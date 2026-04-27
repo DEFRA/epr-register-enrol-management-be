@@ -22,7 +22,12 @@ public enum WorkItemActionFailureCode
     /// <summary>
     /// The assign request was structurally invalid (e.g. blank assignee id).
     /// </summary>
-    InvalidAssignment
+    InvalidAssignment,
+    /// <summary>
+    /// A request to add a note was structurally invalid (e.g. blank text or
+    /// over the size limit).
+    /// </summary>
+    InvalidNote
 }
 
 /// <summary>

@@ -482,6 +482,96 @@ public class WorkItemServiceTests
         await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task AddNote_appends_note_with_author_snapshot_and_persists()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("cognito:client_id", "test-client"),
+            new Claim("user:id", "alice-1"),
+            new Claim("user:name", "Alice Example")
+        ], "test"));
+
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, "  Spoke to applicant; awaiting evidence.  ", actor, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var note = Assert.Single(workItem.Notes);
+        Assert.Equal("Spoke to applicant; awaiting evidence.", note.Text);
+        Assert.Equal("alice-1", note.CreatedBy);
+        Assert.Equal("Alice Example", note.CreatedByName);
+        Assert.Equal(TickedNow, note.CreatedAt);
+        Assert.Equal(TickedNow, workItem.LastModifiedAt);
+        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AddNote_returns_invalid_note_when_text_is_blank()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, "   ", User(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidNote, result.FailureCode);
+        Assert.Empty(workItem.Notes);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AddNote_returns_invalid_note_when_text_exceeds_limit()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var oversized = new string('x', WorkItemService.MaxNoteLength + 1);
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, oversized, User(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidNote, result.FailureCode);
+        Assert.Empty(workItem.Notes);
+    }
+
+    [Fact]
+    public async Task AddNote_returns_not_found_when_work_item_missing()
+    {
+        var type = BuildType();
+        _persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((WorkItem?)null);
+
+        var result = await BuildService(type).AddNoteAsync(
+            Guid.NewGuid(), "anything", User(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task AddNote_allows_any_authenticated_user_without_assign_role()
+    {
+        // Notes are an audit narrative; any authenticated user (assessor or
+        // otherwise) may add one. We assert this explicitly so a future change
+        // doesn't accidentally tighten authorization.
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var standardUser = UserWithRoles("alice-1", "standard");
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, "Note from a standard user.", standardUser, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Single(workItem.Notes);
+    }
+
     private sealed class FakeTimeProvider(DateTime utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);

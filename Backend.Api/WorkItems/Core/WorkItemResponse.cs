@@ -26,4 +26,17 @@ public sealed record WorkItemResponse(
     string? AssignedToId = null,
     string? AssignedToName = null,
     DateTime? AssignedAt = null,
-    string? AssignedBy = null);
+    string? AssignedBy = null,
+    IReadOnlyCollection<WorkItemNoteResponse>? Notes = null);
+
+/// <summary>
+/// Wire shape for a single note attached to a work item (RA-96). Returned
+/// newest-first as part of <see cref="WorkItemResponse.Notes"/> so a UI can
+/// render the audit narrative without a second round-trip.
+/// </summary>
+public sealed record WorkItemNoteResponse(
+    Guid Id,
+    string Text,
+    DateTime CreatedAt,
+    string? CreatedBy,
+    string? CreatedByName);

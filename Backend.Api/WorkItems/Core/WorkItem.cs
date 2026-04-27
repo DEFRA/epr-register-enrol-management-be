@@ -86,4 +86,11 @@ public sealed class WorkItem
     /// BSON sub-document; the API converts to/from JSON at the boundary.
     /// </summary>
     public BsonDocument Payload { get; init; } = new();
+
+    /// <summary>
+    /// Append-only audit narrative attached to the work item by assessors
+    /// (RA-96). Stored in insertion order; projected newest-first by the
+    /// engine. Framework-owned so every type behaves identically.
+    /// </summary>
+    public List<WorkItemNote> Notes { get; init; } = new();
 }

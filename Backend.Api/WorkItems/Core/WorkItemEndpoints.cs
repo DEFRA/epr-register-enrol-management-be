@@ -49,6 +49,11 @@ public static class WorkItemEndpoints
             .WithName("UnassignWorkItem")
             .RequireAuthorization();
 
+        group.MapPost("/{id:guid}/notes", AddNote)
+            .WithName("AddWorkItemNote")
+            .DisableValidation()
+            .RequireAuthorization();
+
         return app;
     }
 
@@ -207,6 +212,29 @@ public static class WorkItemEndpoints
         return ToHttpResult(result, engine);
     }
 
+    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> AddNote(
+        [FromRoute] Guid id,
+        JsonElement body,
+        HttpContext httpContext,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        if (body.ValueKind != JsonValueKind.Object)
+        {
+            return BadRequest("Invalid request", "Request body must be a JSON object containing 'text'.");
+        }
+
+        if (!body.TryGetProperty("text", out var textElement)
+            || textElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(textElement.GetString()))
+        {
+            return BadRequest("Invalid request", "'text' is required and must be a non-empty string.");
+        }
+
+        var result = await engine.AddNoteAsync(id, textElement.GetString()!, httpContext.User, cancellationToken);
+        return ToHttpResult(result, engine);
+    }
+
     private static Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult> ToHttpResult(
         WorkItemActionResult result, IWorkItemService engine)
     {
@@ -222,6 +250,7 @@ public static class WorkItemEndpoints
                 or WorkItemActionFailureCode.UnknownAction
                 or WorkItemActionFailureCode.InvalidTransition
                 or WorkItemActionFailureCode.InvalidAssignment
+                or WorkItemActionFailureCode.InvalidNote
                 => TypedResults.Problem(
                     title: "Invalid action",
                     detail: result.Message,
@@ -258,6 +287,12 @@ public static class WorkItemEndpoints
             w.AssignedToId,
             w.AssignedToName,
             w.AssignedAt,
-            w.AssignedBy);
+            w.AssignedBy,
+            // Notes are stored append-only but rendered newest-first so the
+            // most relevant context is at the top of an assessor's screen.
+            w.Notes
+                .OrderByDescending(n => n.CreatedAt)
+                .Select(n => new WorkItemNoteResponse(n.Id, n.Text, n.CreatedAt, n.CreatedBy, n.CreatedByName))
+                .ToList());
     }
 }

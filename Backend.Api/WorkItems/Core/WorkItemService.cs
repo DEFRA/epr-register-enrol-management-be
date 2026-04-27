@@ -49,6 +49,19 @@ public interface IWorkItemService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Append a free-text note (RA-96) to a work item. Authoring identity is
+    /// snapshotted from the supplied <see cref="ClaimsPrincipal"/> at the
+    /// time of the call so the audit narrative survives later directory
+    /// changes. Notes are append-only; this is the only mutation the
+    /// framework offers for them.
+    /// </summary>
+    Task<WorkItemActionResult> AddNoteAsync(
+        Guid workItemId,
+        string text,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Compute the task progress and currently-available actions for a work
     /// item. Returns <c>null</c> when no work item exists with the supplied id.
     /// </summary>
@@ -276,6 +289,60 @@ public sealed class WorkItemService(
         logger.Audit(
             "Work item {WorkItemId} ({TypeId}) unassigned (was {PreviousAssignee}) by {User}",
             workItem.Id, workItem.TypeId, previousAssigneeId, DescribeUser(user));
+
+        return WorkItemActionResult.Success(workItem);
+    }
+
+    /// <summary>
+    /// Maximum length of a single note body. Picked to comfortably hold a
+    /// long paragraph of assessor narrative without enabling the field as a
+    /// dumping ground for documents. Enforced at the service boundary so
+    /// callers see the same limit regardless of transport.
+    /// </summary>
+    public const int MaxNoteLength = 4000;
+
+    public async Task<WorkItemActionResult> AddNoteAsync(
+        Guid workItemId,
+        string text,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidNote,
+                "Note text is required.");
+        }
+
+        var trimmed = text.Trim();
+        if (trimmed.Length > MaxNoteLength)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidNote,
+                $"Note text must be {MaxNoteLength} characters or fewer.");
+        }
+
+        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        if (workItem is null)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.WorkItemNotFound,
+                $"No work item exists with id '{workItemId}'.");
+        }
+
+        var note = new WorkItemNote
+        {
+            Text = trimmed,
+            CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
+            CreatedBy = ResolveActorUserId(user) ?? DescribeUser(user),
+            CreatedByName = user?.FindFirstValue("user:name")
+        };
+        workItem.Notes.Add(note);
+        workItem.LastModifiedAt = note.CreatedAt;
+        await persistence.ReplaceAsync(workItem, cancellationToken);
+        logger.Audit(
+            "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
+            note.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
 
         return WorkItemActionResult.Success(workItem);
     }

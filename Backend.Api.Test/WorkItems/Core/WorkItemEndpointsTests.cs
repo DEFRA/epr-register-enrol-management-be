@@ -371,10 +371,127 @@ public class WorkItemEndpointsTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
+    [Fact]
+    public async Task AddNote_persists_note_and_returns_updated_response()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userId: "alice-1", userName: "Alice Example");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/notes",
+            new { text = "Reviewed evidence; awaiting confirmation." },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(body?.Notes);
+        var note = Assert.Single(body!.Notes!);
+        Assert.Equal("Reviewed evidence; awaiting confirmation.", note.Text);
+        Assert.Equal("alice-1", note.CreatedBy);
+        Assert.Equal("Alice Example", note.CreatedByName);
+
+        Assert.Single(workItem.Notes);
+        await factory.MockPersistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task AddNote_projects_notes_newest_first()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var older = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc);
+        var newer = new DateTime(2026, 4, 27, 11, 0, 0, DateTimeKind.Utc);
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            Notes =
+            {
+                new WorkItemNote { Text = "older", CreatedAt = older, CreatedBy = "earlier" },
+                new WorkItemNote { Text = "newer", CreatedAt = newer, CreatedBy = "earlier" }
+            }
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(body?.Notes);
+        Assert.Collection(body!.Notes!,
+            first => Assert.Equal("newer", first.Text),
+            second => Assert.Equal("older", second.Text));
+    }
+
+    [Fact]
+    public async Task AddNote_returns_400_when_text_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted"
+        });
+
+        var response = await client.PostAsJsonAsync($"/work-items/{id}/notes", new { text = "   " }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AddNote_returns_404_when_work_item_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        factory.MockPersistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns((WorkItem?)null);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{Guid.NewGuid()}/notes", new { text = "anything" }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AddNote_returns_unauthorized_without_cognito_client_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(includeAuthHeader: false);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{Guid.NewGuid()}/notes", new { text = "anything" }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     private sealed class TestApplicationFactory(
         bool includeAuthHeader = true,
         string? userRoles = null,
-        string? userId = null) : WebApplicationFactory<Program>
+        string? userId = null,
+        string? userName = null) : WebApplicationFactory<Program>
     {
         public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
 
@@ -400,6 +517,10 @@ public class WorkItemEndpointsTests
             if (userId is not null)
             {
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", userId);
+            }
+            if (userName is not null)
+            {
+                client.DefaultRequestHeaders.Add("x-cdp-user-name", userName);
             }
             if (userRoles is not null)
             {

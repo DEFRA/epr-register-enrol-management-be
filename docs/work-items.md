@@ -227,3 +227,53 @@ POST /work-items/{id}/unassign
 Both endpoints are idempotent: assigning an item to its current assignee
 or unassigning an already-unassigned item returns the existing state with
 no audit churn.
+
+## Notes (RA-96)
+
+Every work item carries an append-only list of free-text **notes** —
+short narratives an assessor records to explain context or decisions.
+Notes are framework-level so every type behaves identically; modules do
+not opt in.
+
+### Storage
+
+`WorkItem.Notes` is a `List<WorkItemNote>` persisted inline on the work
+item document. A `WorkItemNote` carries:
+
+| Field | Purpose |
+| --- | --- |
+| `Id` | Server-generated GUID. |
+| `Text` | Note body. Trimmed at write; rendered verbatim by clients (templates must escape). |
+| `CreatedAt` | UTC timestamp set by `WorkItemService` from the injected `TimeProvider`. |
+| `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, falling back to the Cognito client id). |
+| `CreatedByName` | Snapshot of the actor's display name (`user:name` claim) at write time, so the audit narrative survives directory changes. |
+
+Notes are stored in insertion order. The wire projection in
+`WorkItemResponse.Notes` is sorted **newest-first** so a UI can render
+without re-sorting.
+
+### Endpoint
+
+```
+POST /work-items/{id}/notes
+  Body: { "text": "<note body>" }
+  Authorization: any authenticated user (notes are an audit narrative;
+                 no role gate beyond authentication).
+
+  Validation:
+   - `text` required, non-blank, ≤ WorkItemService.MaxNoteLength (4000)
+     characters. Server trims leading/trailing whitespace before storing.
+
+  Returns: the updated WorkItemResponse (with the new note included
+  newest-first under `notes`).
+```
+
+### Conventions
+
+- **Append-only.** The framework deliberately does not expose edit or
+  delete endpoints — notes are part of the audit trail.
+- **No module-specific note types.** If a module needs structured per-note
+  metadata, lift the requirement into the framework rather than modelling
+  it on the payload.
+- The note's author identity is **always** snapshotted on write. Do not
+  rely on `CreatedBy` being a live foreign key into a user directory.
