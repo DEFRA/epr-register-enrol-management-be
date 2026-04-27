@@ -55,8 +55,9 @@ services:
   #   networks:
   #     - cdp-tenant
 
-  your-backend:
+  case-management-backend:
     build: ./
+    container_name: case-management-backend
     ports:
       - '8085:8085'
     links:
@@ -72,6 +73,7 @@ services:
     environment:
       ASPNETCORE_URLS: http://+:8085
       Mongo__DatabaseUri: mongodb://mongodb:27017/
+      Mongo__DatabaseName: epr-register-case-management
     networks:
       - cdp-tenant
 
