@@ -21,6 +21,7 @@ public static class WorkItemModuleExtensions
     {
         services.AddSingleton<IWorkItemRegistry>(sp =>
             new WorkItemRegistry(sp.GetServices<IWorkItemType>()));
+        services.AddSingleton<IWorkItemService, WorkItemService>();
         return services;
     }
 

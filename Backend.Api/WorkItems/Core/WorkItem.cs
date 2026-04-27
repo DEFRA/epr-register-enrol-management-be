@@ -25,8 +25,22 @@ public sealed class WorkItem
     /// <summary>UTC timestamp the work item was first accepted into the system.</summary>
     public DateTime SubmittedAt { get; init; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// UTC timestamp of the last engine-driven mutation (task completion, state
+    /// transition). Equal to <see cref="SubmittedAt"/> for a freshly-submitted
+    /// item.
+    /// </summary>
+    public DateTime LastModifiedAt { get; set; } = DateTime.UtcNow;
+
     /// <summary>Identifier of the upstream caller that submitted the item (CDP Cognito client id).</summary>
     public string? SubmittedBy { get; init; }
+
+    /// <summary>
+    /// Ids of completed tasks, keyed by the state id those tasks belong to.
+    /// Tracking per-state lets the engine reason about progress in the current
+    /// state without losing the audit trail of work done in earlier states.
+    /// </summary>
+    public Dictionary<string, HashSet<string>> CompletedTaskIdsByState { get; init; } = new();
 
     /// <summary>
     /// Free-form, type-specific payload supplied by the upstream caller. Stored

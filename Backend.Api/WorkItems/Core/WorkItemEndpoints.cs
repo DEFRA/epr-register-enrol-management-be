@@ -32,6 +32,14 @@ public static class WorkItemEndpoints
             .WithName("ListWorkItems")
             .RequireAuthorization();
 
+        group.MapPost("/{id:guid}/tasks/{taskId}/complete", CompleteTask)
+            .WithName("CompleteWorkItemTask")
+            .RequireAuthorization();
+
+        group.MapPost("/{id:guid}/actions/{actionId}", ApplyAction)
+            .WithName("ApplyWorkItemAction")
+            .RequireAuthorization();
+
         return app;
     }
 
@@ -40,6 +48,7 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemRegistry registry,
         [FromServices] IWorkItemPersistence persistence,
+        [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
         if (body.ValueKind != JsonValueKind.Object)
@@ -88,7 +97,7 @@ public static class WorkItemEndpoints
 
         await persistence.CreateAsync(workItem, cancellationToken);
 
-        var response = ToResponse(workItem);
+        var response = ToResponse(engine.Project(workItem));
         return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
     }
 
@@ -98,26 +107,89 @@ public static class WorkItemEndpoints
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound>> GetById(
         [FromRoute] Guid id,
         [FromServices] IWorkItemPersistence persistence,
+        [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        return workItem is null ? TypedResults.NotFound() : TypedResults.Ok(ToResponse(workItem));
+        return workItem is null
+            ? TypedResults.NotFound()
+            : TypedResults.Ok(ToResponse(engine.Project(workItem)));
     }
 
     internal static async Task<Ok<IReadOnlyCollection<WorkItemResponse>>> GetAll(
         [FromServices] IWorkItemPersistence persistence,
+        [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
         var items = await persistence.GetAllAsync(cancellationToken);
-        IReadOnlyCollection<WorkItemResponse> mapped = items.Select(ToResponse).ToList();
+        IReadOnlyCollection<WorkItemResponse> mapped = items
+            .Select(w => ToResponse(engine.Project(w)))
+            .ToList();
         return TypedResults.Ok(mapped);
     }
 
-    private static WorkItemResponse ToResponse(WorkItem workItem) => new(
-        workItem.Id,
-        workItem.TypeId,
-        workItem.StateId,
-        workItem.SubmittedAt,
-        workItem.SubmittedBy,
-        WorkItemPayloadConverter.ToJson(workItem.Payload));
+    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> CompleteTask(
+        [FromRoute] Guid id,
+        [FromRoute] string taskId,
+        HttpContext httpContext,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        var result = await engine.CompleteTaskAsync(id, taskId, httpContext.User, cancellationToken);
+        return ToHttpResult(result, engine);
+    }
+
+    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> ApplyAction(
+        [FromRoute] Guid id,
+        [FromRoute] string actionId,
+        HttpContext httpContext,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        var result = await engine.ApplyActionAsync(id, actionId, httpContext.User, cancellationToken);
+        return ToHttpResult(result, engine);
+    }
+
+    private static Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult> ToHttpResult(
+        WorkItemActionResult result, IWorkItemService engine)
+    {
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        return result.FailureCode switch
+        {
+            WorkItemActionFailureCode.WorkItemNotFound => TypedResults.NotFound(),
+            WorkItemActionFailureCode.TaskNotApplicable
+                or WorkItemActionFailureCode.UnknownAction
+                or WorkItemActionFailureCode.InvalidTransition
+                => TypedResults.Problem(
+                    title: "Invalid action",
+                    detail: result.Message,
+                    statusCode: StatusCodes.Status400BadRequest),
+            WorkItemActionFailureCode.IncompleteTasks
+                or WorkItemActionFailureCode.TerminalState
+                => TypedResults.Problem(
+                    title: "Action not allowed",
+                    detail: result.Message,
+                    statusCode: StatusCodes.Status409Conflict),
+            _ => TypedResults.Problem(detail: result.Message, statusCode: StatusCodes.Status400BadRequest)
+        };
+    }
+
+    internal static WorkItemResponse ToResponse(WorkItemEngineProjection projection)
+    {
+        var w = projection.WorkItem;
+        return new WorkItemResponse(
+            w.Id,
+            w.TypeId,
+            w.StateId,
+            w.SubmittedAt,
+            w.LastModifiedAt,
+            w.SubmittedBy,
+            WorkItemPayloadConverter.ToJson(w.Payload),
+            projection.Tasks,
+            projection.AvailableActions);
+    }
 }

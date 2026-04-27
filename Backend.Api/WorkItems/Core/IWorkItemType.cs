@@ -27,4 +27,13 @@ public interface IWorkItemType
     /// Returns an empty collection for states with no tasks.
     /// </summary>
     IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId);
+
+    /// <summary>
+    /// Allowed state transitions, exposed as named actions (e.g. "approve",
+    /// "reject"). The engine consults this list to decide whether an action
+    /// invoked by a caller is permitted given the work item's current state
+    /// and outstanding tasks. Defaults to an empty list so types delivered
+    /// before the engine existed continue to compile.
+    /// </summary>
+    IReadOnlyCollection<WorkItemTransition> Transitions => Array.Empty<WorkItemTransition>();
 }

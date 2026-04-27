@@ -19,6 +19,13 @@ public interface IWorkItemPersistence
     Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
     Task<IReadOnlyCollection<WorkItem>> GetAllAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Persist updates made by the engine (state transitions, task completions).
+    /// Implementations replace the document in its entirety so callers can
+    /// mutate any field on the supplied <see cref="WorkItem"/> before saving.
+    /// </summary>
+    Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default);
 }
 
 [ExcludeFromCodeCoverage]
@@ -46,6 +53,17 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             .Find(_ => true)
             .SortByDescending(w => w.SubmittedAt)
             .ToListAsync(cancellationToken);
+    }
+
+    public async Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)
+    {
+        await Collection.ReplaceOneAsync(
+            w => w.Id == workItem.Id,
+            workItem,
+            cancellationToken: cancellationToken);
+        Logger.Audit(
+            "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState}",
+            workItem.Id, workItem.TypeId, workItem.StateId);
     }
 
     protected override List<CreateIndexModel<WorkItem>> DefineIndexes(
