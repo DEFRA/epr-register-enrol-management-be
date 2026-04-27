@@ -26,6 +26,29 @@ public interface IWorkItemService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Assign (or re-assign) a work item to <paramref name="assigneeId"/>,
+    /// snapshotting <paramref name="assigneeName"/> alongside the id so list
+    /// views do not need a separate user lookup. Authorization rules:
+    /// the caller must either hold the <c>assign</c> role, or be assigning
+    /// the item to themselves while it is currently unassigned.
+    /// </summary>
+    Task<WorkItemActionResult> AssignAsync(
+        Guid workItemId,
+        string assigneeId,
+        string? assigneeName,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Clear the current assignment. Requires the caller to hold the
+    /// <c>assign</c> role.
+    /// </summary>
+    Task<WorkItemActionResult> UnassignAsync(
+        Guid workItemId,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Compute the task progress and currently-available actions for a work
     /// item. Returns <c>null</c> when no work item exists with the supplied id.
     /// </summary>
@@ -48,6 +71,13 @@ public sealed class WorkItemService(
     ILogger<WorkItemService> logger,
     TimeProvider? timeProvider = null) : IWorkItemService
 {
+    /// <summary>
+    /// Role that grants the holder the ability to assign / re-assign /
+    /// unassign any work item to anyone. Standard users without this role
+    /// can only self-assign unassigned items.
+    /// </summary>
+    public const string AssignRole = "assign";
+
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
     public async Task<WorkItemActionResult> CompleteTaskAsync(
@@ -136,6 +166,116 @@ public sealed class WorkItemService(
         logger.Audit(
             "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
             workItem.Id, workItem.TypeId, previousState, workItem.StateId, transition.ActionId, DescribeUser(user));
+
+        return WorkItemActionResult.Success(workItem);
+    }
+
+    public async Task<WorkItemActionResult> AssignAsync(
+        Guid workItemId,
+        string assigneeId,
+        string? assigneeName,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(assigneeId))
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidAssignment,
+                "Assignee id is required.");
+        }
+
+        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        if (workItem is null)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.WorkItemNotFound,
+                $"No work item exists with id '{workItemId}'.");
+        }
+
+        var trimmedAssigneeId = assigneeId.Trim();
+        var actorUserId = ResolveActorUserId(user);
+        var hasAssignRole = user?.IsInRole(AssignRole) == true;
+
+        // Standard users without the assign role can only "claim" an
+        // unassigned item, and only for themselves. Anything else (assigning
+        // to someone else, taking an item already owned by another user) is
+        // reserved for users with the assign role.
+        if (!hasAssignRole)
+        {
+            var isSelfAssign = actorUserId is not null
+                && string.Equals(actorUserId, trimmedAssigneeId, StringComparison.Ordinal);
+            if (!isSelfAssign)
+            {
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.NotAuthorized,
+                    "Only users with the 'assign' role can assign work items to other users.");
+            }
+            if (workItem.AssignedToId is not null
+                && !string.Equals(workItem.AssignedToId, trimmedAssigneeId, StringComparison.Ordinal))
+            {
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.NotAuthorized,
+                    "This work item is already assigned to another user; only users with the 'assign' role can re-assign it.");
+            }
+        }
+
+        var snapshotName = string.IsNullOrWhiteSpace(assigneeName) ? null : assigneeName.Trim();
+        var alreadyAssignedToSameUser = string.Equals(workItem.AssignedToId, trimmedAssigneeId, StringComparison.Ordinal)
+            && string.Equals(workItem.AssignedToName, snapshotName, StringComparison.Ordinal);
+
+        if (!alreadyAssignedToSameUser)
+        {
+            var previousAssigneeId = workItem.AssignedToId;
+            workItem.AssignedToId = trimmedAssigneeId;
+            workItem.AssignedToName = snapshotName;
+            workItem.AssignedAt = _timeProvider.GetUtcNow().UtcDateTime;
+            workItem.AssignedBy = actorUserId ?? DescribeUser(user);
+            workItem.LastModifiedAt = workItem.AssignedAt.Value;
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+            logger.Audit(
+                "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
+                workItem.Id, workItem.TypeId, previousAssigneeId ?? "(unassigned)", trimmedAssigneeId, DescribeUser(user));
+        }
+
+        return WorkItemActionResult.Success(workItem);
+    }
+
+    public async Task<WorkItemActionResult> UnassignAsync(
+        Guid workItemId,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        if (workItem is null)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.WorkItemNotFound,
+                $"No work item exists with id '{workItemId}'.");
+        }
+
+        if (user?.IsInRole(AssignRole) != true)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.NotAuthorized,
+                "Only users with the 'assign' role can unassign work items.");
+        }
+
+        if (workItem.AssignedToId is null)
+        {
+            // Idempotent: already unassigned, nothing to do.
+            return WorkItemActionResult.Success(workItem);
+        }
+
+        var previousAssigneeId = workItem.AssignedToId;
+        workItem.AssignedToId = null;
+        workItem.AssignedToName = null;
+        workItem.AssignedAt = null;
+        workItem.AssignedBy = null;
+        workItem.LastModifiedAt = _timeProvider.GetUtcNow().UtcDateTime;
+        await persistence.ReplaceAsync(workItem, cancellationToken);
+        logger.Audit(
+            "Work item {WorkItemId} ({TypeId}) unassigned (was {PreviousAssignee}) by {User}",
+            workItem.Id, workItem.TypeId, previousAssigneeId, DescribeUser(user));
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -253,7 +393,20 @@ public sealed class WorkItemService(
     }
 
     private static string DescribeUser(ClaimsPrincipal? user) =>
-        user?.FindFirstValue("cognito:client_id")
+        user?.FindFirstValue("user:id")
+        ?? user?.FindFirstValue("cognito:client_id")
         ?? user?.FindFirstValue(ClaimTypes.NameIdentifier)
         ?? "unknown";
+
+    /// <summary>
+    /// The acting end-user's identifier as forwarded by the BFF. Falls back
+    /// to <c>null</c> when the request only carries a service identity (e.g.
+    /// machine-to-machine calls), which is enough for the service to treat
+    /// the call as "no human acting" for assignment purposes.
+    /// </summary>
+    private static string? ResolveActorUserId(ClaimsPrincipal? user)
+    {
+        var id = user?.FindFirstValue("user:id");
+        return string.IsNullOrWhiteSpace(id) ? null : id;
+    }
 }

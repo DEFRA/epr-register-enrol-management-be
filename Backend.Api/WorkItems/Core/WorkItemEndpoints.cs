@@ -40,6 +40,15 @@ public static class WorkItemEndpoints
             .WithName("ApplyWorkItemAction")
             .RequireAuthorization();
 
+        group.MapPost("/{id:guid}/assign", Assign)
+            .WithName("AssignWorkItem")
+            .DisableValidation()
+            .RequireAuthorization();
+
+        group.MapPost("/{id:guid}/unassign", Unassign)
+            .WithName("UnassignWorkItem")
+            .RequireAuthorization();
+
         return app;
     }
 
@@ -157,6 +166,47 @@ public static class WorkItemEndpoints
         return ToHttpResult(result, engine);
     }
 
+    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Assign(
+        [FromRoute] Guid id,
+        JsonElement body,
+        HttpContext httpContext,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        if (body.ValueKind != JsonValueKind.Object)
+        {
+            return BadRequest("Invalid request", "Request body must be a JSON object containing 'assigneeId'.");
+        }
+
+        if (!body.TryGetProperty("assigneeId", out var assigneeIdElement)
+            || assigneeIdElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(assigneeIdElement.GetString()))
+        {
+            return BadRequest("Invalid request", "'assigneeId' is required and must be a non-empty string.");
+        }
+
+        string? assigneeName = null;
+        if (body.TryGetProperty("assigneeName", out var assigneeNameElement)
+            && assigneeNameElement.ValueKind == JsonValueKind.String)
+        {
+            assigneeName = assigneeNameElement.GetString();
+        }
+
+        var result = await engine.AssignAsync(
+            id, assigneeIdElement.GetString()!, assigneeName, httpContext.User, cancellationToken);
+        return ToHttpResult(result, engine);
+    }
+
+    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Unassign(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        var result = await engine.UnassignAsync(id, httpContext.User, cancellationToken);
+        return ToHttpResult(result, engine);
+    }
+
     private static Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult> ToHttpResult(
         WorkItemActionResult result, IWorkItemService engine)
     {
@@ -171,10 +221,16 @@ public static class WorkItemEndpoints
             WorkItemActionFailureCode.TaskNotApplicable
                 or WorkItemActionFailureCode.UnknownAction
                 or WorkItemActionFailureCode.InvalidTransition
+                or WorkItemActionFailureCode.InvalidAssignment
                 => TypedResults.Problem(
                     title: "Invalid action",
                     detail: result.Message,
                     statusCode: StatusCodes.Status400BadRequest),
+            WorkItemActionFailureCode.NotAuthorized
+                => TypedResults.Problem(
+                    title: "Not authorised",
+                    detail: result.Message,
+                    statusCode: StatusCodes.Status403Forbidden),
             WorkItemActionFailureCode.IncompleteTasks
                 or WorkItemActionFailureCode.TerminalState
                 => TypedResults.Problem(
@@ -198,6 +254,10 @@ public static class WorkItemEndpoints
             projection.TemplateVersion,
             WorkItemPayloadConverter.ToJson(w.Payload),
             projection.Tasks,
-            projection.AvailableActions);
+            projection.AvailableActions,
+            w.AssignedToId,
+            w.AssignedToName,
+            w.AssignedAt,
+            w.AssignedBy);
     }
 }

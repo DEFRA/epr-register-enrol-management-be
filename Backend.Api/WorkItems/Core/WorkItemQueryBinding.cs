@@ -12,6 +12,8 @@ internal static class WorkItemQueryBinding
     internal const string TypeIdParam = "typeId";
     internal const string StateIdParam = "stateId";
     internal const string SearchParam = "search";
+    internal const string AssigneeIdParam = "assigneeId";
+    internal const string UnassignedOnlyParam = "unassigned";
     internal const string PageParam = "page";
     internal const string PageSizeParam = "pageSize";
 
@@ -23,6 +25,8 @@ internal static class WorkItemQueryBinding
             TypeIds: ReadStrings(query, TypeIdParam),
             StateIds: ReadStrings(query, StateIdParam),
             Search: ReadString(query, SearchParam),
+            AssigneeId: ReadString(query, AssigneeIdParam),
+            UnassignedOnly: ReadBool(query, UnassignedOnlyParam),
             Page: ReadInt(query, PageParam, defaultValue: 1),
             PageSize: ReadInt(query, PageSizeParam, defaultValue: WorkItemQuery.DefaultPageSize));
     }
@@ -62,5 +66,27 @@ internal static class WorkItemQueryBinding
         }
 
         return int.TryParse(values[0], out var parsed) ? parsed : defaultValue;
+    }
+
+    private static bool ReadBool(IQueryCollection query, string key)
+    {
+        if (!query.TryGetValue(key, out var values) || values.Count == 0)
+        {
+            return false;
+        }
+
+        var first = values[0];
+        if (string.IsNullOrWhiteSpace(first))
+        {
+            return false;
+        }
+
+        // Accept the usual truthy spellings used in HTML forms / query
+        // strings: "true", "1", "on", "yes" (any case).
+        var trimmed = first.Trim();
+        return trimmed.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("1", StringComparison.Ordinal)
+            || trimmed.Equals("on", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("yes", StringComparison.OrdinalIgnoreCase);
     }
 }

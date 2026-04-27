@@ -158,3 +158,72 @@ v1 work item was being progressed.
 
 `WorkItemResponse` includes `templateVersion`. Clients use it (together
 with `typeId`) to pick the correct detail template for the work item.
+
+## Assignment (RA-95)
+
+Work items can be assigned to a user. Two roles drive what a caller can do:
+
+- `assign` — can assign or re-assign any work item to any user, and can
+  unassign.
+- `standard` — can only **self-assign** an unassigned work item to itself.
+  Cannot re-assign other people's work, cannot take an item that is already
+  owned, cannot unassign.
+
+Both rules are enforced by `WorkItemService.AssignAsync` /
+`UnassignAsync`. The frontend BFF exposes both UI affordances and the role
+gates, but the backend is the source of truth: a hand-crafted POST from a
+standard user that targets someone else's id returns `403`.
+
+### Identity from the BFF
+
+The Cognito auth handler (`CognitoClientIdAuthenticationHandler`)
+optionally reads three headers forwarded by the BFF and turns them into
+`ClaimsPrincipal` claims:
+
+| Header | Claim |
+| --- | --- |
+| `x-cdp-user-id` | `user:id` (used by `ResolveActorUserId`) |
+| `x-cdp-user-name` | `user:name` |
+| `x-cdp-user-roles` | one `ClaimTypes.Role` per comma-separated value |
+
+`User.IsInRole("assign")` therefore works as expected on every endpoint.
+
+### Storage
+
+`WorkItem` gains four nullable fields:
+
+- `AssignedToId` / `AssignedToName` — the current assignee (snapshot of the
+  display name so the UI does not have to look the user up again).
+- `AssignedAt` — UTC timestamp of the most recent assignment change.
+- `AssignedBy` — id of the user who performed the assignment (for audit).
+
+The Mongo collection has an `assigneeAndSubmitted` index for the common
+"my work" / "unassigned" list queries.
+
+### List filters
+
+`GET /work-items` accepts two extra query parameters:
+
+| Param | Effect |
+| --- | --- |
+| `assigneeId=<userId>` | only items currently assigned to that user |
+| `unassigned=true` | only items with no current assignee |
+
+If both are supplied, `assigneeId` wins.
+
+### Endpoints
+
+```
+POST /work-items/{id}/assign
+  Body: { "assigneeId": "<userId>", "assigneeName": "<display name>" }
+  Authorization: any authenticated user; backend enforces the
+                 self-assign-only rule for non-`assign` callers.
+
+POST /work-items/{id}/unassign
+  Body: (none)
+  Authorization: caller must hold the `assign` role.
+```
+
+Both endpoints are idempotent: assigning an item to its current assignee
+or unassigning an already-unassigned item returns the existing state with
+no audit churn.

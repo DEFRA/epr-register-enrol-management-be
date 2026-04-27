@@ -33,11 +33,47 @@ public class CognitoClientIdAuthenticationHandler(
             return Task.FromResult(AuthenticateResult.Fail($"Empty {headerName} header"));
         }
 
-        var claims = new[]
+        var claims = new List<Claim>
         {
-            new Claim(ClaimTypes.NameIdentifier, clientId),
-            new Claim("cognito:client_id", clientId)
+            new(ClaimTypes.NameIdentifier, clientId),
+            new("cognito:client_id", clientId)
         };
+
+        // The BFF (frontend) forwards the acting user's identity and role
+        // membership in optional headers. They are not authenticators in
+        // their own right — CDP has already validated the upstream JWT and
+        // placed the trusted client id in the primary header — but they let
+        // backend endpoints make role-based decisions and produce more
+        // useful audit log lines without a separate user lookup.
+        if (Request.Headers.TryGetValue(Options.UserIdHeaderName, out var userIdValues))
+        {
+            var userId = userIdValues.ToString();
+            if (!string.IsNullOrWhiteSpace(userId))
+            {
+                claims.Add(new Claim("user:id", userId));
+            }
+        }
+
+        if (Request.Headers.TryGetValue(Options.UserNameHeaderName, out var userNameValues))
+        {
+            var userName = userNameValues.ToString();
+            if (!string.IsNullOrWhiteSpace(userName))
+            {
+                claims.Add(new Claim("user:name", userName));
+            }
+        }
+
+        if (Request.Headers.TryGetValue(Options.UserRolesHeaderName, out var rolesValues))
+        {
+            var rolesHeader = rolesValues.ToString();
+            if (!string.IsNullOrWhiteSpace(rolesHeader))
+            {
+                foreach (var role in rolesHeader.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                {
+                    claims.Add(new Claim(ClaimTypes.Role, role));
+                }
+            }
+        }
 
         var identity = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);

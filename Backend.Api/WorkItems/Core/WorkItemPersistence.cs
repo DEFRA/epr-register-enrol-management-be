@@ -105,6 +105,24 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
                 builder.Regex(nameof(WorkItem.SubmittedBy), pattern)));
         }
 
+        var assigneeId = query.NormalisedAssigneeId;
+        if (assigneeId is not null && query.UnassignedOnly)
+        {
+            // "Show me my work and anything still up for grabs" — assigned to
+            // the user OR unassigned.
+            clauses.Add(builder.Or(
+                builder.Eq(w => w.AssignedToId, assigneeId),
+                builder.Eq(w => w.AssignedToId, null)));
+        }
+        else if (assigneeId is not null)
+        {
+            clauses.Add(builder.Eq(w => w.AssignedToId, assigneeId));
+        }
+        else if (query.UnassignedOnly)
+        {
+            clauses.Add(builder.Eq(w => w.AssignedToId, null));
+        }
+
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
 
@@ -132,7 +150,11 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
                 builder.Descending(w => w.SubmittedAt)));
         var submittedDescending = new CreateIndexModel<WorkItem>(
             builder.Descending(w => w.SubmittedAt));
-        return [typeAndSubmitted, stateAndSubmitted, submittedDescending];
+        var assigneeAndSubmitted = new CreateIndexModel<WorkItem>(
+            builder.Combine(
+                builder.Ascending(w => w.AssignedToId),
+                builder.Descending(w => w.SubmittedAt)));
+        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted];
     }
 }
 

@@ -22,4 +22,8 @@ public sealed record WorkItemResponse(
     string TemplateVersion,
     JsonElement Payload,
     IReadOnlyCollection<WorkItemTaskProgress> Tasks,
-    IReadOnlyCollection<WorkItemTransition> AvailableActions);
+    IReadOnlyCollection<WorkItemTransition> AvailableActions,
+    string? AssignedToId = null,
+    string? AssignedToName = null,
+    DateTime? AssignedAt = null,
+    string? AssignedBy = null);

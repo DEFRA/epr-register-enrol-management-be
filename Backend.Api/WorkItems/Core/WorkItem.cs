@@ -36,6 +36,27 @@ public sealed class WorkItem
     public string? SubmittedBy { get; init; }
 
     /// <summary>
+    /// Identifier of the user the work item is currently assigned to, or
+    /// <c>null</c> when no one is assigned. Set via the assignment endpoints
+    /// rather than directly by modules so the engine can enforce role-based
+    /// rules consistently.
+    /// </summary>
+    public string? AssignedToId { get; set; }
+
+    /// <summary>
+    /// Human-readable name of the assignee (snapshotted at assignment time so
+    /// list views do not need a separate user lookup). <c>null</c> when no one
+    /// is assigned.
+    /// </summary>
+    public string? AssignedToName { get; set; }
+
+    /// <summary>UTC timestamp the current assignment was made; <c>null</c> when unassigned.</summary>
+    public DateTime? AssignedAt { get; set; }
+
+    /// <summary>Identifier of the user who made the current assignment; <c>null</c> when unassigned.</summary>
+    public string? AssignedBy { get; set; }
+
+    /// <summary>
     /// Frozen copy of the type's template (states, tasks per state,
     /// transitions and version) captured at submission time. Used by the
     /// engine in preference to the live <see cref="IWorkItemType"/> so that

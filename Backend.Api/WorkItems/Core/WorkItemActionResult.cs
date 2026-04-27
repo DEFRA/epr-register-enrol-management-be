@@ -12,7 +12,17 @@ public enum WorkItemActionFailureCode
     UnknownAction,
     InvalidTransition,
     IncompleteTasks,
-    TerminalState
+    TerminalState,
+    /// <summary>
+    /// The caller is not allowed to perform this assignment (e.g. a standard
+    /// user trying to assign someone else, or to take an item that is already
+    /// assigned to a different user).
+    /// </summary>
+    NotAuthorized,
+    /// <summary>
+    /// The assign request was structurally invalid (e.g. blank assignee id).
+    /// </summary>
+    InvalidAssignment
 }
 
 /// <summary>

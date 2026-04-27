@@ -17,12 +17,25 @@ namespace Backend.Api.WorkItems.Core;
 /// (full or prefix) and <see cref="WorkItem.SubmittedBy"/>. Whitespace-only
 /// values are ignored.
 /// </param>
+/// <param name="AssigneeId">
+/// Restrict to items assigned to this user id. Empty/null means "any
+/// assignee". Mutually combinable with <paramref name="UnassignedOnly"/>:
+/// supplying both narrows to the union (assigned to id OR unassigned),
+/// which is the natural shape for a "show me my work and anything still up
+/// for grabs" view.
+/// </param>
+/// <param name="UnassignedOnly">
+/// When <c>true</c>, restricts to items that have no assignee. Combined with
+/// <paramref name="AssigneeId"/> as described above.
+/// </param>
 /// <param name="Page">1-based page number. Coerced to a minimum of 1.</param>
 /// <param name="PageSize">Page size. Coerced into [<see cref="MinPageSize"/>, <see cref="MaxPageSize"/>].</param>
 public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? TypeIds = null,
     IReadOnlyCollection<string>? StateIds = null,
     string? Search = null,
+    string? AssigneeId = null,
+    bool UnassignedOnly = false,
     int Page = 1,
     int PageSize = 20)
 {
@@ -41,6 +54,10 @@ public sealed record WorkItemQuery(
     /// <summary>Trimmed search needle, or <c>null</c> if blank/whitespace.</summary>
     public string? NormalisedSearch =>
         string.IsNullOrWhiteSpace(Search) ? null : Search.Trim();
+
+    /// <summary>Trimmed assignee id, or <c>null</c> if blank/whitespace.</summary>
+    public string? NormalisedAssigneeId =>
+        string.IsNullOrWhiteSpace(AssigneeId) ? null : AssigneeId.Trim();
 }
 
 /// <summary>

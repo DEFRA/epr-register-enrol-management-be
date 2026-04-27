@@ -55,6 +55,20 @@ public class WorkItemServiceTests
     private static ClaimsPrincipal User() =>
         new(new ClaimsIdentity([new Claim("cognito:client_id", "test-client")], "test"));
 
+    private static ClaimsPrincipal UserWithRoles(string userId, params string[] roles)
+    {
+        var claims = new List<Claim>
+        {
+            new("cognito:client_id", "test-client"),
+            new("user:id", userId)
+        };
+        foreach (var role in roles)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, role));
+        }
+        return new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+    }
+
     [Fact]
     public async Task CompleteTask_records_task_against_current_state_and_persists()
     {
@@ -270,6 +284,202 @@ public class WorkItemServiceTests
 
         Assert.Empty(projection.AvailableActions);
         Assert.Empty(projection.Tasks);
+    }
+
+    // ---------------------- Assignment ----------------------
+
+    [Fact]
+    public async Task Assign_records_assignee_with_snapshot_and_audit_metadata()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice Example", actor, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("alice-1", workItem.AssignedToId);
+        Assert.Equal("Alice Example", workItem.AssignedToName);
+        Assert.Equal(TickedNow, workItem.AssignedAt);
+        Assert.Equal("actor-1", workItem.AssignedBy);
+        Assert.Equal(TickedNow, workItem.LastModifiedAt);
+        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Assign_re_assignment_replaces_previous_assignee()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "bob-1";
+        workItem.AssignedToName = "Bob";
+        workItem.AssignedAt = InitialNow;
+        workItem.AssignedBy = "old-actor";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "carol-1", "Carol", actor, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("carol-1", workItem.AssignedToId);
+        Assert.Equal("Carol", workItem.AssignedToName);
+        Assert.Equal("actor-1", workItem.AssignedBy);
+    }
+
+    [Fact]
+    public async Task Assign_is_idempotent_when_assignee_unchanged()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "alice-1";
+        workItem.AssignedToName = "Alice";
+        workItem.AssignedAt = InitialNow;
+        workItem.AssignedBy = "old-actor";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(InitialNow, workItem.AssignedAt);
+        Assert.Equal("old-actor", workItem.AssignedBy);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Assign_blank_assignee_id_is_rejected()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "   ", null, actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidAssignment, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task Assign_returns_not_found_when_work_item_missing()
+    {
+        var type = BuildType();
+        _persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((WorkItem?)null);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildService(type).AssignAsync(
+            Guid.NewGuid(), "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task Assign_standard_user_can_self_assign_unassigned_item()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("alice-1", "standard");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("alice-1", workItem.AssignedToId);
+    }
+
+    [Fact]
+    public async Task Assign_standard_user_cannot_assign_to_someone_else()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("alice-1", "standard");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "bob-1", "Bob", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Assign_standard_user_cannot_take_item_already_assigned_to_another_user()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "bob-1";
+        workItem.AssignedToName = "Bob";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("alice-1", "standard");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
+        Assert.Equal("bob-1", workItem.AssignedToId);
+    }
+
+    [Fact]
+    public async Task Unassign_clears_assignment_when_actor_has_assign_role()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "alice-1";
+        workItem.AssignedToName = "Alice";
+        workItem.AssignedAt = InitialNow;
+        workItem.AssignedBy = "actor-1";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-2", WorkItemService.AssignRole);
+        var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Null(workItem.AssignedToId);
+        Assert.Null(workItem.AssignedToName);
+        Assert.Null(workItem.AssignedAt);
+        Assert.Null(workItem.AssignedBy);
+        Assert.Equal(TickedNow, workItem.LastModifiedAt);
+        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Unassign_is_idempotent_for_already_unassigned_item()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Unassign_rejected_for_standard_user()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "alice-1";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("alice-1", "standard");
+        var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
+        Assert.Equal("alice-1", workItem.AssignedToId);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
     }
 
     private sealed class FakeTimeProvider(DateTime utcNow) : TimeProvider

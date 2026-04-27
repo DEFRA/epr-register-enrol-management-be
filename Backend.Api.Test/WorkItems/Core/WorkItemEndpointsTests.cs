@@ -222,7 +222,7 @@ public class WorkItemEndpointsTests
                 PageSize: 5));
 
         var response = await client.GetAsync(
-            "/work-items?typeId=re-accreditation&typeId=other-type&stateId=submitted&search=acme&page=2&pageSize=5",
+            "/work-items?typeId=re-accreditation&typeId=other-type&stateId=submitted&search=acme&assigneeId=alice-1&unassigned=true&page=2&pageSize=5",
             cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
@@ -231,11 +231,150 @@ public class WorkItemEndpointsTests
         Assert.Equal(new[] { "re-accreditation", "other-type" }, captured.TypeIds);
         Assert.Equal(new[] { "submitted" }, captured.StateIds);
         Assert.Equal("acme", captured.Search);
+        Assert.Equal("alice-1", captured.AssigneeId);
+        Assert.True(captured.UnassignedOnly);
         Assert.Equal(2, captured.Page);
         Assert.Equal(5, captured.PageSize);
     }
 
-    private sealed class TestApplicationFactory(bool includeAuthHeader = true) : WebApplicationFactory<Program>
+    [Fact]
+    public async Task Assign_persists_assignee_snapshot_and_returns_updated_response()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "alice-1", assigneeName = "Alice Example" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.Equal("alice-1", body?.AssignedToId);
+        Assert.Equal("Alice Example", body?.AssignedToName);
+        Assert.Equal("actor-1", body?.AssignedBy);
+        Assert.NotNull(body?.AssignedAt);
+        await factory.MockPersistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Assign_returns_400_when_assigneeId_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{Guid.NewGuid()}/assign", new { }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Assign_returns_403_when_standard_user_assigns_to_someone_else()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: "standard", userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted"
+        });
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign", new { assigneeId = "bob-1", assigneeName = "Bob" }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Assign_returns_404_when_work_item_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        factory.MockPersistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns((WorkItem?)null);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{Guid.NewGuid()}/assign",
+            new { assigneeId = "alice-1", assigneeName = "Alice" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Unassign_clears_assignment_when_actor_has_assign_role()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            AssignedToId = "alice-1",
+            AssignedToName = "Alice",
+            AssignedAt = DateTime.UtcNow,
+            AssignedBy = "earlier-actor"
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.Null(body?.AssignedToId);
+        Assert.Null(body?.AssignedToName);
+        Assert.Null(body?.AssignedAt);
+        Assert.Null(body?.AssignedBy);
+    }
+
+    [Fact]
+    public async Task Unassign_returns_403_when_caller_lacks_assign_role()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: "standard", userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            AssignedToId = "alice-1"
+        });
+
+        var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    private sealed class TestApplicationFactory(
+        bool includeAuthHeader = true,
+        string? userRoles = null,
+        string? userId = null) : WebApplicationFactory<Program>
     {
         public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
 
@@ -257,6 +396,14 @@ public class WorkItemEndpointsTests
             if (includeAuthHeader)
             {
                 client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+            }
+            if (userId is not null)
+            {
+                client.DefaultRequestHeaders.Add("x-cdp-user-id", userId);
+            }
+            if (userRoles is not null)
+            {
+                client.DefaultRequestHeaders.Add("x-cdp-user-roles", userRoles);
             }
         }
     }
