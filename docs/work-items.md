@@ -277,3 +277,46 @@ POST /work-items/{id}/notes
   it on the payload.
 - The note's author identity is **always** snapshotted on write. Do not
   rely on `CreatedBy` being a live foreign key into a user directory.
+
+## Audit log (RA-97)
+
+Every state-changing engine call (`CompleteTaskAsync`, `ApplyActionAsync`,
+`AssignAsync`, `UnassignAsync`, `AddNoteAsync`) automatically appends a
+`WorkItemAuditEntry` to `WorkItem.AuditLog` on success. The framework owns
+this — modules do not opt in and cannot opt out, so every type inherits an
+identical audit trail.
+
+### Storage
+
+`WorkItem.AuditLog` is a `List<WorkItemAuditEntry>` persisted inline on
+the work item document. An entry carries:
+
+| Field | Purpose |
+| --- | --- |
+| `Id` | Server-generated GUID. |
+| `Action` | Stable machine id of the action: `task-completed`, `action-applied`, `assigned`, `unassigned`, `note-added`. |
+| `ActionDisplayName` | Human-readable description (e.g. `Task completed`). |
+| `Details` | `Dictionary<string, string?>` of contextual fields per action: `taskId`/`taskDisplayName`/`stateId`; `actionId`/`actionDisplayName`/`fromStateId`/`toStateId`; `assigneeId`/`assigneeName`/`previousAssigneeId`/`previousAssigneeName`; `previousAssigneeId`/`previousAssigneeName`; `noteId`. |
+| `CreatedAt` | UTC timestamp from the injected `TimeProvider`. |
+| `CreatedBy` | Snapshot of the actor's user id (`user:id`, falling back to the Cognito client id). |
+| `CreatedByName` | Snapshot of the actor's display name (`user:name`) at write time. |
+
+### Wire format
+
+`WorkItemResponse.AuditLog` is sorted **chronologically (oldest-first)** so
+a UI renders a natural top-to-bottom timeline without re-sorting.
+
+### Conventions
+
+- **Append-only.** No edit / delete / clear endpoints — the log is the
+  audit trail.
+- **Failures never write.** Idempotent no-ops (e.g. completing an
+  already-complete task, re-assigning to the same user, unassigning an
+  already-unassigned item) and validation / authorization rejections do
+  **not** append an entry. This keeps the timeline meaningful.
+- **No module-specific entry shape.** If a module needs richer details,
+  extend the framework's `Details` keys rather than introducing a parallel
+  audit channel.
+- **Snapshot identity at write time.** `CreatedBy` / `CreatedByName` are
+  not live foreign keys — the audit narrative survives directory changes.
+

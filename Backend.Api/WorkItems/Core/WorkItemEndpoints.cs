@@ -293,6 +293,20 @@ public static class WorkItemEndpoints
             w.Notes
                 .OrderByDescending(n => n.CreatedAt)
                 .Select(n => new WorkItemNoteResponse(n.Id, n.Text, n.CreatedAt, n.CreatedBy, n.CreatedByName))
+                .ToList(),
+            // Audit log (RA-97) is projected in chronological (oldest-first)
+            // order so a UI renders a natural top-to-bottom timeline of
+            // everything that has happened to the work item.
+            w.AuditLog
+                .OrderBy(e => e.CreatedAt)
+                .Select(e => new WorkItemAuditEntryResponse(
+                    e.Id,
+                    e.Action,
+                    e.ActionDisplayName,
+                    e.Details,
+                    e.CreatedAt,
+                    e.CreatedBy,
+                    e.CreatedByName))
                 .ToList());
     }
 }

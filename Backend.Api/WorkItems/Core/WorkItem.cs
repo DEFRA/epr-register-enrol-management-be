@@ -93,4 +93,15 @@ public sealed class WorkItem
     /// engine. Framework-owned so every type behaves identically.
     /// </summary>
     public List<WorkItemNote> Notes { get; init; } = new();
+
+    /// <summary>
+    /// Append-only system audit log (RA-97). The framework writes one entry
+    /// here for every successful state-changing engine call (task
+    /// completion, action application, assignment / unassignment, note
+    /// added). Entries are stored in chronological (insertion) order and
+    /// projected oldest-first on the wire so a UI renders a natural
+    /// top-to-bottom timeline. Framework-owned so every work item type
+    /// inherits the same audit behaviour without writing any audit code.
+    /// </summary>
+    public List<WorkItemAuditEntry> AuditLog { get; init; } = new();
 }

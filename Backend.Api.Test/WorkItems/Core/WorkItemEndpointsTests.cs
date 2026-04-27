@@ -487,6 +487,67 @@ public class WorkItemEndpointsTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 
+    [Fact]
+    public async Task AuditLog_is_projected_oldest_first_on_the_wire()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var older = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc);
+        var newer = new DateTime(2026, 4, 27, 11, 0, 0, DateTimeKind.Utc);
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            AuditLog =
+            {
+                // Insert out of order on purpose so we know the oldest-first
+                // ordering on the wire is enforced by the projection rather
+                // than by storage order.
+                new WorkItemAuditEntry
+                {
+                    Action = "note-added",
+                    ActionDisplayName = "Note added",
+                    CreatedAt = newer,
+                    CreatedBy = "alice-1",
+                    CreatedByName = "Alice"
+                },
+                new WorkItemAuditEntry
+                {
+                    Action = "task-completed",
+                    ActionDisplayName = "Task completed",
+                    Details = new() { ["taskId"] = "check-eligibility" },
+                    CreatedAt = older,
+                    CreatedBy = "bob-1",
+                    CreatedByName = "Bob"
+                }
+            }
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(body?.AuditLog);
+        Assert.Collection(body!.AuditLog!,
+            first =>
+            {
+                Assert.Equal("task-completed", first.Action);
+                Assert.Equal("Task completed", first.ActionDisplayName);
+                Assert.Equal("check-eligibility", first.Details["taskId"]);
+                Assert.Equal(older, first.CreatedAt);
+            },
+            second =>
+            {
+                Assert.Equal("note-added", second.Action);
+                Assert.Equal(newer, second.CreatedAt);
+            });
+    }
+
     private sealed class TestApplicationFactory(
         bool includeAuthHeader = true,
         string? userRoles = null,

@@ -576,4 +576,286 @@ public class WorkItemServiceTests
     {
         public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
     }
+
+    // ---------------------- Audit log (RA-97) ----------------------
+    //
+    // The framework auto-records every successful state-changing engine call
+    // so modules inherit a complete audit trail without writing any audit
+    // code themselves. These tests assert that contract.
+
+    private static ClaimsPrincipal AuditUser(string userId = "alice-1", string userName = "Alice Example") =>
+        new(new ClaimsIdentity(
+        [
+            new Claim("cognito:client_id", "test-client"),
+            new Claim("user:id", userId),
+            new Claim("user:name", userName)
+        ], "test"));
+
+    [Fact]
+    public async Task Audit_CompleteTask_appends_entry_with_actor_and_task_details()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        await BuildService(type).CompleteTaskAsync(
+            workItem.Id, "check-eligibility", AuditUser(), TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(workItem.AuditLog);
+        Assert.Equal("task-completed", entry.Action);
+        Assert.Equal("Task completed", entry.ActionDisplayName);
+        Assert.Equal("alice-1", entry.CreatedBy);
+        Assert.Equal("Alice Example", entry.CreatedByName);
+        Assert.Equal(TickedNow, entry.CreatedAt);
+        Assert.Equal("check-eligibility", entry.Details["taskId"]);
+        Assert.Equal("Check eligibility", entry.Details["taskDisplayName"]);
+        Assert.Equal("submitted", entry.Details["stateId"]);
+    }
+
+    [Fact]
+    public async Task Audit_CompleteTask_idempotent_call_does_not_append_a_second_entry()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = ExistingWorkItem(completed: new()
+        {
+            ["submitted"] = ["check-eligibility"]
+        });
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        await BuildService(type).CompleteTaskAsync(
+            workItem.Id, "check-eligibility", AuditUser(), TestContext.Current.CancellationToken);
+
+        Assert.Empty(workItem.AuditLog);
+    }
+
+    [Fact]
+    public async Task Audit_CompleteTask_failure_does_not_append_an_entry()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).CompleteTaskAsync(
+            workItem.Id, "unknown-task", AuditUser(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Empty(workItem.AuditLog);
+    }
+
+    [Fact]
+    public async Task Audit_ApplyAction_records_from_and_to_state()
+    {
+        var type = BuildType(transitions: [
+            new WorkItemTransition("withdraw", "Withdraw", "submitted", "rejected", RequiresAllTasksComplete: false)
+        ]);
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        await BuildService(type).ApplyActionAsync(
+            workItem.Id, "withdraw", AuditUser(), TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(workItem.AuditLog);
+        Assert.Equal("action-applied", entry.Action);
+        Assert.Equal("Action applied", entry.ActionDisplayName);
+        Assert.Equal("withdraw", entry.Details["actionId"]);
+        Assert.Equal("Withdraw", entry.Details["actionDisplayName"]);
+        Assert.Equal("submitted", entry.Details["fromStateId"]);
+        Assert.Equal("rejected", entry.Details["toStateId"]);
+        Assert.Equal("alice-1", entry.CreatedBy);
+        Assert.Equal(TickedNow, entry.CreatedAt);
+    }
+
+    [Fact]
+    public async Task Audit_ApplyAction_invalid_transition_does_not_append_an_entry()
+    {
+        var type = BuildType(
+            tasksByState: new()
+            {
+                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+            },
+            transitions: [
+                new WorkItemTransition("approve", "Approve", "submitted", "approved")
+            ]);
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).ApplyActionAsync(
+            workItem.Id, "approve", AuditUser(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Empty(workItem.AuditLog);
+    }
+
+    [Fact]
+    public async Task Audit_Assign_records_assignee_and_previous_assignee()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "bob-1";
+        workItem.AssignedToName = "Bob Example";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("alice-1", WorkItemService.AssignRole);
+        await BuildService(type).AssignAsync(
+            workItem.Id, "carol-1", "Carol Example", actor, TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(workItem.AuditLog);
+        Assert.Equal("assigned", entry.Action);
+        Assert.Equal("Assigned", entry.ActionDisplayName);
+        Assert.Equal("carol-1", entry.Details["assigneeId"]);
+        Assert.Equal("Carol Example", entry.Details["assigneeName"]);
+        Assert.Equal("bob-1", entry.Details["previousAssigneeId"]);
+        Assert.Equal("Bob Example", entry.Details["previousAssigneeName"]);
+        Assert.Equal("alice-1", entry.CreatedBy);
+    }
+
+    [Fact]
+    public async Task Audit_Assign_idempotent_call_does_not_append_an_entry()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "alice-1";
+        workItem.AssignedToName = "Alice";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.Empty(workItem.AuditLog);
+    }
+
+    [Fact]
+    public async Task Audit_Assign_authorization_failure_does_not_append_an_entry()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("alice-1", "standard");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "bob-1", "Bob", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Empty(workItem.AuditLog);
+    }
+
+    [Fact]
+    public async Task Audit_Unassign_records_previous_assignee()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "alice-1";
+        workItem.AssignedToName = "Alice";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(workItem.AuditLog);
+        Assert.Equal("unassigned", entry.Action);
+        Assert.Equal("Unassigned", entry.ActionDisplayName);
+        Assert.Equal("alice-1", entry.Details["previousAssigneeId"]);
+        Assert.Equal("Alice", entry.Details["previousAssigneeName"]);
+        Assert.Equal("actor-1", entry.CreatedBy);
+    }
+
+    [Fact]
+    public async Task Audit_Unassign_already_unassigned_does_not_append_an_entry()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        Assert.Empty(workItem.AuditLog);
+    }
+
+    [Fact]
+    public async Task Audit_AddNote_records_note_id()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        await BuildService(type).AddNoteAsync(
+            workItem.Id, "A note.", AuditUser(), TestContext.Current.CancellationToken);
+
+        var note = Assert.Single(workItem.Notes);
+        var entry = Assert.Single(workItem.AuditLog);
+        Assert.Equal("note-added", entry.Action);
+        Assert.Equal("Note added", entry.ActionDisplayName);
+        Assert.Equal(note.Id.ToString(), entry.Details["noteId"]);
+        Assert.Equal("alice-1", entry.CreatedBy);
+        Assert.Equal("Alice Example", entry.CreatedByName);
+        Assert.Equal(TickedNow, entry.CreatedAt);
+    }
+
+    [Fact]
+    public async Task Audit_AddNote_validation_failure_does_not_append_an_entry()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, "   ", AuditUser(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Empty(workItem.AuditLog);
+    }
+
+    [Fact]
+    public async Task Audit_log_is_chronological_across_a_sequence_of_actions()
+    {
+        var type = BuildType(
+            tasksByState: new()
+            {
+                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+            },
+            transitions: [
+                new WorkItemTransition("approve", "Approve", "submitted", "approved")
+            ]);
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var time = new MutableTimeProvider(TickedNow);
+        var service = new WorkItemService(
+            new WorkItemRegistry([type]),
+            _persistence,
+            NullLogger<WorkItemService>.Instance,
+            time);
+
+        await service.AddNoteAsync(workItem.Id, "first", AuditUser(), TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await service.CompleteTaskAsync(workItem.Id, "check-eligibility", AuditUser(), TestContext.Current.CancellationToken);
+        time.Advance(TimeSpan.FromMinutes(1));
+        await service.ApplyActionAsync(workItem.Id, "approve", AuditUser(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(3, workItem.AuditLog.Count);
+        Assert.Equal(["note-added", "task-completed", "action-applied"],
+            workItem.AuditLog.Select(e => e.Action).ToArray());
+        // Strictly increasing timestamps — entries are appended in
+        // chronological (insertion) order on disk.
+        Assert.True(workItem.AuditLog[0].CreatedAt < workItem.AuditLog[1].CreatedAt);
+        Assert.True(workItem.AuditLog[1].CreatedAt < workItem.AuditLog[2].CreatedAt);
+    }
+
+    private sealed class MutableTimeProvider(DateTime initial) : TimeProvider
+    {
+        private DateTime _now = initial;
+        public override DateTimeOffset GetUtcNow() => new(_now, TimeSpan.Zero);
+        public void Advance(TimeSpan by) => _now = _now.Add(by);
+    }
 }

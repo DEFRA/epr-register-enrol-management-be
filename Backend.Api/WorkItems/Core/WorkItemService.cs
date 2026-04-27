@@ -117,7 +117,14 @@ public sealed class WorkItemService(
         var bucket = GetCompletedBucket(workItem, workItem.StateId);
         if (bucket.Add(task.Id))
         {
-            workItem.LastModifiedAt = _timeProvider.GetUtcNow().UtcDateTime;
+            var now = _timeProvider.GetUtcNow().UtcDateTime;
+            workItem.LastModifiedAt = now;
+            AppendAudit(workItem, "task-completed", "Task completed", user, now, new()
+            {
+                ["taskId"] = task.Id,
+                ["taskDisplayName"] = task.DisplayName,
+                ["stateId"] = workItem.StateId
+            });
             await persistence.ReplaceAsync(workItem, cancellationToken);
             logger.Audit(
                 "Task {TaskId} marked complete on work item {WorkItemId} ({TypeId}) by {User}",
@@ -173,8 +180,16 @@ public sealed class WorkItemService(
         }
 
         var previousState = workItem.StateId;
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.StateId = transition.ToStateId;
-        workItem.LastModifiedAt = _timeProvider.GetUtcNow().UtcDateTime;
+        workItem.LastModifiedAt = now;
+        AppendAudit(workItem, "action-applied", "Action applied", user, now, new()
+        {
+            ["actionId"] = transition.ActionId,
+            ["actionDisplayName"] = transition.DisplayName,
+            ["fromStateId"] = previousState,
+            ["toStateId"] = workItem.StateId
+        });
         await persistence.ReplaceAsync(workItem, cancellationToken);
         logger.Audit(
             "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
@@ -239,11 +254,19 @@ public sealed class WorkItemService(
         if (!alreadyAssignedToSameUser)
         {
             var previousAssigneeId = workItem.AssignedToId;
+            var previousAssigneeName = workItem.AssignedToName;
             workItem.AssignedToId = trimmedAssigneeId;
             workItem.AssignedToName = snapshotName;
             workItem.AssignedAt = _timeProvider.GetUtcNow().UtcDateTime;
             workItem.AssignedBy = actorUserId ?? DescribeUser(user);
             workItem.LastModifiedAt = workItem.AssignedAt.Value;
+            AppendAudit(workItem, "assigned", "Assigned", user, workItem.AssignedAt.Value, new()
+            {
+                ["assigneeId"] = trimmedAssigneeId,
+                ["assigneeName"] = snapshotName,
+                ["previousAssigneeId"] = previousAssigneeId,
+                ["previousAssigneeName"] = previousAssigneeName
+            });
             await persistence.ReplaceAsync(workItem, cancellationToken);
             logger.Audit(
                 "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
@@ -280,11 +303,18 @@ public sealed class WorkItemService(
         }
 
         var previousAssigneeId = workItem.AssignedToId;
+        var previousAssigneeName = workItem.AssignedToName;
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.AssignedToId = null;
         workItem.AssignedToName = null;
         workItem.AssignedAt = null;
         workItem.AssignedBy = null;
-        workItem.LastModifiedAt = _timeProvider.GetUtcNow().UtcDateTime;
+        workItem.LastModifiedAt = now;
+        AppendAudit(workItem, "unassigned", "Unassigned", user, now, new()
+        {
+            ["previousAssigneeId"] = previousAssigneeId,
+            ["previousAssigneeName"] = previousAssigneeName
+        });
         await persistence.ReplaceAsync(workItem, cancellationToken);
         logger.Audit(
             "Work item {WorkItemId} ({TypeId}) unassigned (was {PreviousAssignee}) by {User}",
@@ -339,6 +369,10 @@ public sealed class WorkItemService(
         };
         workItem.Notes.Add(note);
         workItem.LastModifiedAt = note.CreatedAt;
+        AppendAudit(workItem, "note-added", "Note added", user, note.CreatedAt, new()
+        {
+            ["noteId"] = note.Id.ToString()
+        });
         await persistence.ReplaceAsync(workItem, cancellationToken);
         logger.Audit(
             "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
@@ -457,6 +491,32 @@ public sealed class WorkItemService(
             ? done
             : (IReadOnlyCollection<string>)Array.Empty<string>();
         return required.Any(t => !completed.Contains(t.Id));
+    }
+
+    /// <summary>
+    /// Append a single entry to the work item's audit log (RA-97). Called
+    /// from every engine method on the success path so modules inherit a
+    /// complete, automatic audit trail without writing any audit code
+    /// themselves. Identity is snapshotted from the supplied principal at
+    /// write time.
+    /// </summary>
+    private static void AppendAudit(
+        WorkItem workItem,
+        string action,
+        string actionDisplayName,
+        ClaimsPrincipal? user,
+        DateTime createdAt,
+        Dictionary<string, string?> details)
+    {
+        workItem.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = action,
+            ActionDisplayName = actionDisplayName,
+            Details = details,
+            CreatedAt = createdAt,
+            CreatedBy = ResolveActorUserId(user) ?? DescribeUser(user),
+            CreatedByName = user?.FindFirstValue("user:name")
+        });
     }
 
     private static string DescribeUser(ClaimsPrincipal? user) =>

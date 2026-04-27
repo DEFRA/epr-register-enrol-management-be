@@ -27,7 +27,8 @@ public sealed record WorkItemResponse(
     string? AssignedToName = null,
     DateTime? AssignedAt = null,
     string? AssignedBy = null,
-    IReadOnlyCollection<WorkItemNoteResponse>? Notes = null);
+    IReadOnlyCollection<WorkItemNoteResponse>? Notes = null,
+    IReadOnlyCollection<WorkItemAuditEntryResponse>? AuditLog = null);
 
 /// <summary>
 /// Wire shape for a single note attached to a work item (RA-96). Returned
@@ -37,6 +38,21 @@ public sealed record WorkItemResponse(
 public sealed record WorkItemNoteResponse(
     Guid Id,
     string Text,
+    DateTime CreatedAt,
+    string? CreatedBy,
+    string? CreatedByName);
+
+/// <summary>
+/// Wire shape for a single audit log entry (RA-97). Returned in
+/// chronological (oldest-first) order as part of
+/// <see cref="WorkItemResponse.AuditLog"/> so a UI can render a top-to-
+/// bottom timeline without re-sorting.
+/// </summary>
+public sealed record WorkItemAuditEntryResponse(
+    Guid Id,
+    string Action,
+    string ActionDisplayName,
+    IReadOnlyDictionary<string, string?> Details,
     DateTime CreatedAt,
     string? CreatedBy,
     string? CreatedByName);
