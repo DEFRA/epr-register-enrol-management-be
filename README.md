@@ -13,6 +13,7 @@ service.
 - [Local development](#local-development)
 - [Running with Docker Compose](#running-with-docker-compose)
 - [Endpoints](#endpoints)
+- [Authentication](#authentication)
 - [Testing](#testing)
 - [Frontend integration](#frontend-integration)
 - [Licence](#licence)
@@ -80,6 +81,21 @@ docker compose down -v
 
 The example endpoints are placeholders shipped with the template and will
 be replaced by case-management modules in subsequent PoC tickets.
+
+## Authentication
+
+All non-health endpoints require a CDP Cognito client ID supplied in the
+`x-cdp-cognito-client-id` request header. CDP validates the upstream
+service's JWT before forwarding the call, so the backend trusts the header's
+presence and performs no further authorisation:
+
+```bash
+curl -H 'x-cdp-cognito-client-id: my-upstream-service' \
+  http://localhost:8085/example
+```
+
+Requests without the header receive `401 Unauthorized`. The `/health`
+endpoint is anonymous and remains reachable without authentication.
 
 ## Testing
 

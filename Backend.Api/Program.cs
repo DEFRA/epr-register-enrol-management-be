@@ -1,3 +1,4 @@
+using Backend.Api.Auth;
 using Backend.Api.Example.Endpoints;
 using Backend.Api.Example.Services;
 using Backend.Api.Config;
@@ -50,6 +51,8 @@ static void ConfigureServices(WebApplicationBuilder builder)
 
     services.AddHttpContextAccessor();
 
+    ConfigureAuth(services);
+
     ConfigureHeaderPropagation(services, configuration);
     ConfigureHttpClients(services);
     ConfigureMongo(services, configuration);
@@ -58,6 +61,16 @@ static void ConfigureServices(WebApplicationBuilder builder)
 
     // App services
     services.AddSingleton<IExamplePersistence, ExamplePersistence>();
+}
+
+[ExcludeFromCodeCoverage]
+static void ConfigureAuth(IServiceCollection services)
+{
+    services
+        .AddAuthentication(CognitoClientIdDefaults.AuthenticationScheme)
+        .AddCognitoClientId();
+
+    services.AddAuthorization();
 }
 
 [ExcludeFromCodeCoverage]
@@ -105,13 +118,16 @@ static void ConfigureMiddleware(WebApplication app)
     app.UseSerilogRequestLogging();
 
     app.UseHeaderPropagation();
+
+    app.UseAuthentication();
+    app.UseAuthorization();
 }
 
 [ExcludeFromCodeCoverage]
 static void ConfigureEndpoints(WebApplication app)
 {
-    app.MapHealthChecks("/health", new HealthCheckOptions());
+    app.MapHealthChecks("/health", new HealthCheckOptions()).AllowAnonymous();
 
     // Remove before deploying
-    app.MapExampleEndpoints();
+    app.MapExampleEndpoints().RequireAuthorization();
 }

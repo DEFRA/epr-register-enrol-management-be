@@ -153,5 +153,11 @@ public class ExampleEndpointsTest
                 services.AddSingleton(MockPersistence);
             });
         }
+
+        protected override void ConfigureClient(HttpClient client)
+        {
+            base.ConfigureClient(client);
+            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+        }
     }
 }
