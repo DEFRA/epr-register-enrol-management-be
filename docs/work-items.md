@@ -320,3 +320,28 @@ a UI renders a natural top-to-bottom timeline without re-sorting.
 - **Snapshot identity at write time.** `CreatedBy` / `CreatedByName` are
   not live foreign keys — the audit narrative survives directory changes.
 
+## Example: re-accreditation module (RA-98)
+
+Reference implementation that demonstrates the framework's "one folder + one
+registration line" promise. All files live under
+`Backend.Api/WorkItems/ReAccreditation/`:
+
+| File | Role |
+| --- | --- |
+| `ReAccreditationType.cs` | Declares states (`submitted`, `assessment-in-progress`, `awaiting-decision`, terminal `approved` / `rejected` / `withdrawn`), per-state placeholder tasks, and transitions (`start-assessment`, `submit-for-decision`, `approve`, `reject`, `withdraw`, `withdraw-during-assessment`). |
+| `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
+| `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
+| `Endpoints/ReAccreditationEndpoints.cs` | Module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
+| `ReAccreditationModule.cs` | Glue: exposes the type, registers the decision service in DI, mounts the endpoints. |
+
+Wired into the application by a single line in `Program.cs.ConfigureWorkItems`:
+
+```csharp
+services.AddWorkItemModule<ReAccreditationModule>();
+```
+
+The states / tasks / transitions are placeholders for the PoC per the AC; the
+intended workflow diagram is referenced in RA-85. The module inherits the
+framework's audit log automatically — see `ReAccreditationLifecycleTests` for
+a happy-path walk from `submitted` → `approved` that asserts every step is
+captured.

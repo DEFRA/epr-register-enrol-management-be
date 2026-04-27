@@ -4,6 +4,7 @@ using Backend.Api.Example.Services;
 using Backend.Api.Config;
 using Backend.Api.Utils;
 using Backend.Api.WorkItems.Core;
+using Backend.Api.WorkItems.ReAccreditation;
 using Backend.Api.Utils.Http;
 using Backend.Api.Utils.Mongo;
 using System.Diagnostics.CodeAnalysis;
@@ -73,7 +74,7 @@ static void ConfigureWorkItems(IServiceCollection services)
     // See docs in Backend.Api/WorkItems/Core for the contract a module must implement.
     services.AddWorkItemFramework();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
-    // services.AddWorkItemModule<MyModule>();
+    services.AddWorkItemModule<ReAccreditationModule>();
 }
 
 [ExcludeFromCodeCoverage]
