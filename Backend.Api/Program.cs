@@ -3,6 +3,7 @@ using Backend.Api.Example.Endpoints;
 using Backend.Api.Example.Services;
 using Backend.Api.Config;
 using Backend.Api.Utils;
+using Backend.Api.WorkItems.Core;
 using Backend.Api.Utils.Http;
 using Backend.Api.Utils.Mongo;
 using System.Diagnostics.CodeAnalysis;
@@ -61,6 +62,17 @@ static void ConfigureServices(WebApplicationBuilder builder)
 
     // App services
     services.AddSingleton<IExamplePersistence, ExamplePersistence>();
+
+    ConfigureWorkItems(services);
+}
+
+[ExcludeFromCodeCoverage]
+static void ConfigureWorkItems(IServiceCollection services)
+{
+    // Register the framework, then add one line per work item module.
+    // See docs in Backend.Api/WorkItems/Core for the contract a module must implement.
+    services.AddWorkItemFramework();
+    // services.AddWorkItemModule<MyModule>();
 }
 
 [ExcludeFromCodeCoverage]
@@ -130,4 +142,6 @@ static void ConfigureEndpoints(WebApplication app)
 
     // Remove before deploying
     app.MapExampleEndpoints().RequireAuthorization();
+
+    app.MapWorkItemModules();
 }
