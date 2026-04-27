@@ -72,6 +72,7 @@ static void ConfigureWorkItems(IServiceCollection services)
     // Register the framework, then add one line per work item module.
     // See docs in Backend.Api/WorkItems/Core for the contract a module must implement.
     services.AddWorkItemFramework();
+    services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
     // services.AddWorkItemModule<MyModule>();
 }
 
@@ -143,5 +144,6 @@ static void ConfigureEndpoints(WebApplication app)
     // Remove before deploying
     app.MapExampleEndpoints().RequireAuthorization();
 
+    app.MapWorkItemFrameworkEndpoints();
     app.MapWorkItemModules();
 }

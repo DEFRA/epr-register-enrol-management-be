@@ -25,11 +25,32 @@ Defined in `Backend.Api/WorkItems/Core/`:
 | `IWorkItemType` | Declares a type's `TypeId`, `DisplayName`, `InitialState`, `States` and `GetTasksForState(stateId)`. Pure & side-effect free. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
 | `IWorkItemRegistry` | DI-resolvable lookup of every registered type. |
-| `WorkItemModuleExtensions` | `AddWorkItemFramework()`, `AddWorkItemModule<T>()`, `MapWorkItemModules()`. |
+| `WorkItem` | The persisted work item envelope: id, type id, state id, submitted-at, submitted-by (CDP Cognito client id), free-form payload. |
+| `IWorkItemPersistence` | Framework-owned MongoDB persistence for `WorkItem`s. |
+| `WorkItemModuleExtensions` | `AddWorkItemFramework()`, `AddWorkItemModule<T>()`, `MapWorkItemModules()`, `MapWorkItemFrameworkEndpoints()`. |
 
 > The **task and state engine** itself (validating progressions, enforcing
 > task completion before transitions, etc.) is delivered separately by RA-92
 > and consumes the contracts above.
+
+## Ingestion API
+
+The framework exposes generic, type-agnostic endpoints for accepting and
+listing work items. They live in `WorkItemEndpoints` and are mounted by
+`MapWorkItemFrameworkEndpoints()`:
+
+| Method | Route | Description |
+| --- | --- | --- |
+| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP Cognito client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
+| `GET` | `/work-items/{id}` | Fetch a single work item by id. |
+| `GET` | `/work-items` | List every persisted work item, newest first. The richer filter/search/pagination experience is delivered by RA-93. |
+
+All three endpoints require authentication via the CDP Cognito client id
+header (`x-cdp-cognito-client-id`) per RA-89/RA-85b.
+
+The persisted envelope is owned by the framework; modules describe the shape
+of their payload via their `IWorkItemType` and operate on it via their own
+service objects.
 
 ## Adding a new work item type
 
