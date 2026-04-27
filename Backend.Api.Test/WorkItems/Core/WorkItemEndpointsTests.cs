@@ -171,23 +171,60 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
-    public async Task Get_returns_all_persisted_work_items()
+    public async Task Get_returns_paginated_envelope_for_all_persisted_work_items()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new TestApplicationFactory();
         using var client = factory.CreateClient();
 
         factory.MockPersistence
-            .GetAllAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<WorkItem>
-            {
-                new() { TypeId = TypeId, StateId = "submitted" },
-                new() { TypeId = TypeId, StateId = "submitted" }
-            });
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(
+                Items: new List<WorkItem>
+                {
+                    new() { TypeId = TypeId, StateId = "submitted" },
+                    new() { TypeId = TypeId, StateId = "submitted" }
+                },
+                TotalCount: 2,
+                Page: 1,
+                PageSize: WorkItemQuery.DefaultPageSize));
 
-        var body = await client.GetFromJsonAsync<List<WorkItemResponse>>("/work-items", cancellationToken);
+        var body = await client.GetFromJsonAsync<WorkItemListResponse>("/work-items", cancellationToken);
         Assert.NotNull(body);
-        Assert.Equal(2, body!.Count);
+        Assert.Equal(2, body!.Items.Count);
+        Assert.Equal(2, body.TotalCount);
+        Assert.Equal(1, body.Page);
+        Assert.Equal(WorkItemQuery.DefaultPageSize, body.PageSize);
+    }
+
+    [Fact]
+    public async Task Get_passes_query_string_filters_to_persistence()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        WorkItemQuery? captured = null;
+        factory.MockPersistence
+            .QueryAsync(Arg.Do<WorkItemQuery>(q => captured = q), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(
+                Items: new List<WorkItem>(),
+                TotalCount: 0,
+                Page: 2,
+                PageSize: 5));
+
+        var response = await client.GetAsync(
+            "/work-items?typeId=re-accreditation&typeId=other-type&stateId=submitted&search=acme&page=2&pageSize=5",
+            cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        Assert.NotNull(captured);
+        Assert.NotNull(captured!.TypeIds);
+        Assert.Equal(new[] { "re-accreditation", "other-type" }, captured.TypeIds);
+        Assert.Equal(new[] { "submitted" }, captured.StateIds);
+        Assert.Equal("acme", captured.Search);
+        Assert.Equal(2, captured.Page);
+        Assert.Equal(5, captured.PageSize);
     }
 
     private sealed class TestApplicationFactory(bool includeAuthHeader = true) : WebApplicationFactory<Program>

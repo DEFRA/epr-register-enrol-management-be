@@ -18,7 +18,12 @@ public interface IWorkItemPersistence
 
     Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyCollection<WorkItem>> GetAllAsync(CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Return a single page of work items matching <paramref name="query"/>,
+    /// most-recently-submitted first, together with the total number of
+    /// matches across every page.
+    /// </summary>
+    Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Persist updates made by the engine (state transitions, task completions).
@@ -47,12 +52,60 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             .FirstOrDefaultAsync(cancellationToken);
     }
 
-    public async Task<IReadOnlyCollection<WorkItem>> GetAllAsync(CancellationToken cancellationToken = default)
+    public async Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default)
     {
-        return await Collection
-            .Find(_ => true)
-            .SortByDescending(w => w.SubmittedAt)
+        ArgumentNullException.ThrowIfNull(query);
+
+        var filter = BuildFilter(query);
+
+        var find = Collection
+            .Find(filter)
+            .SortByDescending(w => w.SubmittedAt);
+
+        var totalCount = await Collection.CountDocumentsAsync(filter, cancellationToken: cancellationToken);
+
+        var page = query.NormalisedPage;
+        var pageSize = query.NormalisedPageSize;
+        var skip = (page - 1) * pageSize;
+
+        var items = await find
+            .Skip(skip)
+            .Limit(pageSize)
             .ToListAsync(cancellationToken);
+
+        return new WorkItemPage(items, totalCount, page, pageSize);
+    }
+
+    private static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
+    {
+        var builder = Builders<WorkItem>.Filter;
+        var clauses = new List<FilterDefinition<WorkItem>>();
+
+        if (query.TypeIds is { Count: > 0 } typeIds)
+        {
+            clauses.Add(builder.In(w => w.TypeId, typeIds));
+        }
+
+        if (query.StateIds is { Count: > 0 } stateIds)
+        {
+            clauses.Add(builder.In(w => w.StateId, stateIds));
+        }
+
+        var search = query.NormalisedSearch;
+        if (!string.IsNullOrEmpty(search))
+        {
+            // Case-insensitive substring on submitter, plus prefix match on the
+            // string-serialised id (which lets a user paste a full or partial
+            // id into the search box).
+            var escaped = System.Text.RegularExpressions.Regex.Escape(search);
+            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+
+            clauses.Add(builder.Or(
+                builder.Regex("_id", pattern),
+                builder.Regex(nameof(WorkItem.SubmittedBy), pattern)));
+        }
+
+        return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
 
     public async Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)
@@ -73,7 +126,13 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             builder.Combine(
                 builder.Ascending(w => w.TypeId),
                 builder.Descending(w => w.SubmittedAt)));
-        return [typeAndSubmitted];
+        var stateAndSubmitted = new CreateIndexModel<WorkItem>(
+            builder.Combine(
+                builder.Ascending(w => w.StateId),
+                builder.Descending(w => w.SubmittedAt)));
+        var submittedDescending = new CreateIndexModel<WorkItem>(
+            builder.Descending(w => w.SubmittedAt));
+        return [typeAndSubmitted, stateAndSubmitted, submittedDescending];
     }
 }
 

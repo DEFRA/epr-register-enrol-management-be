@@ -47,7 +47,7 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 | --- | --- | --- |
 | `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP Cognito client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
 | `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with current task progress and the actions the engine will currently allow. |
-| `GET` | `/work-items` | List every persisted work item (with the same projection), newest first. The richer filter/search/pagination experience is delivered by RA-93. |
+| `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
 | `POST` | `/work-items/{id}/tasks/{taskId}/complete` | Mark a task complete on the work item's current state. Idempotent. `400` if the task does not apply to the current state, `404` if the work item is unknown. |
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state or has outstanding tasks; `400` for unknown actions or transitions whose from-state does not match. |
 

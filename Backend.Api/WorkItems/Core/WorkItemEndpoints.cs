@@ -116,16 +116,20 @@ public static class WorkItemEndpoints
             : TypedResults.Ok(ToResponse(engine.Project(workItem)));
     }
 
-    internal static async Task<Ok<IReadOnlyCollection<WorkItemResponse>>> GetAll(
+    internal static async Task<Ok<WorkItemListResponse>> GetAll(
+        HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
-        var items = await persistence.GetAllAsync(cancellationToken);
-        IReadOnlyCollection<WorkItemResponse> mapped = items
+        var query = WorkItemQueryBinding.FromQueryString(httpContext.Request.Query);
+        var page = await persistence.QueryAsync(query, cancellationToken);
+
+        var items = page.Items
             .Select(w => ToResponse(engine.Project(w)))
             .ToList();
-        return TypedResults.Ok(mapped);
+
+        return TypedResults.Ok(new WorkItemListResponse(items, page.TotalCount, page.Page, page.PageSize));
     }
 
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> CompleteTask(
