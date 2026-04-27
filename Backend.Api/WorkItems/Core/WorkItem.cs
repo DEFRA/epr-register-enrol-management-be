@@ -36,6 +36,23 @@ public sealed class WorkItem
     public string? SubmittedBy { get; init; }
 
     /// <summary>
+    /// Frozen copy of the type's template (states, tasks per state,
+    /// transitions and version) captured at submission time. Used by the
+    /// engine in preference to the live <see cref="IWorkItemType"/> so that
+    /// the work item — and its audit history — keep rendering as they did at
+    /// the time they were assessed, even when the live module's template
+    /// changes later. Optional only to support legacy items submitted before
+    /// versioning existed.
+    /// </summary>
+    public WorkItemTemplateSnapshot? TemplateSnapshot { get; set; }
+
+    /// <summary>
+    /// Convenience copy of <see cref="WorkItemTemplateSnapshot.TemplateVersion"/>
+    /// so it can be queried/indexed without deserialising the whole snapshot.
+    /// </summary>
+    public string? TemplateVersion { get; set; }
+
+    /// <summary>
     /// Ids of completed tasks, keyed by the state id those tasks belong to.
     /// Tracking per-state lets the engine reason about progress in the current
     /// state without losing the audit trail of work done in earlier states.

@@ -111,3 +111,50 @@ That is the complete list of changes required outside the new module folder.
   `IWorkItemService` covers task completion and transitions; module-scoped
   services should follow the same pattern (intent-named methods, return
   result objects rather than raw exceptions).
+
+## Template versioning (RA-94)
+
+Work items live for a long time. Their state machine, tasks and detail
+templates evolve. Once a work item has been progressed by an assessor under
+v1 of a type, the audit history must continue to make sense even after the
+team ships v2. The framework solves this by **freezing the template at
+submission**.
+
+### Wiring
+
+`IWorkItemTemplate` is the slice of `IWorkItemType` the engine actually
+needs at runtime: `States`, `Transitions`, `GetTasksForState(stateId)` and
+a `TemplateVersion` string. `IWorkItemType` extends `IWorkItemTemplate`.
+
+`WorkItemTemplateSnapshot` is a sealed, frozen `IWorkItemTemplate` produced
+from a live `IWorkItemType` via `WorkItemTemplateSnapshot.Capture(type)`.
+`Capture` walks every state, evaluates `GetTasksForState` and stores the
+result in an in-memory dictionary so the snapshot does not call back into
+the live type after capture.
+
+### Storage
+
+`WorkItem` carries two new fields:
+
+- `TemplateSnapshot` — the captured `IWorkItemTemplate` for the version of
+  the type that submitted the work item.
+- `TemplateVersion` — a copy of the snapshot's version string for cheap
+  filtering and surfaceing on the wire.
+
+Both are populated by `POST /work-items` before the envelope is persisted.
+
+### Engine resolution
+
+`WorkItemService.ResolveTemplate(workItem)` returns the work item's
+`TemplateSnapshot` if present, otherwise it falls back to the live
+`IWorkItemType` from the registry (so legacy items submitted before this
+change continue to work). Every engine operation — task completion,
+action validation, projection of tasks and available actions — runs
+against the resolved template, never the live type. As a result, shipping
+v2 of a type cannot retroactively change the rules under which an in-flight
+v1 work item was being progressed.
+
+### Wire format
+
+`WorkItemResponse` includes `templateVersion`. Clients use it (together
+with `typeId`) to pick the correct detail template for the work item.

@@ -7,7 +7,7 @@ namespace Backend.Api.WorkItems.Core;
 /// to advertise what a type can do, not to perform behaviour. Behaviour belongs in
 /// the module's service objects.
 /// </summary>
-public interface IWorkItemType
+public interface IWorkItemType : IWorkItemTemplate
 {
     /// <summary>Stable, machine-readable identifier (e.g. "re-accreditation").</summary>
     string TypeId { get; }
@@ -18,15 +18,17 @@ public interface IWorkItemType
     /// <summary>The state a newly-ingested work item starts in.</summary>
     WorkItemState InitialState { get; }
 
-    /// <summary>All possible states this type can occupy.</summary>
-    IReadOnlyCollection<WorkItemState> States { get; }
-
     /// <summary>
-    /// Tasks required while the work item is in <paramref name="stateId"/>.
-    /// May be computed dynamically per call to support data-driven flows.
-    /// Returns an empty collection for states with no tasks.
+    /// Stable identifier for the current shape of this type's templates and
+    /// task definitions. Bump this whenever a change to <see cref="States"/>,
+    /// <see cref="IWorkItemTemplate.GetTasksForState"/> or
+    /// <see cref="Transitions"/> would render historical work items
+    /// inconsistently. Frontends use the same identifier to pick a matching
+    /// detail template, so historical items keep their original look.
+    /// Defaults to <c>"v1"</c> so types delivered before versioning existed
+    /// continue to compile.
     /// </summary>
-    IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId);
+    string IWorkItemTemplate.TemplateVersion => "v1";
 
     /// <summary>
     /// Allowed state transitions, exposed as named actions (e.g. "approve",
@@ -35,5 +37,5 @@ public interface IWorkItemType
     /// and outstanding tasks. Defaults to an empty list so types delivered
     /// before the engine existed continue to compile.
     /// </summary>
-    IReadOnlyCollection<WorkItemTransition> Transitions => Array.Empty<WorkItemTransition>();
+    IReadOnlyCollection<WorkItemTransition> IWorkItemTemplate.Transitions => Array.Empty<WorkItemTransition>();
 }

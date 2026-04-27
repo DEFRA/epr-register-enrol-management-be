@@ -87,11 +87,14 @@ public static class WorkItemEndpoints
         var submittedBy = httpContext.User.FindFirstValue("cognito:client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
+        var snapshot = WorkItemTemplateSnapshot.Capture(type);
         var workItem = new WorkItem
         {
             TypeId = type.TypeId,
             StateId = type.InitialState.Id,
             SubmittedBy = submittedBy,
+            TemplateSnapshot = snapshot,
+            TemplateVersion = snapshot.TemplateVersion,
             Payload = payloadDocument
         };
 
@@ -192,6 +195,7 @@ public static class WorkItemEndpoints
             w.SubmittedAt,
             w.LastModifiedAt,
             w.SubmittedBy,
+            projection.TemplateVersion,
             WorkItemPayloadConverter.ToJson(w.Payload),
             projection.Tasks,
             projection.AvailableActions);

@@ -81,6 +81,13 @@ public class WorkItemEndpointsTests
         Assert.Equal("Acme", captured.Payload["applicantName"].AsString);
         Assert.Equal(42, captured.Payload["tonnage"].AsInt32);
 
+        // Snapshot of the type's template (states, tasks, transitions, version)
+        // is frozen onto the work item at submission for faithful historical
+        // rendering after the live module changes.
+        Assert.NotNull(captured.TemplateSnapshot);
+        Assert.Equal("v1", captured.TemplateVersion);
+        Assert.Equal("v1", captured.TemplateSnapshot!.TemplateVersion);
+
         Assert.NotNull(response.Headers.Location);
         Assert.StartsWith("/work-items/", response.Headers.Location!.AbsolutePath);
 
@@ -89,6 +96,7 @@ public class WorkItemEndpointsTests
         Assert.Equal(TypeId, body!.TypeId);
         Assert.Equal("submitted", body.StateId);
         Assert.Equal("test-client", body.SubmittedBy);
+        Assert.Equal("v1", body.TemplateVersion);
         Assert.Equal(JsonValueKind.Object, body.Payload.ValueKind);
         Assert.Equal("Acme", body.Payload.GetProperty("applicantName").GetString());
     }

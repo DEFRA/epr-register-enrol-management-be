@@ -38,6 +38,7 @@ public interface IWorkItemService
 /// <summary>Snapshot of a work item alongside its engine-derived view.</summary>
 public sealed record WorkItemEngineProjection(
     WorkItem WorkItem,
+    string TemplateVersion,
     IReadOnlyCollection<WorkItemTaskProgress> Tasks,
     IReadOnlyCollection<WorkItemTransition> AvailableActions);
 
@@ -55,13 +56,13 @@ public sealed class WorkItemService(
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
-        var (workItem, type, failure) = await LoadAsync(workItemId, cancellationToken);
+        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
             return failure;
         }
 
-        var tasks = type!.GetTasksForState(workItem!.StateId);
+        var tasks = template!.GetTasksForState(workItem!.StateId);
         var task = tasks.FirstOrDefault(t => string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase));
         if (task is null)
         {
@@ -89,22 +90,22 @@ public sealed class WorkItemService(
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
-        var (workItem, type, failure) = await LoadAsync(workItemId, cancellationToken);
+        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
             return failure;
         }
 
-        var transition = type!.Transitions.FirstOrDefault(
+        var transition = template!.Transitions.FirstOrDefault(
             t => string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase));
         if (transition is null)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UnknownAction,
-                $"Action '{actionId}' is not declared by work item type '{type.TypeId}'.");
+                $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'.");
         }
 
-        var currentState = type.States.FirstOrDefault(
+        var currentState = template.States.FirstOrDefault(
             s => string.Equals(s.Id, workItem!.StateId, StringComparison.OrdinalIgnoreCase));
         if (currentState?.IsTerminal == true)
         {
@@ -121,7 +122,7 @@ public sealed class WorkItemService(
                 $"but {workItemId} is in '{workItem.StateId}'.");
         }
 
-        if (transition.RequiresAllTasksComplete && HasIncompleteTasks(type, workItem))
+        if (transition.RequiresAllTasksComplete && HasIncompleteTasks(template, workItem))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.IncompleteTasks,
@@ -149,38 +150,42 @@ public sealed class WorkItemService(
     {
         ArgumentNullException.ThrowIfNull(workItem);
 
-        var type = registry.Find(workItem.TypeId);
-        if (type is null)
+        var template = ResolveTemplate(workItem);
+        if (template is null)
         {
-            // The work item exists but its module is no longer registered (e.g. a
-            // legacy type that has been removed). Render it as having no tasks
-            // and no available actions so callers can still display it.
-            return new WorkItemEngineProjection(workItem, Array.Empty<WorkItemTaskProgress>(), Array.Empty<WorkItemTransition>());
+            // The work item exists but its module is no longer registered and
+            // no snapshot is on file (e.g. a legacy item). Render it as having
+            // no tasks and no available actions so callers can still display it.
+            return new WorkItemEngineProjection(
+                workItem,
+                ResolveTemplateVersion(workItem),
+                Array.Empty<WorkItemTaskProgress>(),
+                Array.Empty<WorkItemTransition>());
         }
 
         var completed = workItem.CompletedTaskIdsByState.TryGetValue(workItem.StateId, out var done)
             ? done
             : new HashSet<string>();
 
-        var taskProgress = type.GetTasksForState(workItem.StateId)
+        var taskProgress = template.GetTasksForState(workItem.StateId)
             .Select(task => new WorkItemTaskProgress(task.Id, task.DisplayName, completed.Contains(task.Id)))
             .ToList();
 
-        var currentState = type.States.FirstOrDefault(
+        var currentState = template.States.FirstOrDefault(
             s => string.Equals(s.Id, workItem.StateId, StringComparison.OrdinalIgnoreCase));
         var isTerminal = currentState?.IsTerminal == true;
 
         IReadOnlyCollection<WorkItemTransition> available = isTerminal
             ? Array.Empty<WorkItemTransition>()
-            : type.Transitions
+            : template.Transitions
                 .Where(t => string.Equals(t.FromStateId, workItem.StateId, StringComparison.OrdinalIgnoreCase))
                 .Where(t => !t.RequiresAllTasksComplete || taskProgress.All(p => p.IsComplete))
                 .ToList();
 
-        return new WorkItemEngineProjection(workItem, taskProgress, available);
+        return new WorkItemEngineProjection(workItem, template.TemplateVersion, taskProgress, available);
     }
 
-    private async Task<(WorkItem? WorkItem, IWorkItemType? Type, WorkItemActionResult? Failure)> LoadAsync(
+    private async Task<(WorkItem? WorkItem, IWorkItemTemplate? Template, WorkItemActionResult? Failure)> LoadAsync(
         Guid workItemId, CancellationToken cancellationToken)
     {
         var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
@@ -191,16 +196,38 @@ public sealed class WorkItemService(
                 $"No work item exists with id '{workItemId}'."));
         }
 
-        var type = registry.Find(workItem.TypeId);
-        if (type is null)
+        var template = ResolveTemplate(workItem);
+        if (template is null)
         {
             return (workItem, null, WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UnknownAction,
-                $"Work item {workItemId} references unregistered type '{workItem.TypeId}'."));
+                $"Work item {workItemId} references unregistered type '{workItem.TypeId}' and has no stored template snapshot."));
         }
 
-        return (workItem, type, null);
+        return (workItem, template, null);
     }
+
+    /// <summary>
+    /// Pick the template the engine should reason about for a work item. The
+    /// snapshot stored on the work item wins so that historical items keep
+    /// their original task list and action set even if the live type has
+    /// since changed; the live type is used only as a fallback for legacy
+    /// items submitted before snapshots existed.
+    /// </summary>
+    private IWorkItemTemplate? ResolveTemplate(WorkItem workItem)
+    {
+        if (workItem.TemplateSnapshot is not null)
+        {
+            return workItem.TemplateSnapshot;
+        }
+        return registry.Find(workItem.TypeId);
+    }
+
+    private string ResolveTemplateVersion(WorkItem workItem) =>
+        workItem.TemplateVersion
+        ?? workItem.TemplateSnapshot?.TemplateVersion
+        ?? registry.Find(workItem.TypeId)?.TemplateVersion
+        ?? "unknown";
 
     private static HashSet<string> GetCompletedBucket(WorkItem workItem, string stateId)
     {
@@ -212,9 +239,9 @@ public sealed class WorkItemService(
         return bucket;
     }
 
-    private static bool HasIncompleteTasks(IWorkItemType type, WorkItem workItem)
+    private static bool HasIncompleteTasks(IWorkItemTemplate template, WorkItem workItem)
     {
-        var required = type.GetTasksForState(workItem.StateId);
+        var required = template.GetTasksForState(workItem.StateId);
         if (required.Count == 0)
         {
             return false;

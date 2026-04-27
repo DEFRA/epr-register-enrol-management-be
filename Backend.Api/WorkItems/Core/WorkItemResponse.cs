@@ -7,6 +7,10 @@ namespace Backend.Api.WorkItems.Core;
 /// but carries the payload as a JSON element so callers do not see BSON types,
 /// and projects engine state (current-state task progress and the actions the
 /// engine will currently allow) so a UI can render without re-deriving it.
+///
+/// <see cref="TemplateVersion"/> exposes the version of the type's template
+/// the work item was assessed against, so a UI can pick a matching detail
+/// template for faithful historical rendering.
 /// </summary>
 public sealed record WorkItemResponse(
     Guid Id,
@@ -15,6 +19,7 @@ public sealed record WorkItemResponse(
     DateTime SubmittedAt,
     DateTime LastModifiedAt,
     string? SubmittedBy,
+    string TemplateVersion,
     JsonElement Payload,
     IReadOnlyCollection<WorkItemTaskProgress> Tasks,
     IReadOnlyCollection<WorkItemTransition> AvailableActions);
