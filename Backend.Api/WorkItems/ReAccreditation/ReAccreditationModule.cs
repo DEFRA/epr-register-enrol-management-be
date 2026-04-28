@@ -19,6 +19,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
     public void RegisterServices(IServiceCollection services)
     {
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
+        services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)

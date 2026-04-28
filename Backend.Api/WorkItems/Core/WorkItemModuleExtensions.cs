@@ -22,6 +22,11 @@ public static class WorkItemModuleExtensions
         services.AddSingleton<IWorkItemRegistry>(sp =>
             new WorkItemRegistry(sp.GetServices<IWorkItemType>()));
         services.AddSingleton<IWorkItemService, WorkItemService>();
+
+        // Seeding is opt-in per module via IWorkItemSeeder; the hosted
+        // service is always registered so seeded modules just work without
+        // any additional wiring in Program.cs.
+        services.AddHostedService<WorkItemSeederHostedService>();
         return services;
     }
 
