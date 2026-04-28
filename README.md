@@ -117,6 +117,15 @@ frontend at `http://localhost:3000/backend-status` reports the backend's
 To run both services together via Docker Compose, see the
 [frontend README](../epr-register-case-management-frontend-poc/README.md#running-the-full-stack).
 
+## Deployment
+
+This service targets the CDP platform. See
+[`docs/cdp-deployment.md`](docs/cdp-deployment.md) for the container port,
+required environment variables, secrets, AWS resources and Squid proxy
+allow-list. Tracing behaviour is documented in
+[`docs/cdp-tracing.md`](docs/cdp-tracing.md). Architecture decisions live
+under [`docs/adr/`](docs/adr/).
+
 ## Licence
 
 THIS INFORMATION IS LICENSED UNDER THE CONDITIONS OF THE OPEN GOVERNMENT
