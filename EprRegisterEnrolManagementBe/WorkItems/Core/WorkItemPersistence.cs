@@ -1,0 +1,214 @@
+using System.Diagnostics.CodeAnalysis;
+using System.Text.Json;
+using EprRegisterEnrolManagementBe.Utils.Mongo;
+using MongoDB.Bson;
+using MongoDB.Driver;
+
+namespace EprRegisterEnrolManagementBe.WorkItems.Core;
+
+/// <summary>
+/// Persistence for <see cref="WorkItem"/>s. Owned by the framework so every
+/// type shares a single envelope/index strategy; modules read/write their own
+/// payload shape on top of it.
+/// </summary>
+public interface IWorkItemPersistence
+{
+    Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default);
+
+    Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Return a single page of work items matching <paramref name="query"/>,
+    /// most-recently-submitted first, together with the total number of
+    /// matches across every page.
+    /// </summary>
+    Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Persist updates made by the engine (state transitions, task completions).
+    /// Implementations replace the document in its entirety so callers can
+    /// mutate any field on the supplied <see cref="WorkItem"/> before saving.
+    /// </summary>
+    Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default);
+}
+
+[ExcludeFromCodeCoverage]
+public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory, ILoggerFactory loggerFactory)
+    : MongoService<WorkItem>(connectionFactory, "workItems", loggerFactory), IWorkItemPersistence
+{
+    public async Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default)
+    {
+        await Collection.InsertOneAsync(workItem, cancellationToken: cancellationToken);
+        Logger.LogInformation(
+            "Submitted work item {WorkItemId} of type {WorkItemTypeId} by {SubmittedBy}",
+            workItem.Id, workItem.TypeId, workItem.SubmittedBy ?? "unknown");
+    }
+
+    public async Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        return await Collection
+            .Find(w => w.Id == id)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public async Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+
+        var filter = BuildFilter(query);
+
+        var find = Collection
+            .Find(filter)
+            .SortByDescending(w => w.SubmittedAt);
+
+        var totalCount = await Collection.CountDocumentsAsync(filter, cancellationToken: cancellationToken);
+
+        var page = query.NormalisedPage;
+        var pageSize = query.NormalisedPageSize;
+        var skip = (page - 1) * pageSize;
+
+        var items = await find
+            .Skip(skip)
+            .Limit(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return new WorkItemPage(items, totalCount, page, pageSize);
+    }
+
+    private static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
+    {
+        var builder = Builders<WorkItem>.Filter;
+        var clauses = new List<FilterDefinition<WorkItem>>();
+
+        if (query.TypeIds is { Count: > 0 } typeIds)
+        {
+            clauses.Add(builder.In(w => w.TypeId, typeIds));
+        }
+
+        if (query.StateIds is { Count: > 0 } stateIds)
+        {
+            clauses.Add(builder.In(w => w.StateId, stateIds));
+        }
+
+        var search = query.NormalisedSearch;
+        if (!string.IsNullOrEmpty(search))
+        {
+            // Case-insensitive substring on submitter, plus prefix match on the
+            // string-serialised id (which lets a user paste a full or partial
+            // id into the search box).
+            var escaped = System.Text.RegularExpressions.Regex.Escape(search);
+            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+
+            clauses.Add(builder.Or(
+                builder.Regex("_id", pattern),
+                builder.Regex(nameof(WorkItem.SubmittedBy), pattern)));
+        }
+
+        var assigneeId = query.NormalisedAssigneeId;
+        if (assigneeId is not null && query.UnassignedOnly)
+        {
+            // "Show me my work and anything still up for grabs" — assigned to
+            // the user OR unassigned.
+            clauses.Add(builder.Or(
+                builder.Eq(w => w.AssignedToId, assigneeId),
+                builder.Eq(w => w.AssignedToId, null)));
+        }
+        else if (assigneeId is not null)
+        {
+            clauses.Add(builder.Eq(w => w.AssignedToId, assigneeId));
+        }
+        else if (query.UnassignedOnly)
+        {
+            clauses.Add(builder.Eq(w => w.AssignedToId, null));
+        }
+
+        var submittedBy = query.NormalisedSubmittedBy;
+        if (submittedBy is not null)
+        {
+            clauses.Add(builder.Eq(w => w.SubmittedBy, submittedBy));
+        }
+
+        return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
+    }
+
+    public async Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)
+    {
+        var expectedVersion = workItem.Version;
+        workItem.Version = expectedVersion + 1;
+
+        var result = await Collection.ReplaceOneAsync(
+            w => w.Id == workItem.Id && w.Version == expectedVersion,
+            workItem,
+            cancellationToken: cancellationToken);
+
+        if (result.MatchedCount != 1)
+        {
+            // Roll the in-memory version back so a caller that catches and
+            // retries does not double-increment.
+            workItem.Version = expectedVersion;
+            throw new WorkItemConcurrencyException(workItem.Id, expectedVersion);
+        }
+
+        Logger.LogInformation(
+            "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState} (version {Version})",
+            workItem.Id, workItem.TypeId, workItem.StateId, workItem.Version);
+    }
+
+    protected override List<CreateIndexModel<WorkItem>> DefineIndexes(
+        IndexKeysDefinitionBuilder<WorkItem> builder)
+    {
+        var typeAndSubmitted = new CreateIndexModel<WorkItem>(
+            builder.Combine(
+                builder.Ascending(w => w.TypeId),
+                builder.Descending(w => w.SubmittedAt)));
+        var stateAndSubmitted = new CreateIndexModel<WorkItem>(
+            builder.Combine(
+                builder.Ascending(w => w.StateId),
+                builder.Descending(w => w.SubmittedAt)));
+        var submittedDescending = new CreateIndexModel<WorkItem>(
+            builder.Descending(w => w.SubmittedAt));
+        var assigneeAndSubmitted = new CreateIndexModel<WorkItem>(
+            builder.Combine(
+                builder.Ascending(w => w.AssignedToId),
+                builder.Descending(w => w.SubmittedAt)));
+        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted];
+    }
+}
+
+/// <summary>
+/// Conversions between API-facing <see cref="JsonElement"/> payloads and the
+/// <see cref="BsonDocument"/> form persisted in MongoDB. Lifted to a static
+/// helper so endpoints, tests and future modules share one implementation.
+/// </summary>
+public static class WorkItemPayloadConverter
+{
+    private static readonly BsonDocument s_emptyDocument = new();
+
+    public static BsonDocument ToBson(JsonElement? payload)
+    {
+        if (!payload.HasValue || payload.Value.ValueKind == JsonValueKind.Undefined ||
+            payload.Value.ValueKind == JsonValueKind.Null)
+        {
+            return new BsonDocument();
+        }
+
+        if (payload.Value.ValueKind != JsonValueKind.Object)
+        {
+            throw new InvalidWorkItemPayloadException(
+                $"Work item payload must be a JSON object, got {payload.Value.ValueKind}.");
+        }
+
+        var json = payload.Value.GetRawText();
+        return BsonDocument.Parse(json);
+    }
+
+    public static JsonElement ToJson(BsonDocument? document)
+    {
+        var bson = document ?? s_emptyDocument;
+        var json = bson.ToJson();
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
+    }
+}
+
+public sealed class InvalidWorkItemPayloadException(string message) : Exception(message);

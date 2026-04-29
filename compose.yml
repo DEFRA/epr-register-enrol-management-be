@@ -30,33 +30,16 @@ services:
       - '27017:27017'
     volumes:
       - mongodb-data:/data
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', 'db.hello().ok']
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
-  ################################################################################
-
-  # your-frontend:
-  #   image: defradigital/your-frontend:${YOUR_FRONTEND_VERSION:-latest}
-  #   ports:
-  #     - '3000:3000'
-  #   links:
-  #     - 'floci:floci'
-  #     - 'redis:redis'
-  #   depends_on:
-  #     floci:
-  #       condition: service_healthy
-  #     redis:
-  #       condition: service_started
-  #   env_file:
-  #     - 'compose/aws.env'
-  #   environment:
-  #     PORT: 3000
-  #     NODE_ENV: development
-  #     REDIS_HOST: redis
-  #     USE_SINGLE_INSTANCE_CACHE: true
-  #   networks:
-  #     - cdp-tenant
-
-  your-backend:
+  case-management-backend:
     build: ./
+    container_name: case-management-backend
     ports:
       - '8085:8085'
     links:
@@ -66,12 +49,13 @@ services:
       floci:
         condition: service_healthy
       mongodb:
-        condition: service_started
+        condition: service_healthy
     env_file:
       - 'compose/aws.env'
     environment:
       ASPNETCORE_URLS: http://+:8085
       Mongo__DatabaseUri: mongodb://mongodb:27017/
+      Mongo__DatabaseName: epr-register-case-management
     networks:
       - cdp-tenant
 

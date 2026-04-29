@@ -8,7 +8,7 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "Mongo__DatabaseUri": "mongodb://127.0.0.1:27017/",
-        "Mongo__DatabaseName": "epr-register-enrol-management-be"
+        "Mongo__DatabaseName": "epr-register-case-management"
       }
     }
   }
