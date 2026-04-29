@@ -1,9 +1,8 @@
 using System.Net;
-using System.Net.Http.Json;
-using Backend.Api.Example.Models;
-using Backend.Api.Example.Services;
+using Backend.Api.WorkItems.Core;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
@@ -19,7 +18,7 @@ public class CognitoClientIdAuthenticationTests
         await using var factory = new BareFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/example", cancellationToken);
+        var response = await client.GetAsync("/work-items", cancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -32,7 +31,7 @@ public class CognitoClientIdAuthenticationTests
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", string.Empty);
 
-        var response = await client.GetAsync("/example", cancellationToken);
+        var response = await client.GetAsync("/work-items", cancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -43,13 +42,13 @@ public class CognitoClientIdAuthenticationTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory();
         factory.MockPersistence
-            .GetAllAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<ExampleModel>().AsReadOnly());
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
 
-        var response = await client.GetAsync("/example", cancellationToken);
+        var response = await client.GetAsync("/work-items", cancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -66,15 +65,78 @@ public class CognitoClientIdAuthenticationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
-    private sealed class BareFactory : WebApplicationFactory<Program>
+    [Fact]
+    public async Task Signature_required_when_shared_secret_configured_request_without_signature_is_401()
     {
-        public readonly IExamplePersistence MockPersistence = Substitute.For<IExamplePersistence>();
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(sharedSecret: "test-secret");
+        factory.MockPersistence
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_required_tampered_signature_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(sharedSecret: "test-secret");
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", "AAAAtampered==");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_required_valid_signature_is_200()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(sharedSecret: "test-secret");
+        factory.MockPersistence
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        var signature = Backend.Api.Auth.CognitoClientIdAuthenticationHandler
+            .ComputeSignature("test-secret", "upstream-service", null, null, null);
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    private sealed class BareFactory(string? sharedSecret = null) : WebApplicationFactory<Program>
+    {
+        public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            if (sharedSecret is not null)
+            {
+                builder.ConfigureAppConfiguration((_, config) =>
+                {
+                    config.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["Auth:SharedSecret"] = sharedSecret
+                    });
+                });
+            }
             builder.ConfigureServices(services =>
             {
-                services.RemoveAll<IExamplePersistence>();
+                services.RemoveAll<IWorkItemPersistence>();
                 services.AddSingleton(MockPersistence);
             });
         }

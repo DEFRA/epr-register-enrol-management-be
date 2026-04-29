@@ -70,17 +70,17 @@ docker compose down -v
 
 ## Endpoints
 
-| Method | Path              | Description                          |
-| ------ | ----------------- | ------------------------------------ |
-| GET    | `/health`         | Health probe used by CDP             |
-| POST   | `/example`        | Create an example record             |
-| GET    | `/example`        | List or search example records       |
-| GET    | `/example/{name}` | Get a single example by name         |
-| PUT    | `/example/{name}` | Update an example                    |
-| DELETE | `/example/{name}` | Delete an example                    |
-
-The example endpoints are placeholders shipped with the template and will
-be replaced by case-management modules in subsequent PoC tickets.
+| Method | Path                                         | Description                            |
+| ------ | -------------------------------------------- | -------------------------------------- |
+| GET    | `/health`                                    | Health probe used by CDP               |
+| POST   | `/work-items`                                | Submit a new work item                 |
+| GET    | `/work-items`                                | List/search work items                 |
+| GET    | `/work-items/{id}`                           | Get a single work item by id           |
+| POST   | `/work-items/{id}/tasks/{taskId}/complete`   | Complete a task on a work item         |
+| POST   | `/work-items/{id}/actions/{actionId}`        | Apply an action / state transition     |
+| POST   | `/work-items/{id}/assign`                    | Assign a work item to a user           |
+| POST   | `/work-items/{id}/unassign`                  | Unassign a work item                   |
+| POST   | `/work-items/{id}/notes`                     | Add a note to a work item              |
 
 ## Authentication
 
@@ -91,7 +91,7 @@ presence and performs no further authorisation:
 
 ```bash
 curl -H 'x-cdp-cognito-client-id: my-upstream-service' \
-  http://localhost:8085/example
+  http://localhost:8085/work-items
 ```
 
 Requests without the header receive `401 Unauthorized`. The `/health`

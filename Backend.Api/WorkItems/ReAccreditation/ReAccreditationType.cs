@@ -22,6 +22,16 @@ public sealed class ReAccreditationType : IWorkItemType
     private static readonly WorkItemState s_rejected = new("rejected", "Rejected", IsTerminal: true);
     private static readonly WorkItemState s_withdrawn = new("withdrawn", "Withdrawn", IsTerminal: true);
 
+    /// <summary>
+    /// Role names that authorise approving or rejecting a re-accreditation.
+    /// Segregation of duties: an assessor who completes tasks should not be
+    /// the same user who records the final decision. Holding this role grants
+    /// permission to invoke the approve / reject transitions.
+    /// </summary>
+    public const string DecisionMakerRole = "reaccreditation-decision-maker";
+
+    private static readonly IReadOnlyCollection<string> s_decisionMakerRoles = new[] { DecisionMakerRole };
+
     private static readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>> s_tasksByState =
         new(StringComparer.OrdinalIgnoreCase)
         {
@@ -67,10 +77,12 @@ public sealed class ReAccreditationType : IWorkItemType
             s_assessmentInProgress.Id, s_awaitingDecision.Id),
         new WorkItemTransition(
             "approve", "Approve",
-            s_awaitingDecision.Id, s_approved.Id),
+            s_awaitingDecision.Id, s_approved.Id,
+            RequiredRoles: s_decisionMakerRoles),
         new WorkItemTransition(
             "reject", "Reject",
-            s_awaitingDecision.Id, s_rejected.Id),
+            s_awaitingDecision.Id, s_rejected.Id,
+            RequiredRoles: s_decisionMakerRoles),
 
         // Withdrawal is always available before a decision is recorded; it
         // bypasses the "all tasks complete" gate so an organisation can
@@ -81,7 +93,10 @@ public sealed class ReAccreditationType : IWorkItemType
             s_submitted.Id, s_withdrawn.Id, RequiresAllTasksComplete: false),
         new WorkItemTransition(
             "withdraw-during-assessment", "Withdraw",
-            s_assessmentInProgress.Id, s_withdrawn.Id, RequiresAllTasksComplete: false)
+            s_assessmentInProgress.Id, s_withdrawn.Id, RequiresAllTasksComplete: false),
+        new WorkItemTransition(
+            "withdraw-during-decision", "Withdraw",
+            s_awaitingDecision.Id, s_withdrawn.Id, RequiresAllTasksComplete: false)
     ];
 
     public IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId) =>

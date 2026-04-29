@@ -104,4 +104,12 @@ public sealed class WorkItem
     /// inherits the same audit behaviour without writing any audit code.
     /// </summary>
     public List<WorkItemAuditEntry> AuditLog { get; init; } = new();
+
+    /// <summary>
+    /// Optimistic concurrency token. Incremented by
+    /// <see cref="IWorkItemPersistence.ReplaceAsync"/> on every successful
+    /// save and used as a filter so two concurrent writers cannot silently
+    /// overwrite one another's changes.
+    /// </summary>
+    public int Version { get; set; }
 }

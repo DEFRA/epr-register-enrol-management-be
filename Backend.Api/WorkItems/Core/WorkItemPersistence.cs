@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
-using Backend.Api.Utils.Auditing;
 using Backend.Api.Utils.Mongo;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -40,7 +39,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
     public async Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default)
     {
         await Collection.InsertOneAsync(workItem, cancellationToken: cancellationToken);
-        Logger.Audit(
+        Logger.LogInformation(
             "Submitted work item {WorkItemId} of type {WorkItemTypeId} by {SubmittedBy}",
             workItem.Id, workItem.TypeId, workItem.SubmittedBy ?? "unknown");
     }
@@ -123,18 +122,36 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             clauses.Add(builder.Eq(w => w.AssignedToId, null));
         }
 
+        var submittedBy = query.NormalisedSubmittedBy;
+        if (submittedBy is not null)
+        {
+            clauses.Add(builder.Eq(w => w.SubmittedBy, submittedBy));
+        }
+
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
 
     public async Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)
     {
-        await Collection.ReplaceOneAsync(
-            w => w.Id == workItem.Id,
+        var expectedVersion = workItem.Version;
+        workItem.Version = expectedVersion + 1;
+
+        var result = await Collection.ReplaceOneAsync(
+            w => w.Id == workItem.Id && w.Version == expectedVersion,
             workItem,
             cancellationToken: cancellationToken);
-        Logger.Audit(
-            "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState}",
-            workItem.Id, workItem.TypeId, workItem.StateId);
+
+        if (result.MatchedCount != 1)
+        {
+            // Roll the in-memory version back so a caller that catches and
+            // retries does not double-increment.
+            workItem.Version = expectedVersion;
+            throw new WorkItemConcurrencyException(workItem.Id, expectedVersion);
+        }
+
+        Logger.LogInformation(
+            "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState} (version {Version})",
+            workItem.Id, workItem.TypeId, workItem.StateId, workItem.Version);
     }
 
     protected override List<CreateIndexModel<WorkItem>> DefineIndexes(

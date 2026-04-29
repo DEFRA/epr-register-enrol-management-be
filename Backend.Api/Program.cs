@@ -1,7 +1,6 @@
 using Backend.Api.Auth;
-using Backend.Api.Example.Endpoints;
-using Backend.Api.Example.Services;
 using Backend.Api.Config;
+using Backend.Api.Health;
 using Backend.Api.Utils;
 using Backend.Api.WorkItems.Core;
 using Backend.Api.WorkItems.ReAccreditation;
@@ -53,16 +52,17 @@ static void ConfigureServices(WebApplicationBuilder builder)
 
     services.AddHttpContextAccessor();
 
-    ConfigureAuth(services);
+    ConfigureAuth(services, configuration);
 
     ConfigureHeaderPropagation(services, configuration);
     ConfigureHttpClients(services);
     ConfigureMongo(services, configuration);
+    ConfigureCors(services, configuration);
 
-    services.AddHealthChecks();
-
-    // App services
-    services.AddSingleton<IExamplePersistence, ExamplePersistence>();
+    services.AddHealthChecks()
+        // Tagged "ready" so liveness (/health) sees no checks while
+        // readiness (/health/ready) only fires checks tagged "ready".
+        .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"]);
 
     ConfigureWorkItems(services);
 }
@@ -78,11 +78,19 @@ static void ConfigureWorkItems(IServiceCollection services)
 }
 
 [ExcludeFromCodeCoverage]
-static void ConfigureAuth(IServiceCollection services)
+static void ConfigureAuth(IServiceCollection services, IConfiguration configuration)
 {
     services
         .AddAuthentication(CognitoClientIdDefaults.AuthenticationScheme)
         .AddCognitoClientId();
+
+    // Bind options lazily via PostConfigure so test fixtures that add
+    // Auth:SharedSecret via WebApplicationFactory.ConfigureAppConfiguration
+    // (which fires during builder.Build(), after this method runs) can still
+    // override the value.
+    services.AddOptions<CognitoClientIdAuthenticationOptions>(CognitoClientIdDefaults.AuthenticationScheme)
+        .Configure<IConfiguration>((options, config) =>
+            options.SharedSecret = config.GetValue<string>("Auth:SharedSecret"));
 
     services.AddAuthorization();
 }
@@ -94,10 +102,36 @@ static void ConfigureHeaderPropagation(IServiceCollection services, IConfigurati
 
     services.AddHeaderPropagation(options =>
     {
+        // EXPLICIT allow-list of headers that may be propagated from the
+        // incoming request to outbound HttpClient calls. This is a security
+        // boundary: anything NOT listed here is dropped on the way out so a
+        // crafted upstream request can't leak credentials or auth state to
+        // downstream services.
+        //
+        // Things deliberately NOT propagated:
+        //   * Authorization, Cookie  — caller credentials must never be
+        //     replayed verbatim to a downstream API.
+        //   * x-cdp-auth-signature, x-api-key — signed/keyed for THIS API
+        //     only; replaying them to another service would cross trust
+        //     boundaries.
+        //   * x-cdp-user-id, x-cdp-user-name, x-cdp-user-roles,
+        //     x-cdp-cognito-client-id — identity headers from the BFF are
+        //     for THIS service to consume; downstream services that need
+        //     them must mint their own.
+        //
+        // To add a new propagated header, add it here AND document why it
+        // is safe to forward.
         if (!string.IsNullOrWhiteSpace(traceHeader))
         {
+            // Distributed tracing correlation id. Safe: it carries no
+            // authority and is the whole point of header propagation.
             options.Headers.Add(traceHeader);
         }
+        // Standard W3C trace context. Safe for the same reason as above.
+        options.Headers.Add("traceparent");
+        options.Headers.Add("tracestate");
+        // Request-id used by some load balancers / API gateways. Safe.
+        options.Headers.Add("x-request-id");
     });
 }
 
@@ -126,12 +160,70 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
     services.AddSingleton<IMongoDbClientFactory, MongoDbClientFactory>();
 }
 
+/// <summary>
+/// CORS posture: deny-all by default. The named policy <c>BackendCors</c> is
+/// applied with an explicit allow-list of trusted origins read from
+/// <c>Cors:AllowedOrigins</c>. With no configured origins the policy is
+/// registered with an empty list which means <em>no</em> browser origin can
+/// successfully call the API — desired in CDP where calls go through the
+/// server-side BFF.
+/// </summary>
+[ExcludeFromCodeCoverage]
+static void ConfigureCors(IServiceCollection services, IConfiguration configuration)
+{
+    services.AddCors();
+
+    // Bind options lazily via PostConfigure so test fixtures that add
+    // Cors:AllowedOrigins via WebApplicationFactory.ConfigureAppConfiguration
+    // (which fires during builder.Build(), after this method runs) can still
+    // override the value.
+    services.AddOptions<Microsoft.AspNetCore.Cors.Infrastructure.CorsOptions>()
+        .Configure<IConfiguration>((options, config) =>
+        {
+            var allowedOrigins = config.GetSection("Cors:AllowedOrigins")
+                .Get<string[]>() ?? Array.Empty<string>();
+
+            options.AddPolicy("BackendCors", policy =>
+            {
+                if (allowedOrigins.Length == 0)
+                {
+                    // Deny-all: no allowed origin and no wildcard. Browser
+                    // requests from any origin will receive no CORS headers and
+                    // will be blocked by the browser.
+                    policy.WithOrigins().DisallowCredentials();
+                    return;
+                }
+                policy.WithOrigins(allowedOrigins)
+                      .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                      .WithHeaders("Authorization", "Content-Type",
+                          "x-cdp-cognito-client-id", "x-cdp-user-id",
+                          "x-cdp-user-name", "x-cdp-user-roles",
+                          "x-cdp-auth-signature")
+                      .DisallowCredentials();
+            });
+        });
+}
+
 [ExcludeFromCodeCoverage]
 static void ConfigureMiddleware(WebApplication app)
 {
+    // ExceptionHandler MUST be the very first middleware so unhandled
+    // exceptions thrown anywhere downstream are caught and translated into
+    // an RFC 7807 ProblemDetails response (configured via
+    // services.AddProblemDetails()) instead of leaking stack traces or
+    // returning a bare 500.
+    app.UseExceptionHandler();
+    // StatusCodePages turns plain status-only responses (e.g. a 404 from
+    // routing) into ProblemDetails too, for a uniform error shape.
+    app.UseStatusCodePages();
+
     app.UseSerilogRequestLogging();
 
     app.UseHeaderPropagation();
+
+    // CORS must run before Auth so preflight (OPTIONS) responses are
+    // produced for browser clients before authorisation kicks in.
+    app.UseCors("BackendCors");
 
     app.UseAuthentication();
     app.UseAuthorization();
@@ -140,10 +232,18 @@ static void ConfigureMiddleware(WebApplication app)
 [ExcludeFromCodeCoverage]
 static void ConfigureEndpoints(WebApplication app)
 {
-    app.MapHealthChecks("/health", new HealthCheckOptions()).AllowAnonymous();
-
-    // Remove before deploying
-    app.MapExampleEndpoints().RequireAuthorization();
+    // Liveness: trivial — answers "is the process up". No dependency
+    // checks; if the process is alive enough to respond, it's alive.
+    app.MapHealthChecks("/health", new HealthCheckOptions
+    {
+        Predicate = _ => false
+    }).AllowAnonymous();
+    // Readiness: only the "ready"-tagged checks run (currently MongoDB).
+    // CDP / Kubernetes uses this to decide when to send traffic.
+    app.MapHealthChecks("/health/ready", new HealthCheckOptions
+    {
+        Predicate = check => check.Tags.Contains("ready")
+    }).AllowAnonymous();
 
     app.MapWorkItemFrameworkEndpoints();
     app.MapWorkItemModules();

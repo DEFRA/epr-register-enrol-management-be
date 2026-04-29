@@ -53,6 +53,13 @@ public class WorkItemServiceTests
         };
 
     private static ClaimsPrincipal User() =>
+        new(new ClaimsIdentity(
+        [
+            new Claim("cognito:client_id", "test-client"),
+            new Claim("user:id", "test-user")
+        ], "test"));
+
+    private static ClaimsPrincipal UserWithoutActorId() =>
         new(new ClaimsIdentity([new Claim("cognito:client_id", "test-client")], "test"));
 
     private static ClaimsPrincipal UserWithRoles(string userId, params string[] roles)
@@ -105,8 +112,12 @@ public class WorkItemServiceTests
             workItem.Id, "check-eligibility", User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
+        Assert.True(result.IsIdempotentReplay,
+            "Re-completing an already-complete task must be flagged as a replay so " +
+            "the endpoint can set X-Idempotent-Replay: true.");
         Assert.Equal(InitialNow, workItem.LastModifiedAt);
         await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        Assert.DoesNotContain(workItem.AuditLog, a => a.Action == "task-completed");
     }
 
     [Fact]
@@ -246,6 +257,124 @@ public class WorkItemServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task ApplyAction_returns_NotAuthorized_when_caller_lacks_required_role()
+    {
+        var type = BuildType(transitions: [
+            new WorkItemTransition(
+                "approve", "Approve", "submitted", "approved",
+                RequiredRoles: new[] { "decision-maker" })
+        ]);
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).ApplyActionAsync(
+            workItem.Id, "approve", UserWithRoles("alice-1"), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
+        Assert.Equal("submitted", workItem.StateId);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ApplyAction_succeeds_when_caller_holds_one_of_required_roles()
+    {
+        var type = BuildType(transitions: [
+            new WorkItemTransition(
+                "approve", "Approve", "submitted", "approved",
+                RequiredRoles: new[] { "decision-maker", "admin" })
+        ]);
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).ApplyActionAsync(
+            workItem.Id, "approve", UserWithRoles("bob-1", "admin"),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("approved", workItem.StateId);
+    }
+
+    [Fact]
+    public async Task CompleteTask_returns_ConcurrencyConflict_when_persistence_throws()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        _persistence
+            .When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
+            .Do(_ => throw new WorkItemConcurrencyException(workItem.Id, 0));
+
+        var result = await BuildService(type).CompleteTaskAsync(
+            workItem.Id, "check-eligibility", User(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task ApplyAction_returns_ConcurrencyConflict_when_persistence_throws()
+    {
+        var type = BuildType(transitions: [
+            new WorkItemTransition("approve", "Approve", "submitted", "approved",
+                RequiresAllTasksComplete: false)
+        ]);
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        _persistence
+            .When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
+            .Do(_ => throw new WorkItemConcurrencyException(workItem.Id, 0));
+
+        var result = await BuildService(type).ApplyActionAsync(
+            workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task CompleteTask_returns_MissingActorIdentity_when_user_id_absent()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).CompleteTaskAsync(
+            workItem.Id, "check-eligibility", UserWithoutActorId(),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+        await _persistence.DidNotReceiveWithAnyArgs()
+            .ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task AddNote_records_user_id_verbatim_without_falling_back_to_client_id()
+    {
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, "An audit-worthy observation.",
+            User(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess, result.Message);
+        var note = Assert.Single(workItem.Notes);
+        Assert.Equal("test-user", note.CreatedBy);
+        var auditEntry = Assert.Single(
+            workItem.AuditLog, a => a.Action == "note-added");
+        Assert.Equal("test-user", auditEntry.CreatedBy);
     }
 
     [Fact]

@@ -14,6 +14,14 @@ namespace Backend.Api.WorkItems.Core;
 /// </summary>
 public static class WorkItemEndpoints
 {
+    /// <summary>
+    /// Role that lets a user read every work item regardless of submitter.
+    /// Standard callers (organisations / BFFs acting on their behalf) only
+    /// see items they themselves submitted; case workers / assessors with
+    /// this role see all of them.
+    /// </summary>
+    public const string CaseWorkerRole = "case-worker";
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapWorkItemFrameworkEndpoints(this IEndpointRouteBuilder app)
     {
@@ -123,23 +131,48 @@ public static class WorkItemEndpoints
 
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound>> GetById(
         [FromRoute] Guid id,
+        HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        return workItem is null
-            ? TypedResults.NotFound()
-            : TypedResults.Ok(ToResponse(engine.Project(workItem)));
+        if (workItem is null || !CanRead(httpContext.User, workItem))
+        {
+            // Always return NotFound for cross-tenant access to avoid
+            // leaking the existence of items the caller cannot see.
+            return TypedResults.NotFound();
+        }
+        return TypedResults.Ok(ToResponse(engine.Project(workItem)));
     }
 
-    internal static async Task<Ok<WorkItemListResponse>> GetAll(
+    internal static async Task<Results<Ok<WorkItemListResponse>, ProblemHttpResult>> GetAll(
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
         var query = WorkItemQueryBinding.FromQueryString(httpContext.Request.Query);
+
+        if (query.ExceedsPageCap)
+        {
+            return TypedResults.Problem(
+                title: "Page out of range",
+                detail: $"'page' must be <= {WorkItemQuery.MaxPage}.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        // Tenancy isolation: standard callers only ever see items they
+        // themselves submitted. Case workers (with the case-worker role)
+        // bypass this filter and see everything.
+        if (!httpContext.User.IsInRole(CaseWorkerRole))
+        {
+            var callerClientId = httpContext.User.FindFirstValue("cognito:client_id")
+                ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+            // No identifiable submitter → nothing to show.
+            query = query with { SubmittedBy = callerClientId ?? "__no_tenant__" };
+        }
+
         var page = await persistence.QueryAsync(query, cancellationToken);
 
         var items = page.Items
@@ -149,6 +182,27 @@ public static class WorkItemEndpoints
         return TypedResults.Ok(new WorkItemListResponse(items, page.TotalCount, page.Page, page.PageSize));
     }
 
+    /// <summary>
+    /// Tenancy gate. The caller is allowed to read the work item if they
+    /// hold the case-worker role, or if their cognito client id matches the
+    /// item's submitter.
+    /// </summary>
+    private static bool CanRead(ClaimsPrincipal user, WorkItem workItem)
+    {
+        if (user.IsInRole(CaseWorkerRole)) return true;
+        var callerClientId = user.FindFirstValue("cognito:client_id")
+            ?? user.FindFirstValue(ClaimTypes.NameIdentifier);
+        return callerClientId is not null
+            && string.Equals(callerClientId, workItem.SubmittedBy, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Header name set on a CompleteTask response when the task was already
+    /// complete. Lets clients distinguish "first hit" from "replay" without
+    /// needing to introspect the audit log.
+    /// </summary>
+    public const string IdempotentReplayHeader = "X-Idempotent-Replay";
+
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> CompleteTask(
         [FromRoute] Guid id,
         [FromRoute] string taskId,
@@ -157,6 +211,10 @@ public static class WorkItemEndpoints
         CancellationToken cancellationToken)
     {
         var result = await engine.CompleteTaskAsync(id, taskId, httpContext.User, cancellationToken);
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[IdempotentReplayHeader] = "true";
+        }
         return ToHttpResult(result, engine);
     }
 
@@ -260,8 +318,14 @@ public static class WorkItemEndpoints
                     title: "Not authorised",
                     detail: result.Message,
                     statusCode: StatusCodes.Status403Forbidden),
+            WorkItemActionFailureCode.MissingActorIdentity
+                => TypedResults.Problem(
+                    title: "Authentication required",
+                    detail: result.Message,
+                    statusCode: StatusCodes.Status401Unauthorized),
             WorkItemActionFailureCode.IncompleteTasks
                 or WorkItemActionFailureCode.TerminalState
+                or WorkItemActionFailureCode.ConcurrencyConflict
                 => TypedResults.Problem(
                     title: "Action not allowed",
                     detail: result.Message,

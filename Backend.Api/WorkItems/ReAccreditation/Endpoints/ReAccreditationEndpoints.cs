@@ -28,6 +28,11 @@ public static class ReAccreditationEndpoints
             .WithName("GetReAccreditationRecommendation")
             .RequireAuthorization();
 
+        group.MapPost("/{id:guid}/decision-rationale", RecordDecisionRationale)
+            .WithName("RecordReAccreditationDecisionRationale")
+            .DisableValidation()
+            .RequireAuthorization();
+
         return app;
     }
 
@@ -76,7 +81,84 @@ public static class ReAccreditationEndpoints
         return TypedResults.Ok(new ReAccreditationRecommendationResponse(
             recommendation.Outcome, recommendation.Rationale));
     }
-}
+    /// <summary>
+    /// Record the decision rationale for a re-accreditation work item.
+    /// Persists the rationale as a note (so it is captured in the standard
+    /// audit log) and marks the <c>record-decision-rationale</c> task
+    /// complete so the work item satisfies
+    /// <see cref="WorkItemTransition.RequiresAllTasksComplete"/> on approve
+    /// / reject.
+    /// </summary>
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> RecordDecisionRationale(
+        [FromRoute] Guid id,
+        DecisionRationaleRequest request,
+        HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        var rationale = request?.Rationale?.Trim();
+        if (string.IsNullOrWhiteSpace(rationale))
+        {
+            return TypedResults.Problem(
+                title: "Invalid rationale",
+                detail: "'rationale' is required and must not be whitespace.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+        if (rationale.Length < ReAccreditationEndpointsRationale.MinRationaleLength)
+        {
+            return TypedResults.Problem(
+                title: "Invalid rationale",
+                detail: $"'rationale' must be at least {ReAccreditationEndpointsRationale.MinRationaleLength} characters.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
 
-/// <summary>HTTP-facing shape returned by the recommendation endpoint.</summary>
+        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
+        if (workItem is null)
+        {
+            return TypedResults.NotFound();
+        }
+        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return TypedResults.Problem(
+                title: "Wrong work item type",
+                detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var noteText = $"[decision-rationale] {rationale}";
+        var noteResult = await engine.AddNoteAsync(id, noteText, httpContext.User, cancellationToken);
+        if (!noteResult.IsSuccess)
+        {
+            return TypedResults.Problem(
+                title: "Could not record rationale",
+                detail: noteResult.Message,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var taskResult = await engine.CompleteTaskAsync(id, "record-decision-rationale", httpContext.User, cancellationToken);
+        if (!taskResult.IsSuccess)
+        {
+            return TypedResults.Problem(
+                title: "Could not complete decision-rationale task",
+                detail: taskResult.Message,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(taskResult.WorkItem!)));
+    }
+}
 public sealed record ReAccreditationRecommendationResponse(string Recommendation, string Rationale);
+
+/// <summary>Request body for <see cref="ReAccreditationEndpoints.RecordDecisionRationale"/>.</summary>
+public sealed record DecisionRationaleRequest(string Rationale);
+
+public static partial class ReAccreditationEndpointsRationale
+{
+    /// <summary>
+    /// Minimum rationale length. Picked to force assessors to write a real
+    /// sentence rather than a one-character placeholder, while still
+    /// permitting short "approved — meets all criteria" decisions.
+    /// </summary>
+    public const int MinRationaleLength = 10;
+}

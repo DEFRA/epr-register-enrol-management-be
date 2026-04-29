@@ -35,4 +35,13 @@ public static class CognitoClientIdDefaults
     /// <c>RequireAuthorization(...)</c> patterns.
     /// </summary>
     public const string DefaultUserRolesHeaderName = "x-cdp-user-roles";
+
+    /// <summary>
+    /// Header carrying a base64 HMAC-SHA256 signature, computed by the BFF
+    /// over the canonical concatenation of the trust headers, using a
+    /// shared secret. Lets the backend verify the trust headers actually
+    /// originated from the BFF and were not forged by a caller that bypassed
+    /// CDP ingress.
+    /// </summary>
+    public const string DefaultSignatureHeaderName = "x-cdp-auth-signature";
 }

@@ -280,6 +280,20 @@ POST /work-items/{id}/notes
 
 ## Audit log (RA-97)
 
+### Single source of truth
+
+`WorkItem.AuditLog` (the per-document, append-only list described below) is
+the **single authoritative audit trail** for every work item. There is no
+parallel database or external audit store. The console-only
+`AuditLogger`/`logger.Audit(...)` helper that previously emitted a second,
+in-memory-only stream of audit events has been retired — it left no durable
+record (lost on log rotation) and produced two divergent histories for the
+same mutation. Service operational logs at `LogInformation` describe what
+the engine did for support purposes, but the auditable record lives on the
+work item itself.
+
+### Mechanism
+
 Every state-changing engine call (`CompleteTaskAsync`, `ApplyActionAsync`,
 `AssignAsync`, `UnassignAsync`, `AddNoteAsync`) automatically appends a
 `WorkItemAuditEntry` to `WorkItem.AuditLog` on success. The framework owns
@@ -298,7 +312,7 @@ the work item document. An entry carries:
 | `ActionDisplayName` | Human-readable description (e.g. `Task completed`). |
 | `Details` | `Dictionary<string, string?>` of contextual fields per action: `taskId`/`taskDisplayName`/`stateId`; `actionId`/`actionDisplayName`/`fromStateId`/`toStateId`; `assigneeId`/`assigneeName`/`previousAssigneeId`/`previousAssigneeName`; `previousAssigneeId`/`previousAssigneeName`; `noteId`. |
 | `CreatedAt` | UTC timestamp from the injected `TimeProvider`. |
-| `CreatedBy` | Snapshot of the actor's user id (`user:id`, falling back to the Cognito client id). |
+| `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, required — mutations without it are rejected with 401). |
 | `CreatedByName` | Snapshot of the actor's display name (`user:name`) at write time. |
 
 ### Wire format

@@ -179,6 +179,103 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Get_by_id_returns_not_found_for_cross_tenant_access()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        factory.MockPersistence
+            .GetByIdAsync(id, Arg.Any<CancellationToken>())
+            .Returns(new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "other-tenant"
+            });
+
+        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Get_by_id_allows_case_worker_to_read_any_tenants_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        factory.MockPersistence
+            .GetByIdAsync(id, Arg.Any<CancellationToken>())
+            .Returns(new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "other-tenant"
+            });
+
+        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Get_list_filters_by_caller_client_id_when_not_case_worker()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        WorkItemQuery? captured = null;
+        factory.MockPersistence
+            .QueryAsync(Arg.Do<WorkItemQuery>(q => captured = q), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, WorkItemQuery.DefaultPageSize));
+
+        _ = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.NotNull(captured);
+        Assert.Equal("test-client", captured!.SubmittedBy);
+    }
+
+    [Fact]
+    public async Task Get_list_does_not_filter_when_case_worker()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
+        using var client = factory.CreateClient();
+
+        WorkItemQuery? captured = null;
+        factory.MockPersistence
+            .QueryAsync(Arg.Do<WorkItemQuery>(q => captured = q), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, WorkItemQuery.DefaultPageSize));
+
+        _ = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.NotNull(captured);
+        Assert.Null(captured!.SubmittedBy);
+    }
+
+    [Fact]
+    public async Task Get_list_rejects_page_above_cap_with_400()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(
+            $"/work-items?page={WorkItemQuery.MaxPage + 1}", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        // Persistence must never be hit for an out-of-range page \u2014 that's the
+        // whole point of the cap.
+        await factory.MockPersistence.DidNotReceiveWithAnyArgs()
+            .QueryAsync(default!, default);
+    }
+
+    [Fact]
     public async Task Get_returns_paginated_envelope_for_all_persisted_work_items()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

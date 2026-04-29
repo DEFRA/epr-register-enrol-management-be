@@ -37,14 +37,29 @@ public sealed record WorkItemQuery(
     string? AssigneeId = null,
     bool UnassignedOnly = false,
     int Page = 1,
-    int PageSize = 20)
+    int PageSize = 20,
+    string? SubmittedBy = null)
 {
     public const int DefaultPageSize = 20;
     public const int MinPageSize = 1;
     public const int MaxPageSize = 100;
+    /// <summary>
+    /// Maximum page number. Together with <see cref="MaxPageSize"/> this caps
+    /// the total skip cost (Mongo "skip" is O(skip)) and prevents an
+    /// attacker from issuing requests like <c>?page=999999999</c> to force
+    /// the database into pathological scans (a cheap DoS vector).
+    /// </summary>
+    public const int MaxPage = 1000;
 
-    /// <summary>The 1-based page number, clamped to a minimum of 1.</summary>
-    public int NormalisedPage => Page < 1 ? 1 : Page;
+    /// <summary>The 1-based page number, clamped to [1, <see cref="MaxPage"/>].</summary>
+    public int NormalisedPage => Page < 1 ? 1 : Page > MaxPage ? MaxPage : Page;
+
+    /// <summary>
+    /// True when <see cref="Page"/> exceeds <see cref="MaxPage"/>. Endpoints
+    /// should reject the request with 400 rather than silently clamping so
+    /// the client cannot accidentally page off the end of the data.
+    /// </summary>
+    public bool ExceedsPageCap => Page > MaxPage;
 
     /// <summary>The page size clamped into [<see cref="MinPageSize"/>, <see cref="MaxPageSize"/>].</summary>
     public int NormalisedPageSize =>
@@ -58,6 +73,10 @@ public sealed record WorkItemQuery(
     /// <summary>Trimmed assignee id, or <c>null</c> if blank/whitespace.</summary>
     public string? NormalisedAssigneeId =>
         string.IsNullOrWhiteSpace(AssigneeId) ? null : AssigneeId.Trim();
+
+    /// <summary>Trimmed submitted-by, or <c>null</c> if blank/whitespace.</summary>
+    public string? NormalisedSubmittedBy =>
+        string.IsNullOrWhiteSpace(SubmittedBy) ? null : SubmittedBy.Trim();
 }
 
 /// <summary>

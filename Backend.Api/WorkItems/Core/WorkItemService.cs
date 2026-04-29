@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using Backend.Api.Utils.Auditing;
 
 namespace Backend.Api.WorkItems.Core;
 
@@ -99,6 +98,11 @@ public sealed class WorkItemService(
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return identityFailure;
+        }
+
         var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
@@ -115,21 +119,34 @@ public sealed class WorkItemService(
         }
 
         var bucket = GetCompletedBucket(workItem, workItem.StateId);
-        if (bucket.Add(task.Id))
+        if (!bucket.Add(task.Id))
         {
-            var now = _timeProvider.GetUtcNow().UtcDateTime;
-            workItem.LastModifiedAt = now;
-            AppendAudit(workItem, "task-completed", "Task completed", user, now, new()
-            {
-                ["taskId"] = task.Id,
-                ["taskDisplayName"] = task.DisplayName,
-                ["stateId"] = workItem.StateId
-            });
-            await persistence.ReplaceAsync(workItem, cancellationToken);
-            logger.Audit(
-                "Task {TaskId} marked complete on work item {WorkItemId} ({TypeId}) by {User}",
-                task.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
+            // Already completed: idempotent replay. Persist nothing, write
+            // no audit entry, but tell the caller this was a no-op so they
+            // can render an appropriate UI state instead of a confusing
+            // "already done" error.
+            return WorkItemActionResult.IdempotentReplay(workItem);
         }
+
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        workItem.LastModifiedAt = now;
+        AppendAudit(workItem, "task-completed", "Task completed", user, now, new()
+        {
+            ["taskId"] = task.Id,
+            ["taskDisplayName"] = task.DisplayName,
+            ["stateId"] = workItem.StateId
+        });
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException)
+        {
+            return ConcurrencyConflict(workItem.Id);
+        }
+        logger.LogInformation(
+            "Task {TaskId} marked complete on work item {WorkItemId} ({TypeId}) by {User}",
+            task.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -140,6 +157,11 @@ public sealed class WorkItemService(
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return identityFailure;
+        }
+
         var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
@@ -179,6 +201,14 @@ public sealed class WorkItemService(
                 $"Action '{actionId}' requires every task for state '{workItem.StateId}' to be complete first.");
         }
 
+        if (transition.RequiredRoles is { Count: > 0 } requiredRoles
+            && !requiredRoles.Any(r => user?.IsInRole(r) == true))
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.NotAuthorized,
+                $"Action '{actionId}' requires one of the following roles: {string.Join(", ", requiredRoles)}.");
+        }
+
         var previousState = workItem.StateId;
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.StateId = transition.ToStateId;
@@ -190,8 +220,15 @@ public sealed class WorkItemService(
             ["fromStateId"] = previousState,
             ["toStateId"] = workItem.StateId
         });
-        await persistence.ReplaceAsync(workItem, cancellationToken);
-        logger.Audit(
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException)
+        {
+            return ConcurrencyConflict(workItem.Id);
+        }
+        logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
             workItem.Id, workItem.TypeId, previousState, workItem.StateId, transition.ActionId, DescribeUser(user));
 
@@ -205,6 +242,11 @@ public sealed class WorkItemService(
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return identityFailure;
+        }
+
         if (string.IsNullOrWhiteSpace(assigneeId))
         {
             return WorkItemActionResult.Failure(
@@ -258,7 +300,7 @@ public sealed class WorkItemService(
             workItem.AssignedToId = trimmedAssigneeId;
             workItem.AssignedToName = snapshotName;
             workItem.AssignedAt = _timeProvider.GetUtcNow().UtcDateTime;
-            workItem.AssignedBy = actorUserId ?? DescribeUser(user);
+            workItem.AssignedBy = actorUserId!;
             workItem.LastModifiedAt = workItem.AssignedAt.Value;
             AppendAudit(workItem, "assigned", "Assigned", user, workItem.AssignedAt.Value, new()
             {
@@ -267,8 +309,15 @@ public sealed class WorkItemService(
                 ["previousAssigneeId"] = previousAssigneeId,
                 ["previousAssigneeName"] = previousAssigneeName
             });
-            await persistence.ReplaceAsync(workItem, cancellationToken);
-            logger.Audit(
+            try
+            {
+                await persistence.ReplaceAsync(workItem, cancellationToken);
+            }
+            catch (WorkItemConcurrencyException)
+            {
+                return ConcurrencyConflict(workItem.Id);
+            }
+            logger.LogInformation(
                 "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
                 workItem.Id, workItem.TypeId, previousAssigneeId ?? "(unassigned)", trimmedAssigneeId, DescribeUser(user));
         }
@@ -281,6 +330,11 @@ public sealed class WorkItemService(
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return identityFailure;
+        }
+
         var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
         {
@@ -315,8 +369,15 @@ public sealed class WorkItemService(
             ["previousAssigneeId"] = previousAssigneeId,
             ["previousAssigneeName"] = previousAssigneeName
         });
-        await persistence.ReplaceAsync(workItem, cancellationToken);
-        logger.Audit(
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException)
+        {
+            return ConcurrencyConflict(workItem.Id);
+        }
+        logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) unassigned (was {PreviousAssignee}) by {User}",
             workItem.Id, workItem.TypeId, previousAssigneeId, DescribeUser(user));
 
@@ -337,6 +398,11 @@ public sealed class WorkItemService(
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return identityFailure;
+        }
+
         if (string.IsNullOrWhiteSpace(text))
         {
             return WorkItemActionResult.Failure(
@@ -364,7 +430,7 @@ public sealed class WorkItemService(
         {
             Text = trimmed,
             CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
-            CreatedBy = ResolveActorUserId(user) ?? DescribeUser(user),
+            CreatedBy = ResolveActorUserId(user)!,
             CreatedByName = user?.FindFirstValue("user:name")
         };
         workItem.Notes.Add(note);
@@ -373,8 +439,15 @@ public sealed class WorkItemService(
         {
             ["noteId"] = note.Id.ToString()
         });
-        await persistence.ReplaceAsync(workItem, cancellationToken);
-        logger.Audit(
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException)
+        {
+            return ConcurrencyConflict(workItem.Id);
+        }
+        logger.LogInformation(
             "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
             note.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
 
@@ -514,16 +587,40 @@ public sealed class WorkItemService(
             ActionDisplayName = actionDisplayName,
             Details = details,
             CreatedAt = createdAt,
-            CreatedBy = ResolveActorUserId(user) ?? DescribeUser(user),
+            CreatedBy = ResolveActorUserId(user)!,
             CreatedByName = user?.FindFirstValue("user:name")
         });
     }
+
+    private static WorkItemActionResult ConcurrencyConflict(Guid workItemId) =>
+        WorkItemActionResult.Failure(
+            WorkItemActionFailureCode.ConcurrencyConflict,
+            $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
 
     private static string DescribeUser(ClaimsPrincipal? user) =>
         user?.FindFirstValue("user:id")
         ?? user?.FindFirstValue("cognito:client_id")
         ?? user?.FindFirstValue(ClaimTypes.NameIdentifier)
         ?? "unknown";
+
+    /// <summary>
+    /// Mutating operations require an end-user identity (forwarded by the
+    /// BFF as the <c>user:id</c> claim). When it is missing the engine
+    /// refuses the call rather than recording an audit entry that cannot be
+    /// traced back to a real human — client_id and "unknown" are NOT
+    /// acceptable substitutes for accountability.
+    /// </summary>
+    private static WorkItemActionResult? RequireActorIdentity(ClaimsPrincipal? user)
+    {
+        if (ResolveActorUserId(user) is not null)
+        {
+            return null;
+        }
+        return WorkItemActionResult.Failure(
+            WorkItemActionFailureCode.MissingActorIdentity,
+            "Mutating this work item requires an authenticated end user; " +
+            "the request did not include a 'user:id' claim.");
+    }
 
     /// <summary>
     /// The acting end-user's identifier as forwarded by the BFF. Falls back
