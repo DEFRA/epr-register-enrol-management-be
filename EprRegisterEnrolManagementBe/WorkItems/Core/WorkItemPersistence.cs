@@ -21,6 +21,15 @@ public interface IWorkItemPersistence
     /// Return a single page of work items matching <paramref name="query"/>,
     /// most-recently-submitted first, together with the total number of
     /// matches across every page.
+    ///
+    /// The per-item <see cref="WorkItem.Notes"/> and
+    /// <see cref="WorkItem.AuditLog"/> collections are excluded server-side
+    /// (epr-4pf). The returned <see cref="WorkItem"/> instances therefore
+    /// carry empty <c>Notes</c> / <c>AuditLog</c> lists regardless of
+    /// what is on disk; callers that need the full timeline must
+    /// <see cref="GetByIdAsync"/> the item individually. This keeps the
+    /// list path's bandwidth bounded by the document envelope rather
+    /// than by accumulated assessor activity.
     /// </summary>
     Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default);
 
@@ -57,8 +66,20 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
 
         var filter = BuildFilter(query);
 
+        // Project away the per-item Notes and AuditLog collections
+        // (epr-4pf): the list endpoint never renders them and they
+        // dominate document size on chatty items. The deserialiser
+        // re-runs against the trimmed BSON and falls back to the
+        // List<>'s default initialiser for the missing fields, so
+        // returned WorkItem instances carry empty Notes / AuditLog
+        // regardless of what is on disk.
+        var projection = Builders<WorkItem>.Projection
+            .Exclude(w => w.Notes)
+            .Exclude(w => w.AuditLog);
+
         var find = Collection
             .Find(filter)
+            .Project<WorkItem>(projection)
             .SortByDescending(w => w.SubmittedAt);
 
         var totalCount = await Collection.CountDocumentsAsync(filter, cancellationToken: cancellationToken);

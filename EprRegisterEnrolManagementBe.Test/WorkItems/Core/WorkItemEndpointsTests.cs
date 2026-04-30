@@ -349,6 +349,87 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Get_list_omits_notes_and_audit_log_from_each_item()
+    {
+        // epr-4pf: the list endpoint never renders the per-item Notes /
+        // AuditLog collections, so they must not appear on the wire at
+        // all (omitted, not nulled) — even if the persisted document
+        // would otherwise have them. Asserted at the JSON level so we
+        // catch a regression that puts them back as `null` properties.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var assignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc);
+        // Pre-populate Notes and AuditLog as a belt-and-braces guard:
+        // even if persistence projection were to leak them into the
+        // returned WorkItem, the slim DTO must still strip them on the
+        // way out. Assignment fields must survive so we know the
+        // projection didn't strip wanted summary data.
+        var workItem = new WorkItem
+        {
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client",
+            AssignedToId = "alice-1",
+            AssignedToName = "Alice Example",
+            AssignedAt = assignedAt,
+            AssignedBy = "manager-1",
+            Notes =
+            {
+                new WorkItemNote { Text = "should not be on the wire", CreatedAt = assignedAt, CreatedBy = "alice-1" }
+            },
+            AuditLog =
+            {
+                new WorkItemAuditEntry
+                {
+                    Action = "assigned",
+                    ActionDisplayName = "Assigned",
+                    CreatedAt = assignedAt,
+                    CreatedBy = "manager-1"
+                }
+            }
+        };
+
+        factory.MockPersistence
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(
+                Items: new List<WorkItem> { workItem },
+                TotalCount: 1,
+                Page: 1,
+                PageSize: WorkItemQuery.DefaultPageSize));
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // Property-level assertion: the JSON must not even mention
+        // 'notes' or 'auditLog' on a list item. JsonNode lets us prove
+        // the absence of a property name (vs WorkItemListItemResponse
+        // which physically can't carry them).
+        var rawJson = await response.Content.ReadAsStringAsync(cancellationToken);
+        var root = System.Text.Json.Nodes.JsonNode.Parse(rawJson);
+        Assert.NotNull(root);
+        var firstItem = root!["items"]!.AsArray()[0]!.AsObject();
+        Assert.False(firstItem.ContainsKey("notes"), "list item must not include 'notes'");
+        Assert.False(firstItem.ContainsKey("auditLog"), "list item must not include 'auditLog'");
+
+        // And the typed DTO surfaces the assignment summary so we know
+        // the projection didn't strip anything we want.
+        var body = System.Text.Json.JsonSerializer.Deserialize<WorkItemListResponse>(
+            rawJson, new System.Text.Json.JsonSerializerOptions
+            {
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
+            });
+        Assert.NotNull(body);
+        var item = Assert.Single(body!.Items);
+        Assert.Equal("alice-1", item.AssignedToId);
+        Assert.Equal("Alice Example", item.AssignedToName);
+        Assert.Equal(assignedAt, item.AssignedAt);
+        Assert.Equal("manager-1", item.AssignedBy);
+        Assert.Equal("submitted", item.StateId);
+    }
+
+    [Fact]
     public async Task Get_passes_query_string_filters_to_persistence()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

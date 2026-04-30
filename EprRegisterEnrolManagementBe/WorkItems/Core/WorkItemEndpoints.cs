@@ -186,7 +186,7 @@ public static class WorkItemEndpoints
         var page = await persistence.QueryAsync(query, cancellationToken);
 
         var items = page.Items
-            .Select(w => ToResponse(engine.Project(w)))
+            .Select(w => ToListItemResponse(engine.Project(w)))
             .ToList();
 
         return TypedResults.Ok(new WorkItemListResponse(items, page.TotalCount, page.Page, page.PageSize));
@@ -382,5 +382,33 @@ public static class WorkItemEndpoints
                     e.CreatedBy,
                     e.CreatedByName))
                 .ToList());
+    }
+
+    /// <summary>
+    /// Slim per-item projection used by the list endpoint (epr-4pf).
+    /// Identical to <see cref="ToResponse(WorkItemEngineProjection)"/>
+    /// except the per-item <c>Notes</c> and <c>AuditLog</c> collections
+    /// are omitted entirely from the wire shape — they would otherwise
+    /// dominate the payload of a 100-row page even though no list view
+    /// renders them.
+    /// </summary>
+    internal static WorkItemListItemResponse ToListItemResponse(WorkItemEngineProjection projection)
+    {
+        var w = projection.WorkItem;
+        return new WorkItemListItemResponse(
+            w.Id,
+            w.TypeId,
+            w.StateId,
+            w.SubmittedAt,
+            w.LastModifiedAt,
+            w.SubmittedBy,
+            projection.TemplateVersion,
+            WorkItemPayloadConverter.ToJson(w.Payload),
+            projection.Tasks,
+            projection.AvailableActions,
+            w.AssignedToId,
+            w.AssignedToName,
+            w.AssignedAt,
+            w.AssignedBy);
     }
 }
