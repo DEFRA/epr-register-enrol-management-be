@@ -1045,4 +1045,83 @@ public class WorkItemServiceTests
         public override DateTimeOffset GetUtcNow() => new(_now, TimeSpan.Zero);
         public void Advance(TimeSpan by) => _now = _now.Add(by);
     }
+
+    // ---------------------- SubmitAsync (RA-97 birth event) ----------------------
+    //
+    // The audit timeline must start at the work item's submission rather
+    // than at the first task completion. The framework writes a single
+    // 'work-item-submitted' entry inside the same CreateAsync call that
+    // persists the new document.
+
+    [Fact]
+    public async Task Submit_persists_work_item_with_initial_state_and_template_snapshot()
+    {
+        var type = BuildType();
+        var payload = new BsonDocument { ["foo"] = "bar" };
+
+        WorkItem? captured = null;
+        await _persistence.CreateAsync(Arg.Do<WorkItem>(w => captured = w), Arg.Any<CancellationToken>());
+
+        var result = await BuildService(type).SubmitAsync(
+            type, payload, "test-client", AuditUser(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(captured);
+        Assert.Equal(TypeId, captured!.TypeId);
+        Assert.Equal("submitted", captured.StateId);
+        Assert.Equal("test-client", captured.SubmittedBy);
+        Assert.Equal(TickedNow, captured.SubmittedAt);
+        Assert.Equal(TickedNow, captured.LastModifiedAt);
+        Assert.NotNull(captured.TemplateSnapshot);
+        Assert.Equal("v1", captured.TemplateVersion);
+        Assert.Equal("v1", captured.TemplateSnapshot!.TemplateVersion);
+        Assert.Equal("bar", captured.Payload["foo"].AsString);
+        await _persistence.Received(1).CreateAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Submit_appends_single_work_item_submitted_audit_entry_in_same_create_call()
+    {
+        var type = BuildType();
+
+        // Snapshot the AuditLog at the moment CreateAsync is invoked so we
+        // can prove the submission entry is part of the same write — not
+        // appended after the fact.
+        List<WorkItemAuditEntry>? auditAtCreate = null;
+        await _persistence.CreateAsync(
+            Arg.Do<WorkItem>(w => auditAtCreate = w.AuditLog.ToList()),
+            Arg.Any<CancellationToken>());
+
+        var result = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(auditAtCreate);
+        var entry = Assert.Single(auditAtCreate!);
+        Assert.Equal("work-item-submitted", entry.Action);
+        Assert.Equal("Work item submitted", entry.ActionDisplayName);
+        Assert.Equal("alice-1", entry.CreatedBy);
+        Assert.Equal("Alice Example", entry.CreatedByName);
+        // The audit entry's timestamp matches WorkItem.SubmittedAt — both
+        // come from the injected TimeProvider in the same call.
+        Assert.Equal(result.WorkItem!.SubmittedAt, entry.CreatedAt);
+        Assert.Equal(TickedNow, entry.CreatedAt);
+        Assert.Equal(TypeId, entry.Details["typeId"]);
+        Assert.Equal("submitted", entry.Details["stateId"]);
+        Assert.Equal("v1", entry.Details["templateVersion"]);
+    }
+
+    [Fact]
+    public async Task Submit_returns_missing_actor_identity_and_persists_nothing_when_user_id_claim_absent()
+    {
+        var type = BuildType();
+
+        var result = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client",
+            UserWithoutActorId(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+        await _persistence.DidNotReceive().CreateAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
 }

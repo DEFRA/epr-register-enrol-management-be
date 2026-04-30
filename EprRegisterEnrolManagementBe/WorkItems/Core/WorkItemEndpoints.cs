@@ -69,7 +69,6 @@ public static class WorkItemEndpoints
         JsonElement body,
         HttpContext httpContext,
         [FromServices] IWorkItemRegistry registry,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
@@ -109,19 +108,30 @@ public static class WorkItemEndpoints
         var submittedBy = httpContext.User.FindFirstValue("cognito:client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        var snapshot = WorkItemTemplateSnapshot.Capture(type);
-        var workItem = new WorkItem
+        // Routed through the engine so the framework owns audit-log
+        // composition for the birth event in the same place it owns every
+        // other state-changing entry. The engine writes the document and
+        // its first 'work-item-submitted' audit entry in a single
+        // CreateAsync call.
+        var result = await engine.SubmitAsync(
+            type, payloadDocument, submittedBy, httpContext.User, cancellationToken);
+        if (!result.IsSuccess)
         {
-            TypeId = type.TypeId,
-            StateId = type.InitialState.Id,
-            SubmittedBy = submittedBy,
-            TemplateSnapshot = snapshot,
-            TemplateVersion = snapshot.TemplateVersion,
-            Payload = payloadDocument
-        };
+            return result.FailureCode switch
+            {
+                WorkItemActionFailureCode.MissingActorIdentity
+                    => TypedResults.Problem(
+                        title: "Authentication required",
+                        detail: result.Message,
+                        statusCode: StatusCodes.Status401Unauthorized),
+                _ => TypedResults.Problem(
+                    title: "Invalid request",
+                    detail: result.Message,
+                    statusCode: StatusCodes.Status400BadRequest)
+            };
+        }
 
-        await persistence.CreateAsync(workItem, cancellationToken);
-
+        var workItem = result.WorkItem!;
         var response = ToResponse(engine.Project(workItem));
         return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
     }

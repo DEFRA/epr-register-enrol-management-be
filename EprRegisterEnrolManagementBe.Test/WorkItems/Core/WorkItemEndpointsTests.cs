@@ -102,6 +102,52 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Post_records_work_item_submitted_audit_entry_as_birth_event()
+    {
+        // RA-97: the audit timeline must start at submission. The framework
+        // appends one 'work-item-submitted' entry inside the same
+        // CreateAsync call that persists the new document, attributed to
+        // the forwarded user:id and stamped with WorkItem.SubmittedAt.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userId: "alice-1", userName: "Alice Example");
+        using var client = factory.CreateClient();
+
+        WorkItem? captured = null;
+        await factory.MockPersistence
+            .CreateAsync(Arg.Do<WorkItem>(w => captured = w), Arg.Any<CancellationToken>());
+
+        var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        Assert.NotNull(captured);
+        var entry = Assert.Single(captured!.AuditLog);
+        Assert.Equal("work-item-submitted", entry.Action);
+        Assert.Equal("Work item submitted", entry.ActionDisplayName);
+        Assert.Equal("alice-1", entry.CreatedBy);
+        Assert.Equal("Alice Example", entry.CreatedByName);
+        Assert.Equal(captured.SubmittedAt, entry.CreatedAt);
+        Assert.Equal(TypeId, entry.Details["typeId"]);
+        Assert.Equal("submitted", entry.Details["stateId"]);
+    }
+
+    [Fact]
+    public async Task Post_returns_401_and_persists_nothing_when_user_id_claim_missing()
+    {
+        // RA-97 / engine rule: every mutating call requires the BFF to
+        // forward a 'user:id' claim so the audit entry can be tied back
+        // to a real human. Without it the engine refuses to write.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userId: null);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        await factory.MockPersistence.DidNotReceive()
+            .CreateAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Post_accepts_request_without_payload()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
@@ -11,7 +12,27 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// that may be called before/after this engine.
 /// </summary>
 public interface IWorkItemService
-{
+{/// <summary>
+    /// Create a brand-new work item of <paramref name="type"/> and persist
+    /// it. Captures a frozen template snapshot, stamps a server-side
+    /// submission timestamp from the injected <see cref="TimeProvider"/>,
+    /// and appends a single <c>work-item-submitted</c> entry to the new
+    /// work item's audit log so the audit timeline starts at the
+    /// document's birth event rather than the first task completion. The
+    /// audit entry and the document body are written in the same
+    /// <see cref="IWorkItemPersistence.CreateAsync"/> call. Mutations
+    /// require a <c>user:id</c> claim — calls without one return
+    /// <see cref="WorkItemActionFailureCode.MissingActorIdentity"/> and
+    /// nothing is persisted.
+    /// </summary>
+    Task<WorkItemActionResult> SubmitAsync(
+        IWorkItemType type,
+        BsonDocument payload,
+        string? submittedBy,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default);
+
+    
     Task<WorkItemActionResult> CompleteTaskAsync(
         Guid workItemId,
         string taskId,
@@ -115,6 +136,55 @@ public sealed class WorkItemService(
     public const string AssignRole = "assign";
 
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
+    public async Task<WorkItemActionResult> SubmitAsync(
+        IWorkItemType type,
+        BsonDocument payload,
+        string? submittedBy,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentNullException.ThrowIfNull(payload);
+
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return identityFailure;
+        }
+
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        var snapshot = WorkItemTemplateSnapshot.Capture(type);
+        var workItem = new WorkItem
+        {
+            TypeId = type.TypeId,
+            StateId = type.InitialState.Id,
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            SubmittedBy = submittedBy,
+            TemplateSnapshot = snapshot,
+            TemplateVersion = snapshot.TemplateVersion,
+            Payload = payload
+        };
+
+        // Birth event: the audit timeline must start at submission rather
+        // than the first task completion. Appended to the in-memory list
+        // before the single CreateAsync call so the document and its first
+        // audit entry land in storage together.
+        AppendAudit(workItem, "work-item-submitted", "Work item submitted", user, now, new()
+        {
+            ["typeId"] = type.TypeId,
+            ["stateId"] = workItem.StateId,
+            ["templateVersion"] = snapshot.TemplateVersion
+        });
+
+        await persistence.CreateAsync(workItem, cancellationToken);
+
+        logger.LogInformation(
+            "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} by {User}",
+            workItem.Id, workItem.TypeId, workItem.StateId, DescribeUser(user));
+
+        return WorkItemActionResult.Success(workItem);
+    }
 
     public async Task<WorkItemActionResult> CompleteTaskAsync(
         Guid workItemId,

@@ -294,11 +294,14 @@ work item itself.
 
 ### Mechanism
 
-Every state-changing engine call (`CompleteTaskAsync`, `ApplyActionAsync`,
-`AssignAsync`, `UnassignAsync`, `AddNoteAsync`) automatically appends a
-`WorkItemAuditEntry` to `WorkItem.AuditLog` on success. The framework owns
-this — modules do not opt in and cannot opt out, so every type inherits an
-identical audit trail.
+Every state-changing engine call (`SubmitAsync`, `CompleteTaskAsync`,
+`ApplyActionAsync`, `AssignAsync`, `UnassignAsync`, `AddNoteAsync`)
+automatically appends a `WorkItemAuditEntry` to `WorkItem.AuditLog` on
+success. The framework owns this — modules do not opt in and cannot opt
+out, so every type inherits an identical audit trail. The submission entry
+is the work item's birth event: it is appended to the in-memory document
+before the single `CreateAsync` call so the new document and its first
+audit entry land in storage together.
 
 ### Storage
 
@@ -308,9 +311,9 @@ the work item document. An entry carries:
 | Field | Purpose |
 | --- | --- |
 | `Id` | Server-generated GUID. |
-| `Action` | Stable machine id of the action: `task-completed`, `action-applied`, `assigned`, `unassigned`, `note-added`. |
+| `Action` | Stable machine id of the action: `work-item-submitted`, `task-completed`, `action-applied`, `assigned`, `unassigned`, `note-added`. |
 | `ActionDisplayName` | Human-readable description (e.g. `Task completed`). |
-| `Details` | `Dictionary<string, string?>` of contextual fields per action: `taskId`/`taskDisplayName`/`stateId`; `actionId`/`actionDisplayName`/`fromStateId`/`toStateId`; `assigneeId`/`assigneeName`/`previousAssigneeId`/`previousAssigneeName`; `previousAssigneeId`/`previousAssigneeName`; `noteId`. |
+| `Details` | `Dictionary<string, string?>` of contextual fields per action: `typeId`/`stateId`/`templateVersion` (submission); `taskId`/`taskDisplayName`/`stateId`; `actionId`/`actionDisplayName`/`fromStateId`/`toStateId`; `assigneeId`/`assigneeName`/`previousAssigneeId`/`previousAssigneeName`; `previousAssigneeId`/`previousAssigneeName`; `noteId`. |
 | `CreatedAt` | UTC timestamp from the injected `TimeProvider`. |
 | `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, required — mutations without it are rejected with 401). |
 | `CreatedByName` | Snapshot of the actor's display name (`user:name`) at write time. |
