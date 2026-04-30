@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -20,13 +21,24 @@ namespace EprRegisterEnrolManagementBe.Auth;
 /// by the BFF over a canonical string of the trust headers and proves the
 /// caller knows the shared secret — defending against requests that reach
 /// the backend directly and forge trust headers.
+///
+/// When the shared secret is NOT configured the handler fails CLOSED in
+/// any non-Development environment (the integrity contract is broken). In
+/// Development it falls back to header-trust mode and logs a single
+/// warning per process to keep local/BFF-stub workflows ergonomic.
 /// </summary>
 public class CognitoClientIdAuthenticationHandler(
     IOptionsMonitor<CognitoClientIdAuthenticationOptions> options,
     ILoggerFactory logger,
-    UrlEncoder encoder)
+    UrlEncoder encoder,
+    IHostEnvironment hostEnvironment)
     : AuthenticationHandler<CognitoClientIdAuthenticationOptions>(options, logger, encoder)
 {
+    // Tracks whether the Development header-trust downgrade warning has
+    // already been emitted in this process. Atomic CAS keeps it to a single
+    // log line even under concurrent first requests.
+    private static int s_devDowngradeWarned;
+
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var headerName = Options.HeaderName;
@@ -82,6 +94,27 @@ public class CognitoClientIdAuthenticationHandler(
                 return Task.FromResult(AuthenticateResult.Fail(
                     $"Invalid {Options.SignatureHeaderName} header"));
             }
+        }
+        else if (!hostEnvironment.IsDevelopment())
+        {
+            // Fail CLOSED: a missing shared secret outside Development means
+            // the integrity contract with the BFF is broken (env var typo,
+            // secret rotation race, misconfigured prod). Trusting the
+            // headers in this state would let any caller forge identity.
+            Logger.LogCritical(
+                "CognitoClientIdAuthentication misconfigured: SharedSecret is not set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
+                hostEnvironment.EnvironmentName);
+            return Task.FromResult(AuthenticateResult.Fail(
+                "Authentication misconfigured: shared secret not set"));
+        }
+        else if (Interlocked.CompareExchange(ref s_devDowngradeWarned, 1, 0) == 0)
+        {
+            // Development-only ergonomics: BFF stub mode runs without a
+            // shared secret. Emit a single warning per process so the
+            // downgrade is visible without spamming the log.
+            Logger.LogWarning(
+                "CognitoClientIdAuthentication: SharedSecret not configured — operating in header-trust mode. This is allowed only because the host environment is '{Environment}'. Set Auth:SharedSecret in any non-Development deployment.",
+                hostEnvironment.EnvironmentName);
         }
 
         var claims = new List<Claim>
