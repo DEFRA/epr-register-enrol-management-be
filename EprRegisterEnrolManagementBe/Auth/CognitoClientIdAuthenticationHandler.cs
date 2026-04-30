@@ -325,11 +325,20 @@ public class CognitoClientIdAuthenticationHandler(
         return Convert.ToBase64String(mac);
     }
 
+    // Length-independent constant-time equality. We SHA-256 both inputs to a
+    // fixed 32-byte digest, then compare the digests. This avoids the
+    // length-based short-circuit in CryptographicOperations.FixedTimeEquals
+    // (which returns immediately when buffer lengths differ) and is therefore
+    // safe for any attacker-controlled input length. Practical leak from the
+    // previous form was nil (HMAC-SHA256 base64 is always 44 chars), but the
+    // helper is now defensible against future callers that wire it to inputs
+    // of variable length.
     private static bool FixedTimeEquals(string a, string b)
     {
-        var ab = Encoding.UTF8.GetBytes(a);
-        var bb = Encoding.UTF8.GetBytes(b);
-        return ab.Length == bb.Length
-            && CryptographicOperations.FixedTimeEquals(ab, bb);
+        Span<byte> aHash = stackalloc byte[32];
+        Span<byte> bHash = stackalloc byte[32];
+        SHA256.HashData(Encoding.UTF8.GetBytes(a), aHash);
+        SHA256.HashData(Encoding.UTF8.GetBytes(b), bHash);
+        return CryptographicOperations.FixedTimeEquals(aHash, bHash);
     }
 }
