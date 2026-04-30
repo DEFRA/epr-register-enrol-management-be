@@ -127,25 +127,22 @@ public static class ReAccreditationEndpoints
         }
 
         var noteText = $"[decision-rationale] {rationale}";
-        var noteResult = await engine.AddNoteAsync(id, noteText, httpContext.User, cancellationToken);
-        if (!noteResult.IsSuccess)
+        // Atomic compound mutation (see IWorkItemService.AddNoteAndCompleteTaskAsync):
+        // both the note and the task completion are persisted in a single
+        // ReplaceAsync, so a concurrency conflict or other persistence
+        // failure cannot leave the work item with an orphan rationale note
+        // and an incomplete record-decision-rationale task.
+        var result = await engine.AddNoteAndCompleteTaskAsync(
+            id, "record-decision-rationale", noteText, httpContext.User, cancellationToken);
+        if (!result.IsSuccess)
         {
             return TypedResults.Problem(
-                title: "Could not record rationale",
-                detail: noteResult.Message,
+                title: "Could not record decision rationale",
+                detail: result.Message,
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var taskResult = await engine.CompleteTaskAsync(id, "record-decision-rationale", httpContext.User, cancellationToken);
-        if (!taskResult.IsSuccess)
-        {
-            return TypedResults.Problem(
-                title: "Could not complete decision-rationale task",
-                detail: taskResult.Message,
-                statusCode: StatusCodes.Status400BadRequest);
-        }
-
-        return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(taskResult.WorkItem!)));
+        return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
     }
 }
 public sealed record ReAccreditationRecommendationResponse(string Recommendation, string Rationale);

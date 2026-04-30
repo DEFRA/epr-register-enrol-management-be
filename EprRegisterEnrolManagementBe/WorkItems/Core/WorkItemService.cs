@@ -61,6 +61,30 @@ public interface IWorkItemService
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Atomic compound mutation: append a note AND mark a task complete in a
+    /// single document write so a partial failure cannot leave a work item
+    /// with an "orphan" note attached to an unfinished task (the bug behind
+    /// a workflow that called <see cref="AddNoteAsync"/> followed by
+    /// <see cref="CompleteTaskAsync"/> and saw the second call fail with
+    /// the first call already persisted). Both halves are validated before
+    /// any in-memory mutation happens; on any validation failure the
+    /// document is unchanged and no audit entries are written. On success
+    /// the framework writes one <c>note-added</c> audit entry plus — only
+    /// when the task was not already complete — one <c>task-completed</c>
+    /// entry, followed by exactly one
+    /// <see cref="IWorkItemPersistence.ReplaceAsync"/>. Re-completing an
+    /// already-complete task is treated as a no-op for the completion half
+    /// (consistent with <see cref="CompleteTaskAsync"/>); the note is still
+    /// appended because note writes are the caller's primary intent.
+    /// </summary>
+    Task<WorkItemActionResult> AddNoteAndCompleteTaskAsync(
+        Guid workItemId,
+        string taskId,
+        string noteText,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Compute the task progress and currently-available actions for a work
     /// item. Returns <c>null</c> when no work item exists with the supplied id.
     /// </summary>
@@ -450,6 +474,109 @@ public sealed class WorkItemService(
         logger.LogInformation(
             "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
             note.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
+
+        return WorkItemActionResult.Success(workItem);
+    }
+
+    public async Task<WorkItemActionResult> AddNoteAndCompleteTaskAsync(
+        Guid workItemId,
+        string taskId,
+        string noteText,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return identityFailure;
+        }
+
+        // Validate the note up-front so the document is untouched on a bad
+        // request (parity with AddNoteAsync's contract).
+        if (string.IsNullOrWhiteSpace(noteText))
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidNote,
+                "Note text is required.");
+        }
+        var trimmed = noteText.Trim();
+        if (trimmed.Length > MaxNoteLength)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidNote,
+                $"Note text must be {MaxNoteLength} characters or fewer.");
+        }
+
+        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        var tasks = template!.GetTasksForState(workItem!.StateId);
+        var task = tasks.FirstOrDefault(t => string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase));
+        if (task is null)
+        {
+            // Validation failure before any mutation: the document is
+            // unchanged, no note appended, no audit entries written.
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.TaskNotApplicable,
+                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'.");
+        }
+
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+
+        // Mutate in memory only — nothing is persisted until the single
+        // ReplaceAsync below, so an exception or a concurrency failure
+        // leaves the on-disk document untouched. This is the whole point
+        // of the compound method.
+        var note = new WorkItemNote
+        {
+            Text = trimmed,
+            CreatedAt = now,
+            CreatedBy = ResolveActorUserId(user)!,
+            CreatedByName = user?.FindFirstValue("user:name")
+        };
+        workItem.Notes.Add(note);
+        AppendAudit(workItem, "note-added", "Note added", user, now, new()
+        {
+            ["noteId"] = note.Id.ToString()
+        });
+
+        // Re-completing an already-complete task is a no-op for the
+        // completion half (matches CompleteTaskAsync's idempotency
+        // contract: no audit entry for the no-op). The note is still
+        // written — note writes are the caller's primary intent here.
+        var bucket = GetCompletedBucket(workItem, workItem.StateId);
+        var taskNewlyCompleted = bucket.Add(task.Id);
+        if (taskNewlyCompleted)
+        {
+            AppendAudit(workItem, "task-completed", "Task completed", user, now, new()
+            {
+                ["taskId"] = task.Id,
+                ["taskDisplayName"] = task.DisplayName,
+                ["stateId"] = workItem.StateId
+            });
+        }
+
+        workItem.LastModifiedAt = now;
+
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException)
+        {
+            return ConcurrencyConflict(workItem.Id);
+        }
+
+        logger.LogInformation(
+            "Note {NoteId} added and task {TaskId} {CompletionOutcome} on work item {WorkItemId} ({TypeId}) by {User}",
+            note.Id,
+            task.Id,
+            taskNewlyCompleted ? "marked complete" : "left as already-complete",
+            workItem.Id,
+            workItem.TypeId,
+            DescribeUser(user));
 
         return WorkItemActionResult.Success(workItem);
     }
