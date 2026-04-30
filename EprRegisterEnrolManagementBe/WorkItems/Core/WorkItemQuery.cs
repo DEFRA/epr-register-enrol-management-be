@@ -30,6 +30,22 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// </param>
 /// <param name="Page">1-based page number. Coerced to a minimum of 1.</param>
 /// <param name="PageSize">Page size. Coerced into [<see cref="MinPageSize"/>, <see cref="MaxPageSize"/>].</param>
+/// <param name="SubmittedBy">
+/// Tenancy isolation filter. **Server-set only.** This value is populated
+/// by <c>WorkItemEndpoints.GetAll</c> from the authenticated caller's
+/// <c>cognito:client_id</c> (or NameIdentifier) claim for non-case-worker
+/// callers; case-worker callers leave it null to see every tenant.
+/// <para>
+/// This property is intentionally NOT bound from the query string by
+/// <see cref="WorkItemQueryBinding"/>. A future contributor must not
+/// "helpfully" wire it up: doing so would let any caller pass
+/// <c>?submittedBy=other-tenant</c> and read another tenant's items,
+/// breaking the isolation enforced by the endpoint (and the fail-closed
+/// short-circuit added in epr-z0k for callers with no identifiable
+/// submitter id). The binding actively discards the parameter — see
+/// <see cref="WorkItemQueryBinding.FromQueryString"/>.
+/// </para>
+/// </param>
 public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? TypeIds = null,
     IReadOnlyCollection<string>? StateIds = null,
