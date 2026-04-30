@@ -93,7 +93,16 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
     // override the value.
     services.AddOptions<CognitoClientIdAuthenticationOptions>(CognitoClientIdDefaults.AuthenticationScheme)
         .Configure<IConfiguration>((options, config) =>
-            options.SharedSecret = config.GetValue<string>("Auth:SharedSecret"));
+        {
+            options.SharedSecret = config.GetValue<string>("Auth:SharedSecret");
+            options.MaxClientIdLength = config.GetValue("Auth:MaxClientIdLength", options.MaxClientIdLength);
+            options.MaxUserIdLength = config.GetValue("Auth:MaxUserIdLength", options.MaxUserIdLength);
+            options.MaxUserNameLength = config.GetValue("Auth:MaxUserNameLength", options.MaxUserNameLength);
+            options.MaxUserRolesLength = config.GetValue("Auth:MaxUserRolesLength", options.MaxUserRolesLength);
+            options.MaxSignatureLength = config.GetValue("Auth:MaxSignatureLength", options.MaxSignatureLength);
+            options.MaxTimestampLength = config.GetValue("Auth:MaxTimestampLength", options.MaxTimestampLength);
+            options.MaxNonceLength = config.GetValue("Auth:MaxNonceLength", options.MaxNonceLength);
+        });
 
     services.AddAuthorization();
 }

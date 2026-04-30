@@ -63,4 +63,52 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// minutes.
     /// </summary>
     public TimeSpan ReplayCacheTtl { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// Maximum permitted length (in UTF-16 chars) of the Cognito client id
+    /// header. Oversize values are rejected with 401 BEFORE any further
+    /// processing — avoids attacker-controlled header bytes feeding into
+    /// downstream allocations or HMAC computation.
+    /// </summary>
+    public int MaxClientIdLength { get; set; } = 256;
+
+    /// <summary>
+    /// Maximum permitted length of the user id header. Persisted into
+    /// <c>WorkItem.AuditLog.CreatedBy</c> and <c>WorkItemNote.CreatedBy</c>
+    /// — capping defends Mongo document size against a misbehaving BFF or
+    /// a caller that holds the shared secret.
+    /// </summary>
+    public int MaxUserIdLength { get; set; } = 128;
+
+    /// <summary>
+    /// Maximum permitted length of the user display name header. Persisted
+    /// into <c>WorkItem.AuditLog.CreatedByName</c> and
+    /// <c>WorkItemNote.CreatedByName</c>.
+    /// </summary>
+    public int MaxUserNameLength { get; set; } = 256;
+
+    /// <summary>
+    /// Maximum permitted length of the comma-separated user roles header
+    /// (whole string, not per role).
+    /// </summary>
+    public int MaxUserRolesLength { get; set; } = 1024;
+
+    /// <summary>
+    /// Maximum permitted length of the HMAC signature header. Base64 of
+    /// SHA-256 is 44 chars; the default leaves headroom for any future
+    /// algorithm bump while preventing megabyte-sized signatures from
+    /// reaching the constant-time comparator.
+    /// </summary>
+    public int MaxSignatureLength { get; set; } = 256;
+
+    /// <summary>
+    /// Maximum permitted length of the timestamp header. ISO-8601 with
+    /// offset is well under 40 chars.
+    /// </summary>
+    public int MaxTimestampLength { get; set; } = 64;
+
+    /// <summary>
+    /// Maximum permitted length of the nonce header.
+    /// </summary>
+    public int MaxNonceLength { get; set; } = 128;
 }

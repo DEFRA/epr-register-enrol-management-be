@@ -63,6 +63,18 @@ public class CognitoClientIdAuthenticationHandler(
             return Task.FromResult(AuthenticateResult.Fail($"Empty {headerName} header"));
         }
 
+        // Length caps run BEFORE any further processing (in particular,
+        // before HMAC compute over attacker-controlled bytes). Each cap is
+        // reported with a distinct fail reason so misbehaving clients can
+        // be diagnosed in logs. We do NOT silently truncate — the user-id
+        // and user-name end up in audit attribution, where corruption
+        // would be worse than a 401.
+        if (clientId.Length > Options.MaxClientIdLength)
+        {
+            return Task.FromResult(AuthenticateResult.Fail(
+                $"{headerName} exceeds {Options.MaxClientIdLength} chars"));
+        }
+
         string? userId = null;
         string? userName = null;
         string? rolesHeader = null;
@@ -70,16 +82,31 @@ public class CognitoClientIdAuthenticationHandler(
         if (Request.Headers.TryGetValue(Options.UserIdHeaderName, out var userIdValues))
         {
             var v = userIdValues.ToString();
+            if (v.Length > Options.MaxUserIdLength)
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"{Options.UserIdHeaderName} exceeds {Options.MaxUserIdLength} chars"));
+            }
             if (!string.IsNullOrWhiteSpace(v)) userId = v;
         }
         if (Request.Headers.TryGetValue(Options.UserNameHeaderName, out var userNameValues))
         {
             var v = userNameValues.ToString();
+            if (v.Length > Options.MaxUserNameLength)
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"{Options.UserNameHeaderName} exceeds {Options.MaxUserNameLength} chars"));
+            }
             if (!string.IsNullOrWhiteSpace(v)) userName = v;
         }
         if (Request.Headers.TryGetValue(Options.UserRolesHeaderName, out var rolesValues))
         {
             var v = rolesValues.ToString();
+            if (v.Length > Options.MaxUserRolesLength)
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"{Options.UserRolesHeaderName} exceeds {Options.MaxUserRolesLength} chars"));
+            }
             if (!string.IsNullOrWhiteSpace(v)) rolesHeader = v;
         }
 
@@ -102,6 +129,12 @@ public class CognitoClientIdAuthenticationHandler(
             {
                 return Task.FromResult(AuthenticateResult.Fail(
                     $"Missing {Options.TimestampHeaderName} header"));
+            }
+
+            if (timestampHeader.Length > Options.MaxTimestampLength)
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"{Options.TimestampHeaderName} exceeds {Options.MaxTimestampLength} chars"));
             }
 
             if (!DateTimeOffset.TryParse(
@@ -137,6 +170,12 @@ public class CognitoClientIdAuthenticationHandler(
                     $"Missing {Options.NonceHeaderName} header"));
             }
 
+            if (nonce.Length > Options.MaxNonceLength)
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"{Options.NonceHeaderName} exceeds {Options.MaxNonceLength} chars"));
+            }
+
             // --- Signature: matches expected HMAC over v2 canonical string. ---
             if (!Request.Headers.TryGetValue(Options.SignatureHeaderName, out var signatureValues))
             {
@@ -145,6 +184,15 @@ public class CognitoClientIdAuthenticationHandler(
             }
 
             var providedSignature = signatureValues.ToString();
+            // Cap BEFORE HMAC compute: oversize signatures are cheap to
+            // detect and computing HMAC over a megabyte of header is itself
+            // a small DoS amplifier.
+            if (providedSignature.Length > Options.MaxSignatureLength)
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"{Options.SignatureHeaderName} exceeds {Options.MaxSignatureLength} chars"));
+            }
+
             var expectedSignature = ComputeSignature(
                 Options.SharedSecret!, clientId, userId, userName, rolesHeader,
                 timestampHeader, nonce);
@@ -216,6 +264,36 @@ public class CognitoClientIdAuthenticationHandler(
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
 
         return Task.FromResult(AuthenticateResult.Success(ticket));
+    }
+
+    /// <summary>
+    /// Surface the <see cref="AuthenticateResult.Failure"/> message via the
+    /// standard <c>WWW-Authenticate</c> challenge so operators (and tests)
+    /// can diagnose misbehaving clients without needing log access. Only
+    /// the failure message — which is authored entirely server-side — is
+    /// echoed; no attacker-supplied bytes leak back into the response.
+    /// </summary>
+    protected override async Task HandleChallengeAsync(AuthenticationProperties properties)
+    {
+        // Re-run authenticate to pick up the failure message stored on the
+        // request feature; AuthenticationMiddleware does not pass it through.
+        var authResult = await Context.AuthenticateAsync(Scheme.Name);
+        var failureMessage = authResult.Failure?.Message;
+
+        Response.StatusCode = 401;
+        var challenge = string.IsNullOrEmpty(failureMessage)
+            ? Scheme.Name
+            : $"{Scheme.Name} error=\"invalid_request\", error_description=\"{EscapeQuotedString(failureMessage)}\"";
+        Response.Headers.Append("WWW-Authenticate", challenge);
+    }
+
+    private static string EscapeQuotedString(string value)
+    {
+        // RFC 7235 quoted-string escaping: backslash and double-quote.
+        // Cap the surfaced length defensively even though the source is a
+        // server-authored constant template.
+        var trimmed = value.Length > 256 ? value[..256] : value;
+        return trimmed.Replace("\\", "\\\\").Replace("\"", "\\\"");
     }
 
     /// <summary>
