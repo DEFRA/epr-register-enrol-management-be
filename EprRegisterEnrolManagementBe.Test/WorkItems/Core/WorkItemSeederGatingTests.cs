@@ -13,16 +13,21 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// tests pin the gating contract so a misconfigured production deploy
 /// cannot pollute the live Mongo collection.
 ///
-/// Configuration is supplied via the <c>WorkItems__SeedOnStartup</c>
-/// environment variable rather than <c>ConfigureAppConfiguration</c>
-/// because the latter only fires during <c>builder.Build()</c>, after
-/// <c>Program.ConfigureServices</c> has already chosen which hosted
-/// services to register. <see cref="WebApplicationFactory{T}"/> uses
-/// the same env-var trick for <c>ASPNETCORE_ENVIRONMENT</c>.
+/// The seed flag is supplied via <see cref="IWebHostBuilder.UseSetting"/>,
+/// which feeds <c>WebApplicationBuilder.Configuration</c> before
+/// <c>Program.ConfigureServices</c> runs. We deliberately do NOT mutate
+/// the process-global <c>WorkItems__SeedOnStartup</c> environment
+/// variable here: xUnit v3 parallelises test classes by default, and a
+/// global mutation would race with any other test class spinning up a
+/// <see cref="WebApplicationFactory{T}"/> at the same time and cause its
+/// host to register the seeder, which would then fire
+/// <c>QueryAsync(Page=1, PageSize=1)</c> against that test's mock
+/// persistence. (Surfaced by epr-mf7 — CI was slow enough to overlap
+/// these factories where local timing did not.)
 /// </summary>
 public class WorkItemSeederGatingTests
 {
-    private const string SeedFlagEnvVar = "WorkItems__SeedOnStartup";
+    private const string SeedFlagConfigKey = "WorkItems:SeedOnStartup";
 
     [Fact]
     public void Seeder_is_not_registered_in_Production_even_when_flag_true()
@@ -62,27 +67,13 @@ public class WorkItemSeederGatingTests
     private static GatingFactory CreateFactory(string environment, bool seedOnStartup) =>
         new(environment, seedOnStartup);
 
-    private sealed class GatingFactory : WebApplicationFactory<Program>
+    private sealed class GatingFactory(string environment, bool seedOnStartup)
+        : WebApplicationFactory<Program>
     {
-        private readonly string _environment;
-        private readonly string? _previousFlag;
-
-        public GatingFactory(string environment, bool seedOnStartup)
-        {
-            _environment = environment;
-            _previousFlag = Environment.GetEnvironmentVariable(SeedFlagEnvVar);
-            Environment.SetEnvironmentVariable(SeedFlagEnvVar, seedOnStartup ? "true" : "false");
-        }
-
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            builder.UseEnvironment(_environment);
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            Environment.SetEnvironmentVariable(SeedFlagEnvVar, _previousFlag);
-            base.Dispose(disposing);
+            builder.UseEnvironment(environment);
+            builder.UseSetting(SeedFlagConfigKey, seedOnStartup ? "true" : "false");
         }
     }
 }
