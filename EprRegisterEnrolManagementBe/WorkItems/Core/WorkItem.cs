@@ -22,15 +22,23 @@ public sealed class WorkItem
     /// <summary>Current <see cref="WorkItemState.Id"/>. Set to the type's initial state on creation.</summary>
     public required string StateId { get; set; }
 
-    /// <summary>UTC timestamp the work item was first accepted into the system.</summary>
-    public DateTime SubmittedAt { get; init; } = DateTime.UtcNow;
+    /// <summary>
+    /// UTC timestamp the work item was first accepted into the system. Has no
+    /// default initializer — the engine must always stamp this from the
+    /// injected <see cref="TimeProvider"/> at submission so tests with a
+    /// <c>FakeTimeProvider</c> are not silently undermined by a wallclock
+    /// fallback. An unset value (<see cref="DateTime.MinValue"/>) signals a
+    /// construction-site bug.
+    /// </summary>
+    public DateTime SubmittedAt { get; init; }
 
     /// <summary>
     /// UTC timestamp of the last engine-driven mutation (task completion, state
     /// transition). Equal to <see cref="SubmittedAt"/> for a freshly-submitted
-    /// item.
+    /// item. Has no default initializer for the same reason as
+    /// <see cref="SubmittedAt"/>.
     /// </summary>
-    public DateTime LastModifiedAt { get; set; } = DateTime.UtcNow;
+    public DateTime LastModifiedAt { get; set; }
 
     /// <summary>Identifier of the upstream caller that submitted the item (CDP Cognito client id).</summary>
     public string? SubmittedBy { get; init; }

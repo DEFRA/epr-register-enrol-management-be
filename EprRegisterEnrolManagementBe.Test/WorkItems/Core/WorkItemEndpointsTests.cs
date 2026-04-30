@@ -478,7 +478,7 @@ public class WorkItemEndpointsTests
             StateId = "submitted",
             AssignedToId = "alice-1",
             AssignedToName = "Alice",
-            AssignedAt = DateTime.UtcNow,
+            AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
             AssignedBy = "earlier-actor"
         };
         factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);

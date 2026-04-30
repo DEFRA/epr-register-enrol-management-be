@@ -43,8 +43,13 @@ public sealed class WorkItemAuditEntry
     /// </summary>
     public Dictionary<string, string?> Details { get; init; } = new();
 
-    /// <summary>UTC timestamp the entry was recorded.</summary>
-    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    /// <summary>
+    /// UTC timestamp the entry was recorded. Has no default initializer — the
+    /// engine must stamp this from the injected <see cref="TimeProvider"/>
+    /// so tests with a <c>FakeTimeProvider</c> are not silently undermined
+    /// by a wallclock fallback.
+    /// </summary>
+    public DateTime CreatedAt { get; init; }
 
     /// <summary>
     /// Identifier of the actor that performed the action. Snapshotted from

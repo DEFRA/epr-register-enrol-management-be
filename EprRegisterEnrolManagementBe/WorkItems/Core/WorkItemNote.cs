@@ -18,8 +18,13 @@ public sealed class WorkItemNote
     /// <summary>The note body. Rendered verbatim; templates must escape.</summary>
     public required string Text { get; init; }
 
-    /// <summary>UTC timestamp the note was added.</summary>
-    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+    /// <summary>
+    /// UTC timestamp the note was added. Has no default initializer — the
+    /// engine must stamp this from the injected <see cref="TimeProvider"/>
+    /// so tests with a <c>FakeTimeProvider</c> are not silently undermined
+    /// by a wallclock fallback.
+    /// </summary>
+    public DateTime CreatedAt { get; init; }
 
     /// <summary>
     /// Identifier of the author. Snapshotted at creation time from the BFF
