@@ -217,13 +217,16 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
                     policy.WithOrigins().DisallowCredentials();
                     return;
                 }
+                // Defence-in-depth: x-cdp-* identity / HMAC-signature headers
+                // are NOT in the allow-list. They are injected by the CDP BFF
+                // server-side and must never originate from a browser; the
+                // HMAC signature check remains the primary defence (browsers
+                // can't sign without the shared secret), but excluding them
+                // here ensures a browser preflight cannot even smuggle them.
                 policy.WithOrigins(allowedOrigins)
                       .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                       .WithHeaders("Authorization", "Content-Type",
-                          "x-cdp-cognito-client-id", "x-cdp-user-id",
-                          "x-cdp-user-name", "x-cdp-user-roles",
-                          "x-cdp-auth-signature", "x-cdp-auth-timestamp",
-                          "x-cdp-auth-nonce")
+                          "x-cdp-auth-timestamp", "x-cdp-auth-nonce")
                       .DisallowCredentials();
             });
         });
