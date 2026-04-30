@@ -215,6 +215,7 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
         {
             var allowedOrigins = config.GetSection("Cors:AllowedOrigins")
                 .Get<string[]>() ?? Array.Empty<string>();
+            var traceHeader = config.GetValue<string>("TraceHeader");
 
             options.AddPolicy("BackendCors", policy =>
             {
@@ -226,16 +227,50 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
                     policy.WithOrigins().DisallowCredentials();
                     return;
                 }
-                // Defence-in-depth: x-cdp-* identity / HMAC-signature headers
-                // are NOT in the allow-list. They are injected by the CDP BFF
-                // server-side and must never originate from a browser; the
-                // HMAC signature check remains the primary defence (browsers
-                // can't sign without the shared secret), but excluding them
-                // here ensures a browser preflight cannot even smuggle them.
+
+                // EXPLICIT allow-list of request headers a browser is
+                // permitted to send cross-origin. This is a security
+                // boundary: a header that is NOT here will fail a CORS
+                // preflight and the browser will refuse to issue the
+                // request. Mirror of the propagation allow-list above —
+                // keep them in sync.
+                //
+                // Things deliberately NOT advertised:
+                //   * Authorization, Cookie  — we do not accept caller
+                //     credentials over CORS. CDP traffic reaches this
+                //     service via the server-side BFF, not directly from
+                //     a browser.
+                //   * x-cdp-auth-signature, x-cdp-auth-timestamp,
+                //     x-cdp-auth-nonce, x-api-key — HMAC inputs are
+                //     injected by the BFF server-side and must never
+                //     originate from a browser. The HMAC check remains
+                //     the primary defence; excluding them here ensures a
+                //     browser preflight cannot even smuggle them.
+                //   * x-cdp-user-id, x-cdp-user-name, x-cdp-user-roles,
+                //     x-cdp-cognito-client-id — identity headers are
+                //     BFF-injected and must not be browser-supplied.
+                //
+                // To advertise a new header, add it here AND document why
+                // it is browser-legitimate.
+                var allowedHeaders = new List<string>
+                {
+                    // Standard request payload negotiation.
+                    "Content-Type",
+                    "Accept",
+                    // W3C trace context — same headers we propagate
+                    // outbound. Carry no authority.
+                    "traceparent",
+                    "tracestate",
+                    "x-request-id",
+                };
+                if (!string.IsNullOrWhiteSpace(traceHeader))
+                {
+                    allowedHeaders.Add(traceHeader);
+                }
+
                 policy.WithOrigins(allowedOrigins)
                       .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                      .WithHeaders("Authorization", "Content-Type",
-                          "x-cdp-auth-timestamp", "x-cdp-auth-nonce")
+                      .WithHeaders([.. allowedHeaders])
                       .DisallowCredentials();
             });
         });
