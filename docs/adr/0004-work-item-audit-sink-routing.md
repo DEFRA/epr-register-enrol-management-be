@@ -133,10 +133,9 @@ considered here and rejected on the grounds below.
 
 ### Neutral
 
-- The deprecated `Utils/Auditing/AuditLogger` is now formally dead code
-  awaiting removal under a follow-up issue. Until that issue lands, the
-  Serilog audit sub-logger continues to be wired but never receives
-  events.
+- The deprecated `Utils/Auditing/AuditLogger` and its Serilog sub-logger
+  wiring in `Utils/Logging/CdpLogging.cs` were deleted under epr-mhi.
+  No production call sites remained at the time of removal.
 - Operational ECS logs continue unchanged. Trace-id correlation
   (`x-cdp-request-id`) still ties operator-facing log lines to a
   request, and through the request to the work-item id printed in those
@@ -148,8 +147,8 @@ A reviewer can confirm this decision is in force by checking:
 
 1. **No engine code emits audit-tagged Serilog events.** A repo-wide
    search for `IsAudit`, `AuditPropertyName`, or `logger.Audit(`
-   returns matches only inside `Utils/Auditing/` and its registration
-   in `Utils/Logging/CdpLogging.cs` — no production call sites.
+   returns no matches — the `Utils/Auditing/` folder and its wiring in
+   `Utils/Logging/CdpLogging.cs` were removed under epr-mhi.
 2. **Every successful engine mutation writes a `WorkItemAuditEntry`.**
    `WorkItems/Core/WorkItemService` is the single place that appends to
    `WorkItem.AuditLog`, and the integration tests under
@@ -160,14 +159,10 @@ A reviewer can confirm this decision is in force by checking:
    per the rules in `docs/work-items.md` — those tests would fail if
    we ever introduced a parallel emit-on-attempt sink.
 4. **The deprecation note in the agent contract and
-   `docs/work-items.md` matches the code state**: `AuditLogger` exists
-   but is referenced only by `CdpLogging.Configuration` and has no
-   callers under `WorkItems/`.
+   `docs/work-items.md` matches the code state**: `Utils/Auditing/`
+   no longer exists in the tree.
 
 ## Follow-up
 
-A separate bd issue should be filed to **delete `Utils/Auditing/`
-(`AuditLogger.cs`, `AuditLoggerExtension.cs`) and remove its wiring
-from `Utils/Logging/CdpLogging.cs`**. That issue is not part of this
-ADR's scope; this ADR's job is to record the decision that makes the
-removal safe.
+Resolved by epr-mhi: `Utils/Auditing/` and its `CdpLogging.Configuration`
+wiring have been deleted.

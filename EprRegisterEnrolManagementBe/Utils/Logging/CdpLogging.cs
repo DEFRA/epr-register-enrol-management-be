@@ -1,5 +1,4 @@
 using System.Diagnostics.CodeAnalysis;
-using EprRegisterEnrolManagementBe.Utils.Auditing;
 using Elastic.Serilog.Enrichers.Web;
 using Serilog;
 
@@ -13,11 +12,15 @@ public static class CdpLogging
         var httpAccessor = ctx.Configuration.Get<HttpContextAccessor>();
         var traceIdHeader = ctx.Configuration.GetValue<string>("TraceHeader");
 
+        // epr-mhi: the deprecated AuditLogger sub-pipeline (and its
+        // ExcludeAuditEvents filter on the main logger) was removed per
+        // ADR-0004 — the canonical audit record is the on-document
+        // WorkItem.AuditLog, not a side-channel Serilog stream. Operational
+        // logs flow through the single configured logger.
         var mainLogger = new LoggerConfiguration()
             .ReadFrom.Configuration(ctx.Configuration)
             .Enrich.WithEcsHttpContext(httpAccessor!)
             .Enrich.FromLogContext()
-            .Filter.With<AuditLogger.Filters.ExcludeAuditEvents>()
             .CreateLogger();
 
         if (traceIdHeader != null)
@@ -25,10 +28,6 @@ public static class CdpLogging
             config.Enrich.WithCorrelationId(traceIdHeader);
         }
 
-        var auditLogger = AuditLogger.CreateAuditLogger();
-
-        config
-            .WriteTo.Logger(mainLogger)
-            .WriteTo.Logger(auditLogger);
+        config.WriteTo.Logger(mainLogger);
     }
 }
