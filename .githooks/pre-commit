@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+#
+# Pre-commit hook: run lint and tests before allowing a commit.
+# Mirrors the checks in .github/workflows/check-pull-request.yml.
+#
+# Skip with: git commit --no-verify
+#
+set -euo pipefail
+
+# Run from the repo root so dotnet picks up the solution file.
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+if ! command -v dotnet >/dev/null 2>&1; then
+  echo "pre-commit: dotnet SDK not found on PATH" >&2
+  exit 1
+fi
+
+echo "pre-commit: dotnet format style --verify-no-changes"
+dotnet format style --verify-no-changes
+
+echo "pre-commit: dotnet test"
+dotnet test --nologo --verbosity quiet

@@ -18,12 +18,15 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v5
-      - name: Test
+      - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
           dotnet-version: |
             10.0
-      - run: dotnet test
+      - name: Lint (dotnet format)
+        run: dotnet format style --verify-no-changes
+      - name: Test
+        run: dotnet test
     ## SonarCloud
     ## Uncomment to unable SonarCloud scan
     ## Requires project to be set up in SonarCloud

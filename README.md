@@ -106,6 +106,18 @@ so they run end-to-end against a real (in-memory) Mongo instance:
 dotnet test
 ```
 
+### Git hooks
+
+A `pre-commit` hook in [`.githooks/`](.githooks/) runs the same lint and
+test checks as CI (`dotnet format style --verify-no-changes` and
+`dotnet test`). Enable it once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Bypass in an emergency with `git commit --no-verify`.
+
 ## Frontend integration
 
 The companion frontend
