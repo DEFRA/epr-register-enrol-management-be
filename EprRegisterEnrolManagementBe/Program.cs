@@ -50,6 +50,13 @@ static void ConfigureServices(WebApplicationBuilder builder)
     services.AddProblemDetails();
     services.AddValidation();
 
+    // Built-in .NET 10 OpenAPI document generation. Document only — no
+    // Swagger UI is wired up (that ships in a separate package). The
+    // document is exposed unauthenticated at /openapi/v1.json by
+    // ConfigureEndpoints, mirroring the health endpoints' posture, since
+    // BFF and platform tooling need to fetch it without credentials.
+    services.AddOpenApi("v1");
+
     services.AddHttpContextAccessor();
     // In-memory cache backs the HMAC nonce replay defence in
     // CognitoClientIdAuthenticationHandler. Singleton by default.
@@ -262,6 +269,13 @@ static void ConfigureEndpoints(WebApplication app)
     {
         Predicate = check => check.Tags.Contains("ready")
     }).AllowAnonymous();
+
+    // OpenAPI document at the conventional /openapi/{documentName}.json
+    // route. Anonymous on purpose: the BFF and platform tooling fetch it
+    // unauthenticated, same posture as /health. Always-on (not gated on
+    // IsDevelopment) because this service sits behind the BFF inside CDP
+    // and the document is internal-platform-facing rather than public.
+    app.MapOpenApi("/openapi/{documentName}.json").AllowAnonymous();
 
     app.MapWorkItemFrameworkEndpoints();
     app.MapWorkItemModules();
