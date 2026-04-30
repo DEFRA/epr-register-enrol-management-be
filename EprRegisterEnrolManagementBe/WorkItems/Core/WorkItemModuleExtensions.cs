@@ -1,4 +1,7 @@
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
@@ -22,10 +25,40 @@ public static class WorkItemModuleExtensions
         services.AddSingleton<IWorkItemRegistry>(sp =>
             new WorkItemRegistry(sp.GetServices<IWorkItemType>()));
         services.AddSingleton<IWorkItemService, WorkItemService>();
+        return services;
+    }
 
-        // Seeding is opt-in per module via IWorkItemSeeder; the hosted
-        // service is always registered so seeded modules just work without
-        // any additional wiring in Program.cs.
+    /// <summary>
+    /// Conditionally register <see cref="WorkItemSeederHostedService"/>.
+    /// The seeder writes records that reference stub user identifiers
+    /// (e.g. <c>stub-standard-1</c>, <c>stub-assign-1</c>,
+    /// <c>stub-portal-client</c>), so it must NEVER run outside a
+    /// developer environment. Registration therefore requires both:
+    /// <list type="bullet">
+    ///   <item><see cref="IHostEnvironment.IsDevelopment"/> is <c>true</c></item>
+    ///   <item><c>WorkItems:SeedOnStartup</c> configuration is <c>true</c></item>
+    /// </list>
+    /// If the flag is observed in any other environment a one-shot
+    /// warning hosted service is registered so the misconfiguration is
+    /// visible in startup logs without ever touching the database.
+    /// </summary>
+    public static IServiceCollection AddWorkItemSeederIfDevelopment(
+        this IServiceCollection services,
+        IHostEnvironment environment,
+        IConfiguration configuration)
+    {
+        var seedFlag = configuration.GetValue("WorkItems:SeedOnStartup", false);
+        if (!seedFlag)
+        {
+            return services;
+        }
+
+        if (!environment.IsDevelopment())
+        {
+            services.AddHostedService<WorkItemSeederMisconfigurationWarningHostedService>();
+            return services;
+        }
+
         services.AddHostedService<WorkItemSeederHostedService>();
         return services;
     }

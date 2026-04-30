@@ -74,17 +74,26 @@ static void ConfigureServices(WebApplicationBuilder builder)
         // readiness (/health/ready) only fires checks tagged "ready".
         .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"]);
 
-    ConfigureWorkItems(services);
+    ConfigureWorkItems(builder);
 }
 
 [ExcludeFromCodeCoverage]
-static void ConfigureWorkItems(IServiceCollection services)
+static void ConfigureWorkItems(WebApplicationBuilder builder)
 {
+    var services = builder.Services;
+
     // Register the framework, then add one line per work item module.
     // See docs in EprRegisterEnrolManagementBe/WorkItems/Core for the contract a module must implement.
     services.AddWorkItemFramework();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
     services.AddWorkItemModule<ReAccreditationModule>();
+
+    // The seeder writes records referencing stub user ids, so it is
+    // gated to Development hosts even when WorkItems:SeedOnStartup=true.
+    // A misconfiguration warning is emitted at startup if the flag is
+    // observed in any other environment. See
+    // WorkItemModuleExtensions.AddWorkItemSeederIfDevelopment.
+    services.AddWorkItemSeederIfDevelopment(builder.Environment, builder.Configuration);
 }
 
 [ExcludeFromCodeCoverage]
