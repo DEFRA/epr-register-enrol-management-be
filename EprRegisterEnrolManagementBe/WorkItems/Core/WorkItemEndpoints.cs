@@ -414,17 +414,25 @@ public static class WorkItemEndpoints
                 .ToList(),
             // Audit log (RA-97) is projected in chronological (oldest-first)
             // order so a UI renders a natural top-to-bottom timeline of
-            // everything that has happened to the work item.
+            // everything that has happened to the work item. Insertion
+            // index is the secondary key so entries written within the
+            // same tick (common under FakeTimeProvider, and possible in
+            // production when a single engine call appends two entries
+            // back-to-back) keep their append order on the wire instead
+            // of relying on undefined behaviour from a tied OrderBy
+            // (epr-s4y).
             w.AuditLog
-                .OrderBy(e => e.CreatedAt)
-                .Select(e => new WorkItemAuditEntryResponse(
-                    e.Id,
-                    e.Action,
-                    e.ActionDisplayName,
-                    e.Details,
-                    e.CreatedAt,
-                    e.CreatedBy,
-                    e.CreatedByName))
+                .Select((e, i) => (Entry: e, Index: i))
+                .OrderBy(x => x.Entry.CreatedAt)
+                .ThenBy(x => x.Index)
+                .Select(x => new WorkItemAuditEntryResponse(
+                    x.Entry.Id,
+                    x.Entry.Action,
+                    x.Entry.ActionDisplayName,
+                    x.Entry.Details,
+                    x.Entry.CreatedAt,
+                    x.Entry.CreatedBy,
+                    x.Entry.CreatedByName))
                 .ToList());
     }
 

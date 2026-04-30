@@ -783,6 +783,65 @@ public class WorkItemEndpointsTests
             });
     }
 
+    [Fact]
+    public async Task AuditLog_preserves_insertion_order_for_entries_with_identical_timestamps()
+    {
+        // Regression for epr-s4y: when two entries share an exact CreatedAt
+        // (common under FakeTimeProvider with the clock held still, and
+        // possible in production when a single engine call appends two
+        // entries back-to-back) the projection must keep their stored
+        // insertion order rather than fall back to undefined behaviour
+        // from a tied OrderBy.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory();
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var t = new DateTime(2026, 4, 30, 9, 0, 0, DateTimeKind.Utc);
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client",
+            AuditLog =
+            {
+                new WorkItemAuditEntry
+                {
+                    Action = "note-added",
+                    ActionDisplayName = "Note added",
+                    Details = new() { ["sequence"] = "1" },
+                    CreatedAt = t
+                },
+                new WorkItemAuditEntry
+                {
+                    Action = "task-completed",
+                    ActionDisplayName = "Task completed",
+                    Details = new() { ["sequence"] = "2" },
+                    CreatedAt = t
+                },
+                new WorkItemAuditEntry
+                {
+                    Action = "action-applied",
+                    ActionDisplayName = "Action applied",
+                    Details = new() { ["sequence"] = "3" },
+                    CreatedAt = t
+                }
+            }
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(body?.AuditLog);
+        Assert.Collection(body!.AuditLog!,
+            first => Assert.Equal("1", first.Details["sequence"]),
+            second => Assert.Equal("2", second.Details["sequence"]),
+            third => Assert.Equal("3", third.Details["sequence"]));
+    }
+
     private sealed class TestApplicationFactory(
         bool includeAuthHeader = true,
         string? userRoles = null,
