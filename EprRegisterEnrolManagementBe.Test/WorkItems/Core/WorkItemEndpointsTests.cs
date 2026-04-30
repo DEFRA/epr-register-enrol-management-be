@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -302,6 +303,72 @@ public class WorkItemEndpointsTests
 
         Assert.NotNull(captured);
         Assert.Null(captured!.SubmittedBy);
+    }
+
+    [Fact]
+    public async Task Get_list_returns_empty_page_without_querying_persistence_when_caller_has_no_client_id()
+    {
+        // epr-z0k: standard callers with no identifiable submitter id
+        // (no cognito:client_id claim AND no NameIdentifier) must
+        // structurally see nothing. Previously the endpoint funnelled
+        // them through Mongo with a magic SubmittedBy = '__no_tenant__'
+        // sentinel; now it short-circuits with an empty page so the
+        // gate cannot fail open if a future submitter id ever happened
+        // to match the literal sentinel.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var engine = Substitute.For<IWorkItemService>();
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
+        };
+
+        var result = await WorkItemEndpoints.GetAll(httpContext, persistence, engine, cancellationToken);
+
+        var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
+        Assert.NotNull(ok.Value);
+        Assert.Empty(ok.Value!.Items);
+        Assert.Equal(0, ok.Value.TotalCount);
+        Assert.Equal(1, ok.Value.Page);
+        Assert.Equal(WorkItemQuery.DefaultPageSize, ok.Value.PageSize);
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task Get_list_does_not_expose_items_submitted_by_literal_sentinel_to_no_tenant_caller()
+    {
+        // epr-z0k regression guard: even if some upstream submitter
+        // somehow ended up with the historical '__no_tenant__' literal
+        // as their cognito:client_id, a caller with no client_id of
+        // their own must NOT inherit visibility of those items.
+        // Structurally enforced by the short-circuit: persistence is
+        // never asked.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var engine = Substitute.For<IWorkItemService>();
+        persistence
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(
+                Items: new List<WorkItem>
+                {
+                    new() { TypeId = TypeId, StateId = "submitted", SubmittedBy = "__no_tenant__" }
+                },
+                TotalCount: 1,
+                Page: 1,
+                PageSize: WorkItemQuery.DefaultPageSize));
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
+        };
+
+        var result = await WorkItemEndpoints.GetAll(httpContext, persistence, engine, cancellationToken);
+
+        var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
+        Assert.Empty(ok.Value!.Items);
+        Assert.Equal(0, ok.Value.TotalCount);
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, default);
     }
 
     [Fact]

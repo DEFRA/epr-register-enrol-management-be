@@ -184,8 +184,20 @@ public static class WorkItemEndpoints
         {
             var callerClientId = httpContext.User.FindFirstValue("cognito:client_id")
                 ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
-            // No identifiable submitter → nothing to show.
-            query = query with { SubmittedBy = callerClientId ?? "__no_tenant__" };
+            if (string.IsNullOrEmpty(callerClientId))
+            {
+                // No identifiable submitter → no items can belong to the
+                // caller, so short-circuit with an empty page rather than
+                // ferrying a sentinel into the Mongo filter. Failing
+                // closed structurally means a future submitter id can
+                // never accidentally collide with the gate.
+                return TypedResults.Ok(new WorkItemListResponse(
+                    Array.Empty<WorkItemListItemResponse>(),
+                    TotalCount: 0,
+                    Page: query.NormalisedPage,
+                    PageSize: query.NormalisedPageSize));
+            }
+            query = query with { SubmittedBy = callerClientId };
         }
 
         var page = await persistence.QueryAsync(query, cancellationToken);
