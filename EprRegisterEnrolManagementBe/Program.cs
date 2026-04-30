@@ -157,6 +157,7 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
 
     MongoExtensions.Register();
     MongoConventions.Register();
+    WorkItemBsonRegistration.Register();
 
     services
         .AddOptions<MongoConfig>()

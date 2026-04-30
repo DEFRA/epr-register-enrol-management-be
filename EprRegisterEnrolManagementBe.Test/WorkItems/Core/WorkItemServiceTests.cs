@@ -1,6 +1,8 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
@@ -118,6 +120,62 @@ public class WorkItemServiceTests
         Assert.Equal(InitialNow, workItem.LastModifiedAt);
         await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
         Assert.DoesNotContain(workItem.AuditLog, a => a.Action == "task-completed");
+    }
+
+    [Fact]
+    public async Task CompleteTask_treats_existing_completion_as_idempotent_after_bson_round_trip_with_different_casing()
+    {
+        // Regression for epr-aq5: a task id written as "Task1" must be
+        // recognised as already-complete when re-completed as "task1" on a
+        // freshly-loaded (Mongo round-tripped) work item.
+        WorkItemBsonRegistration.Register();
+
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("task1", "Task one")]
+        });
+        var seed = ExistingWorkItem(completed: new()
+        {
+            ["submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Task1" }
+        });
+        var reloaded = BsonSerializer.Deserialize<WorkItem>(seed.ToBsonDocument());
+        _persistence.GetByIdAsync(reloaded.Id, Arg.Any<CancellationToken>()).Returns(reloaded);
+
+        var result = await BuildService(type).CompleteTaskAsync(
+            reloaded.Id, "task1", User(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.IsIdempotentReplay,
+            "Engine must recognise the already-complete task across casing differences " +
+            "after a Mongo round-trip.");
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task CompleteTask_treats_existing_completion_as_idempotent_after_bson_round_trip_with_different_state_casing()
+    {
+        // Regression for epr-aq5: the dictionary key (state id) must also
+        // match case-insensitively after a Mongo round-trip. A bucket
+        // recorded under "Submitted" must be found under "submitted".
+        WorkItemBsonRegistration.Register();
+
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("task1", "Task one")]
+        });
+        var seed = ExistingWorkItem(stateId: "submitted", completed: new()
+        {
+            ["Submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "task1" }
+        });
+        var reloaded = BsonSerializer.Deserialize<WorkItem>(seed.ToBsonDocument());
+        _persistence.GetByIdAsync(reloaded.Id, Arg.Any<CancellationToken>()).Returns(reloaded);
+
+        var result = await BuildService(type).CompleteTaskAsync(
+            reloaded.Id, "task1", User(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.IsIdempotentReplay);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
