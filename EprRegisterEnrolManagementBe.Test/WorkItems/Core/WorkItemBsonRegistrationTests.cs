@@ -91,4 +91,53 @@ public class WorkItemBsonRegistrationTests
 
         Assert.Empty(roundTripped.CompletedTaskIdsByState);
     }
+
+    // ---------------------- TaskStatusesByState (epr-gl6) ----------------------
+
+    [Fact]
+    public void Task_status_dictionary_round_trips_with_case_insensitive_lookups()
+    {
+        var workItem = new WorkItem
+        {
+            TypeId = "test-type",
+            StateId = "Submitted",
+            TaskStatusesByState =
+            {
+                ["Submitted"] = new(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Task1"] = WorkItemTaskStatus.InProgress
+                }
+            }
+        };
+
+        var roundTripped = BsonSerializer.Deserialize<WorkItem>(workItem.ToBsonDocument());
+
+        Assert.True(roundTripped.TaskStatusesByState.TryGetValue("submitted", out var inner));
+        Assert.True(inner!.TryGetValue("task1", out var status));
+        Assert.Equal(WorkItemTaskStatus.InProgress, status);
+    }
+
+    [Fact]
+    public void Task_status_unknown_value_falls_back_to_not_started_for_forward_compat()
+    {
+        // Build a BSON document with an unknown status string, simulating a
+        // future enum value being read back by an older binary. The reader
+        // must tolerate it and fall back to NotStarted instead of throwing.
+        var bson = new BsonDocument
+        {
+            ["_id"] = Guid.NewGuid().ToString(),
+            ["TypeId"] = "test-type",
+            ["StateId"] = "submitted",
+            ["TaskStatusesByState"] = new BsonDocument
+            {
+                ["submitted"] = new BsonDocument { ["task1"] = "FromTheFuture" }
+            }
+        };
+
+        var roundTripped = BsonSerializer.Deserialize<WorkItem>(bson);
+
+        Assert.Equal(
+            WorkItemTaskStatus.NotStarted,
+            roundTripped.TaskStatusesByState["submitted"]["task1"]);
+    }
 }

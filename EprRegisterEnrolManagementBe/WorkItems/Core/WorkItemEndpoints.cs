@@ -44,6 +44,11 @@ public static class WorkItemEndpoints
             .WithName("CompleteWorkItemTask")
             .RequireAuthorization();
 
+        group.MapPut("/{id:guid}/tasks/{taskId}/status", SetTaskStatus)
+            .WithName("SetWorkItemTaskStatus")
+            .DisableValidation()
+            .RequireAuthorization();
+
         group.MapPost("/{id:guid}/actions/{actionId}", ApplyAction)
             .WithName("ApplyWorkItemAction")
             .RequireAuthorization();
@@ -225,6 +230,45 @@ public static class WorkItemEndpoints
         {
             httpContext.Response.Headers[IdempotentReplayHeader] = "true";
         }
+        return ToHttpResult(result, engine);
+    }
+
+    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> SetTaskStatus(
+        [FromRoute] Guid id,
+        [FromRoute] string taskId,
+        JsonElement body,
+        HttpContext httpContext,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        if (body.ValueKind != JsonValueKind.Object)
+        {
+            return BadRequest(
+                "Invalid request",
+                "Request body must be a JSON object containing 'status'.");
+        }
+        if (!body.TryGetProperty("status", out var statusElement)
+            || statusElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(statusElement.GetString()))
+        {
+            return BadRequest(
+                "Invalid request",
+                "'status' is required and must be a non-empty string.");
+        }
+
+        // Case-insensitive bind matches the JSON enum convention used
+        // elsewhere on the wire and means a UI can send "InProgress" or
+        // "in-progress"-style casing without breaking the API.
+        if (!Enum.TryParse<WorkItemTaskStatus>(statusElement.GetString(), ignoreCase: true, out var status)
+            || !Enum.IsDefined(status))
+        {
+            return BadRequest(
+                "Invalid status",
+                $"'{statusElement.GetString()}' is not a recognised task status. " +
+                $"Expected one of: {string.Join(", ", Enum.GetNames<WorkItemTaskStatus>())}.");
+        }
+
+        var result = await engine.SetTaskStatusAsync(id, taskId, status, httpContext.User, cancellationToken);
         return ToHttpResult(result, engine);
     }
 

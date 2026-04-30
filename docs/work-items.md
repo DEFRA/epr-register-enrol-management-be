@@ -23,7 +23,7 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | `WorkItemState` | Identifier + display name for a state. `IsTerminal` marks completion states (e.g. approved/rejected). |
 | `WorkItemTask` | Identifier + display name for a unit of work to be completed in a state. |
 | `WorkItemTransition` | A named action (`approve`, `reject`, `withdraw`) that moves a work item from one state to another. `RequiresAllTasksComplete` (default `true`) gates the action behind every task for the from-state being marked complete. |
-| `WorkItemTaskProgress` | A task's id + display name + whether it is complete for the work item's current state. |
+| `WorkItemTaskProgress` | A task's id + display name + its `WorkItemTaskStatus` (`NotStarted` / `InProgress` / `Blocked` / `Completed`) for the work item's current state. The legacy `IsComplete` boolean is retained for back-compat and equals `Status == Completed`. |
 | `IWorkItemType` | Declares a type's `TypeId`, `DisplayName`, `InitialState`, `States`, `GetTasksForState(stateId)` and `Transitions`. Pure & side-effect free. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
 | `IWorkItemRegistry` | DI-resolvable lookup of every registered type. |
@@ -48,7 +48,8 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 | `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP Cognito client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
 | `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with current task progress and the actions the engine will currently allow. |
 | `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
-| `POST` | `/work-items/{id}/tasks/{taskId}/complete` | Mark a task complete on the work item's current state. Idempotent. `400` if the task does not apply to the current state, `404` if the work item is unknown. |
+| `POST` | `/work-items/{id}/tasks/{taskId}/complete` | Mark a task complete on the work item's current state. Idempotent. `400` if the task does not apply to the current state, `404` if the work item is unknown. Equivalent to `PUT /tasks/{taskId}/status` with `{"status":"Completed"}` for callers that only care about the binary view. |
+| `PUT` | `/work-items/{id}/tasks/{taskId}/status` | Set a task's `WorkItemTaskStatus` (epr-gl6). Body: `{ "status": "NotStarted" \| "InProgress" \| "Blocked" \| "Completed" }`. Status name binding is case-insensitive. Idempotent (no-ops do not write audit). On change appends a `task-status-changed` entry with `fromStatus` / `toStatus` in `Details` — no extra `task-completed` is written when transitioning to `Completed` via this endpoint. `400` for unknown tasks or unrecognised status values. |
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state or has outstanding tasks; `400` for unknown actions or transitions whose from-state does not match. |
 
 All three endpoints require authentication via the CDP Cognito client id
@@ -311,7 +312,7 @@ the work item document. An entry carries:
 | Field | Purpose |
 | --- | --- |
 | `Id` | Server-generated GUID. |
-| `Action` | Stable machine id of the action: `work-item-submitted`, `task-completed`, `action-applied`, `assigned`, `unassigned`, `note-added`. |
+| `Action` | Stable machine id of the action: `work-item-submitted`, `task-completed`, `task-status-changed`, `action-applied`, `assigned`, `unassigned`, `note-added`. `task-status-changed` (epr-gl6) is the canonical record for any move through the richer `WorkItemTaskStatus` set (`NotStarted` / `InProgress` / `Blocked` / `Completed`); the legacy `task-completed` entry is still emitted by the `POST /tasks/{id}/complete` endpoint for back-compat with existing audit consumers. |
 | `ActionDisplayName` | Human-readable description (e.g. `Task completed`). |
 | `Details` | `Dictionary<string, string?>` of contextual fields per action: `typeId`/`stateId`/`templateVersion` (submission); `taskId`/`taskDisplayName`/`stateId`; `actionId`/`actionDisplayName`/`fromStateId`/`toStateId`; `assigneeId`/`assigneeName`/`previousAssigneeId`/`previousAssigneeName`; `previousAssigneeId`/`previousAssigneeName`; `noteId`. |
 | `CreatedAt` | UTC timestamp from the injected `TimeProvider`. |

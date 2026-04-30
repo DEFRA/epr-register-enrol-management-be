@@ -54,7 +54,11 @@ public sealed class ReAccreditationType : IWorkItemType
 
     public string TypeId => Id;
     public string DisplayName => "Re-accreditation";
-    public string TemplateVersion => "v1";
+    // epr-gl6: per-state task contract gained a richer WorkItemTaskStatus
+    // (NotStarted/InProgress/Blocked/Completed) alongside the legacy
+    // binary view, so bump the template version even though the schema
+    // (states / transitions / task lists) is otherwise unchanged.
+    public string TemplateVersion => "v2";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =

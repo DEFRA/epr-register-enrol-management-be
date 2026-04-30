@@ -39,6 +39,31 @@ public interface IWorkItemService
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Set the lifecycle <see cref="WorkItemTaskStatus"/> of a single task
+    /// (epr-gl6). Generalises <see cref="CompleteTaskAsync"/> to the full
+    /// status set (NotStarted / InProgress / Blocked / Completed) while
+    /// keeping <see cref="WorkItem.CompletedTaskIdsByState"/> in sync so
+    /// older readers continue to work.
+    ///
+    /// Idempotent: if the task is already in the requested status the call
+    /// returns success without writing an audit entry, matching the
+    /// framework rule that no-ops do not record audit. On a real change
+    /// the engine appends a single <c>task-status-changed</c> entry whose
+    /// <c>Details</c> carry the task id and the from/to status names — no
+    /// separate <c>task-completed</c> entry is emitted when transitioning
+    /// to <see cref="WorkItemTaskStatus.Completed"/> via this call (the
+    /// status change is the canonical record). The legacy
+    /// <see cref="CompleteTaskAsync"/> path keeps emitting
+    /// <c>task-completed</c> for back-compat with existing audit consumers.
+    /// </summary>
+    Task<WorkItemActionResult> SetTaskStatusAsync(
+        Guid workItemId,
+        string taskId,
+        WorkItemTaskStatus status,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default);
+
     Task<WorkItemActionResult> ApplyActionAsync(
         Guid workItemId,
         string actionId,
@@ -221,6 +246,12 @@ public sealed class WorkItemService(
             // "already done" error.
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
+
+        // epr-gl6: dual-write — the per-task status map is the canonical
+        // source of truth for the new status set, but
+        // CompletedTaskIdsByState is retained for one release cycle so
+        // legacy readers continue to work. Keep them in lockstep.
+        SetTaskStatus(workItem, workItem.StateId, task.Id, WorkItemTaskStatus.Completed);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.LastModifiedAt = now;
@@ -628,6 +659,11 @@ public sealed class WorkItemService(
         var taskNewlyCompleted = bucket.Add(task.Id);
         if (taskNewlyCompleted)
         {
+            // epr-gl6: dual-write the per-task status map alongside the
+            // legacy CompletedTaskIdsByState bucket so both sources of
+            // truth stay in lockstep.
+            SetTaskStatus(workItem, workItem.StateId, task.Id, WorkItemTaskStatus.Completed);
+
             AppendAudit(workItem, "task-completed", "Task completed", user, now, new()
             {
                 ["taskId"] = task.Id,
@@ -659,6 +695,75 @@ public sealed class WorkItemService(
         return WorkItemActionResult.Success(workItem);
     }
 
+    public async Task<WorkItemActionResult> SetTaskStatusAsync(
+        Guid workItemId,
+        string taskId,
+        WorkItemTaskStatus status,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return identityFailure;
+        }
+
+        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
+        if (failure is not null)
+        {
+            return failure;
+        }
+
+        var tasks = template!.GetTasksForState(workItem!.StateId);
+        var task = tasks.FirstOrDefault(t => string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase));
+        if (task is null)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.TaskNotApplicable,
+                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'.");
+        }
+
+        var currentStatus = GetCurrentTaskStatus(workItem, workItem.StateId, task.Id);
+        if (currentStatus == status)
+        {
+            // Idempotent no-op: framework rule is that no-ops do not write
+            // an audit entry. Mirror CompleteTaskAsync's behaviour but use
+            // a plain Success rather than IdempotentReplay — the new API
+            // does not need to surface replay through a header.
+            return WorkItemActionResult.Success(workItem);
+        }
+
+        // epr-gl6: dual-write — keep CompletedTaskIdsByState in lockstep
+        // with TaskStatusesByState so legacy readers (which only consume
+        // the bucket) keep observing a consistent view.
+        SetTaskStatus(workItem, workItem.StateId, task.Id, status);
+
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        workItem.LastModifiedAt = now;
+        AppendAudit(workItem, "task-status-changed", "Task status changed", user, now, new()
+        {
+            ["taskId"] = task.Id,
+            ["taskDisplayName"] = task.DisplayName,
+            ["stateId"] = workItem.StateId,
+            ["fromStatus"] = currentStatus.ToString(),
+            ["toStatus"] = status.ToString()
+        });
+
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException)
+        {
+            return ConcurrencyConflict(workItem.Id);
+        }
+
+        logger.LogInformation(
+            "Task {TaskId} on work item {WorkItemId} ({TypeId}) moved from {FromStatus} to {ToStatus} by {User}",
+            task.Id, workItem.Id, workItem.TypeId, currentStatus, status, DescribeUser(user));
+
+        return WorkItemActionResult.Success(workItem);
+    }
+
     public async Task<WorkItemEngineProjection?> ProjectAsync(Guid workItemId, CancellationToken cancellationToken = default)
     {
         var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
@@ -686,8 +791,26 @@ public sealed class WorkItemService(
             ? done
             : new HashSet<string>();
 
+        // epr-gl6: per-task status map is the canonical source of truth
+        // when present; fall back to the legacy CompletedTaskIdsByState
+        // bucket for documents written before the map existed (Completed
+        // when in the bucket, NotStarted otherwise).
+        var statuses = workItem.TaskStatusesByState.TryGetValue(workItem.StateId, out var stateStatuses)
+            ? stateStatuses
+            : null;
+
         var taskProgress = template.GetTasksForState(workItem.StateId)
-            .Select(task => new WorkItemTaskProgress(task.Id, task.DisplayName, completed.Contains(task.Id)))
+            .Select(task =>
+            {
+                var status = statuses is not null && statuses.TryGetValue(task.Id, out var explicitStatus)
+                    ? explicitStatus
+                    : (completed.Contains(task.Id) ? WorkItemTaskStatus.Completed : WorkItemTaskStatus.NotStarted);
+                return new WorkItemTaskProgress(
+                    task.Id,
+                    task.DisplayName,
+                    IsComplete: status == WorkItemTaskStatus.Completed,
+                    Status: status);
+            })
             .ToList();
 
         var currentState = template.States.FirstOrDefault(
@@ -756,6 +879,54 @@ public sealed class WorkItemService(
             workItem.CompletedTaskIdsByState[stateId] = bucket;
         }
         return bucket;
+    }
+
+    /// <summary>
+    /// Resolve the current <see cref="WorkItemTaskStatus"/> of a single task
+    /// (epr-gl6). Prefers the per-task status map; falls back to the legacy
+    /// <see cref="WorkItem.CompletedTaskIdsByState"/> bucket for documents
+    /// written before the map existed.
+    /// </summary>
+    private static WorkItemTaskStatus GetCurrentTaskStatus(WorkItem workItem, string stateId, string taskId)
+    {
+        if (workItem.TaskStatusesByState.TryGetValue(stateId, out var inner)
+            && inner.TryGetValue(taskId, out var explicitStatus))
+        {
+            return explicitStatus;
+        }
+        if (workItem.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket)
+            && bucket.Contains(taskId))
+        {
+            return WorkItemTaskStatus.Completed;
+        }
+        return WorkItemTaskStatus.NotStarted;
+    }
+
+    /// <summary>
+    /// Apply a status change to both <see cref="WorkItem.TaskStatusesByState"/>
+    /// (canonical) and <see cref="WorkItem.CompletedTaskIdsByState"/>
+    /// (legacy duplicate) so the two stay in lockstep on every write — see
+    /// epr-gl6. <see cref="WorkItemTaskStatus.Completed"/> adds the task to
+    /// the legacy bucket; any other status removes it.
+    /// </summary>
+    private static void SetTaskStatus(WorkItem workItem, string stateId, string taskId, WorkItemTaskStatus status)
+    {
+        if (!workItem.TaskStatusesByState.TryGetValue(stateId, out var inner))
+        {
+            inner = new Dictionary<string, WorkItemTaskStatus>(StringComparer.OrdinalIgnoreCase);
+            workItem.TaskStatusesByState[stateId] = inner;
+        }
+        inner[taskId] = status;
+
+        var bucket = GetCompletedBucket(workItem, stateId);
+        if (status == WorkItemTaskStatus.Completed)
+        {
+            bucket.Add(taskId);
+        }
+        else
+        {
+            bucket.Remove(taskId);
+        }
     }
 
     private static bool HasIncompleteTasks(IWorkItemTemplate template, WorkItem workItem)

@@ -153,6 +153,67 @@ public class WorkItemEngineEndpointsTests
         Assert.Empty(body.AvailableActions); // approve is gated on the task
     }
 
+    // ---------------------- Task status endpoint (epr-gl6) ----------------------
+
+    [Fact]
+    public async Task Set_task_status_returns_updated_response_with_in_progress_status()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new EngineFactory();
+        using var client = factory.CreateClient();
+
+        var workItemId = Guid.NewGuid();
+        factory.MockPersistence.GetByIdAsync(workItemId, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = workItemId,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        });
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/{workItemId}/tasks/check-eligibility/status",
+            new { status = "InProgress" }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var task = Assert.Single(body!.Tasks);
+        Assert.Equal(WorkItemTaskStatus.InProgress, task.Status);
+        Assert.False(task.IsComplete);
+    }
+
+    [Theory]
+    [InlineData("in-progress")]
+    [InlineData("nonsense")]
+    [InlineData("")]
+    public async Task Set_task_status_returns_400_for_invalid_status_value(string statusValue)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new EngineFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/{Guid.NewGuid()}/tasks/check-eligibility/status",
+            new { status = statusValue }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Set_task_status_returns_401_when_user_id_header_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new EngineFactory();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Remove("x-cdp-user-id");
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/{Guid.NewGuid()}/tasks/check-eligibility/status",
+            new { status = "InProgress" }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     private sealed class EngineFactory : WebApplicationFactory<Program>
     {
         public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();

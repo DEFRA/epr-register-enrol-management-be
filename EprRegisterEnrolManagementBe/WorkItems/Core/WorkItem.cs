@@ -85,8 +85,32 @@ public sealed class WorkItem
     /// Ids of completed tasks, keyed by the state id those tasks belong to.
     /// Tracking per-state lets the engine reason about progress in the current
     /// state without losing the audit trail of work done in earlier states.
+    ///
+    /// Kept in sync with <see cref="TaskStatusesByState"/> on every write
+    /// (see epr-gl6): a task is in this bucket iff its
+    /// <see cref="WorkItemTaskStatus"/> in <see cref="TaskStatusesByState"/>
+    /// is <see cref="WorkItemTaskStatus.Completed"/>. Retained for one
+    /// release cycle as a duplicated source of truth so legacy readers keep
+    /// working; new code should prefer <see cref="TaskStatusesByState"/>.
     /// </summary>
     public Dictionary<string, HashSet<string>> CompletedTaskIdsByState { get; init; } = new();
+
+    /// <summary>
+    /// Per-task lifecycle status (epr-gl6), keyed by state id then task id.
+    /// Replaces the legacy binary view exposed by
+    /// <see cref="CompletedTaskIdsByState"/>; the engine writes both
+    /// data structures atomically on every change so older readers that
+    /// still consume <see cref="CompletedTaskIdsByState"/> keep working.
+    ///
+    /// Both the outer dictionary (state ids) and every inner dictionary
+    /// (task ids) use <see cref="StringComparer.OrdinalIgnoreCase"/> for
+    /// the same reason as <see cref="CompletedTaskIdsByState"/>: state and
+    /// task ids are compared case-insensitively throughout the engine,
+    /// and the BSON round-trip is normalised by
+    /// <see cref="WorkItemBsonRegistration"/>.
+    /// </summary>
+    public Dictionary<string, Dictionary<string, WorkItemTaskStatus>> TaskStatusesByState { get; init; }
+        = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Free-form, type-specific payload supplied by the upstream caller. Stored

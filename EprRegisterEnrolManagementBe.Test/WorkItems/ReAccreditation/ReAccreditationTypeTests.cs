@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v1", _type.TemplateVersion);
+        Assert.Equal("v2", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
