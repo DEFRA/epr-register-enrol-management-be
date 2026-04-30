@@ -51,6 +51,9 @@ static void ConfigureServices(WebApplicationBuilder builder)
     services.AddValidation();
 
     services.AddHttpContextAccessor();
+    // In-memory cache backs the HMAC nonce replay defence in
+    // CognitoClientIdAuthenticationHandler. Singleton by default.
+    services.AddMemoryCache();
 
     ConfigureAuth(services, configuration);
 
@@ -111,9 +114,13 @@ static void ConfigureHeaderPropagation(IServiceCollection services, IConfigurati
         // Things deliberately NOT propagated:
         //   * Authorization, Cookie  — caller credentials must never be
         //     replayed verbatim to a downstream API.
-        //   * x-cdp-auth-signature, x-api-key — signed/keyed for THIS API
-        //     only; replaying them to another service would cross trust
-        //     boundaries.
+        //   * x-cdp-auth-signature, x-cdp-auth-timestamp, x-cdp-auth-nonce,
+        //     x-api-key — caller-bound to THIS request: the signature is an
+        //     HMAC over the trust headers for THIS API, the timestamp
+        //     bounds replay against THIS API's clock, and the nonce is
+        //     burned in THIS API's replay cache. Forwarding any of them
+        //     downstream would either leak the integrity proof to another
+        //     service or replay the nonce out of band.
         //   * x-cdp-user-id, x-cdp-user-name, x-cdp-user-roles,
         //     x-cdp-cognito-client-id — identity headers from the BFF are
         //     for THIS service to consume; downstream services that need
@@ -198,7 +205,8 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
                       .WithHeaders("Authorization", "Content-Type",
                           "x-cdp-cognito-client-id", "x-cdp-user-id",
                           "x-cdp-user-name", "x-cdp-user-roles",
-                          "x-cdp-auth-signature")
+                          "x-cdp-auth-signature", "x-cdp-auth-timestamp",
+                          "x-cdp-auth-nonce")
                       .DisallowCredentials();
             });
         });

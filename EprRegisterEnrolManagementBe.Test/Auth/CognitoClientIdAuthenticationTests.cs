@@ -1,16 +1,22 @@
 using System.Net;
+using System.Net.Http.Headers;
+using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.Auth;
 
 public class CognitoClientIdAuthenticationTests
 {
+    private const string ClientId = "upstream-service";
+    private const string Secret = "test-secret";
+
     [Fact]
     public async Task Protected_endpoint_returns_401_without_client_id_header()
     {
@@ -46,7 +52,7 @@ public class CognitoClientIdAuthenticationTests
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -69,13 +75,14 @@ public class CognitoClientIdAuthenticationTests
     public async Task Signature_required_when_shared_secret_configured_request_without_signature_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(sharedSecret: "test-secret");
+        await using var factory = new BareFactory(sharedSecret: Secret);
         factory.MockPersistence
             .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
+        AddTimestampAndNonce(client, factory.FakeTime.GetUtcNow().ToString("O"), "nonce-1");
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -86,10 +93,11 @@ public class CognitoClientIdAuthenticationTests
     public async Task Signature_required_tampered_signature_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(sharedSecret: "test-secret");
+        await using var factory = new BareFactory(sharedSecret: Secret);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
+        AddTimestampAndNonce(client, factory.FakeTime.GetUtcNow().ToString("O"), "nonce-2");
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", "AAAAtampered==");
 
         var response = await client.GetAsync("/work-items", cancellationToken);
@@ -98,24 +106,137 @@ public class CognitoClientIdAuthenticationTests
     }
 
     [Fact]
-    public async Task Signature_required_valid_signature_is_200()
+    public async Task Signature_required_valid_signature_with_timestamp_and_nonce_is_200()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(sharedSecret: "test-secret");
+        await using var factory = new BareFactory(sharedSecret: Secret);
         factory.MockPersistence
             .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
-        var signature = EprRegisterEnrolManagementBe.Auth.CognitoClientIdAuthenticationHandler
-            .ComputeSignature("test-secret", "upstream-service", null, null, null);
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-valid";
+        var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
+            Secret, ClientId, null, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_required_missing_timestamp_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(sharedSecret: Secret);
+
+        var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
+            Secret, ClientId, null, null, null,
+            factory.FakeTime.GetUtcNow().ToString("O"), "nonce-no-ts");
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", "nonce-no-ts");
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_required_stale_timestamp_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(sharedSecret: Secret);
+
+        // Six minutes ago — outside the default 5-minute skew.
+        var staleTimestamp = factory.FakeTime.GetUtcNow().AddMinutes(-6).ToString("O");
+        var nonce = "nonce-stale";
+        var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
+            Secret, ClientId, null, null, null, staleTimestamp, nonce);
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
+        AddTimestampAndNonce(client, staleTimestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_required_future_timestamp_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(sharedSecret: Secret);
+
+        // Six minutes ahead — skew check is bidirectional.
+        var futureTimestamp = factory.FakeTime.GetUtcNow().AddMinutes(6).ToString("O");
+        var nonce = "nonce-future";
+        var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
+            Secret, ClientId, null, null, null, futureTimestamp, nonce);
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
+        AddTimestampAndNonce(client, futureTimestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_required_missing_nonce_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(sharedSecret: Secret);
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
+            Secret, ClientId, null, null, null, timestamp, "would-have-been-nonce");
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-timestamp", timestamp);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_required_replayed_nonce_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(sharedSecret: Secret);
+        factory.MockPersistence
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-replay";
+        var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
+            Secret, ClientId, null, null, null, timestamp, nonce);
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+        var first = await client.GetAsync("/work-items", cancellationToken);
+        var second = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, second.StatusCode);
     }
 
     [Fact]
@@ -127,7 +248,7 @@ public class CognitoClientIdAuthenticationTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory(environment: "Production");
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -146,16 +267,23 @@ public class CognitoClientIdAuthenticationTests
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "upstream-service");
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    private static void AddTimestampAndNonce(HttpClient client, string timestamp, string nonce)
+    {
+        client.DefaultRequestHeaders.Add("x-cdp-auth-timestamp", timestamp);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", nonce);
+    }
+
     private sealed class BareFactory(string? sharedSecret = null, string? environment = null) : WebApplicationFactory<Program>
     {
         public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
+        public readonly FakeTimeProvider FakeTime = new(DateTimeOffset.Parse("2026-04-30T12:00:00Z"));
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -177,6 +305,8 @@ public class CognitoClientIdAuthenticationTests
             {
                 services.RemoveAll<IWorkItemPersistence>();
                 services.AddSingleton(MockPersistence);
+                services.RemoveAll<TimeProvider>();
+                services.AddSingleton<TimeProvider>(FakeTime);
             });
         }
     }

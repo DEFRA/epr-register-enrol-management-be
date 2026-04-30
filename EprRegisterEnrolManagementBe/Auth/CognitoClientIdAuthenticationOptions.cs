@@ -27,10 +27,40 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
     public string SignatureHeaderName { get; set; } = CognitoClientIdDefaults.DefaultSignatureHeaderName;
 
     /// <summary>
+    /// Header carrying the BFF's ISO-8601 UTC instant for the request. Part
+    /// of the v2 canonical signing payload — bounds replay windows.
+    /// </summary>
+    public string TimestampHeaderName { get; set; } = CognitoClientIdDefaults.DefaultTimestampHeaderName;
+
+    /// <summary>
+    /// Header carrying a per-request opaque nonce minted by the BFF (e.g.
+    /// base64url of 16 random bytes). Part of the v2 canonical signing
+    /// payload — single-use within the replay cache TTL.
+    /// </summary>
+    public string NonceHeaderName { get; set; } = CognitoClientIdDefaults.DefaultNonceHeaderName;
+
+    /// <summary>
     /// Shared secret used to validate the <see cref="SignatureHeaderName"/>
     /// HMAC. When set, every authenticated request MUST present a valid
     /// signature or the handler fails closed. When null/empty the handler
     /// falls back to header-trust mode (development/local only).
     /// </summary>
     public string? SharedSecret { get; set; }
+
+    /// <summary>
+    /// Maximum permitted absolute difference between the BFF-supplied
+    /// timestamp header and the backend's clock. Enforced in both
+    /// directions to bound replay windows even if a request is captured
+    /// before the BFF clock advances. Defaults to 5 minutes.
+    /// </summary>
+    public TimeSpan MaxClockSkew { get; set; } = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Lifetime of an entry in the in-memory nonce replay cache. Should be
+    /// at least <c>2 * MaxClockSkew</c> so a request that arrived at the
+    /// edge of the freshness window cannot be replayed by re-using a
+    /// nonce that has already aged out of the cache. Defaults to 10
+    /// minutes.
+    /// </summary>
+    public TimeSpan ReplayCacheTtl { get; set; } = TimeSpan.FromMinutes(10);
 }

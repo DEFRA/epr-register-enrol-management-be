@@ -44,4 +44,19 @@ public static class CognitoClientIdDefaults
     /// CDP ingress.
     /// </summary>
     public const string DefaultSignatureHeaderName = "x-cdp-auth-signature";
+
+    /// <summary>
+    /// Header carrying the BFF's ISO-8601 UTC instant for this request.
+    /// Mandatory whenever the shared secret is configured: bounds the
+    /// freshness window in which a captured request may be replayed.
+    /// </summary>
+    public const string DefaultTimestampHeaderName = "x-cdp-auth-timestamp";
+
+    /// <summary>
+    /// Header carrying a per-request opaque nonce minted by the BFF.
+    /// Mandatory whenever the shared secret is configured: tracked
+    /// server-side so a captured request cannot be replayed even within
+    /// the freshness window.
+    /// </summary>
+    public const string DefaultNonceHeaderName = "x-cdp-auth-nonce";
 }

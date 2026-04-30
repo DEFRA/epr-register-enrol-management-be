@@ -1,8 +1,10 @@
+using System.Globalization;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -17,10 +19,11 @@ namespace EprRegisterEnrolManagementBe.Auth;
 ///
 /// When <see cref="CognitoClientIdAuthenticationOptions.SharedSecret"/> is
 /// configured, requests must additionally carry a valid HMAC-SHA256
-/// signature in the configured signature header. The signature is computed
-/// by the BFF over a canonical string of the trust headers and proves the
-/// caller knows the shared secret — defending against requests that reach
-/// the backend directly and forge trust headers.
+/// signature in the configured signature header AND a fresh timestamp /
+/// single-use nonce. The signature proves the caller knows the shared
+/// secret; the timestamp bounds the replay window; the nonce ensures a
+/// captured signed request cannot be replayed even within that window.
+/// See ADR-0003 for the v2 canonical payload contract.
 ///
 /// When the shared secret is NOT configured the handler fails CLOSED in
 /// any non-Development environment (the integrity contract is broken). In
@@ -31,13 +34,19 @@ public class CognitoClientIdAuthenticationHandler(
     IOptionsMonitor<CognitoClientIdAuthenticationOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder,
-    IHostEnvironment hostEnvironment)
+    IHostEnvironment hostEnvironment,
+    TimeProvider timeProvider,
+    IMemoryCache replayCache)
     : AuthenticationHandler<CognitoClientIdAuthenticationOptions>(options, logger, encoder)
 {
     // Tracks whether the Development header-trust downgrade warning has
     // already been emitted in this process. Atomic CAS keeps it to a single
     // log line even under concurrent first requests.
     private static int s_devDowngradeWarned;
+
+    // Cache-key prefix so nonce entries cannot collide with anything else
+    // a future caller might park in the shared IMemoryCache instance.
+    private const string ReplayCacheKeyPrefix = "cognito-client-id:nonce:";
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -75,10 +84,60 @@ public class CognitoClientIdAuthenticationHandler(
         }
 
         // Integrity check: when a shared secret is configured the BFF must
-        // sign the trust headers with HMAC-SHA256 so we refuse requests that
-        // reach the backend directly and forge identity headers.
+        // sign the trust headers with HMAC-SHA256, supply a fresh timestamp
+        // and a single-use nonce. This refuses requests that bypass the BFF
+        // and forge identity headers, AND requests that replay a previously
+        // captured signed request.
         if (!string.IsNullOrEmpty(Options.SharedSecret))
         {
+            // --- Timestamp: present, parseable, within +/- MaxClockSkew. ---
+            if (!Request.Headers.TryGetValue(Options.TimestampHeaderName, out var timestampValues))
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"Missing {Options.TimestampHeaderName} header"));
+            }
+
+            var timestampHeader = timestampValues.ToString();
+            if (string.IsNullOrWhiteSpace(timestampHeader))
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"Missing {Options.TimestampHeaderName} header"));
+            }
+
+            if (!DateTimeOffset.TryParse(
+                    timestampHeader,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                    out var timestamp))
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"Malformed {Options.TimestampHeaderName} header"));
+            }
+
+            var now = timeProvider.GetUtcNow();
+            if ((now - timestamp).Duration() > Options.MaxClockSkew)
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"Stale {Options.TimestampHeaderName} header"));
+            }
+
+            // --- Nonce: present. Replay check happens after signature
+            // verification so a guessable-nonce attacker cannot lock out
+            // legitimate callers by burning their nonces with bad sigs.
+            if (!Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonceValues))
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"Missing {Options.NonceHeaderName} header"));
+            }
+
+            var nonce = nonceValues.ToString();
+            if (string.IsNullOrWhiteSpace(nonce))
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"Missing {Options.NonceHeaderName} header"));
+            }
+
+            // --- Signature: matches expected HMAC over v2 canonical string. ---
             if (!Request.Headers.TryGetValue(Options.SignatureHeaderName, out var signatureValues))
             {
                 return Task.FromResult(AuthenticateResult.Fail(
@@ -87,13 +146,26 @@ public class CognitoClientIdAuthenticationHandler(
 
             var providedSignature = signatureValues.ToString();
             var expectedSignature = ComputeSignature(
-                Options.SharedSecret!, clientId, userId, userName, rolesHeader);
+                Options.SharedSecret!, clientId, userId, userName, rolesHeader,
+                timestampHeader, nonce);
 
             if (!FixedTimeEquals(providedSignature, expectedSignature))
             {
                 return Task.FromResult(AuthenticateResult.Fail(
                     $"Invalid {Options.SignatureHeaderName} header"));
             }
+
+            // --- Replay check: the nonce is single-use within its TTL. ---
+            var cacheKey = ReplayCacheKeyPrefix + nonce;
+            if (replayCache.TryGetValue(cacheKey, out _))
+            {
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"Replayed {Options.NonceHeaderName} header"));
+            }
+            replayCache.Set(cacheKey, true, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = Options.ReplayCacheTtl
+            });
         }
         else if (!hostEnvironment.IsDevelopment())
         {
@@ -147,23 +219,28 @@ public class CognitoClientIdAuthenticationHandler(
     }
 
     /// <summary>
-    /// Canonical signing payload. Order and field separators are part of the
-    /// contract with the BFF: any change here is a breaking change and
-    /// requires a coordinated deploy.
+    /// Canonical signing payload (v2). Order and field separators are part
+    /// of the contract with the BFF: any change here is a breaking change
+    /// and requires a coordinated deploy. The timestamp and nonce are
+    /// non-optional — see ADR-0003.
     /// </summary>
     internal static string ComputeSignature(
         string sharedSecret,
         string clientId,
         string? userId,
         string? userName,
-        string? userRoles)
+        string? userRoles,
+        string timestamp,
+        string nonce)
     {
         var payload = string.Join('\n',
-            "v1",
+            "v2",
             clientId,
             userId ?? string.Empty,
             userName ?? string.Empty,
-            userRoles ?? string.Empty);
+            userRoles ?? string.Empty,
+            timestamp,
+            nonce);
         var keyBytes = Encoding.UTF8.GetBytes(sharedSecret);
         var payloadBytes = Encoding.UTF8.GetBytes(payload);
         var mac = HMACSHA256.HashData(keyBytes, payloadBytes);

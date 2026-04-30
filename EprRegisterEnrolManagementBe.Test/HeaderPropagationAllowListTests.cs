@@ -18,6 +18,8 @@ public class HeaderPropagationAllowListTests
         "Authorization",
         "Cookie",
         "x-cdp-auth-signature",
+        "x-cdp-auth-timestamp",
+        "x-cdp-auth-nonce",
         "x-api-key",
         "x-cdp-user-id",
         "x-cdp-user-name",
