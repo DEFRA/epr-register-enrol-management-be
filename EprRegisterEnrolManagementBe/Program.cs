@@ -69,9 +69,18 @@ static void ConfigureServices(WebApplicationBuilder builder)
     ConfigureMongo(services, configuration);
     ConfigureCors(services, configuration);
 
+    services.AddOptions<LivenessHealthCheckOptions>()
+        .Bind(configuration.GetSection("Liveness"))
+        .ValidateDataAnnotations()
+        .ValidateOnStart();
+
     services.AddHealthChecks()
-        // Tagged "ready" so liveness (/health) sees no checks while
-        // readiness (/health/ready) only fires checks tagged "ready".
+        // Tagged "live" so liveness (/health) only fires checks tagged
+        // "live" (currently the thread-pool probe), and readiness
+        // (/health/ready) only fires checks tagged "ready". The two sets
+        // are deliberately disjoint so a downed dependency cannot recycle
+        // the pod and a wedged process cannot keep serving traffic.
+        .AddCheck<LivenessHealthCheck>("threadpool", tags: ["live"])
         .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"]);
 
     ConfigureWorkItems(builder);
@@ -304,11 +313,14 @@ static void ConfigureMiddleware(WebApplication app)
 [ExcludeFromCodeCoverage]
 static void ConfigureEndpoints(WebApplication app)
 {
-    // Liveness: trivial — answers "is the process up". No dependency
-    // checks; if the process is alive enough to respond, it's alive.
+    // Liveness: only "live"-tagged checks run. Currently the thread-pool
+    // probe (LivenessHealthCheck) which detects a wedged process — a
+    // bare "answer 200 if the pipeline parsed the request" probe would
+    // never let Kubernetes / CDP recycle a deadlocked or thread-pool-
+    // starved pod.
     app.MapHealthChecks("/health", new HealthCheckOptions
     {
-        Predicate = _ => false
+        Predicate = check => check.Tags.Contains("live")
     }).AllowAnonymous();
     // Readiness: only the "ready"-tagged checks run (currently MongoDB).
     // CDP / Kubernetes uses this to decide when to send traffic.
