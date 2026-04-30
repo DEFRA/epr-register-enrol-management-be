@@ -2,6 +2,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using MongoDB.Bson;
+using MongoDB.Bson.IO;
 using MongoDB.Driver;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -209,6 +210,18 @@ public static class WorkItemPayloadConverter
 {
     private static readonly BsonDocument s_emptyDocument = new();
 
+    /// <summary>
+    /// Pinned BSON-to-JSON output mode for every payload we hand to API
+    /// consumers. Relaxed extended JSON keeps int/long/double/decimal as
+    /// plain JSON numbers and emits dates as <c>{ "$date": "ISO-8601" }</c>,
+    /// so frontends see a stable shape regardless of driver version
+    /// defaults (epr-b0x).
+    /// </summary>
+    private static readonly JsonWriterSettings s_jsonWriterSettings = new()
+    {
+        OutputMode = JsonOutputMode.RelaxedExtendedJson,
+    };
+
     public static BsonDocument ToBson(JsonElement? payload)
     {
         if (!payload.HasValue || payload.Value.ValueKind == JsonValueKind.Undefined ||
@@ -230,7 +243,7 @@ public static class WorkItemPayloadConverter
     public static JsonElement ToJson(BsonDocument? document)
     {
         var bson = document ?? s_emptyDocument;
-        var json = bson.ToJson();
+        var json = bson.ToJson(s_jsonWriterSettings);
         using var doc = JsonDocument.Parse(json);
         return doc.RootElement.Clone();
     }
