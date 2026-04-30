@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
@@ -12,7 +14,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// Persisted as a string in BSON (registered in
 /// <c>MongoConventions.Register</c>) so the on-disk shape is stable across
 /// future enum value additions and remains human-readable in the database.
+/// The wire format is also serialised as the enum's name string
+/// (PascalCase, e.g. <c>"InProgress"</c>) so HTTP consumers (the
+/// management FE in particular) can round-trip the value without a
+/// numeric mapping table.
 /// </summary>
+[JsonConverter(typeof(JsonStringEnumConverter<WorkItemTaskStatus>))]
 public enum WorkItemTaskStatus
 {
     NotStarted,
