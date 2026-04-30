@@ -41,10 +41,10 @@ public interface IWorkItemPersistence
     Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default);
 }
 
-[ExcludeFromCodeCoverage]
 public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory, ILoggerFactory loggerFactory)
     : MongoService<WorkItem>(connectionFactory, "workItems", loggerFactory), IWorkItemPersistence
 {
+    [ExcludeFromCodeCoverage]
     public async Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default)
     {
         await Collection.InsertOneAsync(workItem, cancellationToken: cancellationToken);
@@ -53,6 +53,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             workItem.Id, workItem.TypeId, workItem.SubmittedBy ?? "unknown");
     }
 
+    [ExcludeFromCodeCoverage]
     public async Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
     {
         return await Collection
@@ -60,6 +61,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    [ExcludeFromCodeCoverage]
     public async Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -96,7 +98,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
         return new WorkItemPage(items, totalCount, page, pageSize);
     }
 
-    private static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
+    internal static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
     {
         var builder = Builders<WorkItem>.Filter;
         var clauses = new List<FilterDefinition<WorkItem>>();
@@ -152,6 +154,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
 
+    [ExcludeFromCodeCoverage]
     public async Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)
     {
         var expectedVersion = workItem.Version;
@@ -175,6 +178,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             workItem.Id, workItem.TypeId, workItem.StateId, workItem.Version);
     }
 
+    [ExcludeFromCodeCoverage]
     protected override List<CreateIndexModel<WorkItem>> DefineIndexes(
         IndexKeysDefinitionBuilder<WorkItem> builder)
     {
