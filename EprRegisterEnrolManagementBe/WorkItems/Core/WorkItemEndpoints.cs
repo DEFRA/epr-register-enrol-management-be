@@ -311,6 +311,10 @@ public static class WorkItemEndpoints
 
         var result = await engine.AssignAsync(
             id, assigneeIdElement.GetString()!, assigneeName, httpContext.User, cancellationToken);
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[IdempotentReplayHeader] = "true";
+        }
         return ToHttpResult(result, engine);
     }
 
@@ -321,6 +325,10 @@ public static class WorkItemEndpoints
         CancellationToken cancellationToken)
     {
         var result = await engine.UnassignAsync(id, httpContext.User, cancellationToken);
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[IdempotentReplayHeader] = "true";
+        }
         return ToHttpResult(result, engine);
     }
 

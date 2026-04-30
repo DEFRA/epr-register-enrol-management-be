@@ -532,6 +532,9 @@ public class WorkItemServiceTests
             workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
+        Assert.True(result.IsIdempotentReplay,
+            "Re-assigning to the same user must be flagged as a replay so " +
+            "the endpoint can set X-Idempotent-Replay: true.");
         Assert.Equal(InitialNow, workItem.AssignedAt);
         Assert.Equal("old-actor", workItem.AssignedBy);
         await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
@@ -649,6 +652,9 @@ public class WorkItemServiceTests
         var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
+        Assert.True(result.IsIdempotentReplay,
+            "Unassigning an already-unassigned item must be flagged as a replay so " +
+            "the endpoint can set X-Idempotent-Replay: true.");
         await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
     }
 

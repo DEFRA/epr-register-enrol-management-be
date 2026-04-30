@@ -596,6 +596,63 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Assign_to_same_user_sets_idempotent_replay_header_and_does_not_persist()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client",
+            AssignedToId = "alice-1",
+            AssignedToName = "Alice Example",
+            AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
+            AssignedBy = "earlier-actor"
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "alice-1", assigneeName = "Alice Example" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("X-Idempotent-Replay", out var values));
+        Assert.Equal("true", Assert.Single(values!));
+        await factory.MockPersistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Unassign_already_unassigned_sets_idempotent_replay_header_and_does_not_persist()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.TryGetValues("X-Idempotent-Replay", out var values));
+        Assert.Equal("true", Assert.Single(values!));
+        await factory.MockPersistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task AddNote_persists_note_and_returns_updated_response()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

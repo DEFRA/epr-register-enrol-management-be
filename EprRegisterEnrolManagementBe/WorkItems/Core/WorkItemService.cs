@@ -418,34 +418,41 @@ public sealed class WorkItemService(
         var alreadyAssignedToSameUser = string.Equals(workItem.AssignedToId, trimmedAssigneeId, StringComparison.Ordinal)
             && string.Equals(workItem.AssignedToName, snapshotName, StringComparison.Ordinal);
 
-        if (!alreadyAssignedToSameUser)
+        if (alreadyAssignedToSameUser)
         {
-            var previousAssigneeId = workItem.AssignedToId;
-            var previousAssigneeName = workItem.AssignedToName;
-            workItem.AssignedToId = trimmedAssigneeId;
-            workItem.AssignedToName = snapshotName;
-            workItem.AssignedAt = _timeProvider.GetUtcNow().UtcDateTime;
-            workItem.AssignedBy = actorUserId!;
-            workItem.LastModifiedAt = workItem.AssignedAt.Value;
-            AppendAudit(workItem, "assigned", "Assigned", user, workItem.AssignedAt.Value, new()
-            {
-                ["assigneeId"] = trimmedAssigneeId,
-                ["assigneeName"] = snapshotName,
-                ["previousAssigneeId"] = previousAssigneeId,
-                ["previousAssigneeName"] = previousAssigneeName
-            });
-            try
-            {
-                await persistence.ReplaceAsync(workItem, cancellationToken);
-            }
-            catch (WorkItemConcurrencyException)
-            {
-                return ConcurrencyConflict(workItem.Id);
-            }
-            logger.LogInformation(
-                "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
-                workItem.Id, workItem.TypeId, previousAssigneeId ?? "(unassigned)", trimmedAssigneeId, DescribeUser(user));
+            // Re-assigning to the same user is a no-op: persist nothing,
+            // write no audit entry, but tell the caller this was a replay
+            // (parity with CompleteTaskAsync) so the endpoint can surface
+            // X-Idempotent-Replay: true and the UI can render an
+            // appropriate state instead of a misleading "newly assigned".
+            return WorkItemActionResult.IdempotentReplay(workItem);
         }
+
+        var previousAssigneeId = workItem.AssignedToId;
+        var previousAssigneeName = workItem.AssignedToName;
+        workItem.AssignedToId = trimmedAssigneeId;
+        workItem.AssignedToName = snapshotName;
+        workItem.AssignedAt = _timeProvider.GetUtcNow().UtcDateTime;
+        workItem.AssignedBy = actorUserId!;
+        workItem.LastModifiedAt = workItem.AssignedAt.Value;
+        AppendAudit(workItem, "assigned", "Assigned", user, workItem.AssignedAt.Value, new()
+        {
+            ["assigneeId"] = trimmedAssigneeId,
+            ["assigneeName"] = snapshotName,
+            ["previousAssigneeId"] = previousAssigneeId,
+            ["previousAssigneeName"] = previousAssigneeName
+        });
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException)
+        {
+            return ConcurrencyConflict(workItem.Id);
+        }
+        logger.LogInformation(
+            "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
+            workItem.Id, workItem.TypeId, previousAssigneeId ?? "(unassigned)", trimmedAssigneeId, DescribeUser(user));
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -477,8 +484,10 @@ public sealed class WorkItemService(
 
         if (workItem.AssignedToId is null)
         {
-            // Idempotent: already unassigned, nothing to do.
-            return WorkItemActionResult.Success(workItem);
+            // Idempotent: already unassigned, nothing to do. Flag as a
+            // replay (parity with CompleteTaskAsync / AssignAsync) so the
+            // endpoint can set X-Idempotent-Replay: true.
+            return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
         var previousAssigneeId = workItem.AssignedToId;
