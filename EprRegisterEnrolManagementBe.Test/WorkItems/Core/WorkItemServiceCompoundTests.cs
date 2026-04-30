@@ -95,6 +95,10 @@ public class WorkItemServiceCompoundTests
         Assert.Equal("alice-1", noteAudit.CreatedBy);
         Assert.Equal("alice-1", taskAudit.CreatedBy);
         Assert.Equal(note.Id.ToString(), noteAudit.Details["noteId"]);
+        // epr-27o: the audit entry includes the trimmed note body so the
+        // audit log is self-describing.
+        Assert.Equal("Approved — meets all criteria.", noteAudit.Details["noteText"]);
+        Assert.Equal(note.Text, noteAudit.Details["noteText"]);
         Assert.Equal("record-rationale", taskAudit.Details["taskId"]);
     }
 

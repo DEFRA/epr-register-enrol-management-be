@@ -531,7 +531,11 @@ public sealed class WorkItemService(
         workItem.LastModifiedAt = note.CreatedAt;
         AppendAudit(workItem, "note-added", "Note added", user, note.CreatedAt, new()
         {
-            ["noteId"] = note.Id.ToString()
+            ["noteId"] = note.Id.ToString(),
+            // Snapshot the trimmed body so the audit log is self-describing —
+            // a reader does not need to cross-reference Notes by id to see
+            // what was written. Already capped by MaxNoteLength.
+            ["noteText"] = note.Text
         });
         try
         {
@@ -609,7 +613,11 @@ public sealed class WorkItemService(
         workItem.Notes.Add(note);
         AppendAudit(workItem, "note-added", "Note added", user, now, new()
         {
-            ["noteId"] = note.Id.ToString()
+            ["noteId"] = note.Id.ToString(),
+            // Snapshot the trimmed body so the audit log is self-describing —
+            // a reader does not need to cross-reference Notes by id to see
+            // what was written. Already capped by MaxNoteLength.
+            ["noteText"] = note.Text
         });
 
         // Re-completing an already-complete task is a no-op for the

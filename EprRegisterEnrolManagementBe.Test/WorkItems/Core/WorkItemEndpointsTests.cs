@@ -625,6 +625,15 @@ public class WorkItemEndpointsTests
         Assert.Equal("alice-1", note.CreatedBy);
         Assert.Equal("Alice Example", note.CreatedByName);
 
+        // epr-27o: the audit-log entry on the wire surfaces the trimmed
+        // note body via Details["noteText"] so a UI rendering the
+        // timeline does not have to cross-reference the Notes
+        // collection by id.
+        Assert.NotNull(body.AuditLog);
+        var noteAudit = Assert.Single(body.AuditLog!, a => a.Action == "note-added");
+        Assert.Equal("Reviewed evidence; awaiting confirmation.", noteAudit.Details["noteText"]);
+        Assert.Equal(note.Id.ToString(), noteAudit.Details["noteId"]);
+
         Assert.Single(workItem.Notes);
         await factory.MockPersistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
     }

@@ -977,13 +977,18 @@ public class WorkItemServiceTests
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
         await BuildService(type).AddNoteAsync(
-            workItem.Id, "A note.", AuditUser(), TestContext.Current.CancellationToken);
+            workItem.Id, "  A note.  ", AuditUser(), TestContext.Current.CancellationToken);
 
         var note = Assert.Single(workItem.Notes);
         var entry = Assert.Single(workItem.AuditLog);
         Assert.Equal("note-added", entry.Action);
         Assert.Equal("Note added", entry.ActionDisplayName);
         Assert.Equal(note.Id.ToString(), entry.Details["noteId"]);
+        // epr-27o: the audit entry snapshots the trimmed note body so a
+        // reader of the audit log can see what was written without
+        // cross-referencing the Notes collection by id.
+        Assert.Equal("A note.", entry.Details["noteText"]);
+        Assert.Equal(note.Text, entry.Details["noteText"]);
         Assert.Equal("alice-1", entry.CreatedBy);
         Assert.Equal("Alice Example", entry.CreatedByName);
         Assert.Equal(TickedNow, entry.CreatedAt);
