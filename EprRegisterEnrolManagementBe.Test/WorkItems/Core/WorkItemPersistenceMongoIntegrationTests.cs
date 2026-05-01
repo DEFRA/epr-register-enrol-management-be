@@ -219,6 +219,53 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         var final = await _persistence.GetByIdAsync(workItem.Id, TestContext.Current.CancellationToken);
         Assert.Equal("in-progress", final!.StateId);
     }
+
+    [Fact]
+    public async Task CreateIfAbsentAsync_returns_true_on_first_insert_and_false_on_duplicate_id()
+    {
+        // epr-33c: idempotent insert is what makes the seeder safe to
+        // run from multiple instances. Two callers racing with the
+        // same id must produce exactly one persisted document and one
+        // false return — the existing on-disk document is left
+        // untouched.
+        var now = _time.GetUtcNow().UtcDateTime;
+        var id = WorkItemSeed.DeterministicId("re-accreditation", "test-key");
+        var first = new WorkItem
+        {
+            Id = id,
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            SubmittedBy = "first-writer"
+        };
+        var second = new WorkItem
+        {
+            Id = id,
+            TypeId = "re-accreditation",
+            StateId = "approved",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            SubmittedBy = "second-writer"
+        };
+
+        var insertedFirst = await _persistence.CreateIfAbsentAsync(first, TestContext.Current.CancellationToken);
+        var insertedSecond = await _persistence.CreateIfAbsentAsync(second, TestContext.Current.CancellationToken);
+
+        Assert.True(insertedFirst);
+        Assert.False(insertedSecond);
+
+        // The first writer's document is what the database holds; the
+        // second call neither overwrote nor created a duplicate.
+        var fetched = await _persistence.GetByIdAsync(id, TestContext.Current.CancellationToken);
+        Assert.NotNull(fetched);
+        Assert.Equal("submitted", fetched!.StateId);
+        Assert.Equal("first-writer", fetched.SubmittedBy);
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(), TestContext.Current.CancellationToken);
+        Assert.Equal(1, page.TotalCount);
+    }
 }
 
 /// <summary>

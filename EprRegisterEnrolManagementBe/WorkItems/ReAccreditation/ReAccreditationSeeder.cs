@@ -37,6 +37,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
 
         // Newly submitted, no one has picked it up yet.
         yield return Build(
+            seedKey: "acme-recycling",
             submittedDaysAgo: 1,
             stateId: "submitted",
             payload: new BsonDocument
@@ -53,6 +54,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // Submitted and self-claimed by a standard user; first state still
         // has work to do.
         yield return Build(
+            seedKey: "northern-plastics",
             submittedDaysAgo: 3,
             stateId: "submitted",
             payload: new BsonDocument
@@ -72,6 +74,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // and the assigner has picked up two of the three assessment
         // tasks.
         yield return Build(
+            seedKey: "riverside-glass",
             submittedDaysAgo: 9,
             stateId: "assessment-in-progress",
             payload: new BsonDocument
@@ -104,6 +107,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // Awaiting decision: every prior task complete, item parked with
         // the assigner pending the rationale being recorded.
         yield return Build(
+            seedKey: "coastal-materials",
             submittedDaysAgo: 15,
             stateId: "awaiting-decision",
             payload: new BsonDocument
@@ -136,6 +140,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // Already approved — terminal state, useful for exercising the
         // "no further actions" rendering path.
         yield return Build(
+            seedKey: "heritage-paper",
             submittedDaysAgo: 32,
             stateId: "approved",
             payload: new BsonDocument
@@ -171,6 +176,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
     }
 
     private static WorkItem Build(
+        string seedKey,
         int submittedDaysAgo,
         string stateId,
         BsonDocument payload,
@@ -187,6 +193,10 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
 
         var workItem = new WorkItem
         {
+            // Deterministic id keyed by (TypeId, seedKey) so re-running
+            // the seeder is idempotent and concurrent instances cannot
+            // create duplicates (epr-33c).
+            Id = WorkItemSeed.DeterministicId(ReAccreditationType.Id, seedKey),
             TypeId = ReAccreditationType.Id,
             StateId = stateId,
             SubmittedAt = submittedAt,

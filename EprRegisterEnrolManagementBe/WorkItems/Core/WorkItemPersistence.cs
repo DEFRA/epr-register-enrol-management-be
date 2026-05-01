@@ -16,6 +16,18 @@ public interface IWorkItemPersistence
 {
     Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Insert <paramref name="workItem"/> only if no document with the
+    /// same <see cref="WorkItem.Id"/> exists. Returns <c>true</c> when
+    /// the document was inserted and <c>false</c> when an item with
+    /// that id already existed (the on-disk document is left
+    /// untouched). The check is atomic — it relies on the unique
+    /// <c>_id</c> index, so two callers racing with the same id
+    /// produce exactly one insert and one <c>false</c> regardless of
+    /// timing (epr-33c).
+    /// </summary>
+    Task<bool> CreateIfAbsentAsync(WorkItem workItem, CancellationToken cancellationToken = default);
+
     Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -52,6 +64,25 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
         Logger.LogInformation(
             "Submitted work item {WorkItemId} of type {WorkItemTypeId} by {SubmittedBy}",
             workItem.Id, workItem.TypeId, workItem.SubmittedBy ?? "unknown");
+    }
+
+    public async Task<bool> CreateIfAbsentAsync(
+        WorkItem workItem, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(workItem);
+
+        try
+        {
+            await Collection.InsertOneAsync(workItem, cancellationToken: cancellationToken);
+            return true;
+        }
+        catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        {
+            // _id already in the collection — another instance won the
+            // race or the seeder has already run on this database.
+            // Either way the caller treats this as a successful no-op.
+            return false;
+        }
     }
 
     [ExcludeFromCodeCoverage]
