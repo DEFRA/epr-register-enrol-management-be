@@ -1,23 +1,59 @@
 using System.Net;
+using Microsoft.Extensions.Hosting;
 
 namespace EprRegisterEnrolManagementBe.Utils.Http;
 
 public class ProxyHttpMessageHandler : HttpClientHandler
 {
-    public ProxyHttpMessageHandler(ILogger<ProxyHttpMessageHandler> logger)
+    public ProxyHttpMessageHandler(ILogger<ProxyHttpMessageHandler> logger, IHostEnvironment hostEnvironment)
         : this(
             logger,
-            ResolveProxyEnvironmentValue(),
+            ResolveProxyOrFailClosed(logger, hostEnvironment),
             Environment.GetEnvironmentVariable("NO_PROXY")
                 ?? Environment.GetEnvironmentVariable("no_proxy"))
     {
     }
 
     /// <summary>
-    /// Internal seam for tests (epr-9da, extended by epr-9g6). Keeps the
-    /// production constructor's env-var resolution intact while letting
-    /// the strip-credentials and bypass-list behaviour be exercised
-    /// without mutating process state.
+    /// Resolve the proxy URI, failing closed in non-Development hosting
+    /// environments (epr-cuq). docs/cdp-deployment.md requires
+    /// HTTP(S)_PROXY for any external HTTP call outside Development —
+    /// the historical warn-and-continue behaviour meant a misconfigured
+    /// deployment would silently bypass the Squid proxy and egress
+    /// outside the controlled network the first time a real downstream
+    /// HTTP client was registered. Development still gets the
+    /// warn-only path so local runs without proxy infrastructure work.
+    /// </summary>
+    internal static string? ResolveProxyOrFailClosed(
+        ILogger<ProxyHttpMessageHandler> logger, IHostEnvironment hostEnvironment)
+    {
+        var resolved = ResolveProxyEnvironmentValue();
+        if (resolved is not null)
+        {
+            return resolved;
+        }
+
+        if (hostEnvironment.IsDevelopment())
+        {
+            // Internal ctor logs the same warning when proxyUri is null,
+            // so don't double-log here.
+            return null;
+        }
+
+        throw new InvalidOperationException(
+            "Outbound proxy is not configured: neither HTTPS_PROXY/HTTP_PROXY "
+            + "(nor lower-case variants) is set. docs/cdp-deployment.md "
+            + $"requires the CDP Squid proxy in '{hostEnvironment.EnvironmentName}'. "
+            + "Set HTTPS_PROXY (and HTTP_PROXY where applicable) on the service "
+            + "definition, or run with ASPNETCORE_ENVIRONMENT=Development for local "
+            + "use without a proxy.");
+    }
+
+    /// <summary>
+    /// Internal seam for tests (epr-9da, extended by epr-9g6, epr-cuq).
+    /// Bypasses the fail-closed env-var check so tests can drive every
+    /// proxyUri permutation deterministically without mutating
+    /// process state.
     /// </summary>
     internal ProxyHttpMessageHandler(ILogger<ProxyHttpMessageHandler> logger, string? proxyUri, string? noProxy = null)
     {

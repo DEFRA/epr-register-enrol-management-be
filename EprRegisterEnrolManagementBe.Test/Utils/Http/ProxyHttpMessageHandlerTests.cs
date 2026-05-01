@@ -1,5 +1,8 @@
 using System.Net;
 using EprRegisterEnrolManagementBe.Utils.Http;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.Utils.Http;
 
@@ -193,6 +196,96 @@ public class ProxyHttpMessageHandlerTests
 
         var webProxy = Assert.IsType<WebProxy>(handler.Proxy);
         Assert.False(webProxy.IsBypassed(new Uri("https://api.elsewhere.example/")));
+    }
+
+    // ---------------------- epr-cuq: fail-closed in non-Development ----------------------
+    //
+    // docs/cdp-deployment.md requires HTTP(S)_PROXY for any external HTTP
+    // call outside Development. The historical behaviour was warn-and-
+    // continue with UseProxy=false; that meant a misconfigured deployment
+    // would silently bypass the Squid proxy and egress outside the
+    // controlled network the first time a real downstream HTTP client
+    // was registered. Production / Test / Staging must now refuse to
+    // construct the handler without a proxy URI; Development keeps the
+    // warn-only path so local runs work without proxy infrastructure.
+
+    [Fact]
+    public void Production_constructor_throws_when_no_proxy_env_vars_are_set()
+    {
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", null);
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        var env = HostEnvironment("Production");
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            new ProxyHttpMessageHandler(NullLogger<ProxyHttpMessageHandler>.Instance, env));
+
+        // Message must name the missing env vars and the offending
+        // environment so the failure is actionable in CDP logs.
+        Assert.Contains("HTTPS_PROXY", ex.Message);
+        Assert.Contains("HTTP_PROXY", ex.Message);
+        Assert.Contains("Production", ex.Message);
+    }
+
+    [Theory]
+    [InlineData("Staging")]
+    [InlineData("Test")]
+    [InlineData("Performance")]
+    public void Non_development_environments_all_fail_closed(string envName)
+    {
+        // Only Development is whitelisted. Any other environment name —
+        // including custom CDP environments — must fail closed so a
+        // typo (e.g. "Develop", "develpoment") doesn't accidentally
+        // unlock direct egress.
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", null);
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        var env = HostEnvironment(envName);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            new ProxyHttpMessageHandler(NullLogger<ProxyHttpMessageHandler>.Instance, env));
+    }
+
+    [Fact]
+    public void Development_constructor_warns_and_disables_proxy_when_env_vars_unset()
+    {
+        // Local-dev contract: no proxy infrastructure required.
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", null);
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        var env = HostEnvironment("Development");
+
+        using var handler = new ProxyHttpMessageHandler(
+            NullLogger<ProxyHttpMessageHandler>.Instance, env);
+
+        Assert.False(handler.UseProxy);
+    }
+
+    [Fact]
+    public void Production_constructor_succeeds_when_HTTPS_PROXY_is_set()
+    {
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "http://proxy.local:3128");
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        var env = HostEnvironment("Production");
+
+        using var handler = new ProxyHttpMessageHandler(
+            NullLogger<ProxyHttpMessageHandler>.Instance, env);
+
+        Assert.True(handler.UseProxy);
+        var webProxy = Assert.IsType<WebProxy>(handler.Proxy);
+        Assert.Equal("proxy.local", webProxy.Address!.Host);
+    }
+
+    private static IHostEnvironment HostEnvironment(string envName)
+    {
+        var env = Substitute.For<IHostEnvironment>();
+        env.EnvironmentName.Returns(envName);
+        return env;
     }
 }
 
