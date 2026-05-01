@@ -19,6 +19,18 @@ internal static class ReAccreditationEndpoints
         PropertyNameCaseInsensitive = true
     };
 
+    // Request body cap (epr-e5h) for the manually-parsed
+    // RecordDecisionRationale endpoint. Mirrors the framework's epr-rvz
+    // pattern in WorkItemEndpoints — every endpoint that calls
+    // .DisableValidation() must pair it with an explicit
+    // RequestSizeLimitAttribute so an attacker cannot POST a multi-MB
+    // body and force JSON parsing before any size guard fires.
+    // 16 KiB is comfortably above the legitimate maximum: a rationale is
+    // a short justification (assessor-written prose) capped well below
+    // the WorkItem note length limit (4000 chars) plus JSON envelope
+    // overhead, but small enough to make abuse pointless.
+    public const long MaxRationaleBodyBytes = 16 * 1024;
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
     {
@@ -31,6 +43,7 @@ internal static class ReAccreditationEndpoints
         group.MapPost("/{id:guid}/decision-rationale", RecordDecisionRationale)
             .WithName("RecordReAccreditationDecisionRationale")
             .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxRationaleBodyBytes))
             .RequireAuthorization();
 
         return app;
