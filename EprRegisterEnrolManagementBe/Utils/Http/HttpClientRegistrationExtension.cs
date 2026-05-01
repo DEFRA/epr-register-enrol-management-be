@@ -17,7 +17,7 @@ public static class HttpClientRegistrationExtension
             .AddHeaderPropagation();
     }
 
-    public static IHttpClientBuilder AddHttpClientWithTracingAndProxy<TClient, TImplementation>(
+    public static IHttpClientBuilder AddHttpClientWithProxy<TClient, TImplementation>(
         this IServiceCollection services)
         where TClient : class
         where TImplementation : class, TClient
