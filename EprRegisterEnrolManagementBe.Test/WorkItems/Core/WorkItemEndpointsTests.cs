@@ -566,8 +566,21 @@ public class WorkItemEndpointsTests
         await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
         using var client = factory.CreateClient();
 
+        // The new cross-tenant gate (epr-0t9) loads the work item before
+        // any body validation runs, so the gate must be satisfied with a
+        // matching SubmittedBy or the test sees 404 instead of the 400
+        // it cares about. Caller's cognito client id is 'test-client'.
+        var id = Guid.NewGuid();
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        });
+
         var response = await client.PostAsJsonAsync(
-            $"/work-items/{Guid.NewGuid()}/assign", new { }, cancellationToken);
+            $"/work-items/{id}/assign", new { }, cancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -584,7 +597,8 @@ public class WorkItemEndpointsTests
         {
             Id = id,
             TypeId = TypeId,
-            StateId = "submitted"
+            StateId = "submitted",
+            SubmittedBy = "test-client"
         });
 
         var response = await client.PostAsJsonAsync(
@@ -624,6 +638,7 @@ public class WorkItemEndpointsTests
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
+            SubmittedBy = "test-client",
             AssignedToId = "alice-1",
             AssignedToName = "Alice",
             AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
@@ -654,6 +669,7 @@ public class WorkItemEndpointsTests
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
+            SubmittedBy = "test-client",
             AssignedToId = "alice-1"
         });
 
@@ -808,7 +824,11 @@ public class WorkItemEndpointsTests
         {
             Id = id,
             TypeId = TypeId,
-            StateId = "submitted"
+            StateId = "submitted",
+            // Match the factory's default cognito client id so the
+            // cross-tenant gate (epr-0t9) doesn't pre-empt the 400 we
+            // care about here.
+            SubmittedBy = "test-client"
         });
 
         var response = await client.PostAsJsonAsync($"/work-items/{id}/notes", new { text = "   " }, cancellationToken);
@@ -964,6 +984,102 @@ public class WorkItemEndpointsTests
             first => Assert.Equal("1", first.Details["sequence"]),
             second => Assert.Equal("2", second.Details["sequence"]),
             third => Assert.Equal("3", third.Details["sequence"]));
+    }
+
+    // ----------------------------------------------------------------
+    // epr-0t9: cross-tenant IDOR protection on every mutation endpoint.
+    // The mutation handlers must mirror the GetById tenancy gate and
+    // return 404 when a standard caller targets an item submitted by a
+    // different tenant — without ever invoking the engine. Case-workers
+    // bypass the gate and reach the engine as before.
+    // ----------------------------------------------------------------
+
+    public static IEnumerable<TheoryDataRow<string, string, object?>> CrossTenantMutationCases() => new TheoryDataRow<string, string, object?>[]
+    {
+        new("POST", "/work-items/{id}/tasks/some-task/complete", null) { TestDisplayName = "CompleteTask" },
+        new("PUT",  "/work-items/{id}/tasks/some-task/status", new { status = "Completed" }) { TestDisplayName = "SetTaskStatus" },
+        new("POST", "/work-items/{id}/actions/approve", null) { TestDisplayName = "ApplyAction" },
+        new("POST", "/work-items/{id}/assign", new { assigneeId = "alice-1", assigneeName = "Alice" }) { TestDisplayName = "Assign" },
+        new("POST", "/work-items/{id}/unassign", null) { TestDisplayName = "Unassign" },
+        new("POST", "/work-items/{id}/notes", new { text = "anything" }) { TestDisplayName = "AddNote" }
+    };
+
+    [Theory]
+    [MemberData(nameof(CrossTenantMutationCases))]
+    public async Task Mutation_returns_404_for_cross_tenant_caller_and_does_not_invoke_engine(
+        string method, string pathTemplate, object? body)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        // Standard caller (no case-worker role); 'assign' role included so
+        // the Assign / Unassign 403 path can't pre-empt the 404 we're
+        // testing for.
+        await using var factory = new TestApplicationFactory(userRoles: "assign", userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            // Owned by someone else — caller's cognito client id is
+            // 'test-client', which must NOT match.
+            SubmittedBy = "other-tenant"
+        });
+
+        var path = pathTemplate.Replace("{id}", id.ToString());
+        HttpResponseMessage response = method switch
+        {
+            "POST" when body is null => await client.PostAsync(path, content: null, cancellationToken),
+            "POST" => await client.PostAsJsonAsync(path, body, cancellationToken),
+            "PUT" => await client.PutAsJsonAsync(path, body!, cancellationToken),
+            _ => throw new InvalidOperationException($"Unsupported method '{method}'.")
+        };
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        // The engine's writer is ReplaceAsync on persistence — must be
+        // untouched if the gate held.
+        await factory.MockPersistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Theory]
+    [MemberData(nameof(CrossTenantMutationCases))]
+    public async Task Mutation_allows_case_worker_to_target_other_tenants_item(
+        string method, string pathTemplate, object? body)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new TestApplicationFactory(
+            userRoles: $"{WorkItemEndpoints.CaseWorkerRole},assign",
+            userId: "worker-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var workItem = new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "other-tenant"
+        };
+        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var path = pathTemplate.Replace("{id}", id.ToString());
+        HttpResponseMessage response = method switch
+        {
+            "POST" when body is null => await client.PostAsync(path, content: null, cancellationToken),
+            "POST" => await client.PostAsJsonAsync(path, body, cancellationToken),
+            "PUT" => await client.PutAsJsonAsync(path, body!, cancellationToken),
+            _ => throw new InvalidOperationException($"Unsupported method '{method}'.")
+        };
+
+        // 404 means the tenancy gate fired (it must NOT for a case worker).
+        // Anything else (200, 400, 409) means we got past the gate to the
+        // engine — that's the contract for this test. We don't assert the
+        // exact engine outcome because some operations against a fresh
+        // 'submitted' item legitimately produce 400 / 409 (e.g. a task
+        // that doesn't exist on the template). Cross-tenant IDOR is the
+        // only thing we're guarding here.
+        Assert.NotEqual(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     private sealed class TestApplicationFactory(

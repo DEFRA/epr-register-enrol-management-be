@@ -152,7 +152,7 @@ public static class WorkItemEndpoints
         CancellationToken cancellationToken)
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        if (workItem is null || !CanRead(httpContext.User, workItem))
+        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
         {
             // Always return NotFound for cross-tenant access to avoid
             // leaking the existence of items the caller cannot see.
@@ -210,20 +210,6 @@ public static class WorkItemEndpoints
     }
 
     /// <summary>
-    /// Tenancy gate. The caller is allowed to read the work item if they
-    /// hold the case-worker role, or if their cognito client id matches the
-    /// item's submitter.
-    /// </summary>
-    private static bool CanRead(ClaimsPrincipal user, WorkItem workItem)
-    {
-        if (user.IsInRole(CaseWorkerRole)) return true;
-        var callerClientId = user.FindFirstValue("cognito:client_id")
-            ?? user.FindFirstValue(ClaimTypes.NameIdentifier);
-        return callerClientId is not null
-            && string.Equals(callerClientId, workItem.SubmittedBy, StringComparison.Ordinal);
-    }
-
-    /// <summary>
     /// Header name set on a CompleteTask response when the task was already
     /// complete. Lets clients distinguish "first hit" from "replay" without
     /// needing to introspect the audit log.
@@ -234,9 +220,14 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         [FromRoute] string taskId,
         HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
+        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        {
+            return TypedResults.NotFound();
+        }
         var result = await engine.CompleteTaskAsync(id, taskId, httpContext.User, cancellationToken);
         if (result.IsIdempotentReplay)
         {
@@ -250,9 +241,14 @@ public static class WorkItemEndpoints
         [FromRoute] string taskId,
         JsonElement body,
         HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
+        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        {
+            return TypedResults.NotFound();
+        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
@@ -288,9 +284,14 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         [FromRoute] string actionId,
         HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
+        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        {
+            return TypedResults.NotFound();
+        }
         var result = await engine.ApplyActionAsync(id, actionId, httpContext.User, cancellationToken);
         return ToHttpResult(result, engine);
     }
@@ -299,9 +300,14 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         JsonElement body,
         HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
+        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        {
+            return TypedResults.NotFound();
+        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest("Invalid request", "Request body must be a JSON object containing 'assigneeId'.");
@@ -333,9 +339,14 @@ public static class WorkItemEndpoints
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Unassign(
         [FromRoute] Guid id,
         HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
+        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        {
+            return TypedResults.NotFound();
+        }
         var result = await engine.UnassignAsync(id, httpContext.User, cancellationToken);
         if (result.IsIdempotentReplay)
         {
@@ -348,9 +359,14 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         JsonElement body,
         HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
+        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        {
+            return TypedResults.NotFound();
+        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest("Invalid request", "Request body must be a JSON object containing 'text'.");
@@ -365,6 +381,29 @@ public static class WorkItemEndpoints
 
         var result = await engine.AddNoteAsync(id, textElement.GetString()!, httpContext.User, cancellationToken);
         return ToHttpResult(result, engine);
+    }
+
+    /// <summary>
+    /// Tenancy gate for mutation handlers (epr-0t9). Loads the work item
+    /// and verifies the caller may see it via
+    /// <see cref="WorkItemTenancy.CanRead"/>; returns the loaded item on
+    /// success or <c>null</c> when the caller has no access (in which case
+    /// the handler should respond with NotFound to avoid leaking the
+    /// existence of cross-tenant items). Without this gate the engine
+    /// would happily mutate any item whose id the caller can guess.
+    /// </summary>
+    private static async Task<WorkItem?> EnsureTenantAccessAsync(
+        Guid id,
+        ClaimsPrincipal user,
+        IWorkItemPersistence persistence,
+        CancellationToken cancellationToken)
+    {
+        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
+        if (workItem is null || !WorkItemTenancy.CanRead(user, workItem))
+        {
+            return null;
+        }
+        return workItem;
     }
 
     private static Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult> ToHttpResult(

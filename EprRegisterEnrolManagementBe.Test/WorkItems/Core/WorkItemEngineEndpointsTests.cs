@@ -192,8 +192,20 @@ public class WorkItemEngineEndpointsTests
         await using var factory = new EngineFactory();
         using var client = factory.CreateClient();
 
+        // Seed a work item the caller (cognito:client_id = 'test-client')
+        // can see, otherwise the cross-tenant gate (epr-0t9) returns 404
+        // before body validation runs.
+        var workItemId = Guid.NewGuid();
+        factory.MockPersistence.GetByIdAsync(workItemId, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = workItemId,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        });
+
         var response = await client.PutAsJsonAsync(
-            $"/work-items/{Guid.NewGuid()}/tasks/check-eligibility/status",
+            $"/work-items/{workItemId}/tasks/check-eligibility/status",
             new { status = statusValue }, cancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
@@ -207,8 +219,21 @@ public class WorkItemEngineEndpointsTests
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Remove("x-cdp-user-id");
 
+        // Seed a work item visible to the caller so the cross-tenant
+        // gate (epr-0t9) doesn't pre-empt the engine's missing-actor
+        // 401. cognito:client_id is still 'test-client' here — the only
+        // header we removed is x-cdp-user-id (the 'user:id' claim).
+        var workItemId = Guid.NewGuid();
+        factory.MockPersistence.GetByIdAsync(workItemId, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = workItemId,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        });
+
         var response = await client.PutAsJsonAsync(
-            $"/work-items/{Guid.NewGuid()}/tasks/check-eligibility/status",
+            $"/work-items/{workItemId}/tasks/check-eligibility/status",
             new { status = "InProgress" }, cancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
