@@ -152,15 +152,27 @@ public class ReAccreditationEndpointTests
             persistence,
             NullLogger<WorkItemService>.Instance);
 
-    private static HttpContext UserContext(string userId = "alice-1", string userName = "Alice Example")
+    private static HttpContext UserContext(
+        string userId = "alice-1",
+        string userName = "Alice Example",
+        bool decisionMaker = true)
     {
         var ctx = new DefaultHttpContext();
-        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
-        [
-            new Claim("cognito:client_id", "test-client"),
-            new Claim("user:id", userId),
-            new Claim("user:name", userName)
-        ], "test"));
+        var claims = new List<Claim>
+        {
+            new("cognito:client_id", "test-client"),
+            new("user:id", userId),
+            new("user:name", userName)
+        };
+        // RecordDecisionRationale enforces DecisionMakerRole (epr-jdv);
+        // tests that exercise success / cross-tenant / concurrency paths
+        // need the role, so make it the default and let the dedicated
+        // 403 test opt out via decisionMaker:false.
+        if (decisionMaker)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, ReAccreditationType.DecisionMakerRole));
+        }
+        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         return ctx;
     }
 
@@ -319,15 +331,23 @@ public class ReAccreditationEndpointTests
     // against, any work item by id. Both endpoints now route through
     // WorkItemTenancy.CanRead — these tests pin that contract.
 
-    private static HttpContext CaseWorkerContext()
+    private static HttpContext CaseWorkerContext(bool decisionMaker = true)
     {
         var ctx = new DefaultHttpContext();
-        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
-        [
-            new Claim("cognito:client_id", "case-worker-client"),
-            new Claim("user:id", "worker-1"),
-            new Claim(ClaimTypes.Role, WorkItemEndpoints.CaseWorkerRole)
-        ], "test"));
+        var claims = new List<Claim>
+        {
+            new("cognito:client_id", "case-worker-client"),
+            new("user:id", "worker-1"),
+            new(ClaimTypes.Role, WorkItemEndpoints.CaseWorkerRole)
+        };
+        // The cross-tenant test for RecordDecisionRationale also needs
+        // DecisionMakerRole (epr-jdv): tenancy and segregation-of-duties
+        // are orthogonal gates and the endpoint enforces both.
+        if (decisionMaker)
+        {
+            claims.Add(new Claim(ClaimTypes.Role, ReAccreditationType.DecisionMakerRole));
+        }
+        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
         return ctx;
     }
 
@@ -433,5 +453,57 @@ public class ReAccreditationEndpointTests
 
         Assert.IsType<Ok<WorkItemResponse>>(result.Result);
         await _persistence.Received(1).ReplaceAsync(stored, Arg.Any<CancellationToken>());
+    }
+
+    // -------------------- Segregation of duties (epr-jdv) --------------------
+    //
+    // ReAccreditationType documents that an assessor who completes tasks
+    // must not also record the final decision. The framework enforces this
+    // for the approve/reject transitions via WorkItemTransition.RequiredRoles;
+    // RecordDecisionRationale enforces the same role at the endpoint
+    // because it both completes the prerequisite task and writes the
+    // justification note that the decision is built upon. A non-DecisionMaker
+    // hand-crafting this POST must be denied with 403 ProblemDetails before
+    // any persistence happens.
+
+    [Fact]
+    public async Task RecordDecisionRationale_returns_forbidden_for_non_decision_maker()
+    {
+        var id = Guid.NewGuid();
+
+        var result = await ReAccreditationEndpoints.RecordDecisionRationale(
+            id,
+            new DecisionRationaleRequest("Approved on the basis of full compliance history."),
+            UserContext(decisionMaker: false),
+            _persistence,
+            BuildEngine(_persistence),
+            TestContext.Current.CancellationToken);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(StatusCodes.Status403Forbidden, problem.StatusCode);
+        // Fail-closed before any I/O: persistence must not be touched.
+        await _persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>());
+        await _persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RecordDecisionRationale_case_worker_without_decision_maker_role_is_forbidden()
+    {
+        // Cross-tenant access (CaseWorkerRole) does not bypass segregation
+        // of duties — a case-worker who is not also a DecisionMaker must
+        // still be denied.
+        var id = Guid.NewGuid();
+
+        var result = await ReAccreditationEndpoints.RecordDecisionRationale(
+            id,
+            new DecisionRationaleRequest("Approved on the basis of full compliance history."),
+            CaseWorkerContext(decisionMaker: false),
+            _persistence,
+            BuildEngine(_persistence),
+            TestContext.Current.CancellationToken);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(StatusCodes.Status403Forbidden, problem.StatusCode);
+        await _persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
     }
 }

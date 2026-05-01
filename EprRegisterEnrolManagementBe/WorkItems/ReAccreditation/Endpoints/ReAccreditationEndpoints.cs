@@ -102,6 +102,22 @@ public static class ReAccreditationEndpoints
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken)
     {
+        // Segregation of duties (epr-jdv): recording the decision rationale is
+        // part of the decision act itself — it both completes the
+        // record-decision-rationale prerequisite task and appends the
+        // justification note that the approve/reject transition is built
+        // upon. The framework already gates the approve/reject transitions on
+        // DecisionMakerRole; gate this endpoint on the same role so a
+        // standard assessor cannot prepare a decision-ready work item that
+        // only awaits a DecisionMaker rubber-stamp.
+        if (httpContext.User?.IsInRole(ReAccreditationType.DecisionMakerRole) != true)
+        {
+            return TypedResults.Problem(
+                title: "Decision-maker role required",
+                detail: $"Recording a decision rationale requires the '{ReAccreditationType.DecisionMakerRole}' role.",
+                statusCode: StatusCodes.Status403Forbidden);
+        }
+
         var rationale = request?.Rationale?.Trim();
         if (string.IsNullOrWhiteSpace(rationale))
         {
