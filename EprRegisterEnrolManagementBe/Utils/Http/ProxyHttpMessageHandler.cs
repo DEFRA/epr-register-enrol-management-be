@@ -5,19 +5,29 @@ namespace EprRegisterEnrolManagementBe.Utils.Http;
 public class ProxyHttpMessageHandler : HttpClientHandler
 {
     public ProxyHttpMessageHandler(ILogger<ProxyHttpMessageHandler> logger)
-        : this(logger, Environment.GetEnvironmentVariable("HTTP_PROXY"))
+        : this(
+            logger,
+            ResolveProxyEnvironmentValue(),
+            Environment.GetEnvironmentVariable("NO_PROXY")
+                ?? Environment.GetEnvironmentVariable("no_proxy"))
     {
     }
 
     /// <summary>
-    /// Internal seam for tests (epr-9da) — keeps the production
-    /// constructor's HTTP_PROXY env-var read intact while letting the
-    /// strip-credentials behaviour be exercised without mutating
-    /// process state.
+    /// Internal seam for tests (epr-9da, extended by epr-9g6). Keeps the
+    /// production constructor's env-var resolution intact while letting
+    /// the strip-credentials and bypass-list behaviour be exercised
+    /// without mutating process state.
     /// </summary>
-    internal ProxyHttpMessageHandler(ILogger<ProxyHttpMessageHandler> logger, string? proxyUri)
+    internal ProxyHttpMessageHandler(ILogger<ProxyHttpMessageHandler> logger, string? proxyUri, string? noProxy = null)
     {
         var proxy = new WebProxy { BypassProxyOnLocal = true };
+        var bypassList = ParseNoProxy(noProxy);
+        if (bypassList.Length > 0)
+        {
+            proxy.BypassList = bypassList;
+        }
+
         if (proxyUri != null)
         {
             logger.LogDebug("Creating proxy http client");
@@ -33,11 +43,86 @@ public class ProxyHttpMessageHandler : HttpClientHandler
         }
         else
         {
-            logger.LogWarning("HTTP_PROXY is NOT set, proxy client will be disabled");
+            logger.LogWarning("Neither HTTPS_PROXY nor HTTP_PROXY is set, proxy client will be disabled");
         }
 
         Proxy = proxy;
         UseProxy = proxyUri != null;
+    }
+
+    /// <summary>
+    /// Resolve the proxy URI from the CDP-conventional environment
+    /// variables (epr-9g6). HTTPS_PROXY takes precedence because all
+    /// outbound traffic from this service is HTTPS; HTTP_PROXY is the
+    /// fallback. Lower-case variants are checked too — they are the
+    /// historical Unix convention and several CDP base images set them.
+    /// Reading only HTTP_PROXY meant HTTPS egress would silently bypass
+    /// the Squid proxy in environments where direct outbound is
+    /// firewalled.
+    /// </summary>
+    internal static string? ResolveProxyEnvironmentValue() =>
+        FirstNonEmpty(
+            Environment.GetEnvironmentVariable("HTTPS_PROXY"),
+            Environment.GetEnvironmentVariable("https_proxy"),
+            Environment.GetEnvironmentVariable("HTTP_PROXY"),
+            Environment.GetEnvironmentVariable("http_proxy"));
+
+    private static string? FirstNonEmpty(params string?[] candidates)
+    {
+        foreach (var value in candidates)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Parse a NO_PROXY value into a <see cref="WebProxy.BypassList"/>
+    /// of regular expressions. The standard NO_PROXY convention is a
+    /// comma-separated list of host suffixes (and optional ports) — we
+    /// translate each entry into a URI regex so
+    /// <c>internal.example</c> matches both <c>internal.example</c>
+    /// itself and any subdomain. Whitespace and empty entries are
+    /// tolerated. <c>*</c> bypasses everything.
+    /// <para>
+    /// <see cref="WebProxy.BypassList"/> entries are matched against the
+    /// full request URI string (not just the host), so the patterns are
+    /// scheme-prefixed and host-anchored.
+    /// </para>
+    /// </summary>
+    internal static string[] ParseNoProxy(string? noProxy)
+    {
+        if (string.IsNullOrWhiteSpace(noProxy))
+        {
+            return Array.Empty<string>();
+        }
+
+        var parts = noProxy.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var patterns = new List<string>(parts.Length);
+        foreach (var raw in parts)
+        {
+            if (raw == "*")
+            {
+                patterns.Add(".*");
+                continue;
+            }
+            // Strip a leading "." (".example.com" → "example.com") so
+            // both forms match the same suffix.
+            var entry = raw.StartsWith('.') ? raw[1..] : raw;
+            if (entry.Length == 0)
+            {
+                continue;
+            }
+            // Match either "scheme://host[:port]/..." or
+            // "scheme://*.host[:port]/..." so a NO_PROXY of
+            // "internal.example" excludes "api.internal.example" too.
+            patterns.Add(
+                $@"^https?://(?:[^/]+\.)?{System.Text.RegularExpressions.Regex.Escape(entry)}(?::\d+)?(?:[/?#]|$)");
+        }
+        return patterns.ToArray();
     }
 
     /// <summary>

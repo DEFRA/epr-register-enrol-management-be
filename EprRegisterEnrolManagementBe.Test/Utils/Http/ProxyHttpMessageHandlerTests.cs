@@ -87,4 +87,130 @@ public class ProxyHttpMessageHandlerTests
 
         Assert.False(handler.UseProxy);
     }
+
+    // ---------------------- epr-9g6: HTTPS_PROXY / NO_PROXY ----------------------
+
+    [Fact]
+    public void ResolveProxyEnvironmentValue_prefers_HTTPS_PROXY_over_HTTP_PROXY()
+    {
+        // Drive the resolver via process env vars set inside the test
+        // and torn down on exit. Outbound traffic is HTTPS, so when
+        // both are set HTTPS_PROXY must win.
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "http://https-proxy.local:8443");
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+
+        Assert.Equal("http://https-proxy.local:8443", ProxyHttpMessageHandler.ResolveProxyEnvironmentValue());
+    }
+
+    [Fact]
+    public void ResolveProxyEnvironmentValue_falls_back_to_HTTP_PROXY_when_HTTPS_PROXY_absent()
+    {
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", null);
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+
+        Assert.Equal("http://http-proxy.local:3128", ProxyHttpMessageHandler.ResolveProxyEnvironmentValue());
+    }
+
+    [Fact]
+    public void ResolveProxyEnvironmentValue_honours_lower_case_variants()
+    {
+        // Several CDP base images / shells set the lower-case form. The
+        // resolver must accept either case.
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", null);
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", "http://lower-https.local:8443");
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+
+        Assert.Equal("http://lower-https.local:8443", ProxyHttpMessageHandler.ResolveProxyEnvironmentValue());
+    }
+
+    [Fact]
+    public void ResolveProxyEnvironmentValue_returns_null_when_nothing_set()
+    {
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", null);
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+
+        Assert.Null(ProxyHttpMessageHandler.ResolveProxyEnvironmentValue());
+    }
+
+    [Fact]
+    public void ResolveProxyEnvironmentValue_treats_empty_value_as_unset()
+    {
+        // A bare `export HTTPS_PROXY=` shouldn't override a real
+        // HTTP_PROXY value or wedge UseProxy=true with an empty URI.
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "");
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+
+        Assert.Equal("http://http-proxy.local:3128", ProxyHttpMessageHandler.ResolveProxyEnvironmentValue());
+    }
+
+    [Fact]
+    public void NoProxy_entries_are_translated_into_a_bypass_list()
+    {
+        using var handler = new ProxyHttpMessageHandler(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ProxyHttpMessageHandler>.Instance,
+            "http://proxy.local:3128",
+            noProxy: "internal.example, .corp.example, localhost");
+
+        var webProxy = Assert.IsType<WebProxy>(handler.Proxy);
+        // BypassList is built; concrete pattern strings are an
+        // implementation detail, but the bypass behaviour is observable
+        // via WebProxy.IsBypassed.
+        Assert.True(webProxy.IsBypassed(new Uri("https://api.internal.example/v1")));
+        Assert.True(webProxy.IsBypassed(new Uri("https://corp.example/")));
+        Assert.True(webProxy.IsBypassed(new Uri("https://anything.corp.example/")));
+        Assert.False(webProxy.IsBypassed(new Uri("https://api.elsewhere.example/")));
+    }
+
+    [Fact]
+    public void NoProxy_wildcard_bypasses_everything()
+    {
+        using var handler = new ProxyHttpMessageHandler(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ProxyHttpMessageHandler>.Instance,
+            "http://proxy.local:3128",
+            noProxy: "*");
+
+        var webProxy = Assert.IsType<WebProxy>(handler.Proxy);
+        Assert.True(webProxy.IsBypassed(new Uri("https://api.elsewhere.example/")));
+        Assert.True(webProxy.IsBypassed(new Uri("https://internal.corp/")));
+    }
+
+    [Fact]
+    public void NoProxy_unset_leaves_default_bypass_behaviour_intact()
+    {
+        using var handler = new ProxyHttpMessageHandler(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ProxyHttpMessageHandler>.Instance,
+            "http://proxy.local:3128",
+            noProxy: null);
+
+        var webProxy = Assert.IsType<WebProxy>(handler.Proxy);
+        Assert.False(webProxy.IsBypassed(new Uri("https://api.elsewhere.example/")));
+    }
+}
+
+/// <summary>
+/// Test helper: scope an environment-variable change to a `using` block
+/// so concurrent / subsequent tests don't observe leaked state.
+/// </summary>
+internal sealed class ScopedEnvironmentVariable : IDisposable
+{
+    private readonly string _name;
+    private readonly string? _previous;
+
+    public ScopedEnvironmentVariable(string name, string? value)
+    {
+        _name = name;
+        _previous = Environment.GetEnvironmentVariable(name);
+        Environment.SetEnvironmentVariable(name, value);
+    }
+
+    public void Dispose() => Environment.SetEnvironmentVariable(_name, _previous);
 }
