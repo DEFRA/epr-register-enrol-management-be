@@ -287,6 +287,67 @@ public class ProxyHttpMessageHandlerTests
         env.EnvironmentName.Returns(envName);
         return env;
     }
+
+    // ---------------------- epr-0j2: malformed proxy URI redaction ----------------------
+
+    [Fact]
+    public void ParseProxyUri_throws_redacted_when_uri_is_malformed_with_credentials()
+    {
+        // Driving the parser with a value that has user:pass@ but is
+        // syntactically malformed (illegal port). The baseline
+        // behaviour propagated UriBuilder's UriFormatException whose
+        // Message embedded the original input verbatim — putting the
+        // password into Serilog's startup-failure log. The contract
+        // under test: neither the username nor the password appears
+        // anywhere in the resulting exception chain.
+        const string user = "alice";
+        const string secret = "s3cret";
+        var malformed = $"http://{user}:{secret}@proxy.local:port-not-a-number";
+
+        var ex = Assert.Throws<InvalidOperationException>(
+            () => ProxyHttpMessageHandler.ParseProxyUri(malformed));
+
+        AssertNoCredentialLeak(ex, user, secret);
+    }
+
+    [Fact]
+    public void RedactProxyUri_replaces_user_info_with_asterisks()
+    {
+        Assert.Equal(
+            "http://***:***@proxy.local:3128/path",
+            ProxyHttpMessageHandler.RedactProxyUri("http://alice:s3cret@proxy.local:3128/path"));
+    }
+
+    [Fact]
+    public void RedactProxyUri_leaves_uri_without_credentials_unchanged()
+    {
+        Assert.Equal(
+            "http://proxy.local:3128/",
+            ProxyHttpMessageHandler.RedactProxyUri("http://proxy.local:3128/"));
+    }
+
+    [Fact]
+    public void RedactProxyUri_does_not_treat_at_in_path_as_user_info()
+    {
+        // The '@' here is in the path, not in the authority. The
+        // redactor must not over-redact and turn this into "***:***@".
+        Assert.Equal(
+            "http://proxy.local:3128/dir@thing",
+            ProxyHttpMessageHandler.RedactProxyUri("http://proxy.local:3128/dir@thing"));
+    }
+
+    private static void AssertNoCredentialLeak(Exception ex, string user, string secret)
+    {
+        for (var current = ex; current is not null; current = current.InnerException)
+        {
+            Assert.DoesNotContain(secret, current.Message);
+            Assert.DoesNotContain(user, current.Message);
+            if (current.StackTrace is { } stack)
+            {
+                Assert.DoesNotContain(secret, stack);
+            }
+        }
+    }
 }
 
 /// <summary>

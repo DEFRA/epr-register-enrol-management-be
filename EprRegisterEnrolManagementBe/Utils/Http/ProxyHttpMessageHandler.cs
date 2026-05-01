@@ -176,7 +176,25 @@ public class ProxyHttpMessageHandler : HttpClientHandler
         // `new UriBuilder(proxyUri).Uri` call did (e.g.
         // "http://user:pass@proxy.local:3128"), so a CDP-injected
         // HTTP_PROXY value keeps working.
-        var builder = new UriBuilder(proxyUri);
+        //
+        // epr-0j2: a malformed value is the dangerous case. UriBuilder
+        // throws UriFormatException whose Message embeds the original
+        // input verbatim — when that input is "http://user:pass@..."
+        // the password ends up in the exception (and therefore in
+        // Serilog / cluster log storage when the host logs the startup
+        // failure). Catch and re-throw with a redacted Message before
+        // the original UriFormatException can escape.
+        UriBuilder builder;
+        try
+        {
+            builder = new UriBuilder(proxyUri);
+        }
+        catch (Exception ex) when (ex is UriFormatException or ArgumentException or FormatException)
+        {
+            throw new InvalidOperationException(
+                $"Could not parse proxy URI from environment: {RedactProxyUri(proxyUri)}");
+        }
+
         NetworkCredential? credentials = null;
         if (!string.IsNullOrEmpty(builder.UserName) || !string.IsNullOrEmpty(builder.Password))
         {
@@ -190,5 +208,39 @@ public class ProxyHttpMessageHandler : HttpClientHandler
             builder.Password = string.Empty;
         }
         return (builder.Uri, credentials);
+    }
+
+    /// <summary>
+    /// Strip any <c>user:pass@</c> segment from a proxy URI for safe
+    /// inclusion in an exception message or log line. Operates purely
+    /// on the string so it can run on input that already failed to
+    /// parse as a <see cref="Uri"/>. Replacement is the literal
+    /// <c>***:***@</c> so the operator can still see <em>that</em>
+    /// credentials were present without seeing the values.
+    /// </summary>
+    internal static string RedactProxyUri(string proxyUri)
+    {
+        if (string.IsNullOrEmpty(proxyUri))
+        {
+            return proxyUri;
+        }
+
+        // Locate the scheme separator and the next '@' that occurs
+        // before the first '/' of the path. Anything between the
+        // scheme separator and that '@' is the user-info component.
+        var schemeSep = proxyUri.IndexOf("://", StringComparison.Ordinal);
+        var authorityStart = schemeSep >= 0 ? schemeSep + 3 : 0;
+        var pathStart = proxyUri.IndexOf('/', authorityStart);
+        var searchEnd = pathStart >= 0 ? pathStart : proxyUri.Length;
+        var atIndex = proxyUri.LastIndexOf('@', searchEnd - 1, searchEnd - authorityStart);
+        if (atIndex < 0)
+        {
+            return proxyUri;
+        }
+
+        return string.Concat(
+            proxyUri.AsSpan(0, authorityStart),
+            "***:***@",
+            proxyUri.AsSpan(atIndex + 1));
     }
 }
