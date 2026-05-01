@@ -24,7 +24,7 @@ public class ReAccreditationEndpointTests
         _persistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns((WorkItem?)null);
 
         var result = await ReAccreditationEndpoints.GetRecommendation(
-            id, _persistence, _decisionService, TestContext.Current.CancellationToken);
+            id, UserContext(), _persistence, _decisionService, TestContext.Current.CancellationToken);
 
         Assert.IsType<NotFound>(result.Result);
         _decisionService.DidNotReceiveWithAnyArgs().EvaluateRecommendation(default!);
@@ -38,11 +38,12 @@ public class ReAccreditationEndpointTests
         {
             Id = id,
             TypeId = "some-other-type",
-            StateId = "submitted"
+            StateId = "submitted",
+            SubmittedBy = "test-client"
         });
 
         var result = await ReAccreditationEndpoints.GetRecommendation(
-            id, _persistence, _decisionService, TestContext.Current.CancellationToken);
+            id, UserContext(), _persistence, _decisionService, TestContext.Current.CancellationToken);
 
         var problem = Assert.IsType<ProblemHttpResult>(result.Result);
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
@@ -65,6 +66,7 @@ public class ReAccreditationEndpointTests
             Id = id,
             TypeId = ReAccreditationType.Id,
             StateId = "submitted",
+            SubmittedBy = "test-client",
             Payload = payload
         });
 
@@ -75,7 +77,7 @@ public class ReAccreditationEndpointTests
                 ReAccreditationRecommendation.Approve, "Looks good"));
 
         var result = await ReAccreditationEndpoints.GetRecommendation(
-            id, _persistence, _decisionService, TestContext.Current.CancellationToken);
+            id, UserContext(), _persistence, _decisionService, TestContext.Current.CancellationToken);
 
         var ok = Assert.IsType<Ok<ReAccreditationRecommendationResponse>>(result.Result);
         Assert.NotNull(ok.Value);
@@ -102,6 +104,7 @@ public class ReAccreditationEndpointTests
             Id = id,
             TypeId = ReAccreditationType.Id,
             StateId = "submitted",
+            SubmittedBy = "test-client",
             Payload = new BsonDocument()
         });
         _decisionService
@@ -110,7 +113,7 @@ public class ReAccreditationEndpointTests
                 ReAccreditationRecommendation.MoreInfoNeeded, "Missing fields"));
 
         var result = await ReAccreditationEndpoints.GetRecommendation(
-            id, _persistence, _decisionService, TestContext.Current.CancellationToken);
+            id, UserContext(), _persistence, _decisionService, TestContext.Current.CancellationToken);
 
         var ok = Assert.IsType<Ok<ReAccreditationRecommendationResponse>>(result.Result);
         Assert.Equal(ReAccreditationRecommendation.MoreInfoNeeded, ok.Value!.Recommendation);
@@ -291,7 +294,8 @@ public class ReAccreditationEndpointTests
         {
             Id = id,
             TypeId = "some-other-type",
-            StateId = "submitted"
+            StateId = "submitted",
+            SubmittedBy = "test-client"
         });
 
         var result = await ReAccreditationEndpoints.RecordDecisionRationale(
@@ -305,5 +309,129 @@ public class ReAccreditationEndpointTests
         var problem = Assert.IsType<ProblemHttpResult>(result.Result);
         Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
         await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    // -------------------- Cross-tenant gating (epr-946) --------------------
+    //
+    // ReAccreditation endpoints used to call persistence.GetByIdAsync
+    // without any role / SubmittedBy check, so any authenticated caller
+    // could read the recommendation for, or record a decision rationale
+    // against, any work item by id. Both endpoints now route through
+    // WorkItemTenancy.CanRead — these tests pin that contract.
+
+    private static HttpContext CaseWorkerContext()
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("cognito:client_id", "case-worker-client"),
+            new Claim("user:id", "worker-1"),
+            new Claim(ClaimTypes.Role, WorkItemEndpoints.CaseWorkerRole)
+        ], "test"));
+        return ctx;
+    }
+
+    [Fact]
+    public async Task Recommendation_returns_not_found_for_cross_tenant_caller()
+    {
+        var id = Guid.NewGuid();
+        _persistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            // Owned by someone else; UserContext()'s cognito client id is
+            // 'test-client' so the gate must fire.
+            SubmittedBy = "other-tenant"
+        });
+
+        var result = await ReAccreditationEndpoints.GetRecommendation(
+            id, UserContext(), _persistence, _decisionService, TestContext.Current.CancellationToken);
+
+        Assert.IsType<NotFound>(result.Result);
+        _decisionService.DidNotReceiveWithAnyArgs().EvaluateRecommendation(default!);
+    }
+
+    [Fact]
+    public async Task Recommendation_allows_case_worker_to_see_other_tenants_item()
+    {
+        var id = Guid.NewGuid();
+        _persistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            SubmittedBy = "other-tenant",
+            Payload = new BsonDocument()
+        });
+        _decisionService
+            .EvaluateRecommendation(Arg.Any<ReAccreditationPayload>())
+            .Returns(new ReAccreditationRecommendation(
+                ReAccreditationRecommendation.Approve, "ok"));
+
+        var result = await ReAccreditationEndpoints.GetRecommendation(
+            id, CaseWorkerContext(), _persistence, _decisionService, TestContext.Current.CancellationToken);
+
+        Assert.IsType<Ok<ReAccreditationRecommendationResponse>>(result.Result);
+    }
+
+    [Fact]
+    public async Task RecordDecisionRationale_returns_not_found_for_cross_tenant_caller()
+    {
+        var id = Guid.NewGuid();
+        _persistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "awaiting-decision",
+            SubmittedBy = "other-tenant"
+        });
+
+        var result = await ReAccreditationEndpoints.RecordDecisionRationale(
+            id,
+            new DecisionRationaleRequest("Approved on the basis of full compliance history."),
+            UserContext(),
+            _persistence,
+            BuildEngine(_persistence),
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<NotFound>(result.Result);
+        // No write \u2014 a hand-crafted POST against another tenant's item
+        // must not append the note or complete the rationale task.
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RecordDecisionRationale_allows_case_worker_against_other_tenants_item()
+    {
+        var id = Guid.NewGuid();
+        var type = new ReAccreditationType();
+        // Built fresh here (rather than via ExistingAwaitingDecisionWorkItem)
+        // because SubmittedBy is init-only and the case-worker scenario
+        // needs a different value than the helper's "test-client" default.
+        var stored = new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "awaiting-decision",
+            SubmittedBy = "other-tenant",
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion
+        };
+        _persistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(stored);
+        _persistence
+            .When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
+            .Do(call => ((WorkItem)call.Args()[0]!).Version++);
+
+        var result = await ReAccreditationEndpoints.RecordDecisionRationale(
+            id,
+            new DecisionRationaleRequest("Approved on the basis of full compliance history."),
+            CaseWorkerContext(),
+            _persistence,
+            BuildEngine(_persistence),
+            TestContext.Current.CancellationToken);
+
+        Assert.IsType<Ok<WorkItemResponse>>(result.Result);
+        await _persistence.Received(1).ReplaceAsync(stored, Arg.Any<CancellationToken>());
     }
 }

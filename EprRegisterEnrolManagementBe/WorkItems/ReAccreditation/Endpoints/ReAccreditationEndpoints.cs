@@ -45,12 +45,17 @@ public static class ReAccreditationEndpoints
     /// </summary>
     public static async Task<Results<Ok<ReAccreditationRecommendationResponse>, NotFound, ProblemHttpResult>> GetRecommendation(
         [FromRoute] Guid id,
+        HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IReAccreditationDecisionService decisionService,
         CancellationToken cancellationToken)
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        if (workItem is null)
+        // Cross-tenant gate (epr-946): mirror the framework's GetById
+        // contract — callers without case-worker access who target a work
+        // item submitted by a different tenant must see 404 (not 200, not
+        // "wrong type") so existence is not leaked.
+        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
         {
             return TypedResults.NotFound();
         }
@@ -114,7 +119,10 @@ public static class ReAccreditationEndpoints
         }
 
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        if (workItem is null)
+        // Cross-tenant gate (epr-946): without this check any
+        // authenticated caller could record decision-rationale notes
+        // (and complete the rationale task) on any work item by id.
+        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
         {
             return TypedResults.NotFound();
         }
