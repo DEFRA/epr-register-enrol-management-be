@@ -22,6 +22,18 @@ public static class WorkItemEndpoints
     /// </summary>
     public const string CaseWorkerRole = "case-worker";
 
+    // Request body size caps (epr-rvz). The work item endpoints all parse
+    // their JSON body manually after .DisableValidation(), so without an
+    // explicit cap an attacker can POST arbitrarily large payloads and
+    // force in-memory JSON / BSON parsing before any size guard fires.
+    // The caps are deliberately generous for the legitimate use cases
+    // (a real submission payload is well under 1 MB; a note is well under
+    // 100 KB; status / assign carry just a couple of small string fields).
+    public const long MaxSubmitBodyBytes = 1 * 1024 * 1024;       // 1 MB
+    public const long MaxNoteBodyBytes = 100 * 1024;              // 100 KB
+    public const long MaxAssignBodyBytes = 10 * 1024;             // 10 KB
+    public const long MaxTaskStatusBodyBytes = 10 * 1024;         // 10 KB
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapWorkItemFrameworkEndpoints(this IEndpointRouteBuilder app)
     {
@@ -30,6 +42,7 @@ public static class WorkItemEndpoints
         group.MapPost(string.Empty, Submit)
             .WithName("SubmitWorkItem")
             .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxSubmitBodyBytes))
             .RequireAuthorization();
 
         group.MapGet("/{id:guid}", GetById)
@@ -47,6 +60,7 @@ public static class WorkItemEndpoints
         group.MapPut("/{id:guid}/tasks/{taskId}/status", SetTaskStatus)
             .WithName("SetWorkItemTaskStatus")
             .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxTaskStatusBodyBytes))
             .RequireAuthorization();
 
         group.MapPost("/{id:guid}/actions/{actionId}", ApplyAction)
@@ -56,6 +70,7 @@ public static class WorkItemEndpoints
         group.MapPost("/{id:guid}/assign", Assign)
             .WithName("AssignWorkItem")
             .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxAssignBodyBytes))
             .RequireAuthorization();
 
         group.MapPost("/{id:guid}/unassign", Unassign)
@@ -65,6 +80,7 @@ public static class WorkItemEndpoints
         group.MapPost("/{id:guid}/notes", AddNote)
             .WithName("AddWorkItemNote")
             .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxNoteBodyBytes))
             .RequireAuthorization();
 
         return app;
