@@ -1,0 +1,304 @@
+using System.Net;
+using System.Net.Http.Json;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.Utils.Mongo;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
+
+namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
+
+/// <summary>
+/// epr-dt2: negative-path coverage for the auth and assignment role
+/// boundaries documented in AGENTS.md. Every test exercises the real
+/// pipeline (CognitoClientIdAuthenticationHandler, routing,
+/// ProblemDetails) against ephemeral MongoDB so it can also assert the
+/// fail-closed property — that no audit entry is written and no on-disk
+/// version is bumped when the request is denied.
+/// </summary>
+public class WorkItemAuthBoundaryTests
+    : IClassFixture<MongoIntegrationFixture>
+{
+    private const string TypeId = "test-type";
+    private const string TenantClientId = "test-client";
+    private readonly MongoIntegrationFixture _fixture;
+
+    public WorkItemAuthBoundaryTests(MongoIntegrationFixture fixture) => _fixture = fixture;
+
+    // --------- (1) Mutations require a 'user:id' claim — fail closed ---------
+
+    [Fact]
+    public async Task Complete_task_returns_401_when_user_id_claim_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BoundaryFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(NewSubmittedItem(id), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/tasks/check-eligibility/complete", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        // Atomicity: the engine's RequireActorIdentity gate fires before
+        // any mutation, so the persisted document is unchanged.
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(0, persisted!.Version);
+        Assert.Empty(persisted.AuditLog);
+        Assert.False(persisted.CompletedTaskIdsByState.TryGetValue("submitted", out _));
+    }
+
+    [Fact]
+    public async Task Complete_task_returns_401_when_user_id_header_is_whitespace()
+    {
+        // The handler ignores whitespace user-id headers; the engine then
+        // sees no 'user:id' claim and refuses the mutation. This is the
+        // "claim present-ish but resolves to null/empty" path
+        // (CognitoClientIdAuthenticationHandler whitespace filter +
+        // WorkItemService.ResolveActorUserId).
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BoundaryFactory(_fixture, userId: "   ");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(NewSubmittedItem(id), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/tasks/check-eligibility/complete", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(0, persisted!.Version);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    // ---------------- (2) Assign / Unassign role rules ----------------
+
+    [Fact]
+    public async Task Assign_returns_403_when_standard_user_targets_another_user()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(NewSubmittedItem(id), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "bob-2", assigneeName = "Bob" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Null(persisted!.AssignedToId);
+        Assert.Equal(0, persisted.Version);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Fact]
+    public async Task Assign_returns_403_when_standard_user_self_assigns_already_assigned_item()
+    {
+        // The 'assign' role gate: a standard user can claim an unassigned
+        // item but cannot wrest one off another user — only an 'assign'
+        // role-holder can re-assign.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var seeded = NewSubmittedItem(id);
+        seeded.AssignedToId = "bob-2";
+        seeded.AssignedToName = "Bob";
+        await factory.SeedAsync(seeded, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "alice-1", assigneeName = "Alice" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("bob-2", persisted!.AssignedToId);
+        Assert.Equal(0, persisted.Version);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Fact]
+    public async Task Assign_role_holder_can_reassign_already_assigned_item()
+    {
+        // Positive control for the boundary above — the same operation
+        // must succeed when the caller does hold the 'assign' role,
+        // otherwise the 403 above is meaningless.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BoundaryFactory(
+            _fixture, userId: "manager-1", roles: WorkItemService.AssignRole);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var seeded = NewSubmittedItem(id);
+        seeded.AssignedToId = "bob-2";
+        seeded.AssignedToName = "Bob";
+        await factory.SeedAsync(seeded, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "alice-1", assigneeName = "Alice" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("alice-1", persisted!.AssignedToId);
+        Assert.Equal(1, persisted.Version);
+        Assert.Single(persisted.AuditLog);
+    }
+
+    [Fact]
+    public async Task Unassign_returns_403_for_standard_user_without_assign_role()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var seeded = NewSubmittedItem(id);
+        seeded.AssignedToId = "alice-1";
+        seeded.AssignedToName = "Alice";
+        await factory.SeedAsync(seeded, cancellationToken);
+
+        var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("alice-1", persisted!.AssignedToId);
+        Assert.Equal(0, persisted.Version);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    // ---------------- Cross-tenant GET / LIST denial ----------------
+
+    [Fact]
+    public async Task Get_by_id_returns_404_for_cross_tenant_caller()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var seeded = NewSubmittedItem(id, submittedBy: "other-tenant");
+        await factory.SeedAsync(seeded, cancellationToken);
+
+        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
+
+        // Cross-tenant items must never leak via 200 or even via a
+        // distinguishable 403 — return 404 to hide existence.
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task List_hides_cross_tenant_items_from_standard_caller()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var mine = NewSubmittedItem(Guid.NewGuid());
+        var theirs = NewSubmittedItem(Guid.NewGuid(), submittedBy: "other-tenant");
+        await factory.SeedAsync(mine, cancellationToken);
+        await factory.SeedAsync(theirs, cancellationToken);
+
+        var page = await client.GetFromJsonAsync<WorkItemListResponse>(
+            "/work-items", cancellationToken);
+
+        Assert.NotNull(page);
+        Assert.Single(page!.Items);
+        Assert.Equal(mine.Id, page.Items[0].Id);
+    }
+
+    // ---------------------------- Helpers ----------------------------
+
+    private static WorkItem NewSubmittedItem(Guid id, string submittedBy = TenantClientId) => new()
+    {
+        Id = id,
+        TypeId = TypeId,
+        StateId = "submitted",
+        SubmittedBy = submittedBy
+    };
+
+    private sealed class BoundaryFactory : WebApplicationFactory<Program>
+    {
+        private readonly MongoIntegrationFixture _fixture;
+        private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("authbnd");
+        private readonly string? _userId;
+        private readonly string? _roles;
+
+        public BoundaryFactory(
+            MongoIntegrationFixture fixture,
+            string? userId,
+            string? roles = null)
+        {
+            _fixture = fixture;
+            _userId = userId;
+            _roles = roles;
+        }
+
+        public IWorkItemPersistence Persistence => Services.GetRequiredService<IWorkItemPersistence>();
+
+        public Task SeedAsync(WorkItem item, CancellationToken cancellationToken) =>
+            Persistence.CreateAsync(item, cancellationToken);
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IWorkItemPersistence>();
+                services.RemoveAll<IMongoDbClientFactory>();
+                var clientFactory = new TestMongoDbClientFactory(_fixture.ConnectionString, _databaseName);
+                services.AddSingleton<IMongoDbClientFactory>(clientFactory);
+                services.AddSingleton<IWorkItemPersistence>(sp =>
+                    new WorkItemPersistence(clientFactory, sp.GetRequiredService<ILoggerFactory>()));
+                services.AddSingleton<IWorkItemType>(new TestWorkItemType(TypeId, "Test type"));
+            });
+        }
+
+        protected override void ConfigureClient(HttpClient client)
+        {
+            base.ConfigureClient(client);
+            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", TenantClientId);
+            if (_userId is not null)
+            {
+                // Use TryAddWithoutValidation so the test can deliberately
+                // send a whitespace user-id (which HttpClient would
+                // otherwise normalise away) for the
+                // ResolveActorUserId-returns-null path.
+                client.DefaultRequestHeaders.TryAddWithoutValidation("x-cdp-user-id", _userId);
+            }
+            if (_roles is not null)
+            {
+                client.DefaultRequestHeaders.Add("x-cdp-user-roles", _roles);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                try
+                {
+                    var clientFactory = Services.GetRequiredService<IMongoDbClientFactory>();
+                    clientFactory.GetClient().DropDatabase(_databaseName);
+                }
+                catch
+                {
+                    // Best-effort.
+                }
+            }
+            base.Dispose(disposing);
+        }
+    }
+}
