@@ -12,7 +12,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 /// under <c>/work-items/re-accreditation/...</c> to stay isolated from other
 /// modules and from the framework's generic routes.
 /// </summary>
-public static class ReAccreditationEndpoints
+internal static class ReAccreditationEndpoints
 {
     private static readonly JsonSerializerOptions s_payloadJsonOptions = new()
     {
@@ -169,12 +169,12 @@ public static class ReAccreditationEndpoints
         return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
     }
 }
-public sealed record ReAccreditationRecommendationResponse(string Recommendation, string Rationale);
+internal sealed record ReAccreditationRecommendationResponse(string Recommendation, string Rationale);
 
 /// <summary>Request body for <see cref="ReAccreditationEndpoints.RecordDecisionRationale"/>.</summary>
-public sealed record DecisionRationaleRequest(string Rationale);
+internal sealed record DecisionRationaleRequest(string Rationale);
 
-public static partial class ReAccreditationEndpointsRationale
+internal static partial class ReAccreditationEndpointsRationale
 {
     /// <summary>
     /// Minimum rationale length. Picked to force assessors to write a real

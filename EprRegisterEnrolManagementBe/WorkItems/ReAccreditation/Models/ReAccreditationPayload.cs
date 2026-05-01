@@ -9,7 +9,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 /// record is the module's interpretation of that document, deserialised on
 /// demand when the module needs to reason about the payload.
 /// </summary>
-public sealed record ReAccreditationPayload
+internal sealed record ReAccreditationPayload
 {
     public string? OrganisationName { get; init; }
     public string? RegistrationNumber { get; init; }

@@ -8,7 +8,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// universal task / transition rules; type-specific reasoning over the
 /// payload (e.g. "should we recommend approving this?") belongs here.
 /// </summary>
-public interface IReAccreditationDecisionService
+internal interface IReAccreditationDecisionService
 {
     /// <summary>
     /// Pure, deterministic recommendation derived from the payload alone. The
@@ -20,7 +20,7 @@ public interface IReAccreditationDecisionService
 }
 
 /// <summary>Outcome the service recommends, plus a one-line rationale.</summary>
-public sealed record ReAccreditationRecommendation(string Outcome, string Rationale)
+internal sealed record ReAccreditationRecommendation(string Outcome, string Rationale)
 {
     public const string Approve = "approve";
     public const string Reject = "reject";

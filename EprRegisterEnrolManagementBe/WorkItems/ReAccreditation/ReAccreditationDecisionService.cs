@@ -8,7 +8,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// payload. Real rules will replace this implementation when the
 /// re-accreditation policy is finalised.
 /// </summary>
-public sealed class ReAccreditationDecisionService : IReAccreditationDecisionService
+internal sealed class ReAccreditationDecisionService : IReAccreditationDecisionService
 {
     /// <summary>
     /// Maximum number of historical compliance issues tolerated before the

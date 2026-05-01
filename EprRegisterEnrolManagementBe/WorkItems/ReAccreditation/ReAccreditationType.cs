@@ -9,7 +9,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// the workflow diagram referenced in RA-85; the shape is intentionally
 /// declarative so a reader can grasp the lifecycle without reading code.
 /// </summary>
-public sealed class ReAccreditationType : IWorkItemType
+internal sealed class ReAccreditationType : IWorkItemType
 {
     public const string Id = "re-accreditation";
 
