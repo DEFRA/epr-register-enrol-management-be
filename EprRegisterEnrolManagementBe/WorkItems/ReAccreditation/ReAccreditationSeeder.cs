@@ -16,6 +16,16 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationSeeder : IWorkItemSeeder
 {
+    /// <summary>
+    /// Sentinel <see cref="WorkItem.AssignedBy"/> value attributed to the
+    /// seeder. Distinct from any real user id so the audit log makes the
+    /// provenance of seeded assignments explicit and queryable. Setting
+    /// <c>AssignedBy</c> to the assignee id (the original bug, epr-ce4)
+    /// would falsify the audit trail to claim the assignee assigned
+    /// themselves.
+    /// </summary>
+    public const string SeederAssignedBy = "system:seeder";
+
     public string TypeId => ReAccreditationType.Id;
 
     public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
@@ -185,7 +195,11 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
             AssignedToId = assignedToId,
             AssignedToName = assignedToName,
             AssignedAt = assignedAt,
-            AssignedBy = assignedToId is null ? null : assignedToId,
+            // epr-ce4: seeded assignments are attributed to a sentinel
+            // ("system:seeder"), never to the assignee id — that would
+            // falsify the audit trail to claim the user assigned
+            // themselves.
+            AssignedBy = assignedToId is null ? null : SeederAssignedBy,
             Payload = payload
         };
 
