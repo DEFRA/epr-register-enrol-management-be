@@ -265,6 +265,68 @@ public class WorkItemServiceTests
     }
 
     [Fact]
+    public async Task ApplyAction_blocks_transition_when_only_canonical_map_marks_task_incomplete()
+    {
+        // epr-08y: HasIncompleteTasks must consult TaskStatusesByState
+        // first (canonical per epr-gl6) and only fall back to the legacy
+        // CompletedTaskIdsByState bucket. If a future code path writes
+        // only to the canonical map, gating must still respect it.
+        var type = BuildType(
+            tasksByState: new()
+            {
+                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+            },
+            transitions: [
+                new WorkItemTransition("approve", "Approve", "submitted", "approved")
+            ]);
+        var workItem = ExistingWorkItem(completed: new()
+        {
+            // Stale legacy bucket says the task IS complete...
+            ["submitted"] = ["check-eligibility"]
+        });
+        // ...but the canonical per-task status map says it is in progress.
+        workItem.TaskStatusesByState["submitted"] =
+            new(StringComparer.OrdinalIgnoreCase) { ["check-eligibility"] = WorkItemTaskStatus.InProgress };
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).ApplyActionAsync(
+            workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
+        Assert.Equal("submitted", workItem.StateId);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ApplyAction_transitions_when_only_canonical_map_marks_task_complete()
+    {
+        // epr-08y: a v2 module that writes only to the canonical
+        // TaskStatusesByState (without dual-writing the legacy bucket)
+        // must still be allowed to transition once tasks are Completed.
+        var type = BuildType(
+            tasksByState: new()
+            {
+                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+            },
+            transitions: [
+                new WorkItemTransition("approve", "Approve", "submitted", "approved")
+            ]);
+        var workItem = ExistingWorkItem();
+        // Canonical only — legacy CompletedTaskIdsByState bucket left empty.
+        workItem.TaskStatusesByState["submitted"] =
+            new(StringComparer.OrdinalIgnoreCase) { ["check-eligibility"] = WorkItemTaskStatus.Completed };
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await BuildService(type).ApplyActionAsync(
+            workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("approved", workItem.StateId);
+        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task ApplyAction_allows_action_that_does_not_require_task_completion()
     {
         var type = BuildType(

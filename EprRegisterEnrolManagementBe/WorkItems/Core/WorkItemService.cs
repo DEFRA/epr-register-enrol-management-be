@@ -945,10 +945,14 @@ public sealed class WorkItemService(
         {
             return false;
         }
-        var completed = workItem.CompletedTaskIdsByState.TryGetValue(workItem.StateId, out var done)
-            ? done
-            : (IReadOnlyCollection<string>)Array.Empty<string>();
-        return required.Any(t => !completed.Contains(t.Id));
+        // epr-08y: TaskStatusesByState is the canonical source of truth
+        // (epr-gl6 / WorkItem.cs:99-110). Consult it first and only fall
+        // back to the legacy CompletedTaskIdsByState bucket when no
+        // per-task status is recorded for a task. Reading only the legacy
+        // bucket would let a v2 module that writes only to the canonical
+        // map silently transition past incomplete tasks.
+        return required.Any(t =>
+            GetCurrentTaskStatus(workItem, workItem.StateId, t.Id) != WorkItemTaskStatus.Completed);
     }
 
     /// <summary>
