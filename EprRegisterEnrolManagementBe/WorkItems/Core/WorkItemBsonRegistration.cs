@@ -28,23 +28,23 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// </summary>
 internal static class WorkItemBsonRegistration
 {
-    private static int s_initialized;
-
+    /// <summary>
+    /// Backwards-compatible no-op. The custom serializers are now applied
+    /// declaratively via <c>[BsonSerializer]</c> attributes on the
+    /// <see cref="WorkItem"/> properties themselves, so they are picked up
+    /// by the driver's auto-mapper on first access regardless of the order
+    /// in which test classes / Program.cs trigger registration. An
+    /// explicit <see cref="BsonClassMap.RegisterClassMap{TClass}"/> call
+    /// would race against any incidental <c>ToBsonDocument()</c> on a
+    /// parallel test thread (the auto-mapper having already registered
+    /// the type means a second registration throws "duplicate key").
+    /// </summary>
     public static void Register()
     {
-        if (Interlocked.Exchange(ref s_initialized, 1) == 1)
-        {
-            return;
-        }
-
-        BsonClassMap.RegisterClassMap<WorkItem>(cm =>
-        {
-            cm.AutoMap();
-            cm.MapMember(x => x.CompletedTaskIdsByState)
-                .SetSerializer(new CompletedTaskBucketsSerializer());
-            cm.MapMember(x => x.TaskStatusesByState)
-                .SetSerializer(new TaskStatusesByStateSerializer());
-        });
+        // Touch the WorkItem type so any [BsonSerializer]-attributed members
+        // are wired up via the auto-mapper before callers serialize. This
+        // is a no-op if it has already happened.
+        _ = MongoDB.Bson.Serialization.BsonClassMap.LookupClassMap(typeof(WorkItem));
     }
 }
 

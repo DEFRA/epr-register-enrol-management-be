@@ -92,6 +92,44 @@ public class WorkItemBsonRegistrationTests
         Assert.Empty(roundTripped.CompletedTaskIdsByState);
     }
 
+    // epr-81c: a freshly-constructed WorkItem (never round-tripped through
+    // Mongo) must already use OrdinalIgnoreCase for both the outer
+    // dictionary and the HashSet bucket. Otherwise behaviour diverges
+    // depending solely on whether the document was just submitted or just
+    // loaded from Mongo.
+    [Fact]
+    public void Freshly_constructed_dictionary_uses_case_insensitive_state_id_lookup()
+    {
+        var workItem = new WorkItem
+        {
+            TypeId = "test-type",
+            StateId = "Submitted",
+            CompletedTaskIdsByState =
+            {
+                ["Submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "task1" }
+            }
+        };
+
+        Assert.True(workItem.CompletedTaskIdsByState.ContainsKey("submitted"));
+        Assert.True(workItem.CompletedTaskIdsByState.TryGetValue("SUBMITTED", out var bucket));
+        Assert.Contains("task1", bucket!);
+    }
+
+    [Fact]
+    public void Freshly_constructed_seeder_bucket_uses_case_insensitive_task_id_lookup()
+    {
+        // Mirrors how ReAccreditationSeeder builds buckets from a caller-
+        // supplied collection — the resulting HashSet must honour the
+        // OrdinalIgnoreCase contract on .Contains().
+        var workItem = new WorkItem { TypeId = "test-type", StateId = "submitted" };
+        workItem.CompletedTaskIdsByState["submitted"] =
+            new HashSet<string>(new[] { "Task1" }, StringComparer.OrdinalIgnoreCase);
+
+        var bucket = workItem.CompletedTaskIdsByState["submitted"];
+        Assert.Contains("task1", bucket);
+        Assert.Contains("TASK1", bucket);
+    }
+
     // ---------------------- TaskStatusesByState (epr-gl6) ----------------------
 
     [Fact]

@@ -93,7 +93,9 @@ public sealed class WorkItem
     /// release cycle as a duplicated source of truth so legacy readers keep
     /// working; new code should prefer <see cref="TaskStatusesByState"/>.
     /// </summary>
-    public Dictionary<string, HashSet<string>> CompletedTaskIdsByState { get; init; } = new();
+    [BsonSerializer(typeof(CompletedTaskBucketsSerializer))]
+    public Dictionary<string, HashSet<string>> CompletedTaskIdsByState { get; init; }
+        = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Per-task lifecycle status (epr-gl6), keyed by state id then task id.
@@ -109,6 +111,7 @@ public sealed class WorkItem
     /// and the BSON round-trip is normalised by
     /// <see cref="WorkItemBsonRegistration"/>.
     /// </summary>
+    [BsonSerializer(typeof(TaskStatusesByStateSerializer))]
     public Dictionary<string, Dictionary<string, WorkItemTaskStatus>> TaskStatusesByState { get; init; }
         = new(StringComparer.OrdinalIgnoreCase);
 

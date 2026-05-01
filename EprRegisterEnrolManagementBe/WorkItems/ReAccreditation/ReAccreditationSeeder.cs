@@ -193,7 +193,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         {
             foreach (var (state, tasks) in completedTasks)
             {
-                workItem.CompletedTaskIdsByState[state] = [.. tasks];
+                workItem.CompletedTaskIdsByState[state] = new HashSet<string>(tasks, StringComparer.OrdinalIgnoreCase);
             }
         }
 
