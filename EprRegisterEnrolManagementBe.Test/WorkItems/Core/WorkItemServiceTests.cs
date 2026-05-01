@@ -1,20 +1,39 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
-using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
+/// <summary>
+/// epr-efp: backed by ephemeral MongoDB. Persistence is the real
+/// <see cref="WorkItemPersistence"/>; assertions are made against the
+/// document fetched back from Mongo, not against the in-memory instance
+/// the test author handed to the engine.
+/// </summary>
 public class WorkItemServiceTests
+    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
 {
     private const string TypeId = "test-type";
     private static readonly DateTime InitialNow = new(2026, 4, 27, 10, 0, 0, DateTimeKind.Utc);
     private static readonly DateTime TickedNow = InitialNow.AddMinutes(5);
 
-    private readonly IWorkItemPersistence _persistence = Substitute.For<IWorkItemPersistence>();
+    private readonly TestMongoDbClientFactory _clientFactory;
+    private readonly string _databaseName;
+    private readonly WorkItemPersistence _persistence;
     private readonly FakeTimeProvider _time = new(TickedNow);
+
+    public WorkItemServiceTests(MongoIntegrationFixture fixture)
+    {
+        _databaseName = MongoIntegrationFixture.NewDatabaseName("svc");
+        _clientFactory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
+        _persistence = new WorkItemPersistence(_clientFactory, NullLoggerFactory.Instance);
+    }
+
+    public async ValueTask DisposeAsync() =>
+        await _clientFactory.GetClient().DropDatabaseAsync(_databaseName);
 
     private WorkItemService BuildService(IWorkItemType type) =>
         new(
@@ -42,17 +61,39 @@ public class WorkItemServiceTests
             transitions: transitions);
     }
 
-    private WorkItem ExistingWorkItem(string stateId = "submitted", Dictionary<string, HashSet<string>>? completed = null) =>
-        new()
+    private async Task<WorkItem> SeedAsync(
+        string stateId = "submitted",
+        Dictionary<string, HashSet<string>>? completed = null,
+        Action<WorkItem>? configure = null)
+    {
+        var workItem = new WorkItem
         {
             Id = Guid.NewGuid(),
             TypeId = TypeId,
             StateId = stateId,
             SubmittedAt = InitialNow,
             LastModifiedAt = InitialNow,
-            SubmittedBy = "test-client",
-            CompletedTaskIdsByState = completed ?? new()
+            SubmittedBy = "test-client"
         };
+        if (completed is not null)
+        {
+            foreach (var (state, tasks) in completed)
+            {
+                workItem.CompletedTaskIdsByState[state] =
+                    new HashSet<string>(tasks, StringComparer.OrdinalIgnoreCase);
+            }
+        }
+        configure?.Invoke(workItem);
+        await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
+        return workItem;
+    }
+
+    private async Task<WorkItem> GetAsync(Guid id)
+    {
+        var fetched = await _persistence.GetByIdAsync(id, TestContext.Current.CancellationToken);
+        Assert.NotNull(fetched);
+        return fetched!;
+    }
 
     private static ClaimsPrincipal User() =>
         new(new ClaimsIdentity(
@@ -85,16 +126,16 @@ public class WorkItemServiceTests
         {
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).CompleteTaskAsync(
             workItem.Id, "check-eligibility", User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Contains("check-eligibility", workItem.CompletedTaskIdsByState["submitted"]);
-        Assert.Equal(TickedNow, workItem.LastModifiedAt);
-        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Contains("check-eligibility", fetched.CompletedTaskIdsByState["submitted"]);
+        Assert.Equal(TickedNow, fetched.LastModifiedAt);
+        Assert.Equal(1, fetched.Version);
     }
 
     [Fact]
@@ -104,11 +145,10 @@ public class WorkItemServiceTests
         {
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
-        var workItem = ExistingWorkItem(completed: new()
+        var workItem = await SeedAsync(completed: new()
         {
             ["submitted"] = ["check-eligibility"]
         });
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
         var result = await BuildService(type).CompleteTaskAsync(
             workItem.Id, "check-eligibility", User(), TestContext.Current.CancellationToken);
@@ -117,9 +157,11 @@ public class WorkItemServiceTests
         Assert.True(result.IsIdempotentReplay,
             "Re-completing an already-complete task must be flagged as a replay so " +
             "the endpoint can set X-Idempotent-Replay: true.");
-        Assert.Equal(InitialNow, workItem.LastModifiedAt);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
-        Assert.DoesNotContain(workItem.AuditLog, a => a.Action == "task-completed");
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(InitialNow, fetched.LastModifiedAt);
+        Assert.Equal(0, fetched.Version);
+        Assert.DoesNotContain(fetched.AuditLog, a => a.Action == "task-completed");
     }
 
     [Fact]
@@ -127,28 +169,28 @@ public class WorkItemServiceTests
     {
         // Regression for epr-aq5: a task id written as "Task1" must be
         // recognised as already-complete when re-completed as "task1" on a
-        // freshly-loaded (Mongo round-tripped) work item.
+        // freshly-loaded (Mongo round-tripped) work item. The ephemeral
+        // MongoDB load IS the round-trip — no manual ToBsonDocument needed.
         WorkItemBsonRegistration.Register();
 
         var type = BuildType(tasksByState: new()
         {
             ["submitted"] = [new WorkItemTask("task1", "Task one")]
         });
-        var seed = ExistingWorkItem(completed: new()
+        var workItem = await SeedAsync(completed: new()
         {
             ["submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Task1" }
         });
-        var reloaded = BsonSerializer.Deserialize<WorkItem>(seed.ToBsonDocument());
-        _persistence.GetByIdAsync(reloaded.Id, Arg.Any<CancellationToken>()).Returns(reloaded);
 
         var result = await BuildService(type).CompleteTaskAsync(
-            reloaded.Id, "task1", User(), TestContext.Current.CancellationToken);
+            workItem.Id, "task1", User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         Assert.True(result.IsIdempotentReplay,
             "Engine must recognise the already-complete task across casing differences " +
             "after a Mongo round-trip.");
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
@@ -163,19 +205,18 @@ public class WorkItemServiceTests
         {
             ["submitted"] = [new WorkItemTask("task1", "Task one")]
         });
-        var seed = ExistingWorkItem(stateId: "submitted", completed: new()
+        var workItem = await SeedAsync(stateId: "submitted", completed: new()
         {
             ["Submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "task1" }
         });
-        var reloaded = BsonSerializer.Deserialize<WorkItem>(seed.ToBsonDocument());
-        _persistence.GetByIdAsync(reloaded.Id, Arg.Any<CancellationToken>()).Returns(reloaded);
 
         var result = await BuildService(type).CompleteTaskAsync(
-            reloaded.Id, "task1", User(), TestContext.Current.CancellationToken);
+            workItem.Id, "task1", User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         Assert.True(result.IsIdempotentReplay);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
@@ -185,22 +226,21 @@ public class WorkItemServiceTests
         {
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).CompleteTaskAsync(
             workItem.Id, "unknown-task", User(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TaskNotApplicable, result.FailureCode);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
     public async Task CompleteTask_returns_not_found_when_work_item_missing()
     {
         var type = BuildType();
-        _persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((WorkItem?)null);
 
         var result = await BuildService(type).CompleteTaskAsync(
             Guid.NewGuid(), "any", User(), TestContext.Current.CancellationToken);
@@ -223,19 +263,19 @@ public class WorkItemServiceTests
             transitions: [
                 new WorkItemTransition("approve", "Approve", "submitted", "approved")
             ]);
-        var workItem = ExistingWorkItem(completed: new()
+        var workItem = await SeedAsync(completed: new()
         {
             ["submitted"] = ["check-eligibility"]
         });
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
-        Assert.Equal("submitted", workItem.StateId);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("submitted", fetched.StateId);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
@@ -249,19 +289,19 @@ public class WorkItemServiceTests
             transitions: [
                 new WorkItemTransition("approve", "Approve", "submitted", "approved")
             ]);
-        var workItem = ExistingWorkItem(completed: new()
+        var workItem = await SeedAsync(completed: new()
         {
             ["submitted"] = ["check-eligibility"]
         });
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("approved", workItem.StateId);
-        Assert.Equal(TickedNow, workItem.LastModifiedAt);
-        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("approved", fetched.StateId);
+        Assert.Equal(TickedNow, fetched.LastModifiedAt);
+        Assert.Equal(1, fetched.Version);
     }
 
     [Fact]
@@ -279,23 +319,27 @@ public class WorkItemServiceTests
             transitions: [
                 new WorkItemTransition("approve", "Approve", "submitted", "approved")
             ]);
-        var workItem = ExistingWorkItem(completed: new()
-        {
-            // Stale legacy bucket says the task IS complete...
-            ["submitted"] = ["check-eligibility"]
-        });
-        // ...but the canonical per-task status map says it is in progress.
-        workItem.TaskStatusesByState["submitted"] =
-            new(StringComparer.OrdinalIgnoreCase) { ["check-eligibility"] = WorkItemTaskStatus.InProgress };
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(
+            completed: new()
+            {
+                // Stale legacy bucket says the task IS complete...
+                ["submitted"] = ["check-eligibility"]
+            },
+            configure: w =>
+            {
+                // ...but the canonical per-task status map says it is in progress.
+                w.TaskStatusesByState["submitted"] =
+                    new(StringComparer.OrdinalIgnoreCase) { ["check-eligibility"] = WorkItemTaskStatus.InProgress };
+            });
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
-        Assert.Equal("submitted", workItem.StateId);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("submitted", fetched.StateId);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
@@ -312,18 +356,20 @@ public class WorkItemServiceTests
             transitions: [
                 new WorkItemTransition("approve", "Approve", "submitted", "approved")
             ]);
-        var workItem = ExistingWorkItem();
-        // Canonical only — legacy CompletedTaskIdsByState bucket left empty.
-        workItem.TaskStatusesByState["submitted"] =
-            new(StringComparer.OrdinalIgnoreCase) { ["check-eligibility"] = WorkItemTaskStatus.Completed };
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            // Canonical only — legacy CompletedTaskIdsByState bucket left empty.
+            w.TaskStatusesByState["submitted"] =
+                new(StringComparer.OrdinalIgnoreCase) { ["check-eligibility"] = WorkItemTaskStatus.Completed };
+        });
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("approved", workItem.StateId);
-        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("approved", fetched.StateId);
+        Assert.Equal(1, fetched.Version);
     }
 
     [Fact]
@@ -337,14 +383,14 @@ public class WorkItemServiceTests
             transitions: [
                 new WorkItemTransition("withdraw", "Withdraw", "submitted", "rejected", RequiresAllTasksComplete: false)
             ]);
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "withdraw", User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("rejected", workItem.StateId);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("rejected", fetched.StateId);
     }
 
     [Fact]
@@ -353,8 +399,7 @@ public class WorkItemServiceTests
         var type = BuildType(transitions: [
             new WorkItemTransition("approve", "Approve", "submitted", "approved")
         ]);
-        var workItem = ExistingWorkItem(stateId: "approved");
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(stateId: "approved");
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
@@ -369,8 +414,7 @@ public class WorkItemServiceTests
         var type = BuildType(transitions: [
             new WorkItemTransition("approve", "Approve", "submitted", "approved")
         ]);
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "delete", User(), TestContext.Current.CancellationToken);
@@ -387,16 +431,16 @@ public class WorkItemServiceTests
                 "approve", "Approve", "submitted", "approved",
                 RequiredRoles: new[] { "decision-maker" })
         ]);
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "approve", UserWithRoles("alice-1"), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
-        Assert.Equal("submitted", workItem.StateId);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("submitted", fetched.StateId);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
@@ -407,31 +451,30 @@ public class WorkItemServiceTests
                 "approve", "Approve", "submitted", "approved",
                 RequiredRoles: new[] { "decision-maker", "admin" })
         ]);
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "approve", UserWithRoles("bob-1", "admin"),
             TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("approved", workItem.StateId);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("approved", fetched.StateId);
     }
 
     [Fact]
     public async Task CompleteTask_returns_ConcurrencyConflict_when_persistence_throws()
     {
+        // Real concurrency conflict via on-disk version race rather than
+        // a mocked exception (epr-efp).
         var type = BuildType(tasksByState: new()
         {
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
-        _persistence
-            .When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
-            .Do(_ => throw new WorkItemConcurrencyException(workItem.Id, 0));
+        var workItem = await SeedAsync();
+        var racingService = BuildRacingService(type, workItem.Id);
 
-        var result = await BuildService(type).CompleteTaskAsync(
+        var result = await racingService.CompleteTaskAsync(
             workItem.Id, "check-eligibility", User(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
@@ -445,13 +488,10 @@ public class WorkItemServiceTests
             new WorkItemTransition("approve", "Approve", "submitted", "approved",
                 RequiresAllTasksComplete: false)
         ]);
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
-        _persistence
-            .When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
-            .Do(_ => throw new WorkItemConcurrencyException(workItem.Id, 0));
+        var workItem = await SeedAsync();
+        var racingService = BuildRacingService(type, workItem.Id);
 
-        var result = await BuildService(type).ApplyActionAsync(
+        var result = await racingService.ApplyActionAsync(
             workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
@@ -465,8 +505,7 @@ public class WorkItemServiceTests
         {
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).CompleteTaskAsync(
             workItem.Id, "check-eligibility", UserWithoutActorId(),
@@ -474,31 +513,31 @@ public class WorkItemServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
-        await _persistence.DidNotReceiveWithAnyArgs()
-            .ReplaceAsync(default!, default);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
     public async Task AddNote_records_user_id_verbatim_without_falling_back_to_client_id()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).AddNoteAsync(
             workItem.Id, "An audit-worthy observation.",
             User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess, result.Message);
-        var note = Assert.Single(workItem.Notes);
+        var fetched = await GetAsync(workItem.Id);
+        var note = Assert.Single(fetched.Notes);
         Assert.Equal("test-user", note.CreatedBy);
         var auditEntry = Assert.Single(
-            workItem.AuditLog, a => a.Action == "note-added");
+            fetched.AuditLog, a => a.Action == "note-added");
         Assert.Equal("test-user", auditEntry.CreatedBy);
     }
 
     [Fact]
-    public void Project_lists_only_actions_whose_preconditions_are_met()
+    public async Task Project_lists_only_actions_whose_preconditions_are_met()
     {
         var type = BuildType(
             tasksByState: new()
@@ -510,7 +549,18 @@ public class WorkItemServiceTests
                 new WorkItemTransition("reject", "Reject", "submitted", "rejected"),
                 new WorkItemTransition("withdraw", "Withdraw", "submitted", "rejected", RequiresAllTasksComplete: false)
             ]);
-        var workItem = ExistingWorkItem();
+        // Project is a pure read-only function over an in-memory document
+        // (no persistence call), so a hand-built instance exercises the
+        // same code path.
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client"
+        };
 
         var projection = BuildService(type).Project(workItem);
 
@@ -522,17 +572,26 @@ public class WorkItemServiceTests
     }
 
     [Fact]
-    public void Project_returns_no_actions_for_terminal_state()
+    public async Task Project_returns_no_actions_for_terminal_state()
     {
         var type = BuildType(transitions: [
             new WorkItemTransition("approve", "Approve", "submitted", "approved")
         ]);
-        var workItem = ExistingWorkItem(stateId: "approved");
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "approved",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client"
+        };
 
         var projection = BuildService(type).Project(workItem);
 
         Assert.Empty(projection.AvailableActions);
         Assert.Empty(projection.Tasks);
+        await Task.CompletedTask;
     }
 
     // ---------------------- Assignment ----------------------
@@ -541,53 +600,56 @@ public class WorkItemServiceTests
     public async Task Assign_records_assignee_with_snapshot_and_audit_metadata()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         var result = await BuildService(type).AssignAsync(
             workItem.Id, "alice-1", "Alice Example", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("alice-1", workItem.AssignedToId);
-        Assert.Equal("Alice Example", workItem.AssignedToName);
-        Assert.Equal(TickedNow, workItem.AssignedAt);
-        Assert.Equal("actor-1", workItem.AssignedBy);
-        Assert.Equal(TickedNow, workItem.LastModifiedAt);
-        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("alice-1", fetched.AssignedToId);
+        Assert.Equal("Alice Example", fetched.AssignedToName);
+        Assert.Equal(TickedNow, fetched.AssignedAt);
+        Assert.Equal("actor-1", fetched.AssignedBy);
+        Assert.Equal(TickedNow, fetched.LastModifiedAt);
+        Assert.Equal(1, fetched.Version);
     }
 
     [Fact]
     public async Task Assign_re_assignment_replaces_previous_assignee()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "bob-1";
-        workItem.AssignedToName = "Bob";
-        workItem.AssignedAt = InitialNow;
-        workItem.AssignedBy = "old-actor";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "bob-1";
+            w.AssignedToName = "Bob";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
 
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         var result = await BuildService(type).AssignAsync(
             workItem.Id, "carol-1", "Carol", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("carol-1", workItem.AssignedToId);
-        Assert.Equal("Carol", workItem.AssignedToName);
-        Assert.Equal("actor-1", workItem.AssignedBy);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("carol-1", fetched.AssignedToId);
+        Assert.Equal("Carol", fetched.AssignedToName);
+        Assert.Equal("actor-1", fetched.AssignedBy);
     }
 
     [Fact]
     public async Task Assign_is_idempotent_when_assignee_unchanged()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "alice-1";
-        workItem.AssignedToName = "Alice";
-        workItem.AssignedAt = InitialNow;
-        workItem.AssignedBy = "old-actor";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
 
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         var result = await BuildService(type).AssignAsync(
@@ -597,17 +659,17 @@ public class WorkItemServiceTests
         Assert.True(result.IsIdempotentReplay,
             "Re-assigning to the same user must be flagged as a replay so " +
             "the endpoint can set X-Idempotent-Replay: true.");
-        Assert.Equal(InitialNow, workItem.AssignedAt);
-        Assert.Equal("old-actor", workItem.AssignedBy);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(InitialNow, fetched.AssignedAt);
+        Assert.Equal("old-actor", fetched.AssignedBy);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
     public async Task Assign_blank_assignee_id_is_rejected()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         var result = await BuildService(type).AssignAsync(
@@ -621,8 +683,6 @@ public class WorkItemServiceTests
     public async Task Assign_returns_not_found_when_work_item_missing()
     {
         var type = BuildType();
-        _persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((WorkItem?)null);
-
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         var result = await BuildService(type).AssignAsync(
             Guid.NewGuid(), "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
@@ -635,15 +695,15 @@ public class WorkItemServiceTests
     public async Task Assign_standard_user_can_self_assign_unassigned_item()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var actor = UserWithRoles("alice-1", "standard");
         var result = await BuildService(type).AssignAsync(
             workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal("alice-1", workItem.AssignedToId);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("alice-1", fetched.AssignedToId);
     }
 
     [Fact]
@@ -656,17 +716,13 @@ public class WorkItemServiceTests
         // role is treated as a standard user", which means a no-role
         // actor can self-assign an unassigned item but cannot do
         // anything else. This test pins the cannot-do-anything-else
-        // half of that contract: a no-role actor trying to assign
-        // someone else, or trying to take an item already owned by
-        // another user, must be rejected. Without it, a refactor
-        // that flips the IsInRole guard to a different default
-        // could silently widen the gate from "self-assign-only" to
-        // "anything goes".
+        // half of that contract.
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "bob-1";
-        workItem.AssignedToName = "Bob";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "bob-1";
+            w.AssignedToName = "Bob";
+        });
 
         // Deliberately pass no roles. The work item is already
         // assigned to bob-1; alice-1 has no permission to take it.
@@ -676,16 +732,16 @@ public class WorkItemServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
-        Assert.Equal("bob-1", workItem.AssignedToId);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("bob-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
     public async Task Assign_standard_user_cannot_assign_to_someone_else()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var actor = UserWithRoles("alice-1", "standard");
         var result = await BuildService(type).AssignAsync(
@@ -693,17 +749,19 @@ public class WorkItemServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
     public async Task Assign_standard_user_cannot_take_item_already_assigned_to_another_user()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "bob-1";
-        workItem.AssignedToName = "Bob";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "bob-1";
+            w.AssignedToName = "Bob";
+        });
 
         var actor = UserWithRoles("alice-1", "standard");
         var result = await BuildService(type).AssignAsync(
@@ -711,38 +769,40 @@ public class WorkItemServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
-        Assert.Equal("bob-1", workItem.AssignedToId);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("bob-1", fetched.AssignedToId);
     }
 
     [Fact]
     public async Task Unassign_clears_assignment_when_actor_has_assign_role()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "alice-1";
-        workItem.AssignedToName = "Alice";
-        workItem.AssignedAt = InitialNow;
-        workItem.AssignedBy = "actor-1";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "actor-1";
+        });
 
         var actor = UserWithRoles("actor-2", WorkItemService.AssignRole);
         var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Null(workItem.AssignedToId);
-        Assert.Null(workItem.AssignedToName);
-        Assert.Null(workItem.AssignedAt);
-        Assert.Null(workItem.AssignedBy);
-        Assert.Equal(TickedNow, workItem.LastModifiedAt);
-        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Null(fetched.AssignedToId);
+        Assert.Null(fetched.AssignedToName);
+        Assert.Null(fetched.AssignedAt);
+        Assert.Null(fetched.AssignedBy);
+        Assert.Equal(TickedNow, fetched.LastModifiedAt);
+        Assert.Equal(1, fetched.Version);
     }
 
     [Fact]
     public async Task Unassign_is_idempotent_for_already_unassigned_item()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
@@ -751,32 +811,34 @@ public class WorkItemServiceTests
         Assert.True(result.IsIdempotentReplay,
             "Unassigning an already-unassigned item must be flagged as a replay so " +
             "the endpoint can set X-Idempotent-Replay: true.");
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
     public async Task Unassign_rejected_for_standard_user()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "alice-1";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+        });
 
         var actor = UserWithRoles("alice-1", "standard");
         var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
-        Assert.Equal("alice-1", workItem.AssignedToId);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("alice-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
     public async Task AddNote_appends_note_with_author_snapshot_and_persists()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var actor = new ClaimsPrincipal(new ClaimsIdentity(
         [
@@ -789,37 +851,37 @@ public class WorkItemServiceTests
             workItem.Id, "  Spoke to applicant; awaiting evidence.  ", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        var note = Assert.Single(workItem.Notes);
+        var fetched = await GetAsync(workItem.Id);
+        var note = Assert.Single(fetched.Notes);
         Assert.Equal("Spoke to applicant; awaiting evidence.", note.Text);
         Assert.Equal("alice-1", note.CreatedBy);
         Assert.Equal("Alice Example", note.CreatedByName);
         Assert.Equal(TickedNow, note.CreatedAt);
-        Assert.Equal(TickedNow, workItem.LastModifiedAt);
-        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+        Assert.Equal(TickedNow, fetched.LastModifiedAt);
+        Assert.Equal(1, fetched.Version);
     }
 
     [Fact]
     public async Task AddNote_returns_invalid_note_when_text_is_blank()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).AddNoteAsync(
             workItem.Id, "   ", User(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidNote, result.FailureCode);
-        Assert.Empty(workItem.Notes);
-        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.Notes);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
     public async Task AddNote_returns_invalid_note_when_text_exceeds_limit()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var oversized = new string('x', WorkItemService.MaxNoteLength + 1);
         var result = await BuildService(type).AddNoteAsync(
@@ -827,14 +889,14 @@ public class WorkItemServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidNote, result.FailureCode);
-        Assert.Empty(workItem.Notes);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.Notes);
     }
 
     [Fact]
     public async Task AddNote_returns_not_found_when_work_item_missing()
     {
         var type = BuildType();
-        _persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns((WorkItem?)null);
 
         var result = await BuildService(type).AddNoteAsync(
             Guid.NewGuid(), "anything", User(), TestContext.Current.CancellationToken);
@@ -850,15 +912,15 @@ public class WorkItemServiceTests
         // otherwise) may add one. We assert this explicitly so a future change
         // doesn't accidentally tighten authorization.
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var standardUser = UserWithRoles("alice-1", "standard");
         var result = await BuildService(type).AddNoteAsync(
             workItem.Id, "Note from a standard user.", standardUser, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.Single(workItem.Notes);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Single(fetched.Notes);
     }
 
     private sealed class FakeTimeProvider(DateTime utcNow) : TimeProvider
@@ -867,10 +929,6 @@ public class WorkItemServiceTests
     }
 
     // ---------------------- Audit log (RA-97) ----------------------
-    //
-    // The framework auto-records every successful state-changing engine call
-    // so modules inherit a complete audit trail without writing any audit
-    // code themselves. These tests assert that contract.
 
     private static ClaimsPrincipal AuditUser(string userId = "alice-1", string userName = "Alice Example") =>
         new(new ClaimsIdentity(
@@ -887,13 +945,13 @@ public class WorkItemServiceTests
         {
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         await BuildService(type).CompleteTaskAsync(
             workItem.Id, "check-eligibility", AuditUser(), TestContext.Current.CancellationToken);
 
-        var entry = Assert.Single(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        var entry = Assert.Single(fetched.AuditLog);
         Assert.Equal("task-completed", entry.Action);
         Assert.Equal("Task completed", entry.ActionDisplayName);
         Assert.Equal("alice-1", entry.CreatedBy);
@@ -911,16 +969,16 @@ public class WorkItemServiceTests
         {
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
-        var workItem = ExistingWorkItem(completed: new()
+        var workItem = await SeedAsync(completed: new()
         {
             ["submitted"] = ["check-eligibility"]
         });
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
         await BuildService(type).CompleteTaskAsync(
             workItem.Id, "check-eligibility", AuditUser(), TestContext.Current.CancellationToken);
 
-        Assert.Empty(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.AuditLog);
     }
 
     [Fact]
@@ -930,14 +988,14 @@ public class WorkItemServiceTests
         {
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).CompleteTaskAsync(
             workItem.Id, "unknown-task", AuditUser(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
-        Assert.Empty(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.AuditLog);
     }
 
     [Fact]
@@ -946,13 +1004,13 @@ public class WorkItemServiceTests
         var type = BuildType(transitions: [
             new WorkItemTransition("withdraw", "Withdraw", "submitted", "rejected", RequiresAllTasksComplete: false)
         ]);
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         await BuildService(type).ApplyActionAsync(
             workItem.Id, "withdraw", AuditUser(), TestContext.Current.CancellationToken);
 
-        var entry = Assert.Single(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        var entry = Assert.Single(fetched.AuditLog);
         Assert.Equal("action-applied", entry.Action);
         Assert.Equal("Action applied", entry.ActionDisplayName);
         Assert.Equal("withdraw", entry.Details["actionId"]);
@@ -974,30 +1032,32 @@ public class WorkItemServiceTests
             transitions: [
                 new WorkItemTransition("approve", "Approve", "submitted", "approved")
             ]);
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).ApplyActionAsync(
             workItem.Id, "approve", AuditUser(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
-        Assert.Empty(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.AuditLog);
     }
 
     [Fact]
     public async Task Audit_Assign_records_assignee_and_previous_assignee()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "bob-1";
-        workItem.AssignedToName = "Bob Example";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "bob-1";
+            w.AssignedToName = "Bob Example";
+        });
 
         var actor = UserWithRoles("alice-1", WorkItemService.AssignRole);
         await BuildService(type).AssignAsync(
             workItem.Id, "carol-1", "Carol Example", actor, TestContext.Current.CancellationToken);
 
-        var entry = Assert.Single(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        var entry = Assert.Single(fetched.AuditLog);
         Assert.Equal("assigned", entry.Action);
         Assert.Equal("Assigned", entry.ActionDisplayName);
         Assert.Equal("carol-1", entry.Details["assigneeId"]);
@@ -1011,46 +1071,50 @@ public class WorkItemServiceTests
     public async Task Audit_Assign_idempotent_call_does_not_append_an_entry()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "alice-1";
-        workItem.AssignedToName = "Alice";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+        });
 
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         await BuildService(type).AssignAsync(
             workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
-        Assert.Empty(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.AuditLog);
     }
 
     [Fact]
     public async Task Audit_Assign_authorization_failure_does_not_append_an_entry()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var actor = UserWithRoles("alice-1", "standard");
         var result = await BuildService(type).AssignAsync(
             workItem.Id, "bob-1", "Bob", actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
-        Assert.Empty(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.AuditLog);
     }
 
     [Fact]
     public async Task Audit_Unassign_records_previous_assignee()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        workItem.AssignedToId = "alice-1";
-        workItem.AssignedToName = "Alice";
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+        });
 
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
-        var entry = Assert.Single(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        var entry = Assert.Single(fetched.AuditLog);
         Assert.Equal("unassigned", entry.Action);
         Assert.Equal("Unassigned", entry.ActionDisplayName);
         Assert.Equal("alice-1", entry.Details["previousAssigneeId"]);
@@ -1062,27 +1126,27 @@ public class WorkItemServiceTests
     public async Task Audit_Unassign_already_unassigned_does_not_append_an_entry()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
         await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
-        Assert.Empty(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.AuditLog);
     }
 
     [Fact]
     public async Task Audit_AddNote_records_note_id()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         await BuildService(type).AddNoteAsync(
             workItem.Id, "  A note.  ", AuditUser(), TestContext.Current.CancellationToken);
 
-        var note = Assert.Single(workItem.Notes);
-        var entry = Assert.Single(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        var note = Assert.Single(fetched.Notes);
+        var entry = Assert.Single(fetched.AuditLog);
         Assert.Equal("note-added", entry.Action);
         Assert.Equal("Note added", entry.ActionDisplayName);
         Assert.Equal(note.Id.ToString(), entry.Details["noteId"]);
@@ -1100,14 +1164,14 @@ public class WorkItemServiceTests
     public async Task Audit_AddNote_validation_failure_does_not_append_an_entry()
     {
         var type = BuildType();
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type).AddNoteAsync(
             workItem.Id, "   ", AuditUser(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
-        Assert.Empty(workItem.AuditLog);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.AuditLog);
     }
 
     [Fact]
@@ -1121,8 +1185,7 @@ public class WorkItemServiceTests
             transitions: [
                 new WorkItemTransition("approve", "Approve", "submitted", "approved")
             ]);
-        var workItem = ExistingWorkItem();
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var workItem = await SeedAsync();
 
         var time = new MutableTimeProvider(TickedNow);
         var service = new WorkItemService(
@@ -1137,13 +1200,14 @@ public class WorkItemServiceTests
         time.Advance(TimeSpan.FromMinutes(1));
         await service.ApplyActionAsync(workItem.Id, "approve", AuditUser(), TestContext.Current.CancellationToken);
 
-        Assert.Equal(3, workItem.AuditLog.Count);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal(3, fetched.AuditLog.Count);
         Assert.Equal(["note-added", "task-completed", "action-applied"],
-            workItem.AuditLog.Select(e => e.Action).ToArray());
+            fetched.AuditLog.Select(e => e.Action).ToArray());
         // Strictly increasing timestamps — entries are appended in
         // chronological (insertion) order on disk.
-        Assert.True(workItem.AuditLog[0].CreatedAt < workItem.AuditLog[1].CreatedAt);
-        Assert.True(workItem.AuditLog[1].CreatedAt < workItem.AuditLog[2].CreatedAt);
+        Assert.True(fetched.AuditLog[0].CreatedAt < fetched.AuditLog[1].CreatedAt);
+        Assert.True(fetched.AuditLog[1].CreatedAt < fetched.AuditLog[2].CreatedAt);
     }
 
     private sealed class MutableTimeProvider(DateTime initial) : TimeProvider
@@ -1154,11 +1218,6 @@ public class WorkItemServiceTests
     }
 
     // ---------------------- SubmitAsync (RA-97 birth event) ----------------------
-    //
-    // The audit timeline must start at the work item's submission rather
-    // than at the first task completion. The framework writes a single
-    // 'work-item-submitted' entry inside the same CreateAsync call that
-    // persists the new document.
 
     [Fact]
     public async Task Submit_persists_work_item_with_initial_state_and_template_snapshot()
@@ -1166,24 +1225,21 @@ public class WorkItemServiceTests
         var type = BuildType();
         var payload = new BsonDocument { ["foo"] = "bar" };
 
-        WorkItem? captured = null;
-        await _persistence.CreateAsync(Arg.Do<WorkItem>(w => captured = w), Arg.Any<CancellationToken>());
-
         var result = await BuildService(type).SubmitAsync(
             type, payload, "test-client", AuditUser(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.NotNull(captured);
-        Assert.Equal(TypeId, captured!.TypeId);
-        Assert.Equal("submitted", captured.StateId);
-        Assert.Equal("test-client", captured.SubmittedBy);
-        Assert.Equal(TickedNow, captured.SubmittedAt);
-        Assert.Equal(TickedNow, captured.LastModifiedAt);
-        Assert.NotNull(captured.TemplateSnapshot);
-        Assert.Equal("v1", captured.TemplateVersion);
-        Assert.Equal("v1", captured.TemplateSnapshot!.TemplateVersion);
-        Assert.Equal("bar", captured.Payload["foo"].AsString);
-        await _persistence.Received(1).CreateAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        Assert.NotNull(result.WorkItem);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        Assert.Equal(TypeId, fetched.TypeId);
+        Assert.Equal("submitted", fetched.StateId);
+        Assert.Equal("test-client", fetched.SubmittedBy);
+        Assert.Equal(TickedNow, fetched.SubmittedAt);
+        Assert.Equal(TickedNow, fetched.LastModifiedAt);
+        Assert.NotNull(fetched.TemplateSnapshot);
+        Assert.Equal("v1", fetched.TemplateVersion);
+        Assert.Equal("v1", fetched.TemplateSnapshot!.TemplateVersion);
+        Assert.Equal("bar", fetched.Payload["foo"].AsString);
     }
 
     [Fact]
@@ -1191,27 +1247,21 @@ public class WorkItemServiceTests
     {
         var type = BuildType();
 
-        // Snapshot the AuditLog at the moment CreateAsync is invoked so we
-        // can prove the submission entry is part of the same write — not
-        // appended after the fact.
-        List<WorkItemAuditEntry>? auditAtCreate = null;
-        await _persistence.CreateAsync(
-            Arg.Do<WorkItem>(w => auditAtCreate = w.AuditLog.ToList()),
-            Arg.Any<CancellationToken>());
-
         var result = await BuildService(type).SubmitAsync(
             type, new BsonDocument(), "test-client", AuditUser(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
-        Assert.NotNull(auditAtCreate);
-        var entry = Assert.Single(auditAtCreate!);
+        Assert.NotNull(result.WorkItem);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        // The audit entry must have been part of the original CreateAsync
+        // write (not a follow-up replace), so Version is still 0.
+        Assert.Equal(0, fetched.Version);
+        var entry = Assert.Single(fetched.AuditLog);
         Assert.Equal("work-item-submitted", entry.Action);
         Assert.Equal("Work item submitted", entry.ActionDisplayName);
         Assert.Equal("alice-1", entry.CreatedBy);
         Assert.Equal("Alice Example", entry.CreatedByName);
-        // The audit entry's timestamp matches WorkItem.SubmittedAt — both
-        // come from the injected TimeProvider in the same call.
-        Assert.Equal(result.WorkItem!.SubmittedAt, entry.CreatedAt);
+        Assert.Equal(fetched.SubmittedAt, entry.CreatedAt);
         Assert.Equal(TickedNow, entry.CreatedAt);
         Assert.Equal(TypeId, entry.Details["typeId"]);
         Assert.Equal("submitted", entry.Details["stateId"]);
@@ -1229,6 +1279,53 @@ public class WorkItemServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
-        await _persistence.DidNotReceive().CreateAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+
+        // No document was created: the database is empty for this type.
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(TypeIds: [TypeId], Page: 1, PageSize: 10),
+            TestContext.Current.CancellationToken);
+        Assert.Empty(page.Items);
+    }
+
+    /// <summary>
+    /// Produces a service whose persistence wraps the real one so that a
+    /// competing writer bumps the on-disk version between the engine's
+    /// load and replace, triggering the optimistic-concurrency exception
+    /// for real (no mocked throws — see epr-efp).
+    /// </summary>
+    private WorkItemService BuildRacingService(IWorkItemType type, Guid id)
+    {
+        var racing = new RacingPersistence(_persistence, () =>
+        {
+            var raceLoaded = _persistence.GetByIdAsync(id).GetAwaiter().GetResult();
+            raceLoaded!.LastModifiedAt = raceLoaded.LastModifiedAt.AddMinutes(1);
+            _persistence.ReplaceAsync(raceLoaded).GetAwaiter().GetResult();
+        });
+        return new WorkItemService(
+            new WorkItemRegistry([type]),
+            racing,
+            NullLogger<WorkItemService>.Instance,
+            _time);
+    }
+
+    private sealed class RacingPersistence(IWorkItemPersistence inner, Action onBeforeReplace) : IWorkItemPersistence
+    {
+        public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+            inner.CreateAsync(workItem, cancellationToken);
+
+        public Task<bool> CreateIfAbsentAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+            inner.CreateIfAbsentAsync(workItem, cancellationToken);
+
+        public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default) =>
+            inner.QueryAsync(query, cancellationToken);
+
+        public Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)
+        {
+            onBeforeReplace();
+            return inner.ReplaceAsync(workItem, cancellationToken);
+        }
     }
 }

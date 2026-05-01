@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -12,15 +13,36 @@ using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
+/// <summary>
+/// epr-efp: persistence is real <see cref="WorkItemPersistence"/> backed
+/// by ephemeral MongoDB. Tests seed work items via
+/// <see cref="TestApplicationFactory.Persistence"/> and assert on
+/// fetched-back documents rather than on a captured-in-flight reference.
+/// A thin <see cref="RecordingPersistence"/> wrapper is layered on top
+/// for the handful of tests that still need to inspect the
+/// <see cref="WorkItemQuery"/> the endpoint built — the wrapper records
+/// calls but delegates to the real persistence so behaviour stays end-to-end.
+/// </summary>
 public class WorkItemEndpointsTests
+    : IClassFixture<MongoIntegrationFixture>
 {
     private const string TypeId = "test-type";
+    private readonly MongoIntegrationFixture _fixture;
+
+    public WorkItemEndpointsTests(MongoIntegrationFixture fixture) => _fixture = fixture;
+
+    private TestApplicationFactory NewFactory(
+        bool includeAuthHeader = true,
+        string? userRoles = null,
+        string? userId = "test-user",
+        string? userName = null) =>
+        new(_fixture, includeAuthHeader, userRoles, userId, userName);
 
     [Fact]
     public async Task Post_returns_unauthorized_without_cognito_client_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(includeAuthHeader: false);
+        await using var factory = NewFactory(includeAuthHeader: false);
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
@@ -32,7 +54,7 @@ public class WorkItemEndpointsTests
     public async Task Post_returns_problem_when_typeId_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/work-items", new { typeId = string.Empty }, cancellationToken);
@@ -46,7 +68,7 @@ public class WorkItemEndpointsTests
     public async Task Post_returns_problem_when_typeId_unknown()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/work-items", new { typeId = "unknown-type" }, cancellationToken);
@@ -60,12 +82,8 @@ public class WorkItemEndpointsTests
     public async Task Post_persists_work_item_in_initial_state_with_payload_and_submitter()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
-
-        WorkItem? captured = null;
-        await factory.MockPersistence
-            .CreateAsync(Arg.Do<WorkItem>(w => captured = w), Arg.Any<CancellationToken>());
 
         var response = await client.PostAsJsonAsync("/work-items", new
         {
@@ -74,27 +92,28 @@ public class WorkItemEndpointsTests
         }, cancellationToken);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(body);
 
-        Assert.NotNull(captured);
-        Assert.Equal(TypeId, captured!.TypeId);
-        Assert.Equal("submitted", captured.StateId);
-        Assert.Equal("test-client", captured.SubmittedBy);
-        Assert.Equal("Acme", captured.Payload["applicantName"].AsString);
-        Assert.Equal(42, captured.Payload["tonnage"].AsInt32);
+        var persisted = await factory.Persistence.GetByIdAsync(body!.Id, cancellationToken);
+        Assert.NotNull(persisted);
+        Assert.Equal(TypeId, persisted!.TypeId);
+        Assert.Equal("submitted", persisted.StateId);
+        Assert.Equal("test-client", persisted.SubmittedBy);
+        Assert.Equal("Acme", persisted.Payload["applicantName"].AsString);
+        Assert.Equal(42, persisted.Payload["tonnage"].AsInt32);
 
         // Snapshot of the type's template (states, tasks, transitions, version)
         // is frozen onto the work item at submission for faithful historical
         // rendering after the live module changes.
-        Assert.NotNull(captured.TemplateSnapshot);
-        Assert.Equal("v1", captured.TemplateVersion);
-        Assert.Equal("v1", captured.TemplateSnapshot!.TemplateVersion);
+        Assert.NotNull(persisted.TemplateSnapshot);
+        Assert.Equal("v1", persisted.TemplateVersion);
+        Assert.Equal("v1", persisted.TemplateSnapshot!.TemplateVersion);
 
         Assert.NotNull(response.Headers.Location);
         Assert.StartsWith("/work-items/", response.Headers.Location!.AbsolutePath);
 
-        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
-        Assert.NotNull(body);
-        Assert.Equal(TypeId, body!.TypeId);
+        Assert.Equal(TypeId, body.TypeId);
         Assert.Equal("submitted", body.StateId);
         Assert.Equal("test-client", body.SubmittedBy);
         Assert.Equal("v1", body.TemplateVersion);
@@ -110,25 +129,26 @@ public class WorkItemEndpointsTests
         // CreateAsync call that persists the new document, attributed to
         // the forwarded user:id and stamped with WorkItem.SubmittedAt.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userId: "alice-1", userName: "Alice Example");
+        await using var factory = NewFactory(userId: "alice-1", userName: "Alice Example");
         using var client = factory.CreateClient();
-
-        WorkItem? captured = null;
-        await factory.MockPersistence
-            .CreateAsync(Arg.Do<WorkItem>(w => captured = w), Arg.Any<CancellationToken>());
 
         var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        Assert.NotNull(captured);
-        var entry = Assert.Single(captured!.AuditLog);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var persisted = await factory.Persistence.GetByIdAsync(body!.Id, cancellationToken);
+        Assert.NotNull(persisted);
+        var entry = Assert.Single(persisted!.AuditLog);
         Assert.Equal("work-item-submitted", entry.Action);
         Assert.Equal("Work item submitted", entry.ActionDisplayName);
         Assert.Equal("alice-1", entry.CreatedBy);
         Assert.Equal("Alice Example", entry.CreatedByName);
-        Assert.Equal(captured.SubmittedAt, entry.CreatedAt);
+        Assert.Equal(persisted.SubmittedAt, entry.CreatedAt);
         Assert.Equal(TypeId, entry.Details["typeId"]);
         Assert.Equal("submitted", entry.Details["stateId"]);
+        // Birth event was part of the original CreateAsync (no follow-up
+        // ReplaceAsync), so Version is still 0.
+        Assert.Equal(0, persisted.Version);
     }
 
     [Fact]
@@ -138,39 +158,36 @@ public class WorkItemEndpointsTests
         // forward a 'user:id' claim so the audit entry can be tied back
         // to a real human. Without it the engine refuses to write.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userId: null);
+        await using var factory = NewFactory(userId: null);
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        await factory.MockPersistence.DidNotReceive()
-            .CreateAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        Assert.Empty(await factory.AllItemsAsync(cancellationToken));
     }
 
     [Fact]
     public async Task Post_accepts_request_without_payload()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
-
-        WorkItem? captured = null;
-        await factory.MockPersistence
-            .CreateAsync(Arg.Do<WorkItem>(w => captured = w), Arg.Any<CancellationToken>());
 
         var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        Assert.NotNull(captured);
-        Assert.Empty(captured!.Payload);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var persisted = await factory.Persistence.GetByIdAsync(body!.Id, cancellationToken);
+        Assert.NotNull(persisted);
+        Assert.Empty(persisted!.Payload);
     }
 
     [Fact]
     public async Task Post_returns_problem_when_payload_is_not_an_object()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync("/work-items", new
@@ -188,19 +205,17 @@ public class WorkItemEndpointsTests
     public async Task Get_by_id_returns_work_item_when_present()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        factory.MockPersistence
-            .GetByIdAsync(id, Arg.Any<CancellationToken>())
-            .Returns(new WorkItem
-            {
-                Id = id,
-                TypeId = TypeId,
-                StateId = "submitted",
-                SubmittedBy = "test-client"
-            });
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        }, cancellationToken);
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -214,12 +229,8 @@ public class WorkItemEndpointsTests
     public async Task Get_by_id_returns_not_found_when_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
-
-        factory.MockPersistence
-            .GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-            .Returns((WorkItem?)null);
 
         var response = await client.GetAsync($"/work-items/{Guid.NewGuid()}", cancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -229,19 +240,17 @@ public class WorkItemEndpointsTests
     public async Task Get_by_id_returns_not_found_for_cross_tenant_access()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        factory.MockPersistence
-            .GetByIdAsync(id, Arg.Any<CancellationToken>())
-            .Returns(new WorkItem
-            {
-                Id = id,
-                TypeId = TypeId,
-                StateId = "submitted",
-                SubmittedBy = "other-tenant"
-            });
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "other-tenant"
+        }, cancellationToken);
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -251,19 +260,17 @@ public class WorkItemEndpointsTests
     public async Task Get_by_id_allows_case_worker_to_read_any_tenants_item()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
+        await using var factory = NewFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        factory.MockPersistence
-            .GetByIdAsync(id, Arg.Any<CancellationToken>())
-            .Returns(new WorkItem
-            {
-                Id = id,
-                TypeId = TypeId,
-                StateId = "submitted",
-                SubmittedBy = "other-tenant"
-            });
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "other-tenant"
+        }, cancellationToken);
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -273,36 +280,68 @@ public class WorkItemEndpointsTests
     public async Task Get_list_filters_by_caller_client_id_when_not_case_worker()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
-        WorkItemQuery? captured = null;
-        factory.MockPersistence
-            .QueryAsync(Arg.Do<WorkItemQuery>(q => captured = q), Arg.Any<CancellationToken>())
-            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, WorkItemQuery.DefaultPageSize));
+        // Seed two items: one belongs to the caller, one to another tenant.
+        // The non-case-worker filter must only surface the caller's.
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        }, cancellationToken);
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "other-tenant"
+        }, cancellationToken);
 
-        _ = await client.GetAsync("/work-items", cancellationToken);
+        var body = await client.GetFromJsonAsync<WorkItemListResponse>("/work-items", cancellationToken);
+        Assert.NotNull(body);
+        var item = Assert.Single(body!.Items);
+        Assert.Equal("test-client", item.SubmittedBy);
 
-        Assert.NotNull(captured);
-        Assert.Equal("test-client", captured!.SubmittedBy);
+        // Defence in depth: the captured query carried the SubmittedBy
+        // filter, so the gate is enforced upstream of Mongo not as a
+        // post-filter (the latter would be a much more dangerous design).
+        var lastQuery = factory.Recording.LastQuery;
+        Assert.NotNull(lastQuery);
+        Assert.Equal("test-client", lastQuery!.SubmittedBy);
     }
 
     [Fact]
     public async Task Get_list_does_not_filter_when_case_worker()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
+        await using var factory = NewFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
         using var client = factory.CreateClient();
 
-        WorkItemQuery? captured = null;
-        factory.MockPersistence
-            .QueryAsync(Arg.Do<WorkItemQuery>(q => captured = q), Arg.Any<CancellationToken>())
-            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, WorkItemQuery.DefaultPageSize));
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        }, cancellationToken);
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "other-tenant"
+        }, cancellationToken);
 
-        _ = await client.GetAsync("/work-items", cancellationToken);
+        var body = await client.GetFromJsonAsync<WorkItemListResponse>("/work-items", cancellationToken);
+        Assert.NotNull(body);
+        Assert.Equal(2, body!.Items.Count);
 
-        Assert.NotNull(captured);
-        Assert.Null(captured!.SubmittedBy);
+        var lastQuery = factory.Recording.LastQuery;
+        Assert.NotNull(lastQuery);
+        Assert.Null(lastQuery!.SubmittedBy);
     }
 
     [Fact]
@@ -332,6 +371,9 @@ public class WorkItemEndpointsTests
         Assert.Equal(0, ok.Value.TotalCount);
         Assert.Equal(1, ok.Value.Page);
         Assert.Equal(WorkItemQuery.DefaultPageSize, ok.Value.PageSize);
+        // The structural property under test is "persistence is never
+        // consulted" — verifying it requires a stub that records calls,
+        // not a real database. Kept as a substitute deliberately.
         await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, default);
     }
 
@@ -375,37 +417,39 @@ public class WorkItemEndpointsTests
     public async Task Get_list_rejects_page_above_cap_with_400()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(
             $"/work-items?page={WorkItemQuery.MaxPage + 1}", cancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        // Persistence must never be hit for an out-of-range page \u2014 that's the
+        // Persistence must never be hit for an out-of-range page — that's the
         // whole point of the cap.
-        await factory.MockPersistence.DidNotReceiveWithAnyArgs()
-            .QueryAsync(default!, default);
+        Assert.Null(factory.Recording.LastQuery);
     }
 
     [Fact]
     public async Task Get_returns_paginated_envelope_for_all_persisted_work_items()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new WorkItemPage(
-                Items: new List<WorkItem>
-                {
-                    new() { TypeId = TypeId, StateId = "submitted" },
-                    new() { TypeId = TypeId, StateId = "submitted" }
-                },
-                TotalCount: 2,
-                Page: 1,
-                PageSize: WorkItemQuery.DefaultPageSize));
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        }, cancellationToken);
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client"
+        }, cancellationToken);
 
         var body = await client.GetFromJsonAsync<WorkItemListResponse>("/work-items", cancellationToken);
         Assert.NotNull(body);
@@ -421,20 +465,15 @@ public class WorkItemEndpointsTests
         // epr-4pf: the list endpoint never renders the per-item Notes /
         // AuditLog collections, so they must not appear on the wire at
         // all (omitted, not nulled) — even if the persisted document
-        // would otherwise have them. Asserted at the JSON level so we
-        // catch a regression that puts them back as `null` properties.
+        // would otherwise have them.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var assignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc);
-        // Pre-populate Notes and AuditLog as a belt-and-braces guard:
-        // even if persistence projection were to leak them into the
-        // returned WorkItem, the slim DTO must still strip them on the
-        // way out. Assignment fields must survive so we know the
-        // projection didn't strip wanted summary data.
         var workItem = new WorkItem
         {
+            Id = Guid.NewGuid(),
             TypeId = TypeId,
             StateId = "submitted",
             SubmittedBy = "test-client",
@@ -457,22 +496,13 @@ public class WorkItemEndpointsTests
                 }
             }
         };
-
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new WorkItemPage(
-                Items: new List<WorkItem> { workItem },
-                TotalCount: 1,
-                Page: 1,
-                PageSize: WorkItemQuery.DefaultPageSize));
+        await factory.SeedAsync(workItem, cancellationToken);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         // Property-level assertion: the JSON must not even mention
-        // 'notes' or 'auditLog' on a list item. JsonNode lets us prove
-        // the absence of a property name (vs WorkItemListItemResponse
-        // which physically can't carry them).
+        // 'notes' or 'auditLog' on a list item.
         var rawJson = await response.Content.ReadAsStringAsync(cancellationToken);
         var root = System.Text.Json.Nodes.JsonNode.Parse(rawJson);
         Assert.NotNull(root);
@@ -480,8 +510,6 @@ public class WorkItemEndpointsTests
         Assert.False(firstItem.ContainsKey("notes"), "list item must not include 'notes'");
         Assert.False(firstItem.ContainsKey("auditLog"), "list item must not include 'auditLog'");
 
-        // And the typed DTO surfaces the assignment summary so we know
-        // the projection didn't strip anything we want.
         var body = System.Text.Json.JsonSerializer.Deserialize<WorkItemListResponse>(
             rawJson, new System.Text.Json.JsonSerializerOptions
             {
@@ -500,23 +528,15 @@ public class WorkItemEndpointsTests
     public async Task Get_passes_query_string_filters_to_persistence()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
-
-        WorkItemQuery? captured = null;
-        factory.MockPersistence
-            .QueryAsync(Arg.Do<WorkItemQuery>(q => captured = q), Arg.Any<CancellationToken>())
-            .Returns(new WorkItemPage(
-                Items: new List<WorkItem>(),
-                TotalCount: 0,
-                Page: 2,
-                PageSize: 5));
 
         var response = await client.GetAsync(
             "/work-items?typeId=re-accreditation&typeId=other-type&stateId=submitted&search=acme&assigneeId=alice-1&unassigned=true&page=2&pageSize=5",
             cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
+        var captured = factory.Recording.LastQuery;
         Assert.NotNull(captured);
         Assert.NotNull(captured!.TypeIds);
         Assert.Equal(new[] { "re-accreditation", "other-type" }, captured.TypeIds);
@@ -532,18 +552,17 @@ public class WorkItemEndpointsTests
     public async Task Assign_persists_assignee_snapshot_and_returns_updated_response()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
             SubmittedBy = "test-client"
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/assign",
@@ -556,28 +575,31 @@ public class WorkItemEndpointsTests
         Assert.Equal("Alice Example", body?.AssignedToName);
         Assert.Equal("actor-1", body?.AssignedBy);
         Assert.NotNull(body?.AssignedAt);
-        await factory.MockPersistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("alice-1", persisted!.AssignedToId);
+        Assert.Equal(1, persisted.Version);
     }
 
     [Fact]
     public async Task Assign_returns_400_when_assigneeId_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
         using var client = factory.CreateClient();
 
-        // The new cross-tenant gate (epr-0t9) loads the work item before
+        // The cross-tenant gate (epr-0t9) loads the work item before
         // any body validation runs, so the gate must be satisfied with a
         // matching SubmittedBy or the test sees 404 instead of the 400
         // it cares about. Caller's cognito client id is 'test-client'.
         var id = Guid.NewGuid();
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
             SubmittedBy = "test-client"
-        });
+        }, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/assign", new { }, cancellationToken);
@@ -589,17 +611,17 @@ public class WorkItemEndpointsTests
     public async Task Assign_returns_403_when_standard_user_assigns_to_someone_else()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: "standard", userId: "alice-1");
+        await using var factory = NewFactory(userRoles: "standard", userId: "alice-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
             SubmittedBy = "test-client"
-        });
+        }, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/assign", new { assigneeId = "bob-1", assigneeName = "Bob" }, cancellationToken);
@@ -611,11 +633,8 @@ public class WorkItemEndpointsTests
     public async Task Assign_returns_404_when_work_item_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
         using var client = factory.CreateClient();
-
-        factory.MockPersistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-            .Returns((WorkItem?)null);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{Guid.NewGuid()}/assign",
@@ -629,11 +648,11 @@ public class WorkItemEndpointsTests
     public async Task Unassign_clears_assignment_when_actor_has_assign_role()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
@@ -643,8 +662,7 @@ public class WorkItemEndpointsTests
             AssignedToName = "Alice",
             AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
             AssignedBy = "earlier-actor"
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
 
@@ -660,18 +678,18 @@ public class WorkItemEndpointsTests
     public async Task Unassign_returns_403_when_caller_lacks_assign_role()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: "standard", userId: "alice-1");
+        await using var factory = NewFactory(userRoles: "standard", userId: "alice-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
             SubmittedBy = "test-client",
             AssignedToId = "alice-1"
-        });
+        }, cancellationToken);
 
         var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
 
@@ -682,11 +700,11 @@ public class WorkItemEndpointsTests
     public async Task Assign_to_same_user_sets_idempotent_replay_header_and_does_not_persist()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
@@ -696,8 +714,7 @@ public class WorkItemEndpointsTests
             AssignedToName = "Alice Example",
             AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
             AssignedBy = "earlier-actor"
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/assign",
@@ -707,50 +724,50 @@ public class WorkItemEndpointsTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.TryGetValues("X-Idempotent-Replay", out var values));
         Assert.Equal("true", Assert.Single(values!));
-        await factory.MockPersistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(0, persisted!.Version);
     }
 
     [Fact]
     public async Task Unassign_already_unassigned_sets_idempotent_replay_header_and_does_not_persist()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
             SubmittedBy = "test-client"
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.TryGetValues("X-Idempotent-Replay", out var values));
         Assert.Equal("true", Assert.Single(values!));
-        await factory.MockPersistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(0, persisted!.Version);
     }
 
     [Fact]
     public async Task AddNote_persists_note_and_returns_updated_response()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userId: "alice-1", userName: "Alice Example");
+        await using var factory = NewFactory(userId: "alice-1", userName: "Alice Example");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
             SubmittedBy = "test-client"
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/notes",
@@ -774,21 +791,22 @@ public class WorkItemEndpointsTests
         Assert.Equal("Reviewed evidence; awaiting confirmation.", noteAudit.Details["noteText"]);
         Assert.Equal(note.Id.ToString(), noteAudit.Details["noteId"]);
 
-        Assert.Single(workItem.Notes);
-        await factory.MockPersistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Single(persisted!.Notes);
+        Assert.Equal(1, persisted.Version);
     }
 
     [Fact]
     public async Task AddNote_projects_notes_newest_first()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(userId: "alice-1");
+        await using var factory = NewFactory(userId: "alice-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
         var older = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc);
         var newer = new DateTime(2026, 4, 27, 11, 0, 0, DateTimeKind.Utc);
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
@@ -799,8 +817,7 @@ public class WorkItemEndpointsTests
                 new WorkItemNote { Text = "older", CreatedAt = older, CreatedBy = "earlier" },
                 new WorkItemNote { Text = "newer", CreatedAt = newer, CreatedBy = "earlier" }
             }
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -816,11 +833,11 @@ public class WorkItemEndpointsTests
     public async Task AddNote_returns_400_when_text_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
@@ -829,7 +846,7 @@ public class WorkItemEndpointsTests
             // cross-tenant gate (epr-0t9) doesn't pre-empt the 400 we
             // care about here.
             SubmittedBy = "test-client"
-        });
+        }, cancellationToken);
 
         var response = await client.PostAsJsonAsync($"/work-items/{id}/notes", new { text = "   " }, cancellationToken);
 
@@ -840,11 +857,8 @@ public class WorkItemEndpointsTests
     public async Task AddNote_returns_404_when_work_item_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
-
-        factory.MockPersistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
-            .Returns((WorkItem?)null);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{Guid.NewGuid()}/notes", new { text = "anything" }, cancellationToken);
@@ -856,7 +870,7 @@ public class WorkItemEndpointsTests
     public async Task AddNote_returns_unauthorized_without_cognito_client_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(includeAuthHeader: false);
+        await using var factory = NewFactory(includeAuthHeader: false);
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
@@ -869,13 +883,13 @@ public class WorkItemEndpointsTests
     public async Task AuditLog_is_projected_oldest_first_on_the_wire()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
         var older = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc);
         var newer = new DateTime(2026, 4, 27, 11, 0, 0, DateTimeKind.Utc);
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
@@ -904,8 +918,7 @@ public class WorkItemEndpointsTests
                     CreatedByName = "Bob"
                 }
             }
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -937,12 +950,12 @@ public class WorkItemEndpointsTests
         // insertion order rather than fall back to undefined behaviour
         // from a tied OrderBy.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory();
+        await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
         var t = new DateTime(2026, 4, 30, 9, 0, 0, DateTimeKind.Utc);
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
@@ -972,8 +985,7 @@ public class WorkItemEndpointsTests
                     CreatedAt = t
                 }
             }
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -990,8 +1002,8 @@ public class WorkItemEndpointsTests
     // epr-0t9: cross-tenant IDOR protection on every mutation endpoint.
     // The mutation handlers must mirror the GetById tenancy gate and
     // return 404 when a standard caller targets an item submitted by a
-    // different tenant — without ever invoking the engine. Case-workers
-    // bypass the gate and reach the engine as before.
+    // different tenant — without ever bumping the document version.
+    // Case-workers bypass the gate and reach the engine as before.
     // ----------------------------------------------------------------
 
     public static IEnumerable<TheoryDataRow<string, string, object?>> CrossTenantMutationCases() => new TheoryDataRow<string, string, object?>[]
@@ -1013,11 +1025,11 @@ public class WorkItemEndpointsTests
         // Standard caller (no case-worker role); 'assign' role included so
         // the Assign / Unassign 403 path can't pre-empt the 404 we're
         // testing for.
-        await using var factory = new TestApplicationFactory(userRoles: "assign", userId: "actor-1");
+        await using var factory = NewFactory(userRoles: "assign", userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
@@ -1025,7 +1037,7 @@ public class WorkItemEndpointsTests
             // Owned by someone else — caller's cognito client id is
             // 'test-client', which must NOT match.
             SubmittedBy = "other-tenant"
-        });
+        }, cancellationToken);
 
         var path = pathTemplate.Replace("{id}", id.ToString());
         HttpResponseMessage response = method switch
@@ -1037,9 +1049,11 @@ public class WorkItemEndpointsTests
         };
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        // The engine's writer is ReplaceAsync on persistence — must be
-        // untouched if the gate held.
-        await factory.MockPersistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        // The engine's writer would bump Version; if the gate held, the
+        // document on disk is untouched.
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        Assert.Equal(0, persisted!.Version);
     }
 
     [Theory]
@@ -1048,20 +1062,19 @@ public class WorkItemEndpointsTests
         string method, string pathTemplate, object? body)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new TestApplicationFactory(
+        await using var factory = NewFactory(
             userRoles: $"{WorkItemEndpoints.CaseWorkerRole},assign",
             userId: "worker-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        var workItem = new WorkItem
+        await factory.SeedAsync(new WorkItem
         {
             Id = id,
             TypeId = TypeId,
             StateId = "submitted",
             SubmittedBy = "other-tenant"
-        };
-        factory.MockPersistence.GetByIdAsync(id, Arg.Any<CancellationToken>()).Returns(workItem);
+        }, cancellationToken);
 
         var path = pathTemplate.Replace("{id}", id.ToString());
         HttpResponseMessage response = method switch
@@ -1074,30 +1087,74 @@ public class WorkItemEndpointsTests
 
         // 404 means the tenancy gate fired (it must NOT for a case worker).
         // Anything else (200, 400, 409) means we got past the gate to the
-        // engine — that's the contract for this test. We don't assert the
-        // exact engine outcome because some operations against a fresh
-        // 'submitted' item legitimately produce 400 / 409 (e.g. a task
-        // that doesn't exist on the template). Cross-tenant IDOR is the
-        // only thing we're guarding here.
+        // engine — that's the contract for this test.
         Assert.NotEqual(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    private sealed class TestApplicationFactory(
-        bool includeAuthHeader = true,
-        string? userRoles = null,
-        string? userId = "test-user",
-        string? userName = null) : WebApplicationFactory<Program>
+    /// <summary>
+    /// Test factory backed by ephemeral MongoDB. <see cref="Persistence"/>
+    /// is the real <see cref="IWorkItemPersistence"/>; tests use it to
+    /// seed and re-fetch documents instead of stubbing call results.
+    /// <see cref="Recording"/> exposes the last <see cref="WorkItemQuery"/>
+    /// passed through, for the few tests that need to assert how the
+    /// endpoint built it.
+    /// </summary>
+    private sealed class TestApplicationFactory : WebApplicationFactory<Program>
     {
-        public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
+        private readonly MongoIntegrationFixture _fixture;
+        private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("endpoints");
+        private readonly bool _includeAuthHeader;
+        private readonly string? _userRoles;
+        private readonly string? _userId;
+        private readonly string? _userName;
+
+        public TestApplicationFactory(
+            MongoIntegrationFixture fixture,
+            bool includeAuthHeader,
+            string? userRoles,
+            string? userId,
+            string? userName)
+        {
+            _fixture = fixture;
+            _includeAuthHeader = includeAuthHeader;
+            _userRoles = userRoles;
+            _userId = userId;
+            _userName = userName;
+        }
+
+        public IWorkItemPersistence Persistence => Recording.Inner;
+
+        public RecordingPersistence Recording =>
+            (RecordingPersistence)Services.GetRequiredService<IWorkItemPersistence>();
+
+        public Task SeedAsync(WorkItem item, CancellationToken cancellationToken) =>
+            Persistence.CreateAsync(item, cancellationToken);
+
+        public async Task<List<WorkItem>> AllItemsAsync(CancellationToken cancellationToken)
+        {
+            var page = await Persistence.QueryAsync(
+                new WorkItemQuery(Page: 1, PageSize: 100), cancellationToken);
+            return page.Items.ToList();
+        }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IWorkItemPersistence>();
-                services.AddSingleton(MockPersistence);
-
-                // Register a known work item type for the tests.
+                services.RemoveAll<EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory>();
+                var clientFactory = new TestMongoDbClientFactory(
+                    _fixture.ConnectionString, _databaseName);
+                services.AddSingleton<EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory>(clientFactory);
+                // The real WorkItemPersistence is wrapped with a recording
+                // layer so query-capture tests can observe the
+                // WorkItemQuery the endpoint built. Behaviour is
+                // otherwise end-to-end against ephemeral Mongo.
+                services.AddSingleton<IWorkItemPersistence>(sp =>
+                    new RecordingPersistence(
+                        new WorkItemPersistence(
+                            clientFactory,
+                            sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>())));
                 services.AddSingleton<IWorkItemType>(new TestWorkItemType(TypeId, "Test type"));
             });
         }
@@ -1105,22 +1162,70 @@ public class WorkItemEndpointsTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            if (includeAuthHeader)
+            if (_includeAuthHeader)
             {
                 client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
             }
-            if (userId is not null)
+            if (_userId is not null)
             {
-                client.DefaultRequestHeaders.Add("x-cdp-user-id", userId);
+                client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);
             }
-            if (userName is not null)
+            if (_userName is not null)
             {
-                client.DefaultRequestHeaders.Add("x-cdp-user-name", userName);
+                client.DefaultRequestHeaders.Add("x-cdp-user-name", _userName);
             }
-            if (userRoles is not null)
+            if (_userRoles is not null)
             {
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", userRoles);
+                client.DefaultRequestHeaders.Add("x-cdp-user-roles", _userRoles);
             }
         }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                try
+                {
+                    var clientFactory = Services.GetRequiredService<EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory>();
+                    clientFactory.GetClient().DropDatabase(_databaseName);
+                }
+                catch
+                {
+                    // Best-effort cleanup; ephemeral instance dies with the
+                    // fixture anyway.
+                }
+            }
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// Pass-through wrapper around <see cref="IWorkItemPersistence"/>
+    /// that records the last <see cref="WorkItemQuery"/> the endpoint
+    /// built. Behaviour is otherwise identical to the wrapped
+    /// persistence — tests still go end-to-end against ephemeral Mongo.
+    /// </summary>
+    public sealed class RecordingPersistence(IWorkItemPersistence inner) : IWorkItemPersistence
+    {
+        public IWorkItemPersistence Inner { get; } = inner;
+        public WorkItemQuery? LastQuery { get; private set; }
+
+        public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+            Inner.CreateAsync(workItem, cancellationToken);
+
+        public Task<bool> CreateIfAbsentAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+            Inner.CreateIfAbsentAsync(workItem, cancellationToken);
+
+        public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+            Inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default)
+        {
+            LastQuery = query;
+            return Inner.QueryAsync(query, cancellationToken);
+        }
+
+        public Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+            Inner.ReplaceAsync(workItem, cancellationToken);
     }
 }

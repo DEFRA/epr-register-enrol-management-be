@@ -35,7 +35,7 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(TypeIds: new[] { "re-accreditation", "registration" }));
 
-        var expected = new BsonDocument("TypeId", new BsonDocument("$in",
+        var expected = new BsonDocument("typeId", new BsonDocument("$in",
             new BsonArray { "re-accreditation", "registration" }));
         Assert.Equal(expected, doc);
     }
@@ -45,7 +45,7 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted", "in-review" }));
 
-        var expected = new BsonDocument("StateId", new BsonDocument("$in",
+        var expected = new BsonDocument("stateId", new BsonDocument("$in",
             new BsonArray { "submitted", "in-review" }));
         Assert.Equal(expected, doc);
     }
@@ -60,7 +60,7 @@ public class WorkItemPersistenceBuildFilterTests
         var or = doc["$or"].AsBsonArray;
         Assert.Equal(2, or.Count);
         Assert.Equal(pattern, or[0]["_id"].AsBsonRegularExpression);
-        Assert.Equal(pattern, or[1]["SubmittedBy"].AsBsonRegularExpression);
+        Assert.Equal(pattern, or[1]["submittedBy"].AsBsonRegularExpression);
     }
 
     [Fact]
@@ -89,7 +89,7 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(AssigneeId: " user-1 "));
 
-        Assert.Equal("user-1", doc["AssignedToId"].AsString);
+        Assert.Equal("user-1", doc["assignedToId"].AsString);
     }
 
     [Fact]
@@ -97,7 +97,7 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(UnassignedOnly: true));
 
-        Assert.Equal(BsonNull.Value, doc["AssignedToId"]);
+        Assert.Equal(BsonNull.Value, doc["assignedToId"]);
     }
 
     [Fact]
@@ -107,8 +107,8 @@ public class WorkItemPersistenceBuildFilterTests
 
         var or = doc["$or"].AsBsonArray;
         Assert.Equal(2, or.Count);
-        Assert.Equal("user-1", or[0]["AssignedToId"].AsString);
-        Assert.Equal(BsonNull.Value, or[1]["AssignedToId"]);
+        Assert.Equal("user-1", or[0]["assignedToId"].AsString);
+        Assert.Equal(BsonNull.Value, or[1]["assignedToId"]);
     }
 
     [Fact]
@@ -124,7 +124,7 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(SubmittedBy: " bob "));
 
-        Assert.Equal("bob", doc["SubmittedBy"].AsString);
+        Assert.Equal("bob", doc["submittedBy"].AsString);
     }
 
     [Fact]
@@ -146,9 +146,9 @@ public class WorkItemPersistenceBuildFilterTests
             AssigneeId: "user-1",
             SubmittedBy: "bob"));
 
-        Assert.Equal("re-accreditation", doc["TypeId"]["$in"].AsBsonArray[0].AsString);
-        Assert.Equal("submitted", doc["StateId"]["$in"].AsBsonArray[0].AsString);
-        Assert.Equal("user-1", doc["AssignedToId"].AsString);
-        Assert.Equal("bob", doc["SubmittedBy"].AsString);
+        Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
+        Assert.Equal("submitted", doc["stateId"]["$in"].AsBsonArray[0].AsString);
+        Assert.Equal("user-1", doc["assignedToId"].AsString);
+        Assert.Equal("bob", doc["submittedBy"].AsString);
     }
 }

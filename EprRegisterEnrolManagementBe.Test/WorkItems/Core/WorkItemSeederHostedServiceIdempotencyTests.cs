@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -24,16 +25,10 @@ public sealed class WorkItemSeederHostedServiceIdempotencyTests
     private readonly WorkItemPersistence _persistence;
     private readonly IServiceProvider _services;
 
-    static WorkItemSeederHostedServiceIdempotencyTests()
-    {
-        MongoConventions.Register();
-        WorkItemBsonRegistration.Register();
-    }
-
     public WorkItemSeederHostedServiceIdempotencyTests(MongoIntegrationFixture fixture)
     {
         _fixture = fixture;
-        _databaseName = $"work_items_seeder_test_{Guid.NewGuid():N}";
+        _databaseName = MongoIntegrationFixture.NewDatabaseName("work_items_seeder");
         _clientFactory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _persistence = new WorkItemPersistence(_clientFactory, NullLoggerFactory.Instance);
 

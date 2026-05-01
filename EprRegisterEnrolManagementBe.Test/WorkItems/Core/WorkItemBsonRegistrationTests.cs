@@ -164,9 +164,9 @@ public class WorkItemBsonRegistrationTests
         var bson = new BsonDocument
         {
             ["_id"] = Guid.NewGuid().ToString(),
-            ["TypeId"] = "test-type",
-            ["StateId"] = "submitted",
-            ["TaskStatusesByState"] = new BsonDocument
+            ["typeId"] = "test-type",
+            ["stateId"] = "submitted",
+            ["taskStatusesByState"] = new BsonDocument
             {
                 ["submitted"] = new BsonDocument { ["task1"] = "FromTheFuture" }
             }

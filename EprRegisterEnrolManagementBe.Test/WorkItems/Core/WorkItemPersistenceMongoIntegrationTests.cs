@@ -1,4 +1,4 @@
-using EphemeralMongo;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -42,21 +42,13 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     private readonly WorkItemPersistence _persistence;
     private readonly FakeTimeProvider _time = new(s_seedNow);
 
-    static WorkItemPersistenceMongoIntegrationTests()
-    {
-        // Match production's startup ordering — these are the same calls
-        // Program.cs makes before any IMongoClient is constructed.
-        MongoConventions.Register();
-        WorkItemBsonRegistration.Register();
-    }
-
     public WorkItemPersistenceMongoIntegrationTests(MongoIntegrationFixture fixture)
     {
         _fixture = fixture;
         // Each test class instance (xUnit creates one per [Fact]) gets a
         // fresh database name so collections / indexes from one test do
         // not leak into another.
-        _databaseName = $"work_items_test_{Guid.NewGuid():N}";
+        _databaseName = MongoIntegrationFixture.NewDatabaseName("work_items");
         _clientFactory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _persistence = new WorkItemPersistence(_clientFactory, NullLoggerFactory.Instance);
     }
@@ -147,11 +139,11 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             .ToList();
 
         Assert.Equal(4, keyDocs.Count);
-        Assert.Contains(keyDocs, k => k.Contains("\"TypeId\" : 1") && k.Contains("\"SubmittedAt\" : -1"));
-        Assert.Contains(keyDocs, k => k.Contains("\"StateId\" : 1") && k.Contains("\"SubmittedAt\" : -1"));
-        Assert.Contains(keyDocs, k => k.Contains("\"AssignedToId\" : 1") && k.Contains("\"SubmittedAt\" : -1"));
+        Assert.Contains(keyDocs, k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1"));
+        Assert.Contains(keyDocs, k => k.Contains("\"stateId\" : 1") && k.Contains("\"submittedAt\" : -1"));
+        Assert.Contains(keyDocs, k => k.Contains("\"assignedToId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k =>
-            k.Contains("\"SubmittedAt\" : -1") && !k.Contains("TypeId") && !k.Contains("StateId") && !k.Contains("AssignedToId"));
+            k.Contains("\"submittedAt\" : -1") && !k.Contains("typeId") && !k.Contains("stateId") && !k.Contains("assignedToId"));
     }
 
     [Fact]
@@ -266,60 +258,4 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             new WorkItemQuery(), TestContext.Current.CancellationToken);
         Assert.Equal(1, page.TotalCount);
     }
-}
-
-/// <summary>
-/// xUnit class fixture that boots a single ephemeral <c>mongod</c> for
-/// the lifetime of the test class and exposes its connection string.
-/// One mongod is reused across the [Fact]s in this class via a fresh
-/// per-test database to keep the fan-out cheap.
-/// </summary>
-public sealed class MongoIntegrationFixture : IAsyncLifetime
-{
-    private IMongoRunner? _runner;
-
-    public string ConnectionString =>
-        _runner?.ConnectionString
-        ?? throw new InvalidOperationException("Mongo runner has not started yet.");
-
-    public async ValueTask InitializeAsync()
-    {
-        _runner = await MongoRunner.RunAsync(new MongoRunnerOptions
-        {
-            // A single-node replica set is the closest match to the CDP
-            // production topology and unlocks transactions / change
-            // streams should a future test need them.
-            UseSingleNodeReplicaSet = true,
-        });
-    }
-
-    public ValueTask DisposeAsync()
-    {
-        _runner?.Dispose();
-        return ValueTask.CompletedTask;
-    }
-}
-
-/// <summary>
-/// Minimal <see cref="IMongoDbClientFactory"/> that points at the
-/// fixture's ephemeral <c>mongod</c>. Exists so the integration tests
-/// can drive the production <see cref="WorkItemPersistence"/>
-/// constructor without standing up the full DI container / Options
-/// pipeline.
-/// </summary>
-internal sealed class TestMongoDbClientFactory : IMongoDbClientFactory
-{
-    private readonly MongoClient _client;
-    private readonly IMongoDatabase _database;
-
-    public TestMongoDbClientFactory(string connectionString, string databaseName)
-    {
-        _client = new MongoClient(connectionString);
-        _database = _client.GetDatabase(databaseName);
-    }
-
-    public IMongoClient GetClient() => _client;
-
-    public IMongoCollection<T> GetCollection<T>(string collection) =>
-        _database.GetCollection<T>(collection);
 }
