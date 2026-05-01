@@ -29,9 +29,15 @@ public class HeaderPropagationAllowListTests
 
     [Theory]
     [MemberData(nameof(ForbiddenHeaders))]
-    public void Allow_list_does_not_include_credential_or_identity_headers(string header)
+    public async Task Allow_list_does_not_include_credential_or_identity_headers(string header)
     {
-        using var factory = new WebApplicationFactory<Program>();
+        // epr-6e5: WebApplicationFactory implements IAsyncDisposable;
+        // a 'using var' on a sync void test only invokes Dispose(),
+        // skipping the async teardown path the host registers for
+        // its IHostedService graph. Use 'await using' so the kestrel
+        // pipeline / hosted services are torn down on their async
+        // path.
+        await using var factory = new WebApplicationFactory<Program>();
         var options = factory.Services
             .GetRequiredService<IOptions<HeaderPropagationOptions>>().Value;
 

@@ -647,6 +647,40 @@ public class WorkItemServiceTests
     }
 
     [Fact]
+    public async Task Assign_actor_with_no_role_is_forbidden(/* epr-6e5 */)
+    {
+        // The "assign" / "standard" cases are covered above; pin the
+        // third branch — an actor with no recognised role at all —
+        // explicitly. The current contract (per AGENTS.md and
+        // WorkItemService.AssignAsync) is "anyone without the assign
+        // role is treated as a standard user", which means a no-role
+        // actor can self-assign an unassigned item but cannot do
+        // anything else. This test pins the cannot-do-anything-else
+        // half of that contract: a no-role actor trying to assign
+        // someone else, or trying to take an item already owned by
+        // another user, must be rejected. Without it, a refactor
+        // that flips the IsInRole guard to a different default
+        // could silently widen the gate from "self-assign-only" to
+        // "anything goes".
+        var type = BuildType();
+        var workItem = ExistingWorkItem();
+        workItem.AssignedToId = "bob-1";
+        workItem.AssignedToName = "Bob";
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        // Deliberately pass no roles. The work item is already
+        // assigned to bob-1; alice-1 has no permission to take it.
+        var actor = UserWithRoles("alice-1");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
+        Assert.Equal("bob-1", workItem.AssignedToId);
+        await _persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task Assign_standard_user_cannot_assign_to_someone_else()
     {
         var type = BuildType();

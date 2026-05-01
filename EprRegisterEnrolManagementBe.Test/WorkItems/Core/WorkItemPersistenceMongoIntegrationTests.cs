@@ -2,6 +2,7 @@ using EphemeralMongo;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using MongoDB.Driver;
 
@@ -23,12 +24,23 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// regression in BSON conventions, indexes or projections pass CI.
 /// </summary>
 public sealed class WorkItemPersistenceMongoIntegrationTests
-    : IClassFixture<MongoIntegrationFixture>, IDisposable
+    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable, IDisposable
 {
+    /// <summary>
+    /// Deterministic timestamp seed used for every <see cref="WorkItem"/>
+    /// constructed in this fixture (epr-6e5). Inlined values were
+    /// previously <c>DateTime.UtcNow</c>, which is wallclock-coupled
+    /// and obscures which value the contract under test actually
+    /// cares about.
+    /// </summary>
+    private static readonly DateTimeOffset s_seedNow =
+        new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+
     private readonly MongoIntegrationFixture _fixture;
     private readonly string _databaseName;
     private readonly TestMongoDbClientFactory _clientFactory;
     private readonly WorkItemPersistence _persistence;
+    private readonly FakeTimeProvider _time = new(s_seedNow);
 
     static WorkItemPersistenceMongoIntegrationTests()
     {
@@ -49,6 +61,18 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         _persistence = new WorkItemPersistence(_clientFactory, NullLoggerFactory.Instance);
     }
 
+    /// <summary>
+    /// epr-6e5: <see cref="MongoClient"/> exposes async DB management
+    /// APIs and the test runner already drives every other resource
+    /// asynchronously. Prefer the async path; the synchronous
+    /// <see cref="Dispose"/> remains as a safety net for the rare
+    /// xUnit code path that disposes via the synchronous interface.
+    /// </summary>
+    public async ValueTask DisposeAsync()
+    {
+        await _clientFactory.GetClient().DropDatabaseAsync(_databaseName);
+    }
+
     public void Dispose()
     {
         // Drop the per-test database so we don't accumulate state in the
@@ -59,12 +83,13 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     [Fact]
     public async Task Submit_then_get_then_query_round_trips_a_work_item_through_real_mongo()
     {
+        var now = _time.GetUtcNow().UtcDateTime;
         var workItem = new WorkItem
         {
             TypeId = "re-accreditation",
             StateId = "submitted",
-            SubmittedAt = DateTime.UtcNow,
-            LastModifiedAt = DateTime.UtcNow,
+            SubmittedAt = now,
+            LastModifiedAt = now,
             SubmittedBy = "client-1",
             CompletedTaskIdsByState =
             {
@@ -132,14 +157,15 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     [Fact]
     public async Task QueryAsync_excludes_notes_and_audit_log_at_the_wire_level()
     {
+        var now = _time.GetUtcNow().UtcDateTime;
         var workItem = new WorkItem
         {
             TypeId = "re-accreditation",
             StateId = "submitted",
-            SubmittedAt = DateTime.UtcNow,
-            LastModifiedAt = DateTime.UtcNow,
-            Notes = { new WorkItemNote { Text = "secret note body", CreatedAt = DateTime.UtcNow, CreatedBy = "user-1", CreatedByName = "Alice" } },
-            AuditLog = { new WorkItemAuditEntry { Action = "submitted", ActionDisplayName = "Submitted", CreatedAt = DateTime.UtcNow, CreatedBy = "user-1", CreatedByName = "Alice" } }
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            Notes = { new WorkItemNote { Text = "secret note body", CreatedAt = now, CreatedBy = "user-1", CreatedByName = "Alice" } },
+            AuditLog = { new WorkItemAuditEntry { Action = "submitted", ActionDisplayName = "Submitted", CreatedAt = now, CreatedBy = "user-1", CreatedByName = "Alice" } }
         };
         await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
 
@@ -159,12 +185,13 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     [Fact]
     public async Task ReplaceAsync_throws_concurrency_exception_when_version_does_not_match()
     {
+        var now = _time.GetUtcNow().UtcDateTime;
         var workItem = new WorkItem
         {
             TypeId = "re-accreditation",
             StateId = "submitted",
-            SubmittedAt = DateTime.UtcNow,
-            LastModifiedAt = DateTime.UtcNow
+            SubmittedAt = now,
+            LastModifiedAt = now
         };
         await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
 
