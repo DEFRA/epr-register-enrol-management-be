@@ -191,7 +191,8 @@ static void ConfigureHttpClients(IServiceCollection services)
 
 [ExcludeFromCodeCoverage]
 static void ConfigureMongo(IServiceCollection services, IConfiguration configuration)
-{    MongoExtensions.Register();
+{
+    MongoExtensions.Register();
     MongoConventions.Register();
     WorkItemBsonRegistration.Register();
 

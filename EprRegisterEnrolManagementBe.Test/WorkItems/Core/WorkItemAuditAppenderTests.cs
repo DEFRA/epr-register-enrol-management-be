@@ -3,6 +3,8 @@ using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -105,5 +107,52 @@ public class WorkItemAuditAppenderTests
         Assert.Equal(2, persisted!.AuditLog.Count);
         Assert.Equal("first", persisted.AuditLog[0].Action);
         Assert.Equal("second", persisted.AuditLog[1].Action);
+    }
+
+    [Fact]
+    public async Task AppendAsync_retries_and_succeeds_after_one_concurrency_exception()
+    {
+        // Use a mock persistence so we can inject a controlled
+        // WorkItemConcurrencyException on the first ReplaceAsync call
+        // and verify the appender retries and ultimately succeeds.
+        var ct = TestContext.Current.CancellationToken;
+        var workItemId = Guid.NewGuid();
+        var storedWorkItem = new WorkItem
+        {
+            Id = workItemId,
+            TypeId = "test-type",
+            StateId = "submitted",
+            Payload = new BsonDocument()
+        };
+
+        var mockPersistence = Substitute.For<IWorkItemPersistence>();
+        mockPersistence.GetByIdAsync(workItemId, ct).Returns(storedWorkItem);
+
+        var replaceCallCount = 0;
+        mockPersistence.ReplaceAsync(Arg.Any<WorkItem>(), ct)
+            .Returns(_ =>
+            {
+                replaceCallCount++;
+                if (replaceCallCount == 1)
+                {
+                    throw new WorkItemConcurrencyException(workItemId, 0);
+                }
+
+                return Task.CompletedTask;
+            });
+
+        var sut = new WorkItemAuditAppender(mockPersistence, NullLogger<WorkItemAuditAppender>.Instance);
+
+        var ok = await sut.AppendAsync(
+            workItemId,
+            action: "notification-sent",
+            actionDisplayName: "Email sent",
+            details: new Dictionary<string, string?>(),
+            s_user,
+            ct);
+
+        Assert.True(ok);
+        Assert.Equal(2, replaceCallCount);
+        await mockPersistence.Received(2).GetByIdAsync(workItemId, ct);
     }
 }

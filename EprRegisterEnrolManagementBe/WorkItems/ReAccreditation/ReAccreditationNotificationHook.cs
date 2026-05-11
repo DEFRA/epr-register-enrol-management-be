@@ -54,6 +54,7 @@ internal sealed class ReAccreditationNotificationHook(
             workItem,
             templateKey: "SubmissionConfirmation",
             description: "Submission confirmation",
+            actionId: null,
             user,
             cancellationToken);
     }
@@ -75,7 +76,7 @@ internal sealed class ReAccreditationNotificationHook(
             return Task.CompletedTask;
         }
 
-        return SendAndRecordAsync(workItem, mapping.TemplateKey, mapping.Description, user, cancellationToken);
+        return SendAndRecordAsync(workItem, mapping.TemplateKey, mapping.Description, actionId, user, cancellationToken);
     }
 
     private static bool IsReAccreditation(WorkItem workItem) =>
@@ -85,6 +86,7 @@ internal sealed class ReAccreditationNotificationHook(
         WorkItem workItem,
         string templateKey,
         string description,
+        string? actionId,
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
@@ -112,7 +114,7 @@ internal sealed class ReAccreditationNotificationHook(
             return;
         }
 
-        var personalisation = BuildPersonalisation(payload!, workItem, templateKey);
+        var personalisation = BuildPersonalisation(payload!, workItem, templateKey, actionId);
 
         var result = await notifyClient.SendEmailAsync(
             templateKey, recipient, personalisation, reference, cancellationToken);
@@ -148,14 +150,17 @@ internal sealed class ReAccreditationNotificationHook(
         }
     }
 
-    private static ReAccreditationPayload? DeserialisePayload(WorkItem workItem)
+    private ReAccreditationPayload? DeserialisePayload(WorkItem workItem)
     {
         try
         {
             return BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            logger.LogError(ex,
+                "Failed to deserialise payload for work item {WorkItemId}; notification will be skipped.",
+                workItem.Id);
             return null;
         }
     }
@@ -163,7 +168,8 @@ internal sealed class ReAccreditationNotificationHook(
     private static Dictionary<string, string> BuildPersonalisation(
         ReAccreditationPayload payload,
         WorkItem workItem,
-        string templateKey)
+        string templateKey,
+        string? actionId = null)
     {
         var personalisation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -174,7 +180,7 @@ internal sealed class ReAccreditationNotificationHook(
 
         if (string.Equals(templateKey, "Decision", StringComparison.OrdinalIgnoreCase))
         {
-            personalisation["decision"] = string.Equals(workItem.StateId, "approved", StringComparison.OrdinalIgnoreCase)
+            personalisation["decision"] = string.Equals(actionId, "approve", StringComparison.OrdinalIgnoreCase)
                 ? "Approved"
                 : "Rejected";
         }

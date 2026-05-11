@@ -17,11 +17,10 @@ namespace EprRegisterEnrolManagementBe.Notifications;
 /// The underlying transport is owned by GovukNotify (its
 /// <c>NotificationClient</c> constructs and disposes its own
 /// <see cref="System.Net.Http.HttpClient"/>) — a deliberate deviation
-/// from the project-wide <c>AddHttpClientWithTracing</c> rule recorded
-/// in <c>docs/adr/0005-govuk-notify-http-client.md</c>. The CDP proxy
-/// is honoured via the <c>HTTP_PROXY</c> / <c>HTTPS_PROXY</c> env vars
-/// because the SDK uses the default <see cref="System.Net.Http.HttpClient"/>
-/// which respects them.
+/// from the project-wide <c>AddHttpClientWithTracing</c> rule. The CDP
+/// proxy is honoured via the <c>HTTP_PROXY</c> / <c>HTTPS_PROXY</c>
+/// env vars because the SDK uses the default
+/// <see cref="System.Net.Http.HttpClient"/> which respects them.
 /// </summary>
 internal sealed class GovukNotifyClient : INotifyClient
 {
@@ -33,12 +32,13 @@ internal sealed class GovukNotifyClient : INotifyClient
     public GovukNotifyClient(
         IAsyncNotificationClient client,
         IOptions<NotifyConfig> options,
-        ILogger<GovukNotifyClient> logger)
+        ILogger<GovukNotifyClient> logger,
+        ResiliencePipeline? retryPipeline = null)
     {
         _client = client;
         _config = options.Value;
         _logger = logger;
-        _retryPipeline = BuildRetryPipeline(logger);
+        _retryPipeline = retryPipeline ?? BuildRetryPipeline(logger);
     }
 
     public async Task<NotifySendResult> SendEmailAsync(

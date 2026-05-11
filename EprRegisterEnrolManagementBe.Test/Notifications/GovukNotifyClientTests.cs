@@ -5,6 +5,8 @@ using Notify.Interfaces;
 using Notify.Models.Responses;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using Polly;
+using Polly.Retry;
 
 namespace EprRegisterEnrolManagementBe.Test.Notifications;
 
@@ -30,6 +32,22 @@ public class GovukNotifyClientTests
             Options.Create(config),
             NullLogger<GovukNotifyClient>.Instance);
     }
+
+    /// <summary>
+    /// Zero-delay retry pipeline with the same attempt count as the
+    /// production pipeline so retry logic is exercised in tests without
+    /// real exponential-backoff waits.
+    /// </summary>
+    private static ResiliencePipeline ZeroDelayRetryPipeline() =>
+        new ResiliencePipelineBuilder()
+            .AddRetry(new RetryStrategyOptions
+            {
+                MaxRetryAttempts = 2,
+                Delay = TimeSpan.Zero,
+                BackoffType = DelayBackoffType.Constant,
+                ShouldHandle = new PredicateBuilder().Handle<Exception>()
+            })
+            .Build();
 
     [Fact]
     public async Task SendEmailAsync_returns_success_with_provider_message_id_on_happy_path()
@@ -119,19 +137,20 @@ public class GovukNotifyClientTests
             });
 
         var config = ConfigWithTemplates(("DulyMade", "t-id"));
-        // Zero-delay retry pipeline for fast unit tests — build a subclass
-        // isn't possible (sealed), so we accept the real backoff is
-        // tested only in integration. Here we just verify call count.
+        // Zero-delay pipeline so the test doesn't incur real backoff waits.
         var sut = new GovukNotifyClient(
             inner,
             Options.Create(config),
-            NullLogger<GovukNotifyClient>.Instance);
+            NullLogger<GovukNotifyClient>.Instance,
+            retryPipeline: ZeroDelayRetryPipeline());
 
         var result = await sut.SendEmailAsync(
             "DulyMade", "op@ex.com",
             new Dictionary<string, string>(), "ref",
             TestContext.Current.CancellationToken);
 
+        // ResiliencePipeline with zero delay retries just like production
+        // but without waiting — verifies the 3-attempt call-count.
         Assert.True(result.IsSuccess);
         Assert.Equal("retry-success-id", result.ProviderMessageId);
         Assert.Equal(3, callCount);
@@ -148,10 +167,12 @@ public class GovukNotifyClientTests
             .ThrowsAsync(new Exception("persistent failure"));
 
         var config = ConfigWithTemplates(("DulyMade", "t-id"));
+        // Zero-delay pipeline so the test doesn't incur real backoff waits.
         var sut = new GovukNotifyClient(
             inner,
             Options.Create(config),
-            NullLogger<GovukNotifyClient>.Instance);
+            NullLogger<GovukNotifyClient>.Instance,
+            retryPipeline: ZeroDelayRetryPipeline());
 
         var result = await sut.SendEmailAsync(
             "DulyMade", "op@ex.com",
@@ -160,7 +181,7 @@ public class GovukNotifyClientTests
 
         Assert.False(result.IsSuccess);
         Assert.Contains("persistent failure", result.ErrorMessage);
-        // 3 total attempts (1 initial + 2 retries)
+        // 3 total attempts (1 initial + 2 retries) with zero delay.
         await inner.Received(3).SendEmailAsync(
             Arg.Any<string>(), Arg.Any<string>(),
             Arg.Any<Dictionary<string, dynamic>>(),
