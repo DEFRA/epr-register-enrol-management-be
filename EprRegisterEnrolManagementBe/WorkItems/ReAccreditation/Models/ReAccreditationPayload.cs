@@ -16,4 +16,13 @@ internal sealed record ReAccreditationPayload
     public List<string>? MaterialsHandled { get; init; }
     public int? PreviousAccreditationYear { get; init; }
     public int? ComplianceIssuesReported { get; init; }
+
+    /// <summary>
+    /// Operator email address used as the GOV.UK Notify recipient for
+    /// the lifecycle email templates wired up by
+    /// <c>ReAccreditationNotificationHook</c> (RA-123). Optional —
+    /// notifications are skipped (and recorded as such in the audit
+    /// log) when missing.
+    /// </summary>
+    public string? OperatorEmail { get; init; }
 }

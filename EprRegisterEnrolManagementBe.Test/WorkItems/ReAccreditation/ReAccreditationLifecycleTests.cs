@@ -41,7 +41,10 @@ public class ReAccreditationLifecycleTests
 
         // Per-state task completion → action.
         await CompleteAll(engine, workItem.Id, type, "submitted", user, ct);
-        Assert.True((await engine.ApplyActionAsync(workItem.Id, "start-assessment", user, ct)).IsSuccess);
+        Assert.True((await engine.ApplyActionAsync(workItem.Id, "duly-make", user, ct)).IsSuccess);
+
+        await CompleteAll(engine, workItem.Id, type, "duly-made", user, ct);
+        Assert.True((await engine.ApplyActionAsync(workItem.Id, "payment-received", user, ct)).IsSuccess);
 
         await CompleteAll(engine, workItem.Id, type, "assessment-in-progress", user, ct);
         Assert.True((await engine.ApplyActionAsync(workItem.Id, "submit-for-decision", user, ct)).IsSuccess);
@@ -51,10 +54,10 @@ public class ReAccreditationLifecycleTests
 
         Assert.Equal("approved", workItem.StateId);
 
-        // 6 task completions + 3 transitions = 9 audit entries.
-        Assert.Equal(9, workItem.AuditLog.Count);
+        // 2 + 1 + 3 + 1 = 7 task completions + 4 transitions = 11 audit entries.
+        Assert.Equal(11, workItem.AuditLog.Count);
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"
-            && e.Details.GetValueOrDefault("actionId") == "start-assessment");
+            && e.Details.GetValueOrDefault("actionId") == "duly-make");
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"
             && e.Details.GetValueOrDefault("actionId") == "approve"
             && e.Details.GetValueOrDefault("toStateId") == "approved");

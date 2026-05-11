@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v2", _type.TemplateVersion);
+        Assert.Equal("v3", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -22,23 +22,29 @@ public class ReAccreditationTypeTests
         var states = _type.States.ToDictionary(s => s.Id);
 
         Assert.True(states.ContainsKey("submitted"));
+        Assert.True(states.ContainsKey("duly-made"));
         Assert.True(states.ContainsKey("assessment-in-progress"));
         Assert.True(states.ContainsKey("awaiting-decision"));
         Assert.True(states["approved"].IsTerminal);
         Assert.True(states["rejected"].IsTerminal);
         Assert.True(states["withdrawn"].IsTerminal);
         Assert.False(states["submitted"].IsTerminal);
+        Assert.False(states["duly-made"].IsTerminal);
         Assert.False(states["assessment-in-progress"].IsTerminal);
         Assert.False(states["awaiting-decision"].IsTerminal);
     }
 
     [Theory]
-    [InlineData("start-assessment", "submitted", "assessment-in-progress", true)]
+    [InlineData("duly-make", "submitted", "duly-made", true)]
+    [InlineData("payment-received", "duly-made", "assessment-in-progress", true)]
+    [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress", false)]
     [InlineData("submit-for-decision", "assessment-in-progress", "awaiting-decision", true)]
     [InlineData("approve", "awaiting-decision", "approved", true)]
     [InlineData("reject", "awaiting-decision", "rejected", true)]
     [InlineData("withdraw", "submitted", "withdrawn", false)]
+    [InlineData("withdraw-during-duly-made", "duly-made", "withdrawn", false)]
     [InlineData("withdraw-during-assessment", "assessment-in-progress", "withdrawn", false)]
+    [InlineData("withdraw-during-decision", "awaiting-decision", "withdrawn", false)]
     public void Declares_expected_transition(
         string actionId, string fromStateId, string toStateId, bool requiresAllTasksComplete)
     {
@@ -51,7 +57,8 @@ public class ReAccreditationTypeTests
     }
 
     [Theory]
-    [InlineData("submitted", new[] { "verify-organisation-details", "confirm-registration-fee-paid" })]
+    [InlineData("submitted", new[] { "verify-organisation-details", "confirm-application-completeness" })]
+    [InlineData("duly-made", new[] { "confirm-registration-fee-paid" })]
     [InlineData("assessment-in-progress", new[]
     {
         "review-compliance-history", "assess-technical-capacity", "assess-financial-capacity"

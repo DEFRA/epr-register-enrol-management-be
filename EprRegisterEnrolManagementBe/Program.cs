@@ -1,6 +1,7 @@
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Health;
+using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -11,6 +12,8 @@ using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using MongoDB.Driver;
 using MongoDB.Driver.Authentication.AWS;
+using Notify.Client;
+using Notify.Interfaces;
 using Serilog;
 
 var app = BuildApp(args);
@@ -68,6 +71,7 @@ static void ConfigureServices(WebApplicationBuilder builder)
     ConfigureHttpClients(services);
     ConfigureMongo(services, configuration);
     ConfigureCors(services, configuration);
+    ConfigureNotifications(services, configuration);
 
     services.AddOptions<LivenessHealthCheckOptions>()
         .Bind(configuration.GetSection("Liveness"))
@@ -188,7 +192,6 @@ static void ConfigureHttpClients(IServiceCollection services)
 [ExcludeFromCodeCoverage]
 static void ConfigureMongo(IServiceCollection services, IConfiguration configuration)
 {
-
     MongoExtensions.Register();
     MongoConventions.Register();
     WorkItemBsonRegistration.Register();
@@ -200,6 +203,33 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
         .ValidateOnStart();
 
     services.AddSingleton<IMongoDbClientFactory, MongoDbClientFactory>();
+}
+
+/// <summary>
+/// GOV.UK Notify wiring (RA-123). When <c>Notify:ApiKey</c> is empty
+/// the no-op client is registered so the service still boots in
+/// environments without Notify credentials. When set, the real
+/// GovukNotify SDK client is registered behind the project-owned
+/// <see cref="INotifyClient"/> abstraction with Polly retries.
+/// </summary>
+[ExcludeFromCodeCoverage]
+static void ConfigureNotifications(IServiceCollection services, IConfiguration configuration)
+{
+    services.AddOptions<NotifyConfig>()
+        .Bind(configuration.GetSection("Notify"));
+
+    var notifyConfig = configuration.GetSection("Notify").Get<NotifyConfig>() ?? new NotifyConfig();
+    if (string.IsNullOrWhiteSpace(notifyConfig.ApiKey))
+    {
+        services.AddSingleton<INotifyClient, NoOpNotifyClient>();
+        return;
+    }
+
+    services.AddSingleton<IAsyncNotificationClient>(_ =>
+        string.IsNullOrWhiteSpace(notifyConfig.BaseUri)
+            ? new NotificationClient(notifyConfig.ApiKey)
+            : new NotificationClient(notifyConfig.BaseUri, notifyConfig.ApiKey));
+    services.AddSingleton<INotifyClient, GovukNotifyClient>();
 }
 
 /// <summary>

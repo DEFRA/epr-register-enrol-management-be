@@ -147,11 +147,7 @@ public sealed record WorkItemEngineProjection(
     IReadOnlyCollection<WorkItemTaskProgress> Tasks,
     IReadOnlyCollection<WorkItemTransition> AvailableActions);
 
-public sealed class WorkItemService(
-    IWorkItemRegistry registry,
-    IWorkItemPersistence persistence,
-    ILogger<WorkItemService> logger,
-    TimeProvider? timeProvider = null) : IWorkItemService
+public sealed class WorkItemService : IWorkItemService
 {
     /// <summary>
     /// Role that grants the holder the ability to assign / re-assign /
@@ -160,7 +156,25 @@ public sealed class WorkItemService(
     /// </summary>
     public const string AssignRole = "assign";
 
-    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly IWorkItemRegistry _registry;
+    private readonly IWorkItemPersistence _persistence;
+    private readonly ILogger<WorkItemService> _logger;
+    private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
+    private readonly TimeProvider _timeProvider;
+
+    public WorkItemService(
+        IWorkItemRegistry registry,
+        IWorkItemPersistence persistence,
+        ILogger<WorkItemService> logger,
+        TimeProvider? timeProvider = null,
+        IEnumerable<IWorkItemPostActionHook>? postActionHooks = null)
+    {
+        this._registry = registry;
+        this._persistence = persistence;
+        this._logger = logger;
+        _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public async Task<WorkItemActionResult> SubmitAsync(
         IWorkItemType type,
@@ -202,11 +216,13 @@ public sealed class WorkItemService(
             ["templateVersion"] = snapshot.TemplateVersion
         });
 
-        await persistence.CreateAsync(workItem, cancellationToken);
+        await _persistence.CreateAsync(workItem, cancellationToken);
 
-        logger.LogInformation(
+        _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} by {User}",
             workItem.Id, workItem.TypeId, workItem.StateId, DescribeUser(user));
+
+        await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -263,13 +279,13 @@ public sealed class WorkItemService(
         });
         try
         {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
+            await _persistence.ReplaceAsync(workItem, cancellationToken);
         }
         catch (WorkItemConcurrencyException)
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        logger.LogInformation(
+        _logger.LogInformation(
             "Task {TaskId} marked complete on work item {WorkItemId} ({TypeId}) by {User}",
             task.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
 
@@ -347,15 +363,17 @@ public sealed class WorkItemService(
         });
         try
         {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
+            await _persistence.ReplaceAsync(workItem, cancellationToken);
         }
         catch (WorkItemConcurrencyException)
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        logger.LogInformation(
+        _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
             workItem.Id, workItem.TypeId, previousState, workItem.StateId, transition.ActionId, DescribeUser(user));
+
+        await InvokeActionAppliedHooksAsync(workItem, transition.ActionId, previousState, user, cancellationToken);
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -379,7 +397,7 @@ public sealed class WorkItemService(
                 "Assignee id is required.");
         }
 
-        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
         {
             return WorkItemActionResult.Failure(
@@ -444,13 +462,13 @@ public sealed class WorkItemService(
         });
         try
         {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
+            await _persistence.ReplaceAsync(workItem, cancellationToken);
         }
         catch (WorkItemConcurrencyException)
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        logger.LogInformation(
+        _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
             workItem.Id, workItem.TypeId, previousAssigneeId ?? "(unassigned)", trimmedAssigneeId, DescribeUser(user));
 
@@ -467,7 +485,7 @@ public sealed class WorkItemService(
             return identityFailure;
         }
 
-        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
         {
             return WorkItemActionResult.Failure(
@@ -505,13 +523,13 @@ public sealed class WorkItemService(
         });
         try
         {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
+            await _persistence.ReplaceAsync(workItem, cancellationToken);
         }
         catch (WorkItemConcurrencyException)
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        logger.LogInformation(
+        _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) unassigned (was {PreviousAssignee}) by {User}",
             workItem.Id, workItem.TypeId, previousAssigneeId, DescribeUser(user));
 
@@ -552,7 +570,7 @@ public sealed class WorkItemService(
                 $"Note text must be {MaxNoteLength} characters or fewer.");
         }
 
-        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
         {
             return WorkItemActionResult.Failure(
@@ -579,13 +597,13 @@ public sealed class WorkItemService(
         });
         try
         {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
+            await _persistence.ReplaceAsync(workItem, cancellationToken);
         }
         catch (WorkItemConcurrencyException)
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        logger.LogInformation(
+        _logger.LogInformation(
             "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
             note.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
 
@@ -685,14 +703,14 @@ public sealed class WorkItemService(
 
         try
         {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
+            await _persistence.ReplaceAsync(workItem, cancellationToken);
         }
         catch (WorkItemConcurrencyException)
         {
             return ConcurrencyConflict(workItem.Id);
         }
 
-        logger.LogInformation(
+        _logger.LogInformation(
             "Note {NoteId} added and task {TaskId} {CompletionOutcome} on work item {WorkItemId} ({TypeId}) by {User}",
             note.Id,
             task.Id,
@@ -759,14 +777,14 @@ public sealed class WorkItemService(
 
         try
         {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
+            await _persistence.ReplaceAsync(workItem, cancellationToken);
         }
         catch (WorkItemConcurrencyException)
         {
             return ConcurrencyConflict(workItem.Id);
         }
 
-        logger.LogInformation(
+        _logger.LogInformation(
             "Task {TaskId} on work item {WorkItemId} ({TypeId}) moved from {FromStatus} to {ToStatus} by {User}",
             task.Id, workItem.Id, workItem.TypeId, currentStatus, status, DescribeUser(user));
 
@@ -775,7 +793,7 @@ public sealed class WorkItemService(
 
     public async Task<WorkItemEngineProjection?> ProjectAsync(Guid workItemId, CancellationToken cancellationToken = default)
     {
-        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         return workItem is null ? null : Project(workItem);
     }
 
@@ -839,7 +857,7 @@ public sealed class WorkItemService(
     private async Task<(WorkItem? WorkItem, IWorkItemTemplate? Template, WorkItemActionResult? Failure)> LoadAsync(
         Guid workItemId, CancellationToken cancellationToken)
     {
-        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
         {
             return (null, null, WorkItemActionResult.Failure(
@@ -871,13 +889,13 @@ public sealed class WorkItemService(
         {
             return workItem.TemplateSnapshot;
         }
-        return registry.Find(workItem.TypeId);
+        return _registry.Find(workItem.TypeId);
     }
 
     private string ResolveTemplateVersion(WorkItem workItem) =>
         workItem.TemplateVersion
         ?? workItem.TemplateSnapshot?.TemplateVersion
-        ?? registry.Find(workItem.TypeId)?.TemplateVersion
+        ?? _registry.Find(workItem.TypeId)?.TemplateVersion
         ?? "unknown";
 
     private static HashSet<string> GetCompletedBucket(WorkItem workItem, string stateId)
@@ -1021,5 +1039,54 @@ public sealed class WorkItemService(
     {
         var id = user?.FindFirstValue("user:id");
         return string.IsNullOrWhiteSpace(id) ? null : id;
+    }
+
+    /// <summary>
+    /// Fan out to every registered <see cref="IWorkItemPostActionHook"/>
+    /// after a successful submission. Hooks are required to swallow
+    /// their own failures (see interface contract); this method only
+    /// guards against a misbehaving hook by catching and logging so a
+    /// single hook cannot unwind the originating mutation.
+    /// </summary>
+    private async Task InvokeSubmittedHooksAsync(
+        WorkItem workItem,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        foreach (var hook in _postActionHooks)
+        {
+            try
+            {
+                await hook.OnSubmittedAsync(workItem, user, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Post-action submit hook {HookType} failed for work item {WorkItemId}",
+                    hook.GetType().FullName, workItem.Id);
+            }
+        }
+    }
+
+    private async Task InvokeActionAppliedHooksAsync(
+        WorkItem workItem,
+        string actionId,
+        string fromStateId,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        foreach (var hook in _postActionHooks)
+        {
+            try
+            {
+                await hook.OnActionAppliedAsync(workItem, actionId, fromStateId, user, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Post-action transition hook {HookType} failed for work item {WorkItemId} action {ActionId}",
+                    hook.GetType().FullName, workItem.Id, actionId);
+            }
+        }
     }
 }

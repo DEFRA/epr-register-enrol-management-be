@@ -20,6 +20,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
     {
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
+        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)
