@@ -99,7 +99,7 @@ internal sealed class ReAccreditationNotificationHook(
             logger.LogInformation(
                 "Skipping notification for work item {WorkItemId} ({TemplateKey}): payload has no operator email.",
                 workItem.Id, templateKey);
-            await auditAppender.AppendAsync(
+            var appended = await auditAppender.AppendAsync(
                 workItem.Id,
                 action: "notification-skipped",
                 actionDisplayName: $"{description} email skipped",
@@ -111,6 +111,13 @@ internal sealed class ReAccreditationNotificationHook(
                 },
                 user,
                 cancellationToken);
+            if (!appended)
+            {
+                logger.LogWarning(
+                    "notification-skipped audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                    workItem.Id, templateKey);
+            }
+
             return;
         }
 
@@ -129,24 +136,36 @@ internal sealed class ReAccreditationNotificationHook(
 
         if (result.IsSuccess)
         {
-            await auditAppender.AppendAsync(
+            var appended = await auditAppender.AppendAsync(
                 workItem.Id,
                 action: "notification-sent",
                 actionDisplayName: $"{description} email sent",
                 details,
                 user,
                 cancellationToken);
+            if (!appended)
+            {
+                logger.LogWarning(
+                    "notification-sent audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                    workItem.Id, templateKey);
+            }
         }
         else
         {
             details["errorMessage"] = result.ErrorMessage;
-            await auditAppender.AppendAsync(
+            var appended = await auditAppender.AppendAsync(
                 workItem.Id,
                 action: "notification-failed",
                 actionDisplayName: $"{description} email failed",
                 details,
                 user,
                 cancellationToken);
+            if (!appended)
+            {
+                logger.LogWarning(
+                    "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                    workItem.Id, templateKey);
+            }
         }
     }
 

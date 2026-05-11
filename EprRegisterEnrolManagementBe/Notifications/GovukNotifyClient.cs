@@ -74,6 +74,10 @@ internal sealed class GovukNotifyClient : INotifyClient
 
             return NotifySendResult.Success(response.id);
         }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex,
