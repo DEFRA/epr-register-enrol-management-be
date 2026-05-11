@@ -5,15 +5,16 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <summary>
 /// Re-accreditation work item type (RA-98). Reference module that proves the
 /// framework's "one folder + one registration line" promise. The states /
-/// transitions / tasks declared here are placeholders for the PoC and follow
-/// the workflow diagram referenced in RA-85; the shape is intentionally
-/// declarative so a reader can grasp the lifecycle without reading code.
+/// transitions / tasks declared here follow the workflow diagram referenced
+/// in RA-85; the shape is intentionally declarative so a reader can grasp
+/// the lifecycle without reading code.
 /// </summary>
 internal sealed class ReAccreditationType : IWorkItemType
 {
     public const string Id = "re-accreditation";
 
     private static readonly WorkItemState s_submitted = new("submitted", "Submitted");
+    private static readonly WorkItemState s_dulyMade = new("duly-made", "Duly made");
     private static readonly WorkItemState s_assessmentInProgress =
         new("assessment-in-progress", "Assessment in progress");
     private static readonly WorkItemState s_awaitingDecision =
@@ -38,6 +39,10 @@ internal sealed class ReAccreditationType : IWorkItemType
             [s_submitted.Id] =
             [
                 new WorkItemTask("verify-organisation-details", "Verify organisation details"),
+                new WorkItemTask("confirm-application-completeness", "Confirm application is duly made")
+            ],
+            [s_dulyMade.Id] =
+            [
                 new WorkItemTask("confirm-registration-fee-paid", "Confirm registration fee paid")
             ],
             [s_assessmentInProgress.Id] =
@@ -54,16 +59,17 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     public string TypeId => Id;
     public string DisplayName => "Re-accreditation";
-    // epr-gl6: per-state task contract gained a richer WorkItemTaskStatus
-    // (NotStarted/InProgress/Blocked/Completed) alongside the legacy
-    // binary view, so bump the template version even though the schema
-    // (states / transitions / task lists) is otherwise unchanged.
-    public string TemplateVersion => "v2";
+    // RA-123: introduced duly-made state plus duly-make / payment-received /
+    // sla-extend transitions, and added OperatorEmail to the payload to
+    // drive GOV.UK Notify sends. Bump template version so in-flight v2
+    // items keep rendering against their captured snapshot.
+    public string TemplateVersion => "v3";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
     [
         s_submitted,
+        s_dulyMade,
         s_assessmentInProgress,
         s_awaitingDecision,
         s_approved,
@@ -74,8 +80,20 @@ internal sealed class ReAccreditationType : IWorkItemType
     public IReadOnlyCollection<WorkItemTransition> Transitions { get; } =
     [
         new WorkItemTransition(
-            "start-assessment", "Start assessment",
-            s_submitted.Id, s_assessmentInProgress.Id),
+            "duly-make", "Mark as duly made",
+            s_submitted.Id, s_dulyMade.Id),
+        new WorkItemTransition(
+            "payment-received", "Record payment received",
+            s_dulyMade.Id, s_assessmentInProgress.Id),
+
+        // SLA extension is a self-loop on assessment-in-progress; it
+        // bypasses the "all tasks complete" gate so an assessor can
+        // record an extension at any time during assessment.
+        new WorkItemTransition(
+            "sla-extend", "Extend SLA",
+            s_assessmentInProgress.Id, s_assessmentInProgress.Id,
+            RequiresAllTasksComplete: false),
+
         new WorkItemTransition(
             "submit-for-decision", "Submit for decision",
             s_assessmentInProgress.Id, s_awaitingDecision.Id),
@@ -95,6 +113,9 @@ internal sealed class ReAccreditationType : IWorkItemType
         new WorkItemTransition(
             "withdraw", "Withdraw",
             s_submitted.Id, s_withdrawn.Id, RequiresAllTasksComplete: false),
+        new WorkItemTransition(
+            "withdraw-during-duly-made", "Withdraw",
+            s_dulyMade.Id, s_withdrawn.Id, RequiresAllTasksComplete: false),
         new WorkItemTransition(
             "withdraw-during-assessment", "Withdraw",
             s_assessmentInProgress.Id, s_withdrawn.Id, RequiresAllTasksComplete: false),

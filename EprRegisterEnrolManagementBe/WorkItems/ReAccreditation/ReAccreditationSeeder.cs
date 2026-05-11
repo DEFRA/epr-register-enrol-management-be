@@ -95,6 +95,10 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["submitted"] =
                 [
                     "verify-organisation-details",
+                    "confirm-application-completeness"
+                ],
+                ["duly-made"] =
+                [
                     "confirm-registration-fee-paid"
                 ],
                 ["assessment-in-progress"] =
@@ -127,6 +131,10 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["submitted"] =
                 [
                     "verify-organisation-details",
+                    "confirm-application-completeness"
+                ],
+                ["duly-made"] =
+                [
                     "confirm-registration-fee-paid"
                 ],
                 ["assessment-in-progress"] =
@@ -160,6 +168,10 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["submitted"] =
                 [
                     "verify-organisation-details",
+                    "confirm-application-completeness"
+                ],
+                ["duly-made"] =
+                [
                     "confirm-registration-fee-paid"
                 ],
                 ["assessment-in-progress"] =

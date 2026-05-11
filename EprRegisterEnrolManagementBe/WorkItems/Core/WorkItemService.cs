@@ -147,11 +147,7 @@ public sealed record WorkItemEngineProjection(
     IReadOnlyCollection<WorkItemTaskProgress> Tasks,
     IReadOnlyCollection<WorkItemTransition> AvailableActions);
 
-public sealed class WorkItemService(
-    IWorkItemRegistry registry,
-    IWorkItemPersistence persistence,
-    ILogger<WorkItemService> logger,
-    TimeProvider? timeProvider = null) : IWorkItemService
+public sealed class WorkItemService : IWorkItemService
 {
     /// <summary>
     /// Role that grants the holder the ability to assign / re-assign /
@@ -160,7 +156,25 @@ public sealed class WorkItemService(
     /// </summary>
     public const string AssignRole = "assign";
 
-    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly IWorkItemRegistry registry;
+    private readonly IWorkItemPersistence persistence;
+    private readonly ILogger<WorkItemService> logger;
+    private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
+    private readonly TimeProvider _timeProvider;
+
+    public WorkItemService(
+        IWorkItemRegistry registry,
+        IWorkItemPersistence persistence,
+        ILogger<WorkItemService> logger,
+        TimeProvider? timeProvider = null,
+        IEnumerable<IWorkItemPostActionHook>? postActionHooks = null)
+    {
+        this.registry = registry;
+        this.persistence = persistence;
+        this.logger = logger;
+        _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
+        _timeProvider = timeProvider ?? TimeProvider.System;
+    }
 
     public async Task<WorkItemActionResult> SubmitAsync(
         IWorkItemType type,
@@ -207,6 +221,8 @@ public sealed class WorkItemService(
         logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} by {User}",
             workItem.Id, workItem.TypeId, workItem.StateId, DescribeUser(user));
+
+        await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -356,6 +372,8 @@ public sealed class WorkItemService(
         logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
             workItem.Id, workItem.TypeId, previousState, workItem.StateId, transition.ActionId, DescribeUser(user));
+
+        await InvokeActionAppliedHooksAsync(workItem, transition.ActionId, previousState, user, cancellationToken);
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -1021,5 +1039,54 @@ public sealed class WorkItemService(
     {
         var id = user?.FindFirstValue("user:id");
         return string.IsNullOrWhiteSpace(id) ? null : id;
+    }
+
+    /// <summary>
+    /// Fan out to every registered <see cref="IWorkItemPostActionHook"/>
+    /// after a successful submission. Hooks are required to swallow
+    /// their own failures (see interface contract); this method only
+    /// guards against a misbehaving hook by catching and logging so a
+    /// single hook cannot unwind the originating mutation.
+    /// </summary>
+    private async Task InvokeSubmittedHooksAsync(
+        WorkItem workItem,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        foreach (var hook in _postActionHooks)
+        {
+            try
+            {
+                await hook.OnSubmittedAsync(workItem, user, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "Post-action submit hook {HookType} failed for work item {WorkItemId}",
+                    hook.GetType().FullName, workItem.Id);
+            }
+        }
+    }
+
+    private async Task InvokeActionAppliedHooksAsync(
+        WorkItem workItem,
+        string actionId,
+        string fromStateId,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        foreach (var hook in _postActionHooks)
+        {
+            try
+            {
+                await hook.OnActionAppliedAsync(workItem, actionId, fromStateId, user, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "Post-action transition hook {HookType} failed for work item {WorkItemId} action {ActionId}",
+                    hook.GetType().FullName, workItem.Id, actionId);
+            }
+        }
     }
 }
