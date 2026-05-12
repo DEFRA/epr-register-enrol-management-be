@@ -366,6 +366,22 @@ static void ConfigureEndpoints(WebApplication app)
     // and the document is internal-platform-facing rather than public.
     app.MapOpenApi("/openapi/{documentName}.json").AllowAnonymous();
 
+    // Swagger UI explorer at /swagger, gated by SwaggerUiGating: enabled
+    // outside Production, or anywhere that opts in via Swagger:Enabled.
+    // Anonymous on purpose, mirroring the /health and /openapi posture —
+    // the underlying document is already anonymous so authenticating the
+    // explorer page would be theatre. Production stays off by default so
+    // the explorer is not exposed to platform traffic without an explicit
+    // operator decision.
+    if (SwaggerUiGating.ShouldEnableSwaggerUi(app.Environment, app.Configuration))
+    {
+        app.UseSwaggerUI(options =>
+        {
+            options.SwaggerEndpoint("/openapi/v1.json", "EPR Management BE v1");
+            options.RoutePrefix = "swagger";
+        });
+    }
+
     app.MapWorkItemFrameworkEndpoints();
     app.MapWorkItemModules();
 }

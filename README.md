@@ -40,6 +40,9 @@ The API listens on `http://localhost:8085`. Verify it is up:
 curl http://localhost:8085/health
 ```
 
+Outside the Production environment (or with `Swagger__Enabled=true`) the
+Swagger UI explorer is available at <http://localhost:8085/swagger>.
+
 The MongoDB connection is configured in
 [`EprRegisterEnrolManagementBe/appsettings.Development.json`](EprRegisterEnrolManagementBe/appsettings.Development.json)
 and can be overridden via the `Mongo__DatabaseUri` and `Mongo__DatabaseName`
@@ -73,6 +76,8 @@ docker compose down -v
 | Method | Path                                         | Description                            |
 | ------ | -------------------------------------------- | -------------------------------------- |
 | GET    | `/health`                                    | Health probe used by CDP               |
+| GET    | `/openapi/v1.json`                           | OpenAPI document (anonymous)           |
+| GET    | `/swagger`                                   | Swagger UI explorer (non-Production)   |
 | POST   | `/work-items`                                | Submit a new work item                 |
 | GET    | `/work-items`                                | List/search work items                 |
 | GET    | `/work-items/{id}`                           | Get a single work item by id           |
