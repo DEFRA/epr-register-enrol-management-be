@@ -1,6 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
-using System.Text.Json.Nodes;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -45,19 +44,7 @@ internal static class ReAccreditationEndpoints
             .WithName("RecordReAccreditationDecisionRationale")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxRationaleBodyBytes))
-            .RequireAuthorization()
-            .WithOpenApi(op =>
-            {
-                if (op.RequestBody?.Content.TryGetValue("application/json", out var mediaType) == true)
-                {
-                    mediaType.Example = JsonNode.Parse("""
-                        {
-                            "rationale": "All assessment tasks completed satisfactorily. Organisation demonstrates adequate technical and financial capacity for re-accreditation."
-                        }
-                        """);
-                }
-                return op;
-            });
+            .RequireAuthorization();
 
         return app;
     }

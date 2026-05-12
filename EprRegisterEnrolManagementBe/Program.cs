@@ -58,7 +58,14 @@ static void ConfigureServices(WebApplicationBuilder builder)
     // document is exposed unauthenticated at /openapi/v1.json by
     // ConfigureEndpoints, mirroring the health endpoints' posture, since
     // BFF and platform tooling need to fetch it without credentials.
-    services.AddOpenApi("v1");
+    services.AddOpenApi("v1", options =>
+    {
+        // Inject concrete request-body examples so the Swagger UI
+        // "Try it out" panel pre-fills with real payloads. Runs last in
+        // the transformer pipeline to survive schema population. RA-124.
+        options.AddDocumentTransformer<WorkItemOpenApiExampleTransformer>();
+    });
+    services.AddSingleton<WorkItemOpenApiExampleTransformer>();
 
     services.AddHttpContextAccessor();
     // In-memory cache backs the HMAC nonce replay defence in
