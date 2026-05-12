@@ -1,8 +1,10 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Claims;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.OpenApi;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
@@ -43,7 +45,24 @@ public static class WorkItemEndpoints
             .WithName("SubmitWorkItem")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxSubmitBodyBytes))
-            .RequireAuthorization();
+            .RequireAuthorization()
+            .WithOpenApi(op =>
+            {
+                EnsureJsonRequestBody(op).Example = JsonNode.Parse("""
+                    {
+                        "typeId": "re-accreditation",
+                        "payload": {
+                            "organisationName": "Acme Recycling Ltd",
+                            "registrationNumber": "12345678",
+                            "materialsHandled": ["paper", "glass", "plastic"],
+                            "previousAccreditationYear": 2023,
+                            "complianceIssuesReported": 0,
+                            "operatorEmail": "operator@acmerecycling.example.com"
+                        }
+                    }
+                    """);
+                return op;
+            });
 
         group.MapGet("/{id:guid}", GetById)
             .WithName("GetWorkItemById")
@@ -61,7 +80,14 @@ public static class WorkItemEndpoints
             .WithName("SetWorkItemTaskStatus")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxTaskStatusBodyBytes))
-            .RequireAuthorization();
+            .RequireAuthorization()
+            .WithOpenApi(op =>
+            {
+                EnsureJsonRequestBody(op).Example = JsonNode.Parse("""
+                    { "status": "InProgress" }
+                    """);
+                return op;
+            });
 
         group.MapPost("/{id:guid}/actions/{actionId}", ApplyAction)
             .WithName("ApplyWorkItemAction")
@@ -71,7 +97,14 @@ public static class WorkItemEndpoints
             .WithName("AssignWorkItem")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxAssignBodyBytes))
-            .RequireAuthorization();
+            .RequireAuthorization()
+            .WithOpenApi(op =>
+            {
+                EnsureJsonRequestBody(op).Example = JsonNode.Parse("""
+                    { "assigneeId": "caseworker-abc123", "assigneeName": "Jane Smith" }
+                    """);
+                return op;
+            });
 
         group.MapPost("/{id:guid}/unassign", Unassign)
             .WithName("UnassignWorkItem")
@@ -81,7 +114,14 @@ public static class WorkItemEndpoints
             .WithName("AddWorkItemNote")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxNoteBodyBytes))
-            .RequireAuthorization();
+            .RequireAuthorization()
+            .WithOpenApi(op =>
+            {
+                EnsureJsonRequestBody(op).Example = JsonNode.Parse("""
+                    { "text": "Organisation details verified against Companies House. All directors confirmed active." }
+                    """);
+                return op;
+            });
 
         return app;
     }
@@ -159,6 +199,21 @@ public static class WorkItemEndpoints
 
     private static ProblemHttpResult BadRequest(string title, string detail) =>
         TypedResults.Problem(title: title, detail: detail, statusCode: StatusCodes.Status400BadRequest);
+
+    // Ensures the operation has an application/json request body entry so
+    // the .WithOpenApi() lambdas above can set an Example regardless of
+    // whether the OpenAPI generator detected the body from the JsonElement
+    // parameter.
+    private static OpenApiMediaType EnsureJsonRequestBody(OpenApiOperation op)
+    {
+        op.RequestBody ??= new OpenApiRequestBody { Required = true };
+        if (!op.RequestBody.Content.TryGetValue("application/json", out var mediaType))
+        {
+            mediaType = new OpenApiMediaType();
+            op.RequestBody.Content["application/json"] = mediaType;
+        }
+        return mediaType;
+    }
 
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound>> GetById(
         [FromRoute] Guid id,
