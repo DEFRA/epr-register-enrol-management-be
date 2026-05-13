@@ -394,13 +394,12 @@ static void ConfigureEndpoints(WebApplication app)
         {
             options.SwaggerEndpoint("/openapi/v1.json", "EPR Management BE v1");
             options.RoutePrefix = "swagger";
-            // Inject the stub-user picker into the topbar.
+            // Inject the stub-user picker into the topbar. The script
+            // also monkey-patches window.fetch so every Try it out call
+            // carries the four CDP trust headers for the selected user
+            // — Swashbuckle's UseRequestInterceptor is unreliable with
+            // arrow-function bodies, so we bypass it.
             options.InjectJavascript(SwaggerUiStubUserAssets.ScriptPath);
-            // requestInterceptor reads the picker's selection from
-            // localStorage and attaches the four CDP trust headers to
-            // every outgoing request, so the developer does not have to
-            // touch the Authorize modal.
-            options.UseRequestInterceptor(SwaggerUiStubUserAssets.RequestInterceptor);
         });
     }
 

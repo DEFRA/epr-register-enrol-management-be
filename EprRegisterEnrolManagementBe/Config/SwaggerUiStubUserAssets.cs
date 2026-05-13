@@ -19,37 +19,21 @@ internal static class SwaggerUiStubUserAssets
     internal const string ScriptPath = "/swagger-ui-stub-users.js";
 
     /// <summary>
-    /// JS function (as a single expression) registered as Swagger UI's
-    /// <c>requestInterceptor</c>. Reads the user selected by the topbar
-    /// dropdown from <c>localStorage</c> and attaches the four CDP trust
-    /// headers that <c>CognitoClientIdAuthenticationHandler</c> consumes
-    /// in header-trust (no-shared-secret) mode. Anonymous endpoints
-    /// (<c>/health</c>, <c>/openapi/*</c>, the Swagger UI itself) ignore
-    /// the headers, so attaching them unconditionally is safe.
-    /// </summary>
-    internal const string RequestInterceptor = """
-        (req) => {
-          try {
-            const raw = window.localStorage.getItem('eprSwaggerStubUser');
-            if (!raw) return req;
-            const u = JSON.parse(raw);
-            req.headers = req.headers || {};
-            req.headers['x-cdp-cognito-client-id'] = 'local-swagger-ui';
-            req.headers['x-cdp-user-id'] = u.id;
-            req.headers['x-cdp-user-name'] = u.name;
-            req.headers['x-cdp-user-roles'] = u.roles;
-          } catch (e) {
-            console.warn('stub-user interceptor failed', e);
-          }
-          return req;
-        }
-        """;
-
-    /// <summary>
-    /// JS bundle served at <see cref="ScriptPath"/>. Adds a stub-user
-    /// picker to the Swagger UI topbar. Kept as inline source so it ships
-    /// with the assembly — no static-file middleware required.
-    /// The stub-user list mirrors <c>STUB_USERS</c> in the BFF
+    /// JS bundle served at <see cref="ScriptPath"/>. Two responsibilities:
+    /// 1. Add a stub-user picker to the Swagger UI topbar; selection is
+    ///    persisted in <c>localStorage</c>.
+    /// 2. Monkey-patch <c>window.fetch</c> so every same-origin Try it out
+    ///    call carries the four CDP trust headers that
+    ///    <c>CognitoClientIdAuthenticationHandler</c> consumes in
+    ///    header-trust (no-shared-secret) mode. Patching <c>fetch</c>
+    ///    directly rather than going through Swashbuckle's
+    ///    <c>UseRequestInterceptor</c> avoids that helper's brittle
+    ///    arrow-function parsing — the interceptor was being injected but
+    ///    silently dropped, leaving every Try it out as anonymous.
+    ///
+    /// Kept as inline source so it ships with the assembly — no
+    /// static-file middleware required. The stub-user list mirrors
+    /// <c>STUB_USERS</c> in the BFF
     /// (<c>src/server/routes/auth/stub/controller.js</c>); these are dev
     /// fixtures only and not tied to any real identity.
     /// </summary>
@@ -76,6 +60,37 @@ internal static class SwaggerUiStubUserAssets
               window.localStorage.removeItem(STORAGE_KEY);
             }
           }
+
+          // Monkey-patch fetch BEFORE Swagger UI mounts so every Try it
+          // out call goes through us. We only attach trust headers for
+          // same-origin requests (Swagger UI itself fetches the OpenAPI
+          // doc with fetch too — it's also same-origin and the backend
+          // serves /openapi/* anonymously, so unconditionally attaching
+          // is safe).
+          const originalFetch = window.fetch.bind(window);
+          window.fetch = function (input, init) {
+            const user = read();
+            if (!user) return originalFetch(input, init);
+
+            const url = typeof input === 'string' ? input : (input && input.url) || '';
+            // Resolve relative URLs against the page so we can compare
+            // origins. file:// and other oddities fall through unmodified.
+            let sameOrigin = true;
+            try {
+              const parsed = new URL(url, window.location.href);
+              sameOrigin = parsed.origin === window.location.origin;
+            } catch (e) { /* leave sameOrigin true */ }
+            if (!sameOrigin) return originalFetch(input, init);
+
+            init = init || {};
+            const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
+            headers.set('x-cdp-cognito-client-id', 'local-swagger-ui');
+            headers.set('x-cdp-user-id', user.id);
+            headers.set('x-cdp-user-name', user.name);
+            headers.set('x-cdp-user-roles', user.roles);
+            init.headers = headers;
+            return originalFetch(input, init);
+          };
 
           function buildPicker() {
             const wrapper = document.createElement('div');
