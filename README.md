@@ -43,6 +43,19 @@ curl http://localhost:8085/health
 Outside the Production environment (or with `Swagger__Enabled=true`) the
 Swagger UI explorer is available at <http://localhost:8085/swagger>.
 
+The explorer ships with a dev-only **"Authenticate as:"** dropdown in the
+topbar that mirrors the BFF's stub login fixtures
+(`stub-standard-1`, `stub-assign-1`, `stub-decision-maker-1`). Pick a
+user and every "Try it out" call will be sent with the four CDP trust
+headers (`x-cdp-cognito-client-id`, `x-cdp-user-id`, `x-cdp-user-name`,
+`x-cdp-user-roles`) for that user. The selection persists in the
+browser's `localStorage`. Picking "— anonymous —" clears it.
+
+> The cURL preview Swagger UI shows in the response panel is generated
+> *before* the request is sent and does **not** include the headers
+> attached by the picker. The actual XHR over the wire does — check the
+> server response, not the cURL snippet, to confirm authentication.
+
 The MongoDB connection is configured in
 [`EprRegisterEnrolManagementBe/appsettings.Development.json`](EprRegisterEnrolManagementBe/appsettings.Development.json)
 and can be overridden via the `Mongo__DatabaseUri` and `Mongo__DatabaseName`
@@ -101,6 +114,10 @@ curl -H 'x-cdp-cognito-client-id: my-upstream-service' \
 
 Requests without the header receive `401 Unauthorized`. The `/health`
 endpoint is anonymous and remains reachable without authentication.
+
+For local exploration without crafting cURL commands by hand, use the
+Swagger UI explorer at <http://localhost:8085/swagger> with its built-in
+stub-user picker — see [Local development](#local-development) above.
 
 ## Testing
 
