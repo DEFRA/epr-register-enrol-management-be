@@ -168,6 +168,92 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Post_records_submission_metadata_on_birth_audit_entry()
+    {
+        // RA-126: birth audit entry must carry source / clientId / userId
+        // / applicationReference alongside the existing typeId / stateId
+        // / templateVersion keys so audit consumers can reconstruct the
+        // submission origin without joining back to request logs.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory(userId: "alice-1", userName: "Alice Example");
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync("/work-items", new
+        {
+            typeId = TypeId,
+            source = "operator-fe",
+            applicationReference = "APP-123",
+            payload = new { applicantName = "Acme" }
+        }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var persisted = await factory.Persistence.GetByIdAsync(body!.Id, cancellationToken);
+        Assert.NotNull(persisted);
+        var entry = Assert.Single(persisted!.AuditLog);
+        Assert.Equal("work-item-submitted", entry.Action);
+        Assert.Equal(TypeId, entry.Details["typeId"]);
+        Assert.Equal("submitted", entry.Details["stateId"]);
+        Assert.Equal("v1", entry.Details["templateVersion"]);
+        Assert.Equal("operator-fe", entry.Details["source"]);
+        Assert.Equal("test-client", entry.Details["clientId"]);
+        Assert.Equal("alice-1", entry.Details["userId"]);
+        Assert.Equal("APP-123", entry.Details["applicationReference"]);
+    }
+
+    [Fact]
+    public async Task Post_records_birth_audit_entry_with_null_metadata_when_omitted()
+    {
+        // RA-126: source / applicationReference are optional; when the
+        // caller omits them the keys still appear on Details with a
+        // null value so audit consumers can rely on a fixed shape.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory(userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            "/work-items", new { typeId = TypeId }, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var persisted = await factory.Persistence.GetByIdAsync(body!.Id, cancellationToken);
+        var entry = Assert.Single(persisted!.AuditLog);
+        Assert.True(entry.Details.ContainsKey("source"));
+        Assert.Null(entry.Details["source"]);
+        Assert.True(entry.Details.ContainsKey("applicationReference"));
+        Assert.Null(entry.Details["applicationReference"]);
+        Assert.Equal("test-client", entry.Details["clientId"]);
+        Assert.Equal("alice-1", entry.Details["userId"]);
+    }
+
+    [Theory]
+    [InlineData("source", "'source' must be a string.")]
+    [InlineData("applicationReference", "'applicationReference' must be a string.")]
+    public async Task Post_rejects_non_string_submission_metadata_field(string field, string expectedDetail)
+    {
+        // RA-126: reject malformed metadata up front rather than
+        // silently coercing / dropping it — that would leave the audit
+        // record degraded without the caller noticing.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory();
+        using var client = factory.CreateClient();
+
+        // Hand-craft body to inject a non-string value (e.g. a number)
+        // for the field under test.
+        var json = $$"""
+        { "typeId": "{{TypeId}}", "{{field}}": 42 }
+        """;
+        var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+        var response = await client.PostAsync("/work-items", content, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Invalid request body", problem?.Title);
+        Assert.Equal(expectedDetail, problem?.Detail);
+        Assert.Empty(await factory.AllItemsAsync(cancellationToken));
+    }
+
+    [Fact]
     public async Task Post_accepts_request_without_payload()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
