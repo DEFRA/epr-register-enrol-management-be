@@ -58,7 +58,15 @@ static void ConfigureServices(WebApplicationBuilder builder)
     // document is exposed unauthenticated at /openapi/v1.json by
     // ConfigureEndpoints, mirroring the health endpoints' posture, since
     // BFF and platform tooling need to fetch it without credentials.
-    services.AddOpenApi("v1");
+    services.AddOpenApi("v1", options =>
+    {
+        // Inject concrete request-body examples so the Swagger UI
+        // "Try it out" panel pre-fills with real payloads. Runs last in
+        // the transformer pipeline to survive schema population. RA-124.
+        // AddDocumentTransformer<T> registers the transformer in DI, so
+        // no separate AddSingleton call is required.
+        options.AddDocumentTransformer<WorkItemOpenApiExampleTransformer>();
+    });
 
     services.AddHttpContextAccessor();
     // In-memory cache backs the HMAC nonce replay defence in
@@ -365,6 +373,36 @@ static void ConfigureEndpoints(WebApplication app)
     // IsDevelopment) because this service sits behind the BFF inside CDP
     // and the document is internal-platform-facing rather than public.
     app.MapOpenApi("/openapi/{documentName}.json").AllowAnonymous();
+
+    // Swagger UI explorer at /swagger, gated by SwaggerUiGating: enabled
+    // outside Production, or anywhere that opts in via Swagger:Enabled.
+    // Anonymous on purpose, mirroring the /health and /openapi posture —
+    // the underlying document is already anonymous so authenticating the
+    // explorer page would be theatre. Production stays off by default so
+    // the explorer is not exposed to platform traffic without an explicit
+    // operator decision.
+    if (SwaggerUiGating.ShouldEnableSwaggerUi(app.Environment, app.Configuration))
+    {
+        // Serve the stub-user picker JS that augments the Swagger UI
+        // topbar with a dev-only dropdown. Anonymous: the JS contains no
+        // secrets, only the dev-fixture stub user list. RA-124.
+        app.MapGet(SwaggerUiStubUserAssets.ScriptPath, () =>
+            Results.Content(SwaggerUiStubUserAssets.ScriptBody, "application/javascript"))
+            .AllowAnonymous()
+            .ExcludeFromDescription();
+
+        app.UseSwaggerUI(options =>
+        {
+            options.SwaggerEndpoint("/openapi/v1.json", "EPR Management BE v1");
+            options.RoutePrefix = "swagger";
+            // Inject the stub-user picker into the topbar. The script
+            // also monkey-patches window.fetch so every Try it out call
+            // carries the four CDP trust headers for the selected user
+            // — Swashbuckle's UseRequestInterceptor is unreliable with
+            // arrow-function bodies, so we bypass it.
+            options.InjectJavascript(SwaggerUiStubUserAssets.ScriptPath);
+        });
+    }
 
     app.MapWorkItemFrameworkEndpoints();
     app.MapWorkItemModules();
