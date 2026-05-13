@@ -30,6 +30,7 @@ public interface IWorkItemService
         BsonDocument payload,
         string? submittedBy,
         ClaimsPrincipal user,
+        IReadOnlyDictionary<string, string?>? submissionMetadata = null,
         CancellationToken cancellationToken = default);
 
     
@@ -181,6 +182,7 @@ public sealed class WorkItemService : IWorkItemService
         BsonDocument payload,
         string? submittedBy,
         ClaimsPrincipal user,
+        IReadOnlyDictionary<string, string?>? submissionMetadata = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(type);
@@ -209,11 +211,25 @@ public sealed class WorkItemService : IWorkItemService
         // than the first task completion. Appended to the in-memory list
         // before the single CreateAsync call so the document and its first
         // audit entry land in storage together.
+        //
+        // RA-126: enrich the birth entry with the originating BFF /
+        // application context so audit consumers can reconstruct who
+        // submitted from where without joining back to request logs.
+        // 'source' / 'applicationReference' are caller-supplied (BFF /
+        // operator FE forward whichever apply); 'clientId' is the
+        // Cognito client id forwarded by the CDP gateway; 'userId' is
+        // the end-user identity claim required for any mutation.
         AppendAudit(workItem, "work-item-submitted", "Work item submitted", user, now, new()
         {
             ["typeId"] = type.TypeId,
             ["stateId"] = workItem.StateId,
-            ["templateVersion"] = snapshot.TemplateVersion
+            ["templateVersion"] = snapshot.TemplateVersion,
+            ["source"] = submissionMetadata is not null
+                && submissionMetadata.TryGetValue("source", out var src) ? src : null,
+            ["clientId"] = user.FindFirstValue("cognito:client_id"),
+            ["userId"] = ResolveActorUserId(user),
+            ["applicationReference"] = submissionMetadata is not null
+                && submissionMetadata.TryGetValue("applicationReference", out var appRef) ? appRef : null
         });
 
         await _persistence.CreateAsync(workItem, cancellationToken);

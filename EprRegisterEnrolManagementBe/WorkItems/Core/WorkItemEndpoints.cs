@@ -129,13 +129,36 @@ public static class WorkItemEndpoints
         var submittedBy = httpContext.User.FindFirstValue("cognito:client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
+        // RA-126: optional caller-supplied audit context. Both fields are
+        // strings when present; reject other JSON types up front so a
+        // malformed body cannot silently degrade the audit record.
+        Dictionary<string, string?>? submissionMetadata = null;
+        if (body.TryGetProperty("source", out var sourceElement))
+        {
+            if (sourceElement.ValueKind != JsonValueKind.String)
+            {
+                return BadRequest("Invalid request body", "'source' must be a string.");
+            }
+            (submissionMetadata ??= new Dictionary<string, string?>(StringComparer.Ordinal))
+                ["source"] = sourceElement.GetString();
+        }
+        if (body.TryGetProperty("applicationReference", out var applicationReferenceElement))
+        {
+            if (applicationReferenceElement.ValueKind != JsonValueKind.String)
+            {
+                return BadRequest("Invalid request body", "'applicationReference' must be a string.");
+            }
+            (submissionMetadata ??= new Dictionary<string, string?>(StringComparer.Ordinal))
+                ["applicationReference"] = applicationReferenceElement.GetString();
+        }
+
         // Routed through the engine so the framework owns audit-log
         // composition for the birth event in the same place it owns every
         // other state-changing entry. The engine writes the document and
         // its first 'work-item-submitted' audit entry in a single
         // CreateAsync call.
         var result = await engine.SubmitAsync(
-            type, payloadDocument, submittedBy, httpContext.User, cancellationToken);
+            type, payloadDocument, submittedBy, httpContext.User, submissionMetadata, cancellationToken);
         if (!result.IsSuccess)
         {
             return result.FailureCode switch

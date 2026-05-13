@@ -86,7 +86,7 @@ public class WorkItemServiceTimestampTests
     {
         var result = await BuildService(BuildType()).SubmitAsync(
             BuildType(), new BsonDocument(), submittedBy: "test-client",
-            User(), TestContext.Current.CancellationToken);
+            User(), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess, result.Message);
 

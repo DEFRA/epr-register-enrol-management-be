@@ -1226,7 +1226,7 @@ public class WorkItemServiceTests
         var payload = new BsonDocument { ["foo"] = "bar" };
 
         var result = await BuildService(type).SubmitAsync(
-            type, payload, "test-client", AuditUser(), TestContext.Current.CancellationToken);
+            type, payload, "test-client", AuditUser(), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.WorkItem);
@@ -1248,7 +1248,7 @@ public class WorkItemServiceTests
         var type = BuildType();
 
         var result = await BuildService(type).SubmitAsync(
-            type, new BsonDocument(), "test-client", AuditUser(), TestContext.Current.CancellationToken);
+            type, new BsonDocument(), "test-client", AuditUser(), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(result.WorkItem);
@@ -1275,7 +1275,7 @@ public class WorkItemServiceTests
 
         var result = await BuildService(type).SubmitAsync(
             type, new BsonDocument(), "test-client",
-            UserWithoutActorId(), TestContext.Current.CancellationToken);
+            UserWithoutActorId(), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
@@ -1285,6 +1285,64 @@ public class WorkItemServiceTests
             new WorkItemQuery(TypeIds: [TypeId], Page: 1, PageSize: 10),
             TestContext.Current.CancellationToken);
         Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    public async Task Submit_records_submission_metadata_on_birth_audit_entry()
+    {
+        // RA-126: source / clientId / userId / applicationReference are
+        // appended to the birth entry's Details alongside the existing
+        // typeId / stateId / templateVersion keys. CreatedAt must be the
+        // server-side receipt time from the injected TimeProvider, not a
+        // client-supplied value.
+        var type = BuildType();
+        var metadata = new Dictionary<string, string?>
+        {
+            ["source"] = "operator-fe",
+            ["applicationReference"] = "APP-123"
+        };
+
+        var result = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            submissionMetadata: metadata,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        var entry = Assert.Single(fetched.AuditLog);
+        Assert.Equal("work-item-submitted", entry.Action);
+        Assert.Equal(TickedNow, entry.CreatedAt);
+        Assert.Equal(TypeId, entry.Details["typeId"]);
+        Assert.Equal("submitted", entry.Details["stateId"]);
+        Assert.Equal("v1", entry.Details["templateVersion"]);
+        Assert.Equal("operator-fe", entry.Details["source"]);
+        Assert.Equal("test-client", entry.Details["clientId"]);
+        Assert.Equal("alice-1", entry.Details["userId"]);
+        Assert.Equal("APP-123", entry.Details["applicationReference"]);
+    }
+
+    [Fact]
+    public async Task Submit_records_null_metadata_keys_when_no_metadata_supplied()
+    {
+        // RA-126: when the caller passes no metadata the four keys still
+        // appear on Details. clientId / userId resolve from claims;
+        // source / applicationReference are null.
+        var type = BuildType();
+
+        var result = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            submissionMetadata: null,
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        var entry = Assert.Single(fetched.AuditLog);
+        Assert.True(entry.Details.ContainsKey("source"));
+        Assert.Null(entry.Details["source"]);
+        Assert.True(entry.Details.ContainsKey("applicationReference"));
+        Assert.Null(entry.Details["applicationReference"]);
+        Assert.Equal("test-client", entry.Details["clientId"]);
+        Assert.Equal("alice-1", entry.Details["userId"]);
     }
 
     /// <summary>
