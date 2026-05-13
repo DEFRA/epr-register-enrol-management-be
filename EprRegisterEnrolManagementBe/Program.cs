@@ -63,9 +63,10 @@ static void ConfigureServices(WebApplicationBuilder builder)
         // Inject concrete request-body examples so the Swagger UI
         // "Try it out" panel pre-fills with real payloads. Runs last in
         // the transformer pipeline to survive schema population. RA-124.
+        // AddDocumentTransformer<T> registers the transformer in DI, so
+        // no separate AddSingleton call is required.
         options.AddDocumentTransformer<WorkItemOpenApiExampleTransformer>();
     });
-    services.AddSingleton<WorkItemOpenApiExampleTransformer>();
 
     services.AddHttpContextAccessor();
     // In-memory cache backs the HMAC nonce replay defence in

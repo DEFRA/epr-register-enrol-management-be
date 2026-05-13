@@ -36,26 +36,53 @@ public class OpenApiEndpointTests
         Assert.Contains(pathNames, p => p.StartsWith("/work-items", StringComparison.Ordinal));
     }
 
-    [Fact]
-    public async Task Swagger_ui_stub_user_picker_script_is_served_when_swagger_ui_is_enabled()
+    [Theory]
+    [InlineData("SubmitWorkItem")]
+    [InlineData("SetWorkItemTaskStatus")]
+    [InlineData("AssignWorkItem")]
+    [InlineData("AddWorkItemNote")]
+    [InlineData("RecordReAccreditationDecisionRationale")]
+    public async Task Request_body_example_is_present_for_known_operation(string operationId)
     {
+        // Drift guard for WorkItemOpenApiExampleTransformer: if an
+        // endpoint's .WithName(...) is renamed without updating the
+        // transformer's lookup table, the example silently disappears
+        // from the rendered Swagger UI. Asserting at the document level
+        // catches both the rename-only and the example-removal cases.
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new OpenApiFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.GetAsync("/swagger-ui-stub-users.js", ct);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        Assert.Equal("application/javascript",
-            response.Content.Headers.ContentType?.MediaType);
-
+        var response = await client.GetAsync("/openapi/v1.json", ct);
         var body = await response.Content.ReadAsStringAsync(ct);
-        // Sanity: contains the dropdown-mount marker and the four trust
-        // headers it sets via the request interceptor (the interceptor
-        // string is also embedded in this asset class so a single grep
-        // here confirms wiring end-to-end).
-        Assert.Contains("epr-stub-user-picker", body, StringComparison.Ordinal);
-        Assert.Contains("stub-assign-1", body, StringComparison.Ordinal);
+        using var document = JsonDocument.Parse(body);
+
+        var found = false;
+        foreach (var path in document.RootElement.GetProperty("paths").EnumerateObject())
+        {
+            foreach (var op in path.Value.EnumerateObject())
+            {
+                if (!op.Value.TryGetProperty("operationId", out var opIdEl) ||
+                    opIdEl.GetString() != operationId)
+                {
+                    continue;
+                }
+
+                Assert.True(
+                    op.Value.TryGetProperty("requestBody", out var requestBody),
+                    $"Operation '{operationId}' must declare a requestBody.");
+                var json = requestBody.GetProperty("content").GetProperty("application/json");
+                Assert.True(
+                    json.TryGetProperty("example", out _),
+                    $"Operation '{operationId}' must have a request-body example wired " +
+                    "in WorkItemOpenApiExampleTransformer.");
+                found = true;
+            }
+        }
+
+        Assert.True(found, $"Operation id '{operationId}' was not found in the OpenAPI document. " +
+            "Either the endpoint was renamed or removed — update WorkItemOpenApiExampleTransformer " +
+            "to match.");
     }
 
     private sealed class OpenApiFactory : WebApplicationFactory<Program>

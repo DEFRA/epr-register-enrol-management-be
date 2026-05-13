@@ -14,6 +14,17 @@ internal static class SwaggerUiGating
     /// explorer for diagnostics can opt in without redeploying with a
     /// non-Production environment name.
     /// </summary>
+    /// <remarks>
+    /// SECURITY: opting in via <c>Swagger:Enabled</c> in any environment
+    /// also exposes the dev-only stub-user picker
+    /// (<see cref="SwaggerUiStubUserAssets"/>), which auto-attaches the
+    /// CDP trust headers <c>x-cdp-cognito-client-id=local-swagger-ui</c>
+    /// and arbitrary <c>x-cdp-user-*</c> values to every "Try it out"
+    /// request. This is only safe as long as <c>local-swagger-ui</c> is
+    /// not an allow-listed Cognito client id in the target environment.
+    /// Do NOT enable this flag in any environment whose data you are not
+    /// happy for an authenticated operator to act on as any user/role.
+    /// </remarks>
     internal static bool ShouldEnableSwaggerUi(IHostEnvironment env, IConfiguration config)
     {
         ArgumentNullException.ThrowIfNull(env);
