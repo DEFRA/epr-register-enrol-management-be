@@ -36,6 +36,47 @@ public class OpenApiEndpointTests
         Assert.Contains(pathNames, p => p.StartsWith("/work-items", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task OpenApi_document_advertises_cdp_trust_headers_as_security_schemes_when_swagger_ui_is_enabled()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new OpenApiFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync("/openapi/v1.json", ct);
+        var body = await response.Content.ReadAsStringAsync(ct);
+        using var document = JsonDocument.Parse(body);
+
+        var schemes = document.RootElement
+            .GetProperty("components")
+            .GetProperty("securitySchemes");
+
+        // All four CDP trust headers must be declared as apiKey-in-header
+        // schemes so the Swagger UI explorer renders an Authorize button
+        // for them. RA-124.
+        var expected = new (string Scheme, string Header)[]
+        {
+            ("CognitoClientId", "x-cdp-cognito-client-id"),
+            ("UserId", "x-cdp-user-id"),
+            ("UserName", "x-cdp-user-name"),
+            ("UserRoles", "x-cdp-user-roles"),
+        };
+
+        foreach (var (scheme, header) in expected)
+        {
+            var s = schemes.GetProperty(scheme);
+            Assert.Equal("apiKey", s.GetProperty("type").GetString());
+            Assert.Equal("header", s.GetProperty("in").GetString());
+            Assert.Equal(header, s.GetProperty("name").GetString());
+        }
+
+        // Global security requirement so the headers are applied to every
+        // operation.
+        var security = document.RootElement.GetProperty("security");
+        Assert.Equal(JsonValueKind.Array, security.ValueKind);
+        Assert.True(security.GetArrayLength() >= 1);
+    }
+
     private sealed class OpenApiFactory : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)

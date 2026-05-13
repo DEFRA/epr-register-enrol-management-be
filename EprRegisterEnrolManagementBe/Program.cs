@@ -64,8 +64,19 @@ static void ConfigureServices(WebApplicationBuilder builder)
         // "Try it out" panel pre-fills with real payloads. Runs last in
         // the transformer pipeline to survive schema population. RA-124.
         options.AddDocumentTransformer<WorkItemOpenApiExampleTransformer>();
+
+        // When Swagger UI is enabled (i.e. anywhere except Production
+        // unless explicitly opted in), declare the four CDP trust headers
+        // as ApiKey-in-header security schemes so the explorer renders an
+        // "Authorize" button. Lets local devs fill the headers once and
+        // have them sent on every "Try it out" call. RA-124.
+        if (SwaggerUiGating.ShouldEnableSwaggerUi(builder.Environment, configuration))
+        {
+            options.AddDocumentTransformer<SwaggerUiAuthHeadersTransformer>();
+        }
     });
     services.AddSingleton<WorkItemOpenApiExampleTransformer>();
+    services.AddSingleton<SwaggerUiAuthHeadersTransformer>();
 
     services.AddHttpContextAccessor();
     // In-memory cache backs the HMAC nonce replay defence in
