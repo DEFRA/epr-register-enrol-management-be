@@ -64,19 +64,8 @@ static void ConfigureServices(WebApplicationBuilder builder)
         // "Try it out" panel pre-fills with real payloads. Runs last in
         // the transformer pipeline to survive schema population. RA-124.
         options.AddDocumentTransformer<WorkItemOpenApiExampleTransformer>();
-
-        // When Swagger UI is enabled (i.e. anywhere except Production
-        // unless explicitly opted in), declare the four CDP trust headers
-        // as ApiKey-in-header security schemes so the explorer renders an
-        // "Authorize" button. Lets local devs fill the headers once and
-        // have them sent on every "Try it out" call. RA-124.
-        if (SwaggerUiGating.ShouldEnableSwaggerUi(builder.Environment, configuration))
-        {
-            options.AddDocumentTransformer<SwaggerUiAuthHeadersTransformer>();
-        }
     });
     services.AddSingleton<WorkItemOpenApiExampleTransformer>();
-    services.AddSingleton<SwaggerUiAuthHeadersTransformer>();
 
     services.AddHttpContextAccessor();
     // In-memory cache backs the HMAC nonce replay defence in
@@ -393,10 +382,25 @@ static void ConfigureEndpoints(WebApplication app)
     // operator decision.
     if (SwaggerUiGating.ShouldEnableSwaggerUi(app.Environment, app.Configuration))
     {
+        // Serve the stub-user picker JS that augments the Swagger UI
+        // topbar with a dev-only dropdown. Anonymous: the JS contains no
+        // secrets, only the dev-fixture stub user list. RA-124.
+        app.MapGet(SwaggerUiStubUserAssets.ScriptPath, () =>
+            Results.Content(SwaggerUiStubUserAssets.ScriptBody, "application/javascript"))
+            .AllowAnonymous()
+            .ExcludeFromDescription();
+
         app.UseSwaggerUI(options =>
         {
             options.SwaggerEndpoint("/openapi/v1.json", "EPR Management BE v1");
             options.RoutePrefix = "swagger";
+            // Inject the stub-user picker into the topbar.
+            options.InjectJavascript(SwaggerUiStubUserAssets.ScriptPath);
+            // requestInterceptor reads the picker's selection from
+            // localStorage and attaches the four CDP trust headers to
+            // every outgoing request, so the developer does not have to
+            // touch the Authorize modal.
+            options.UseRequestInterceptor(SwaggerUiStubUserAssets.RequestInterceptor);
         });
     }
 
