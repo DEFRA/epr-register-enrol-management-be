@@ -934,10 +934,9 @@ public class WorkItemServiceTests
         });
         var workItem = await SeedAsync();
 
-        var result = await BuildService(type).AddNoteAsync(
-            workItem.Id, "Spoke to applicant.", AuditUser(),
-            TestContext.Current.CancellationToken,
-            taskId: "check-eligibility");
+        var result = await BuildService(type).AddTaskNoteAsync(
+            workItem.Id, "check-eligibility", "Spoke to applicant.", AuditUser(),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess, result.Message);
         var fetched = await GetAsync(workItem.Id);
@@ -966,10 +965,9 @@ public class WorkItemServiceTests
         var workItem = await SeedAsync();
 
         var exactlyHundred = new string('x', WorkItemService.TaskNoteAuditExcerptLength);
-        var result = await BuildService(type).AddNoteAsync(
-            workItem.Id, exactlyHundred, AuditUser(),
-            TestContext.Current.CancellationToken,
-            taskId: "check-eligibility");
+        var result = await BuildService(type).AddTaskNoteAsync(
+            workItem.Id, "check-eligibility", exactlyHundred, AuditUser(),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -989,10 +987,9 @@ public class WorkItemServiceTests
 
         var longBody = new string('a', WorkItemService.TaskNoteAuditExcerptLength)
                        + new string('b', 50);
-        var result = await BuildService(type).AddNoteAsync(
-            workItem.Id, longBody, AuditUser(),
-            TestContext.Current.CancellationToken,
-            taskId: "check-eligibility");
+        var result = await BuildService(type).AddTaskNoteAsync(
+            workItem.Id, "check-eligibility", longBody, AuditUser(),
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -1014,10 +1011,9 @@ public class WorkItemServiceTests
         });
         var workItem = await SeedAsync();
 
-        var result = await BuildService(type).AddNoteAsync(
-            workItem.Id, "anything", AuditUser(),
-            TestContext.Current.CancellationToken,
-            taskId: "no-such-task");
+        var result = await BuildService(type).AddTaskNoteAsync(
+            workItem.Id, "no-such-task", "anything", AuditUser(),
+            TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TaskNotApplicable, result.FailureCode);
@@ -1035,10 +1031,9 @@ public class WorkItemServiceTests
             ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
         });
 
-        var result = await BuildService(type).AddNoteAsync(
-            Guid.NewGuid(), "anything", AuditUser(),
-            TestContext.Current.CancellationToken,
-            taskId: "check-eligibility");
+        var result = await BuildService(type).AddTaskNoteAsync(
+            Guid.NewGuid(), "check-eligibility", "anything", AuditUser(),
+            TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);

@@ -461,7 +461,7 @@ public static class WorkItemEndpoints
             return BadRequest("Invalid request", "'text' is required and must be a non-empty string.");
         }
 
-        var result = await engine.AddNoteAsync(id, textElement.GetString()!, httpContext.User, cancellationToken, taskId);
+        var result = await engine.AddTaskNoteAsync(id, taskId, textElement.GetString()!, httpContext.User, cancellationToken);
         return ToHttpResult(result, engine);
     }
 
@@ -551,7 +551,7 @@ public static class WorkItemEndpoints
             // most relevant context is at the top of an assessor's screen.
             w.Notes
                 .OrderByDescending(n => n.CreatedAt)
-                .Select(n => new WorkItemNoteResponse(n.Id, n.Text, n.CreatedAt, n.CreatedBy, n.CreatedByName, n.TaskId))
+                .Select(n => new WorkItemNoteResponse(n.Id, n.Text, n.CreatedAt, n.CreatedBy, n.CreatedByName) { TaskId = n.TaskId })
                 .ToList(),
             // Audit log (RA-97) is projected in chronological (oldest-first)
             // order so a UI renders a natural top-to-bottom timeline of

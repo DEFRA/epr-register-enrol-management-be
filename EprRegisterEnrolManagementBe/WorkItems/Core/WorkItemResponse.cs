@@ -40,8 +40,16 @@ public sealed record WorkItemNoteResponse(
     string Text,
     DateTime CreatedAt,
     string? CreatedBy,
-    string? CreatedByName,
-    string? TaskId = null);
+    string? CreatedByName)
+{
+    /// <summary>
+    /// Optional id of the task this note is scoped to (RA-129 / epr-cky).
+    /// Kept as a separate init-only property — rather than appended to the
+    /// positional constructor — so future task-scoped fields can be added
+    /// without a binary-breaking change to the record's primary ctor.
+    /// </summary>
+    public string? TaskId { get; init; }
+}
 
 /// <summary>
 /// Wire shape for a single audit log entry (RA-97). Returned in
