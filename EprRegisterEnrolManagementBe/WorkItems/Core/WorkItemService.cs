@@ -100,12 +100,30 @@ public interface IWorkItemService
     /// time of the call so the audit narrative survives later directory
     /// changes. Notes are append-only; this is the only mutation the
     /// framework offers for them.
+    ///
+    /// When <paramref name="taskId"/> is <c>null</c> (the default) the note
+    /// is a work-item-level note: persisted with <c>TaskId = null</c> and
+    /// audited as <c>note-added</c> (RA-96 behaviour).
+    ///
+    /// When <paramref name="taskId"/> is set (RA-129 / epr-cky) the note is
+    /// scoped to a task on the work item's current state. The id is
+    /// validated against the resolved template's task list — an unknown
+    /// id returns
+    /// <see cref="WorkItemActionFailureCode.TaskNotApplicable"/> with no
+    /// mutation. On success the persisted <c>WorkItemNote.TaskId</c> is
+    /// populated and the audit entry becomes <c>task-note-added</c> with
+    /// details <c>{ taskId, taskDisplayName, noteId, excerpt }</c> where
+    /// <c>excerpt</c> is the first
+    /// <see cref="TaskNoteAuditExcerptLength"/> characters of the trimmed
+    /// note body. Note write + audit entry are a single atomic
+    /// <see cref="IWorkItemPersistence.ReplaceAsync"/>.
     /// </summary>
     Task<WorkItemActionResult> AddNoteAsync(
         Guid workItemId,
         string text,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? taskId = null);
 
     /// <summary>
     /// Atomic compound mutation: append a note AND mark a task complete in a
@@ -560,11 +578,20 @@ public sealed class WorkItemService : IWorkItemService
     /// </summary>
     public const int MaxNoteLength = 4000;
 
+    /// <summary>
+    /// Length of the snapshot copied into a <c>task-note-added</c> audit
+    /// entry's <c>excerpt</c> detail (RA-129 / epr-cky). Audit entries are
+    /// scanned in list views; the full note body lives on
+    /// <c>WorkItem.Notes</c> for the rare case a reader needs the rest.
+    /// </summary>
+    public const int TaskNoteAuditExcerptLength = 100;
+
     public async Task<WorkItemActionResult> AddNoteAsync(
         Guid workItemId,
         string text,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? taskId = null)
     {
         if (RequireActorIdentity(user) is { } identityFailure)
         {
@@ -586,12 +613,49 @@ public sealed class WorkItemService : IWorkItemService
                 $"Note text must be {MaxNoteLength} characters or fewer.");
         }
 
-        var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
-        if (workItem is null)
+        // Two paths intentionally diverge here:
+        //  * work-item-level note (taskId null): historical RA-96 path —
+        //    a single GetByIdAsync, no template resolution required, so
+        //    the note still works for legacy items whose module is no
+        //    longer registered and which carry no template snapshot.
+        //  * task-level note (RA-129): the task id must be validated
+        //    against the resolved template's tasks for the current
+        //    state, mirroring CompleteTaskAsync's TaskNotApplicable
+        //    contract for unknown ids. We therefore go through LoadAsync
+        //    so a missing template surfaces as a structured failure
+        //    instead of a NullReferenceException.
+        WorkItem workItem;
+        WorkItemTask? task = null;
+        if (taskId is null)
         {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.WorkItemNotFound,
-                $"No work item exists with id '{workItemId}'.");
+            var loaded = await _persistence.GetByIdAsync(workItemId, cancellationToken);
+            if (loaded is null)
+            {
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.WorkItemNotFound,
+                    $"No work item exists with id '{workItemId}'.");
+            }
+            workItem = loaded;
+        }
+        else
+        {
+            var (loaded, template, failure) = await LoadAsync(workItemId, cancellationToken);
+            if (failure is not null)
+            {
+                return failure;
+            }
+
+            workItem = loaded!;
+            var tasks = template!.GetTasksForState(workItem.StateId);
+            task = tasks.FirstOrDefault(t => string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase));
+            if (task is null)
+            {
+                // Validation failure before any mutation: document is
+                // unchanged, no note appended, no audit entry written.
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.TaskNotApplicable,
+                    $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'.");
+            }
         }
 
         var note = new WorkItemNote
@@ -599,18 +663,46 @@ public sealed class WorkItemService : IWorkItemService
             Text = trimmed,
             CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
             CreatedBy = ResolveActorUserId(user)!,
-            CreatedByName = user?.FindFirstValue("user:name")
+            CreatedByName = user?.FindFirstValue("user:name"),
+            // Use the resolved task's canonical id rather than echoing
+            // the caller's casing so on-disk values stay in lockstep
+            // with the template even when the BFF forwards a casing
+            // variant.
+            TaskId = task?.Id
         };
         workItem.Notes.Add(note);
         workItem.LastModifiedAt = note.CreatedAt;
-        AppendAudit(workItem, "note-added", "Note added", user, note.CreatedAt, new()
+
+        if (task is null)
         {
-            ["noteId"] = note.Id.ToString(),
-            // Snapshot the trimmed body so the audit log is self-describing —
-            // a reader does not need to cross-reference Notes by id to see
-            // what was written. Already capped by MaxNoteLength.
-            ["noteText"] = note.Text
-        });
+            AppendAudit(workItem, "note-added", "Note added", user, note.CreatedAt, new()
+            {
+                ["noteId"] = note.Id.ToString(),
+                // Snapshot the trimmed body so the audit log is self-describing —
+                // a reader does not need to cross-reference Notes by id to see
+                // what was written. Already capped by MaxNoteLength.
+                ["noteText"] = note.Text
+            });
+        }
+        else
+        {
+            // RA-129 spec (user-stories.md): excerpt is the first 100
+            // characters of the trimmed body. Audit consumers scan
+            // entries in list views; the full body is still available
+            // via WorkItem.Notes for the rare case a reader wants the
+            // rest.
+            var excerpt = trimmed.Length <= TaskNoteAuditExcerptLength
+                ? trimmed
+                : trimmed[..TaskNoteAuditExcerptLength];
+            AppendAudit(workItem, "task-note-added", "Task note added", user, note.CreatedAt, new()
+            {
+                ["taskId"] = task.Id,
+                ["taskDisplayName"] = task.DisplayName,
+                ["noteId"] = note.Id.ToString(),
+                ["excerpt"] = excerpt
+            });
+        }
+
         try
         {
             await _persistence.ReplaceAsync(workItem, cancellationToken);
@@ -620,8 +712,10 @@ public sealed class WorkItemService : IWorkItemService
             return ConcurrencyConflict(workItem.Id);
         }
         _logger.LogInformation(
-            "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
-            note.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
+            "Note {NoteId} added to work item {WorkItemId} ({TypeId}) {TaskScope} by {User}",
+            note.Id, workItem.Id, workItem.TypeId,
+            task is null ? "(work-item-level)" : $"for task {task.Id}",
+            DescribeUser(user));
 
         return WorkItemActionResult.Success(workItem);
     }

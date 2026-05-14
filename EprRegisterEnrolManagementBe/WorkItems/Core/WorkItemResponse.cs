@@ -40,7 +40,8 @@ public sealed record WorkItemNoteResponse(
     string Text,
     DateTime CreatedAt,
     string? CreatedBy,
-    string? CreatedByName);
+    string? CreatedByName,
+    string? TaskId = null);
 
 /// <summary>
 /// Wire shape for a single audit log entry (RA-97). Returned in

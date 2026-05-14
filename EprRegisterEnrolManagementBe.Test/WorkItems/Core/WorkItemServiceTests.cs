@@ -923,6 +923,148 @@ public class WorkItemServiceTests
         Assert.Single(fetched.Notes);
     }
 
+    // ---------------------- Task-scoped notes (RA-129 / epr-cky) ----------------------
+
+    [Fact]
+    public async Task AddNote_task_scoped_persists_taskId_and_writes_task_note_added_audit_entry()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = await SeedAsync();
+
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, "Spoke to applicant.", AuditUser(),
+            TestContext.Current.CancellationToken,
+            taskId: "check-eligibility");
+
+        Assert.True(result.IsSuccess, result.Message);
+        var fetched = await GetAsync(workItem.Id);
+        var note = Assert.Single(fetched.Notes);
+        Assert.Equal("check-eligibility", note.TaskId);
+        Assert.Equal("Spoke to applicant.", note.Text);
+        Assert.Equal("alice-1", note.CreatedBy);
+
+        var entry = Assert.Single(fetched.AuditLog);
+        Assert.Equal("task-note-added", entry.Action);
+        Assert.Equal("Task note added", entry.ActionDisplayName);
+        Assert.Equal("check-eligibility", entry.Details["taskId"]);
+        Assert.Equal("Check eligibility", entry.Details["taskDisplayName"]);
+        Assert.Equal(note.Id.ToString(), entry.Details["noteId"]);
+        // Short note: excerpt mirrors the full trimmed body.
+        Assert.Equal("Spoke to applicant.", entry.Details["excerpt"]);
+    }
+
+    [Fact]
+    public async Task AddNote_task_scoped_excerpt_is_full_text_when_under_or_at_100_chars()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = await SeedAsync();
+
+        var exactlyHundred = new string('x', WorkItemService.TaskNoteAuditExcerptLength);
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, exactlyHundred, AuditUser(),
+            TestContext.Current.CancellationToken,
+            taskId: "check-eligibility");
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(workItem.Id);
+        var entry = Assert.Single(fetched.AuditLog);
+        Assert.Equal(exactlyHundred, entry.Details["excerpt"]);
+        Assert.Equal(WorkItemService.TaskNoteAuditExcerptLength, ((string)entry.Details["excerpt"]!).Length);
+    }
+
+    [Fact]
+    public async Task AddNote_task_scoped_excerpt_truncates_at_100_chars_for_longer_text()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = await SeedAsync();
+
+        var longBody = new string('a', WorkItemService.TaskNoteAuditExcerptLength)
+                       + new string('b', 50);
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, longBody, AuditUser(),
+            TestContext.Current.CancellationToken,
+            taskId: "check-eligibility");
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(workItem.Id);
+        var note = Assert.Single(fetched.Notes);
+        // Full body persisted; excerpt is just the first N chars.
+        Assert.Equal(longBody, note.Text);
+        var entry = Assert.Single(fetched.AuditLog);
+        var excerpt = (string)entry.Details["excerpt"]!;
+        Assert.Equal(WorkItemService.TaskNoteAuditExcerptLength, excerpt.Length);
+        Assert.Equal(new string('a', WorkItemService.TaskNoteAuditExcerptLength), excerpt);
+    }
+
+    [Fact]
+    public async Task AddNote_task_scoped_returns_task_not_applicable_for_unknown_task()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+        var workItem = await SeedAsync();
+
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, "anything", AuditUser(),
+            TestContext.Current.CancellationToken,
+            taskId: "no-such-task");
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.TaskNotApplicable, result.FailureCode);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Empty(fetched.Notes);
+        Assert.Empty(fetched.AuditLog);
+        Assert.Equal(0, fetched.Version);
+    }
+
+    [Fact]
+    public async Task AddNote_task_scoped_returns_not_found_when_work_item_missing()
+    {
+        var type = BuildType(tasksByState: new()
+        {
+            ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
+        });
+
+        var result = await BuildService(type).AddNoteAsync(
+            Guid.NewGuid(), "anything", AuditUser(),
+            TestContext.Current.CancellationToken,
+            taskId: "check-eligibility");
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task AddNote_work_item_level_path_unchanged_when_taskId_omitted()
+    {
+        // Regression: passing no taskId must keep the historical
+        // 'note-added' audit action and persist TaskId = null.
+        var type = BuildType();
+        var workItem = await SeedAsync();
+
+        var result = await BuildService(type).AddNoteAsync(
+            workItem.Id, "Generic note.", AuditUser(),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(workItem.Id);
+        var note = Assert.Single(fetched.Notes);
+        Assert.Null(note.TaskId);
+        var entry = Assert.Single(fetched.AuditLog);
+        Assert.Equal("note-added", entry.Action);
+        Assert.False(entry.Details.ContainsKey("excerpt"));
+    }
+
     private sealed class FakeTimeProvider(DateTime utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);

@@ -38,4 +38,16 @@ public sealed class WorkItemNote
     /// list views do not need a separate user lookup.
     /// </summary>
     public string? CreatedByName { get; init; }
+
+    /// <summary>
+    /// Optional id of the task this note is scoped to (RA-129 / epr-cky).
+    /// <c>null</c> means a work-item-level note (the historical default);
+    /// when set the note was authored against a specific task on the work
+    /// item's current state and is rendered inline against that task on
+    /// the dedicated tasks page. The id references
+    /// <see cref="WorkItemTask.Id"/> on the snapshot template; the note
+    /// still lives embedded on the work-item document — no separate
+    /// collection or index is introduced.
+    /// </summary>
+    public string? TaskId { get; init; }
 }

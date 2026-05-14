@@ -83,6 +83,12 @@ public static class WorkItemEndpoints
             .WithMetadata(new RequestSizeLimitAttribute(MaxNoteBodyBytes))
             .RequireAuthorization();
 
+        group.MapPost("/{id:guid}/tasks/{taskId}/notes", AddTaskNote)
+            .WithName("AddWorkItemTaskNote")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxNoteBodyBytes))
+            .RequireAuthorization();
+
         return app;
     }
 
@@ -423,6 +429,43 @@ public static class WorkItemEndpoints
     }
 
     /// <summary>
+    /// RA-129 / epr-cky: task-scoped note endpoint. Mirrors
+    /// <see cref="AddNote"/>'s body shape, validation and tenancy gate;
+    /// the only differences are the task-scoped route and the engine
+    /// receiving the <paramref name="taskId"/> so it can validate the
+    /// task against the work item's current-state task list and emit a
+    /// <c>task-note-added</c> audit entry instead of <c>note-added</c>.
+    /// </summary>
+    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> AddTaskNote(
+        [FromRoute] Guid id,
+        [FromRoute] string taskId,
+        JsonElement body,
+        HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        {
+            return TypedResults.NotFound();
+        }
+        if (body.ValueKind != JsonValueKind.Object)
+        {
+            return BadRequest("Invalid request", "Request body must be a JSON object containing 'text'.");
+        }
+
+        if (!body.TryGetProperty("text", out var textElement)
+            || textElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(textElement.GetString()))
+        {
+            return BadRequest("Invalid request", "'text' is required and must be a non-empty string.");
+        }
+
+        var result = await engine.AddNoteAsync(id, textElement.GetString()!, httpContext.User, cancellationToken, taskId);
+        return ToHttpResult(result, engine);
+    }
+
+    /// <summary>
     /// Tenancy gate for mutation handlers (epr-0t9). Loads the work item
     /// and verifies the caller may see it via
     /// <see cref="WorkItemTenancy.CanRead"/>; returns the loaded item on
@@ -508,7 +551,7 @@ public static class WorkItemEndpoints
             // most relevant context is at the top of an assessor's screen.
             w.Notes
                 .OrderByDescending(n => n.CreatedAt)
-                .Select(n => new WorkItemNoteResponse(n.Id, n.Text, n.CreatedAt, n.CreatedBy, n.CreatedByName))
+                .Select(n => new WorkItemNoteResponse(n.Id, n.Text, n.CreatedAt, n.CreatedBy, n.CreatedByName, n.TaskId))
                 .ToList(),
             // Audit log (RA-97) is projected in chronological (oldest-first)
             // order so a UI renders a natural top-to-bottom timeline of
