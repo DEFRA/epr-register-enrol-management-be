@@ -151,4 +151,52 @@ public class WorkItemPersistenceBuildFilterTests
         Assert.Equal("user-1", doc["assignedToId"].AsString);
         Assert.Equal("bob", doc["submittedBy"].AsString);
     }
+
+    // ─────────────────────────────── Nations ────────────────────────────────
+
+    [Fact]
+    public void NationsRendersAsInClauseOnPayloadNation()
+    {
+        var doc = Render(new WorkItemQuery(Nations: new[] { "England", "Scotland" }));
+
+        var inArr = doc["payload.Nation"]["$in"].AsBsonArray;
+        Assert.Equal(2, inArr.Count);
+        Assert.Contains("England", inArr.Select(v => v.AsString));
+        Assert.Contains("Scotland", inArr.Select(v => v.AsString));
+    }
+
+    [Fact]
+    public void SingleNationRendersAsInClause()
+    {
+        var doc = Render(new WorkItemQuery(Nations: new[] { "Wales" }));
+
+        Assert.Equal("Wales", doc["payload.Nation"]["$in"].AsBsonArray[0].AsString);
+    }
+
+    [Fact]
+    public void EmptyNationsIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(Nations: Array.Empty<string>()));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void NullNationsIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(Nations: null));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void NationsAndTypeIdsCombineCorrectly()
+    {
+        var doc = Render(new WorkItemQuery(
+            TypeIds: new[] { "re-accreditation" },
+            Nations: new[] { "England" }));
+
+        Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
+        Assert.Equal("England", doc["payload.Nation"]["$in"].AsBsonArray[0].AsString);
+    }
 }

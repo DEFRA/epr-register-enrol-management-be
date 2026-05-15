@@ -18,8 +18,10 @@ internal sealed class ReAccreditationModule : IWorkItemModule
 
     public void RegisterServices(IServiceCollection services)
     {
+        services.AddSingleton<INationResolver, NationResolver>();
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
+        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
     }
 

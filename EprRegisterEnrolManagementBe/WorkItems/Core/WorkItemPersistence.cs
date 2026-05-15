@@ -183,6 +183,13 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             clauses.Add(builder.Eq(w => w.SubmittedBy, submittedBy));
         }
 
+        if (query.Nations is { Count: > 0 } nations)
+        {
+            // Filter by payload.Nation stored as a string in the BSON document
+            // (the Nation enum is serialised as its member name, e.g. "England").
+            clauses.Add(builder.In("payload.Nation", nations));
+        }
+
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
 
@@ -228,7 +235,13 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             builder.Combine(
                 builder.Ascending(w => w.AssignedToId),
                 builder.Descending(w => w.SubmittedAt)));
-        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted];
+        // RA-125: nation-based routing filter; most useful when also
+        // filtering by state so both fields appear in the compound key.
+        var nationAndState = new CreateIndexModel<WorkItem>(
+            builder.Combine(
+                builder.Ascending("payload.Nation"),
+                builder.Ascending(w => w.StateId)));
+        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState];
     }
 }
 

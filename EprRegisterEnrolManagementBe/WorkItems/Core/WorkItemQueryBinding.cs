@@ -16,6 +16,7 @@ internal static class WorkItemQueryBinding
     internal const string UnassignedOnlyParam = "unassigned";
     internal const string PageParam = "page";
     internal const string PageSizeParam = "pageSize";
+    internal const string NationParam = "nation";
 
     /// <summary>
     /// Name of the tenancy-isolation field on <see cref="WorkItemQuery"/>.
@@ -49,7 +50,8 @@ internal static class WorkItemQueryBinding
             AssigneeId: ReadString(query, AssigneeIdParam),
             UnassignedOnly: ReadBool(query, UnassignedOnlyParam),
             Page: ReadInt(query, PageParam, defaultValue: 1),
-            PageSize: ReadInt(query, PageSizeParam, defaultValue: WorkItemQuery.DefaultPageSize));
+            PageSize: ReadInt(query, PageSizeParam, defaultValue: WorkItemQuery.DefaultPageSize),
+            Nations: ReadStrings(query, NationParam));
         // NB: SubmittedBy is intentionally omitted from the constructor
         // call above. Do not add it. See WorkItemQuery.SubmittedBy.
     }

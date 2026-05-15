@@ -58,4 +58,38 @@ public class WorkItemQueryBindingTests
 
         Assert.Null(query.SubmittedBy);
     }
+
+    // ─────────────────────────────── Nations ────────────────────────────────
+
+    [Fact]
+    public void SingleNationIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("nation", "England")));
+
+        Assert.NotNull(query.Nations);
+        Assert.Contains("England", query.Nations!);
+    }
+
+    [Fact]
+    public void MultipleNationValuesAreBound()
+    {
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["nation"] = new Microsoft.Extensions.Primitives.StringValues(new[] { "England", "Scotland" })
+        };
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.NotNull(query.Nations);
+        Assert.Contains("England", query.Nations!);
+        Assert.Contains("Scotland", query.Nations!);
+    }
+
+    [Fact]
+    public void EmptyQueryProducesNullNations()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.Nations);
+    }
 }

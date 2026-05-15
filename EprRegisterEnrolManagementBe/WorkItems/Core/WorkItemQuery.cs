@@ -46,6 +46,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <see cref="WorkItemQueryBinding.FromQueryString"/>.
 /// </para>
 /// </param>
+/// <param name="Nations">
+/// Restrict to items whose <c>payload.Nation</c> is in this set.
+/// Empty/null means "any nation". Values are the string names of the
+/// <see cref="EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.Nation"/>
+/// enum members (e.g. <c>England</c>, <c>NorthernIreland</c>).
+/// </param>
 public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? TypeIds = null,
     IReadOnlyCollection<string>? StateIds = null,
@@ -54,7 +60,8 @@ public sealed record WorkItemQuery(
     bool UnassignedOnly = false,
     int Page = 1,
     int PageSize = 20,
-    string? SubmittedBy = null)
+    string? SubmittedBy = null,
+    IReadOnlyCollection<string>? Nations = null)
 {
     public const int DefaultPageSize = 20;
     public const int MinPageSize = 1;
