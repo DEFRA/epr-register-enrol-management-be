@@ -58,4 +58,72 @@ public class WorkItemQueryBindingTests
 
         Assert.Null(query.SubmittedBy);
     }
+
+    // ─────────────────────────────── Nations ────────────────────────────────
+
+    [Fact]
+    public void SingleNationIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("nation", "England")));
+
+        Assert.NotNull(query.Nations);
+        Assert.Contains("England", query.Nations!);
+    }
+
+    [Fact]
+    public void MultipleNationValuesAreBound()
+    {
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["nation"] = new Microsoft.Extensions.Primitives.StringValues(new[] { "England", "Scotland" })
+        };
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.NotNull(query.Nations);
+        Assert.Contains("England", query.Nations!);
+        Assert.Contains("Scotland", query.Nations!);
+    }
+
+    [Fact]
+    public void EmptyQueryProducesNullNations()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.Nations);
+    }
+
+    [Theory]
+    [InlineData("england", "England")]
+    [InlineData("ENGLAND", "England")]
+    [InlineData("northernireland", "NorthernIreland")]
+    public void NationValuesAreNormalisedToCanonicalEnumName(string input, string expected)
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("nation", input)));
+
+        Assert.NotNull(query.Nations);
+        Assert.Contains(expected, query.Nations!);
+    }
+
+    [Fact]
+    public void UnknownNationValueIsDropped()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("nation", "Atlantis")));
+
+        Assert.Null(query.Nations);
+    }
+
+    [Fact]
+    public void MixedValidAndInvalidNationsKeepsOnlyValid()
+    {
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["nation"] = new Microsoft.Extensions.Primitives.StringValues(new[] { "England", "Atlantis", "wales" })
+        };
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.NotNull(query.Nations);
+        Assert.Equal(new[] { "England", "Wales" }.OrderBy(n => n), query.Nations!.OrderBy(n => n));
+    }
 }

@@ -46,7 +46,9 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["registrationNumber"] = "EPR-100023",
                 ["materialsHandled"] = new BsonArray { "plastic", "glass" },
                 ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0
+                ["complianceIssuesReported"] = 0,
+                ["SiteAddressPostcode"] = "SW1A 1AA",
+                ["Nation"] = "England"
             },
             submittedBy: "stub-portal-client",
             now: now);
@@ -63,7 +65,9 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["registrationNumber"] = "EPR-100087",
                 ["materialsHandled"] = new BsonArray { "plastic" },
                 ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 1
+                ["complianceIssuesReported"] = 1,
+                ["SiteAddressPostcode"] = "EH1 3BN",
+                ["Nation"] = "Scotland"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-standard-1",
@@ -79,12 +83,13 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
             stateId: "assessment-in-progress",
             payload: new BsonDocument
             {
-                ["organisationName"] = "Riverside Glass Recovery"
-                    ,
+                ["organisationName"] = "Riverside Glass Recovery",
                 ["registrationNumber"] = "EPR-099812",
                 ["materialsHandled"] = new BsonArray { "glass", "metal" },
                 ["previousAccreditationYear"] = 2024,
-                ["complianceIssuesReported"] = 2
+                ["complianceIssuesReported"] = 2,
+                ["SiteAddressPostcode"] = "CF10 1AA",
+                ["Nation"] = "Wales"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -120,7 +125,9 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["registrationNumber"] = "EPR-098774",
                 ["materialsHandled"] = new BsonArray { "plastic", "paper", "card" },
                 ["previousAccreditationYear"] = 2024,
-                ["complianceIssuesReported"] = 0
+                ["complianceIssuesReported"] = 0,
+                ["SiteAddressPostcode"] = "BT1 1AA",
+                ["Nation"] = "NorthernIreland"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -157,7 +164,9 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["registrationNumber"] = "EPR-097215",
                 ["materialsHandled"] = new BsonArray { "paper", "card" },
                 ["previousAccreditationYear"] = 2024,
-                ["complianceIssuesReported"] = 0
+                ["complianceIssuesReported"] = 0,
+                ["SiteAddressPostcode"] = "BS1 4DJ",
+                ["Nation"] = "England"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -185,6 +194,78 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                     "record-decision-rationale"
                 ]
             });
+
+        // Additional Scotland item — submitted, unassigned.
+        yield return Build(
+            seedKey: "clyde-composites",
+            submittedDaysAgo: 5,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Clyde Composites Ltd",
+                ["registrationNumber"] = "EPR-100134",
+                ["materialsHandled"] = new BsonArray { "plastic", "metal" },
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["SiteAddressPostcode"] = "G1 1AA",
+                ["Nation"] = "Scotland"
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // Additional Wales item — assessment in progress.
+        yield return Build(
+            seedKey: "swansea-textiles",
+            submittedDaysAgo: 11,
+            stateId: "assessment-in-progress",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Swansea Textiles Recovery",
+                ["registrationNumber"] = "EPR-099441",
+                ["materialsHandled"] = new BsonArray { "glass" },
+                ["previousAccreditationYear"] = 2024,
+                ["complianceIssuesReported"] = 1,
+                ["SiteAddressPostcode"] = "SA1 1AA",
+                ["Nation"] = "Wales"
+            },
+            submittedBy: "stub-portal-client",
+            assignedToId: "stub-assign-1",
+            assignedToName: "Stub Assign User",
+            now: now,
+            completedTasks: new()
+            {
+                ["submitted"] =
+                [
+                    "verify-organisation-details",
+                    "confirm-application-completeness"
+                ],
+                ["duly-made"] =
+                [
+                    "confirm-registration-fee-paid"
+                ],
+                ["assessment-in-progress"] =
+                [
+                    "review-compliance-history"
+                ]
+            });
+
+        // Additional Northern Ireland item — submitted, unassigned.
+        yield return Build(
+            seedKey: "belfast-fibres",
+            submittedDaysAgo: 2,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Belfast Fibres Co",
+                ["registrationNumber"] = "EPR-100198",
+                ["materialsHandled"] = new BsonArray { "paper", "card" },
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["SiteAddressPostcode"] = "BT7 1AA",
+                ["Nation"] = "NorthernIreland"
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
     }
 
     private static WorkItem Build(
