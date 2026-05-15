@@ -145,7 +145,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Contains(keyDocs, k =>
             k.Contains("\"submittedAt\" : -1") && !k.Contains("typeId") && !k.Contains("stateId") && !k.Contains("assignedToId"));
         // RA-125: nation + stateId compound index for fast nation-filtered worklist queries.
-        Assert.Contains(keyDocs, k => k.Contains("\"payload.Nation\" : 1") && k.Contains("\"stateId\" : 1"));
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.nation\" : 1") && k.Contains("\"stateId\" : 1"));
     }
 
     [Fact]

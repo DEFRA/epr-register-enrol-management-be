@@ -28,7 +28,7 @@ public class ReAccreditationNationRoutingHookTests
         };
         if (postcode is not null)
         {
-            payload["SiteAddressPostcode"] = postcode;
+            payload["siteAddressPostcode"] = postcode;
         }
 
         return new WorkItem
@@ -44,15 +44,19 @@ public class ReAccreditationNationRoutingHookTests
     private static ReAccreditationNationRoutingHook BuildSut(
         IWorkItemPersistence persistence,
         INationResolver? resolver = null,
-        FakeTimeProvider? clock = null)
+        FakeTimeProvider? clock = null,
+        TimeSpan? retryDelay = null)
     {
         resolver ??= new NationResolver();
         clock ??= new FakeTimeProvider(s_now);
+        // TimeSpan.Zero by default to keep retry tests fast and deterministic.
+        retryDelay ??= TimeSpan.Zero;
         return new ReAccreditationNationRoutingHook(
             resolver,
             persistence,
             NullLogger<ReAccreditationNationRoutingHook>.Instance,
-            clock);
+            clock,
+            retryDelay);
     }
 
     // ─────────────────────────── OnSubmittedAsync ───────────────────────────
@@ -76,7 +80,7 @@ public class ReAccreditationNationRoutingHookTests
 
         await persistence.Received(1).ReplaceAsync(
             Arg.Is<WorkItem>(w =>
-                w.Payload["Nation"].AsString == expectedNation),
+                w.Payload["nation"].AsString == expectedNation),
             ct);
 
         var entry = freshCopy.AuditLog.Single();
@@ -101,7 +105,7 @@ public class ReAccreditationNationRoutingHookTests
         await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         await persistence.Received(1).ReplaceAsync(
-            Arg.Is<WorkItem>(w => w.Payload["Nation"].AsString == "England"), ct);
+            Arg.Is<WorkItem>(w => w.Payload["nation"].AsString == "England"), ct);
     }
 
     [Fact]

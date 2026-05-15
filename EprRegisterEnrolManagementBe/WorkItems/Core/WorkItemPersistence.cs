@@ -185,9 +185,9 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
 
         if (query.Nations is { Count: > 0 } nations)
         {
-            // Filter by payload.Nation stored as a string in the BSON document
+            // Filter by payload.nation stored as a string in the BSON document
             // (the Nation enum is serialised as its member name, e.g. "England").
-            clauses.Add(builder.In("payload.Nation", nations));
+            clauses.Add(builder.In("payload.nation", nations));
         }
 
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
@@ -239,7 +239,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
         // filtering by state so both fields appear in the compound key.
         var nationAndState = new CreateIndexModel<WorkItem>(
             builder.Combine(
-                builder.Ascending("payload.Nation"),
+                builder.Ascending("payload.nation"),
                 builder.Ascending(w => w.StateId)));
         return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState];
     }

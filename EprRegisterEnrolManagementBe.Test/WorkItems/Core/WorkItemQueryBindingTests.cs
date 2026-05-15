@@ -92,4 +92,38 @@ public class WorkItemQueryBindingTests
 
         Assert.Null(query.Nations);
     }
+
+    [Theory]
+    [InlineData("england", "England")]
+    [InlineData("ENGLAND", "England")]
+    [InlineData("northernireland", "NorthernIreland")]
+    public void NationValuesAreNormalisedToCanonicalEnumName(string input, string expected)
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("nation", input)));
+
+        Assert.NotNull(query.Nations);
+        Assert.Contains(expected, query.Nations!);
+    }
+
+    [Fact]
+    public void UnknownNationValueIsDropped()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("nation", "Atlantis")));
+
+        Assert.Null(query.Nations);
+    }
+
+    [Fact]
+    public void MixedValidAndInvalidNationsKeepsOnlyValid()
+    {
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["nation"] = new Microsoft.Extensions.Primitives.StringValues(new[] { "England", "Atlantis", "wales" })
+        };
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.NotNull(query.Nations);
+        Assert.Equal(new[] { "England", "Wales" }.OrderBy(n => n), query.Nations!.OrderBy(n => n));
+    }
 }

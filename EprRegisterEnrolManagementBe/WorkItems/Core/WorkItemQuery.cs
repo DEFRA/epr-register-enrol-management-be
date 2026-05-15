@@ -47,7 +47,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// </para>
 /// </param>
 /// <param name="Nations">
-/// Restrict to items whose <c>payload.Nation</c> is in this set.
+/// Restrict to items whose <c>payload.nation</c> is in this set.
 /// Empty/null means "any nation". Values are the string names of the
 /// <see cref="EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.Nation"/>
 /// enum members (e.g. <c>England</c>, <c>NorthernIreland</c>).

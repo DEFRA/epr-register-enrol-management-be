@@ -7,23 +7,37 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
 /// RA-125: post-submission hook that derives the UK nation from the
-/// re-accreditation payload's <c>SiteAddressPostcode</c> field, writes the
-/// result back into <c>payload.Nation</c>, and records a
+/// re-accreditation payloads <c>siteAddressPostcode</c> field, writes the
+/// result back into <c>payload.nation</c>, and records a
 /// <c>routed-to-nation</c> audit entry.
 ///
 /// All of this happens in a single <see cref="IWorkItemPersistence.ReplaceAsync"/>
 /// so the payload update and the audit entry land atomically. Failures are
 /// logged and swallowed so a transient DB hiccup does not unwind the
 /// originating submission.
+///
+/// BSON keys are camelCase to match the global
+/// <c>CamelCaseElementNameConvention</c> registered in
+/// <c>MongoConversions</c> and the casing produced by client JSON
+/// submissions (which are stored verbatim by
+/// <c>WorkItemPersistence.ToBson</c>).
 /// </summary>
 internal sealed class ReAccreditationNationRoutingHook(
     INationResolver nationResolver,
     IWorkItemPersistence persistence,
     ILogger<ReAccreditationNationRoutingHook> logger,
-    TimeProvider? timeProvider = null) : IWorkItemPostActionHook
+    TimeProvider? timeProvider = null,
+    TimeSpan? retryDelay = null) : IWorkItemPostActionHook
 {
+    /// <summary>BSON key (camelCase) under which the postcode is read.</summary>
+    internal const string PostcodeKey = "siteAddressPostcode";
+
+    /// <summary>BSON key (camelCase) under which the derived nation is written.</summary>
+    internal const string NationKey = "nation";
+
     private const int MaxAttempts = 3;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly TimeSpan _retryDelay = retryDelay ?? TimeSpan.FromMilliseconds(50);
 
     public Task OnSubmittedAsync(
         WorkItem workItem,
@@ -65,7 +79,7 @@ internal sealed class ReAccreditationNationRoutingHook(
             }
 
             // Stamp Nation into the payload BSON document.
-            item.Payload["Nation"] = nationString;
+            item.Payload[NationKey] = nationString;
 
             var now = _timeProvider.GetUtcNow().UtcDateTime;
             item.AuditLog.Add(new WorkItemAuditEntry
@@ -95,9 +109,20 @@ internal sealed class ReAccreditationNationRoutingHook(
                 if (attempt == MaxAttempts)
                 {
                     logger.LogError(
-                        "Nation routing for work item {WorkItemId} abandoned after {Attempts} attempts.",
+                        "Nation routing for work item {WorkItemId} abandoned after {Attempts} attempts; " +
+                        "item left unrouted (no payload.nation, no routed-to-nation audit entry).",
                         workItem.Id, MaxAttempts);
                     return;
+                }
+
+                // Small jittered backoff so a contended item gets a chance to settle
+                // before we re-fetch and retry. Jitter avoids lockstep retries when
+                // multiple submissions race.
+                if (_retryDelay > TimeSpan.Zero)
+                {
+                    var jitterMs = Random.Shared.Next(0, (int)_retryDelay.TotalMilliseconds + 1);
+                    var delay = TimeSpan.FromMilliseconds(_retryDelay.TotalMilliseconds * attempt + jitterMs);
+                    await Task.Delay(delay, cancellationToken);
                 }
             }
         }
@@ -108,12 +133,12 @@ internal sealed class ReAccreditationNationRoutingHook(
 
     private static string? ExtractPostcode(WorkItem workItem)
     {
-        if (workItem.Payload is null || !workItem.Payload.Contains("SiteAddressPostcode"))
+        if (workItem.Payload is null || !workItem.Payload.Contains(PostcodeKey))
         {
             return null;
         }
 
-        var element = workItem.Payload["SiteAddressPostcode"];
+        var element = workItem.Payload[PostcodeKey];
         return element.IsBsonNull ? null : element.AsString;
     }
 }

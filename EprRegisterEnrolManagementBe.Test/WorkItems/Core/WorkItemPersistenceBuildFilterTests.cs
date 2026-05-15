@@ -159,7 +159,7 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(Nations: new[] { "England", "Scotland" }));
 
-        var inArr = doc["payload.Nation"]["$in"].AsBsonArray;
+        var inArr = doc["payload.nation"]["$in"].AsBsonArray;
         Assert.Equal(2, inArr.Count);
         Assert.Contains("England", inArr.Select(v => v.AsString));
         Assert.Contains("Scotland", inArr.Select(v => v.AsString));
@@ -170,7 +170,7 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(Nations: new[] { "Wales" }));
 
-        Assert.Equal("Wales", doc["payload.Nation"]["$in"].AsBsonArray[0].AsString);
+        Assert.Equal("Wales", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
     }
 
     [Fact]
@@ -197,6 +197,6 @@ public class WorkItemPersistenceBuildFilterTests
             Nations: new[] { "England" }));
 
         Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
-        Assert.Equal("England", doc["payload.Nation"]["$in"].AsBsonArray[0].AsString);
+        Assert.Equal("England", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
     }
 }
