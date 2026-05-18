@@ -1,7 +1,7 @@
 # CDP deployment configuration
 
 This document captures the metadata required to deploy
-`epr-register-case-management-backend-poc` onto the CDP platform. It
+`epr-register-enrol-management-be` onto the CDP platform. It
 complements the official
 [CDP documentation](https://github.com/DEFRA/cdp-documentation) — refer to
 those how-tos for the authoritative platform behaviour.
@@ -10,7 +10,7 @@ those how-tos for the authoritative platform behaviour.
 
 | Attribute      | Value                                          |
 | -------------- | ---------------------------------------------- |
-| Service name   | `epr-register-case-management-backend-poc`     |
+| Service name   | `epr-register-enrol-management-be`     |
 | Runtime        | .NET 10 (`dotnet10`) ASP.NET Core              |
 | Container port | `8085`                                         |
 | Health probe   | `GET /health` (anonymous, returns `200`)       |
@@ -23,7 +23,7 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 | -------------------------- | --------------------- | ----------------------------------------------------------- |
 | `ASPNETCORE_URLS`          | Container             | Set to `http://+:8085` (matches `EXPOSE`).                  |
 | `Mongo__DatabaseUri`       | CDP MongoDB binding   | Authenticated via IAM (`MONGODB-AWS`).                      |
-| `Mongo__DatabaseName`      | Service config        | Defaults to `epr-register-case-management`.                 |
+| `Mongo__DatabaseName`      | Service config        | Defaults to `epr-register-enrol-management-be`.     |
 | `TraceHeader`              | Service config        | Defaults to `x-cdp-request-id`.                             |
 | `HTTP_PROXY` / `HTTPS_PROXY` | CDP platform        | CDP outbound proxy. Required for any external HTTP call.    |
 | `TRUSTSTORE_*`             | CDP platform          | Loaded by `LoadCustomTrustStoreFromEnvironment`.            |
@@ -78,7 +78,7 @@ Provision through the cdp-portal "Create a service" / "Create a resource"
 flows so they appear under the service's owning team:
 
 - ECR repository (named after the service).
-- MongoDB database (`epr-register-case-management`).
+- MongoDB database (`epr-register-enrol-management-be`).
 - CloudWatch log group + dashboard (created automatically once the service
   publishes ECS metrics).
 
