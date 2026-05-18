@@ -28,7 +28,10 @@ public class ReAccreditationNationRoutingHookTests
         };
         if (postcode is not null)
         {
-            payload["siteAddressPostcode"] = postcode;
+            payload[ReAccreditationNationRoutingHook.SiteAddressKey] = new BsonDocument
+            {
+                [ReAccreditationNationRoutingHook.PostcodeKey] = postcode
+            };
         }
 
         return new WorkItem

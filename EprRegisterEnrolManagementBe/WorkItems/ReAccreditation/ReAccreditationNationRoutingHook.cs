@@ -29,8 +29,11 @@ internal sealed class ReAccreditationNationRoutingHook(
     TimeProvider? timeProvider = null,
     TimeSpan? retryDelay = null) : IWorkItemPostActionHook
 {
-    /// <summary>BSON key (camelCase) under which the postcode is read.</summary>
-    internal const string PostcodeKey = "siteAddressPostcode";
+    /// <summary>BSON key (camelCase) for the site address sub-document.</summary>
+    internal const string SiteAddressKey = "siteAddress";
+
+    /// <summary>BSON key (camelCase) within the site address sub-document under which the postcode is read.</summary>
+    internal const string PostcodeKey = "postcode";
 
     /// <summary>BSON key (camelCase) under which the derived nation is written.</summary>
     internal const string NationKey = "nation";
@@ -133,12 +136,24 @@ internal sealed class ReAccreditationNationRoutingHook(
 
     private static string? ExtractPostcode(WorkItem workItem)
     {
-        if (workItem.Payload is null || !workItem.Payload.Contains(PostcodeKey))
+        if (workItem.Payload is null || !workItem.Payload.Contains(SiteAddressKey))
         {
             return null;
         }
 
-        var element = workItem.Payload[PostcodeKey];
+        var siteAddress = workItem.Payload[SiteAddressKey];
+        if (siteAddress.IsBsonNull || !siteAddress.IsBsonDocument)
+        {
+            return null;
+        }
+
+        var doc = siteAddress.AsBsonDocument;
+        if (!doc.Contains(PostcodeKey))
+        {
+            return null;
+        }
+
+        var element = doc[PostcodeKey];
         return element.IsBsonNull ? null : element.AsString;
     }
 }
