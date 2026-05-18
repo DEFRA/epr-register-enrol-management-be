@@ -24,9 +24,6 @@ static WebApplication BuildApp(string[] args)
 {
     var builder = WebApplication.CreateBuilder(args);
 
-    if (Environment.GetEnvironmentVariable("NOTIFY_API_KEY") is { Length: > 0 } notifyApiKey)
-        builder.Configuration["Notify:ApiKey"] = notifyApiKey;
-
     ConfigureHost(builder);
     ConfigureServices(builder);
 
@@ -218,8 +215,8 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
 }
 
 /// <summary>
-/// GOV.UK Notify wiring (RA-123). When <c>Notify:ApiKey</c> is empty
-/// the no-op client is registered so the service still boots in
+/// GOV.UK Notify wiring (RA-123). When <c>NOTIFY_API_KEY</c> is absent or
+/// empty the no-op client is registered so the service still boots in
 /// environments without Notify credentials. When set, the real
 /// GovukNotify SDK client is registered behind the project-owned
 /// <see cref="INotifyClient"/> abstraction with Polly retries.
@@ -230,17 +227,18 @@ static void ConfigureNotifications(IServiceCollection services, IConfiguration c
     services.AddOptions<NotifyConfig>()
         .Bind(configuration.GetSection("Notify"));
 
-    var notifyConfig = configuration.GetSection("Notify").Get<NotifyConfig>() ?? new NotifyConfig();
-    if (string.IsNullOrWhiteSpace(notifyConfig.ApiKey))
+    var apiKey = configuration.GetValue<string>("NOTIFY_API_KEY");
+    if (string.IsNullOrWhiteSpace(apiKey))
     {
         services.AddSingleton<INotifyClient, NoOpNotifyClient>();
         return;
     }
 
+    var baseUri = configuration.GetValue<string>("Notify:BaseUri");
     services.AddSingleton<IAsyncNotificationClient>(_ =>
-        string.IsNullOrWhiteSpace(notifyConfig.BaseUri)
-            ? new NotificationClient(notifyConfig.ApiKey)
-            : new NotificationClient(notifyConfig.BaseUri, notifyConfig.ApiKey));
+        string.IsNullOrWhiteSpace(baseUri)
+            ? new NotificationClient(apiKey)
+            : new NotificationClient(baseUri, apiKey));
     services.AddSingleton<INotifyClient, GovukNotifyClient>();
 }
 
