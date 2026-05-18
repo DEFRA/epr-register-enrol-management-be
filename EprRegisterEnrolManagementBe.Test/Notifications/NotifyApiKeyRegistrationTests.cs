@@ -58,8 +58,9 @@ public class NotifyApiKeyRegistrationTests
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
-            if (apiKey is not null)
-                builder.UseSetting("NOTIFY_API_KEY", apiKey);
+            // Always set explicitly so an ambient NOTIFY_API_KEY env var in the
+            // test runner's environment cannot influence the no-key test cases.
+            builder.UseSetting("NOTIFY_API_KEY", apiKey ?? string.Empty);
         }
     }
 }
