@@ -29,7 +29,12 @@ RUN apt update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/publish .
-RUN useradd -r -u 1001 -g root dotnetuser && chown -R 1001:0 /app
+RUN useradd -r -u 1001 -g root dotnetuser && \
+    mkdir -p /home/dotnetuser && \
+    chown 1001:0 /home/dotnetuser && \
+    chmod g=u /home/dotnetuser && \
+    chown -R 1001:0 /app
+ENV HOME=/home/dotnetuser
 USER 1001
 EXPOSE 8085
 HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3 \
