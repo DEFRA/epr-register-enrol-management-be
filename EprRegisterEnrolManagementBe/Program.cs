@@ -24,6 +24,9 @@ static WebApplication BuildApp(string[] args)
 {
     var builder = WebApplication.CreateBuilder(args);
 
+    if (Environment.GetEnvironmentVariable("NOTIFY_API_KEY") is { Length: > 0 } notifyApiKey)
+        builder.Configuration["Notify:ApiKey"] = notifyApiKey;
+
     ConfigureHost(builder);
     ConfigureServices(builder);
 

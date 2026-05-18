@@ -32,8 +32,9 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 
 Create via the CDP self-service portal under the service's "secrets" tab:
 
-- _None at PoC stage._ Secrets will be added when downstream integrations
-  appear (e.g. SQS queue ARNs, third-party API keys).
+| Secret            | Notes                                                                                                                    |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `NOTIFY_API_KEY`  | GOV.UK Notify API key. When absent the service boots with a no-op Notify client — notifications are logged but not sent. |
 
 ## AWS resources to provision
 
@@ -53,6 +54,7 @@ the cdp-portal "Outbound proxy" form:
 - `cognito-idp.eu-west-2.amazonaws.com` — IAM auth for Cognito.
 - `sts.eu-west-2.amazonaws.com` — STS for IAM roles for service accounts.
 - `mongodb-*.eu-west-2.docdb.amazonaws.com` (CDP-managed MongoDB endpoint).
+- `api.notifications.service.gov.uk` — GOV.UK Notify (required when `NOTIFY_API_KEY` is set).
 - `sqs.eu-west-2.amazonaws.com` — only when SQS queues are added.
 
 ## Related
