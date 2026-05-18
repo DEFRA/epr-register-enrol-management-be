@@ -115,7 +115,13 @@ internal sealed class ReAccreditationApprovalService(
             var accreditationId = accreditationIdGenerator.Generate();
             var accreditationStartDate = DateOnly.FromDateTime(nowUtc);
 
-            ApplyApprovalToPayload(workItem, accreditationId, accreditationStartDate, now);
+            if (!TryApplyApprovalToPayload(workItem, accreditationId, accreditationStartDate, now))
+            {
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.InvalidTransition,
+                    $"Work item '{workItemId}' payload is corrupt and cannot be read. " +
+                    "Inspect the server logs for details; a manual data repair may be required.");
+            }
 
             var previousState = workItem.StateId;
             workItem.StateId = ToStateId;
@@ -174,7 +180,7 @@ internal sealed class ReAccreditationApprovalService(
         return WorkItemActionResult.Success(persisted);
     }
 
-    private static void ApplyApprovalToPayload(
+    private bool TryApplyApprovalToPayload(
         WorkItem workItem,
         string accreditationId,
         DateOnly accreditationStartDate,
@@ -188,9 +194,14 @@ internal sealed class ReAccreditationApprovalService(
         {
             payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload ?? new BsonDocument());
         }
-        catch (Exception)
+        catch (Exception ex) when (ex is BsonSerializationException or FormatException or InvalidCastException)
         {
-            payload = new ReAccreditationPayload();
+            logger.LogError(ex,
+                "Re-accreditation approval for work item {WorkItemId} aborted: " +
+                "existing payload could not be deserialised. Approving would destroy " +
+                "existing payload data (organisation name, registration number, nation, etc.).",
+                workItem.Id);
+            return false;
         }
 
         var updated = payload with
@@ -200,7 +211,8 @@ internal sealed class ReAccreditationApprovalService(
             SlaClock = new SlaClock(stoppedAt)
         };
 
-        workItem.Payload = updated.ToBsonDocument();
+        workItem.ReplacePayload(updated.ToBsonDocument());
+        return true;
     }
 
     private async Task EnqueuePublishingAuditAsync(

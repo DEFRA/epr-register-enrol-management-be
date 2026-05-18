@@ -5,7 +5,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 public class AccreditationIdGeneratorTests
 {
-    private static readonly Regex s_format = new("^RA-[0-9A-F]{8}$", RegexOptions.CultureInvariant);
+    private static readonly Regex s_format = new("^RA-[0-9A-F]{16}$", RegexOptions.CultureInvariant);
 
     [Fact]
     public void Generate_returns_id_in_RA_hex_format()
@@ -25,9 +25,8 @@ public class AccreditationIdGeneratorTests
 
         var ids = Enumerable.Range(0, 2000).Select(_ => sut.Generate()).ToHashSet();
 
-        // 32 bits of entropy makes accidental collisions across 2k calls
-        // vanishingly unlikely (birthday-bound ~1.7e-4) but not zero;
-        // tolerate one collision to keep the test stable.
-        Assert.True(ids.Count >= 1999, $"expected near-unique ids, got {ids.Count}");
+        // 64 bits of entropy makes accidental collisions across 2k calls
+        // essentially impossible (birthday-bound ~1.1e-13); require strict uniqueness.
+        Assert.True(ids.Count == 2000, $"expected 2000 unique ids, got {ids.Count}");
     }
 }

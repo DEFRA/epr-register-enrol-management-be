@@ -39,8 +39,8 @@ public class ReAccreditationTypeTests
     [InlineData("payment-received", "duly-made", "assessment-in-progress", true)]
     [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress", false)]
     [InlineData("submit-for-decision", "assessment-in-progress", "awaiting-decision", true)]
-    // RA-132: approve now fires directly from assessment-in-progress.
-    [InlineData("approve", "assessment-in-progress", "approved", true)]
+    // RA-132: approve is NOT a generic-engine transition; it is handled
+    // exclusively by ReAccreditationApprovalService.
     [InlineData("reject", "awaiting-decision", "rejected", true)]
     [InlineData("withdraw", "submitted", "withdrawn", false)]
     [InlineData("withdraw-during-duly-made", "duly-made", "withdrawn", false)]

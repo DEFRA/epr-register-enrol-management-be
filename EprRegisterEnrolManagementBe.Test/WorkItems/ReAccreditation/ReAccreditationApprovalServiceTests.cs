@@ -274,10 +274,10 @@ public class ReAccreditationApprovalServiceTests
     }
 
     [Fact]
-    public async Task Tolerates_unparseable_existing_payload_and_rebuilds_from_scratch()
+    public async Task Returns_InvalidTransition_and_does_not_persist_when_existing_payload_is_corrupt()
     {
         var ct = TestContext.Current.CancellationToken;
-        var sut = Build("RA-AAAAAAAA");
+        var sut = Build("RA-AAAAAAAAAAAAAAAAA");
         // Force the deserialiser to throw by stuffing a malformed value
         // into a typed field.
         var workItem = BuildWorkItem(payload: new BsonDocument
@@ -288,10 +288,14 @@ public class ReAccreditationApprovalServiceTests
 
         var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
-        Assert.True(result.IsSuccess);
-        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
-        Assert.Equal("RA-AAAAAAAA", payload.AccreditationId);
-        Assert.Equal(DateOnly.FromDateTime(s_fixedNow.UtcDateTime), payload.AccreditationStartDate);
+        // A corrupt payload must NOT silently wipe existing data — the service
+        // must abort and return a failure so the operator can investigate.
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        // Persistence must not have been called — the corrupt item is left unchanged.
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        // The original payload should be untouched.
+        Assert.Equal("not-a-date", workItem.Payload["accreditationStartDate"].AsString);
     }
 
     [Fact]

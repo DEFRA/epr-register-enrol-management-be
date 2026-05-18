@@ -120,13 +120,21 @@ public sealed class WorkItem
     /// verbatim so modules can interpret it however they choose. Persisted as a
     /// BSON sub-document; the API converts to/from JSON at the boundary.
     ///
-    /// Mutable (RA-132) so that engine-driven mutations such as the
-    /// re-accreditation approve service can swap the payload as part of
-    /// the same atomic <see cref="IWorkItemPersistence.ReplaceAsync"/>
-    /// that records the state transition and audit entries — keeping the
-    /// state, payload and audit log consistent on disk.
+    /// The property has a public setter to satisfy the BSON auto-mapper on
+    /// deserialisation. Call-site mutations should go through
+    /// <see cref="ReplacePayload"/> so the intent is explicit and
+    /// discoverable.
     /// </summary>
     public BsonDocument Payload { get; set; } = new();
+
+    /// <summary>
+    /// RA-132: swap the payload for a freshly-built <paramref name="payload"/>
+    /// document. Used by module service objects (e.g. the re-accreditation
+    /// approval service) that need to rebuild the payload as part of the same
+    /// atomic <see cref="IWorkItemPersistence.ReplaceAsync"/> that records
+    /// the state transition and audit entries.
+    /// </summary>
+    internal void ReplacePayload(BsonDocument payload) => Payload = payload;
 
     /// <summary>
     /// Append-only audit narrative attached to the work item by assessors

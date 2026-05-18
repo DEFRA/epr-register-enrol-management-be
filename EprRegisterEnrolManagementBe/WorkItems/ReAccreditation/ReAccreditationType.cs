@@ -63,12 +63,10 @@ internal sealed class ReAccreditationType : IWorkItemType
     // sla-extend transitions, and added OperatorEmail to the payload to
     // drive GOV.UK Notify sends. Bump template version so in-flight v2
     // items keep rendering against their captured snapshot.
-    // RA-132: approve now transitions directly from
-    // assessment-in-progress → approved (skipping the separate
-    // awaiting-decision dwell state) and the approval service stamps
-    // AccreditationId, AccreditationStartDate and SlaClock on the
-    // payload. v3 items must keep rendering against their snapshot so
-    // bump to v4.
+    // RA-132: approval is handled exclusively by ReAccreditationApprovalService
+    // (POST /work-items/re-accreditation/{id}/approve). That service stamps
+    // AccreditationId, AccreditationStartDate and SlaClock on the payload.
+    // v3 items must keep rendering against their captured snapshot so bump to v4.
     public string TemplateVersion => "v4";
     public WorkItemState InitialState => s_submitted;
 
@@ -103,15 +101,12 @@ internal sealed class ReAccreditationType : IWorkItemType
         new WorkItemTransition(
             "submit-for-decision", "Submit for decision",
             s_assessmentInProgress.Id, s_awaitingDecision.Id),
-        // RA-132: approve fires directly from assessment-in-progress
-        // (skipping the awaiting-decision dwell state); the dedicated
-        // ReAccreditationApprovalService owns the side-effects
-        // (accreditation id, SLA clock, audit trail). Reject still goes
-        // through awaiting-decision via the generic engine.
-        new WorkItemTransition(
-            "approve", "Approve",
-            s_assessmentInProgress.Id, s_approved.Id,
-            RequiredRoles: s_decisionMakerRoles),
+        // RA-132: approve is handled exclusively by ReAccreditationApprovalService
+        // via POST /work-items/re-accreditation/{id}/approve. The transition is NOT
+        // registered here so the generic engine rejects any attempt to call
+        // /work-items/{id}/actions/approve, preventing a caller from bypassing the
+        // bespoke side-effects (accreditation id issuance, SLA clock stop, queued
+        // publishing job). Reject still goes through awaiting-decision via the generic engine.
         new WorkItemTransition(
             "reject", "Reject",
             s_awaitingDecision.Id, s_rejected.Id,
