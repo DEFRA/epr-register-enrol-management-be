@@ -4,7 +4,7 @@ namespace EprRegisterEnrolManagementBe.Notifications;
 
 /// <summary>
 /// Fallback <see cref="INotifyClient"/> registered when
-/// <see cref="NotifyConfig.ApiKey"/> is missing. Logs the intended send
+/// <c>NOTIFY_API_KEY</c> is absent or empty. Logs the intended send
 /// at <see cref="LogLevel.Information"/> and returns success with a
 /// null provider message id so the caller's audit-log path is exercised
 /// in development without contacting Notify.

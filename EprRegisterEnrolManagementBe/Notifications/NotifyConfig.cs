@@ -2,20 +2,12 @@ namespace EprRegisterEnrolManagementBe.Notifications;
 
 /// <summary>
 /// GOV.UK Notify configuration bound from the <c>Notify</c> section of
-/// configuration. When <see cref="ApiKey"/> is null/empty the
-/// <see cref="NoOpNotifyClient"/> is registered in place of the real
-/// <see cref="GovukNotifyClient"/> so the service still boots in
-/// environments where Notify credentials have not been provisioned —
-/// notification calls are logged but no HTTP traffic is generated.
+/// configuration. The API key is read separately from the <c>NOTIFY_API_KEY</c>
+/// environment variable rather than from this section — see
+/// <c>ConfigureNotifications</c> in <c>Program.cs</c>.
 /// </summary>
 public sealed class NotifyConfig
 {
-    /// <summary>
-    /// API key issued by GOV.UK Notify. When null/empty the no-op client
-    /// is used. Treated as a secret in production.
-    /// </summary>
-    public string? ApiKey { get; set; }
-
     /// <summary>
     /// Optional override for the Notify base URI. Defaults to the
     /// production <c>https://api.notifications.service.gov.uk/</c> baked
