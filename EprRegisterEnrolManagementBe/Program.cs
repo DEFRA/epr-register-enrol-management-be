@@ -50,6 +50,7 @@ static void ConfigureServices(WebApplicationBuilder builder)
     // Trust material must be loaded before anything creates outbound connections.
     services.LoadCustomTrustStoreFromEnvironment();
 
+    services.AddExceptionHandler<ExceptionLoggingHandler>();
     services.AddProblemDetails();
     services.AddValidation();
 
