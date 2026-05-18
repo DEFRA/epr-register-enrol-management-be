@@ -126,13 +126,13 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
         .AddCognitoClientId();
 
     // Bind options lazily via PostConfigure so test fixtures that add
-    // Auth:SharedSecret via WebApplicationFactory.ConfigureAppConfiguration
+    // AUTH_SHARED_SECRET via WebApplicationFactory.ConfigureAppConfiguration
     // (which fires during builder.Build(), after this method runs) can still
     // override the value.
     services.AddOptions<CognitoClientIdAuthenticationOptions>(CognitoClientIdDefaults.AuthenticationScheme)
         .Configure<IConfiguration>((options, config) =>
         {
-            options.SharedSecret = config.GetValue<string>("Auth:SharedSecret");
+            options.SharedSecret = config.GetValue<string>("AUTH_SHARED_SECRET");
             options.MaxClientIdLength = config.GetValue("Auth:MaxClientIdLength", options.MaxClientIdLength);
             options.MaxUserIdLength = config.GetValue("Auth:MaxUserIdLength", options.MaxUserIdLength);
             options.MaxUserNameLength = config.GetValue("Auth:MaxUserNameLength", options.MaxUserNameLength);

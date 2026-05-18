@@ -32,9 +32,45 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 
 Create via the CDP self-service portal under the service's "secrets" tab:
 
-| Secret            | Notes                                                                                                                    |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `NOTIFY_API_KEY`  | GOV.UK Notify API key. When absent the service boots with a no-op Notify client — notifications are logged but not sent. |
+| Secret               | Notes                                                                                                                    |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `AUTH_SHARED_SECRET` | HMAC shared secret used by the BFF to sign trust headers (see [BFF signing contract](#bff-signing-contract) below). **Required in all non-Development environments.** The service will reject every authenticated request with `401` until this is set. Generate with `openssl rand -base64 32`. |
+| `NOTIFY_API_KEY`     | GOV.UK Notify API key. When absent the service boots with a no-op Notify client — notifications are logged but not sent. |
+
+## BFF signing contract
+
+Every request the BFF sends to this backend must carry four headers. The
+backend verifies them before accepting the CDP-injected identity headers as
+authoritative. Requests missing any of these headers, or with an invalid
+signature, are rejected with `401`.
+
+| Header                    | Description                                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------------------------ |
+| `x-cdp-cognito-client-id` | CDP-injected Cognito client ID (unchanged — CDP sets this).                                      |
+| `x-cdp-auth-timestamp`    | ISO-8601 UTC instant the BFF assembled the request (e.g. `2026-05-18T10:00:00Z`). Must be within 5 minutes of the backend clock. |
+| `x-cdp-auth-nonce`        | Per-request opaque random token minted by the BFF (e.g. base64url of 16 random bytes). Single-use — a replayed nonce is rejected for 10 minutes. |
+| `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below) keyed with `AUTH_SHARED_SECRET`.         |
+
+### Canonical payload (v2)
+
+Join the following fields with a newline (`\n`), in this order, then compute
+`HMAC-SHA256(key=sharedSecret, message=payload)` and base64-encode the result:
+
+```
+v2
+{x-cdp-cognito-client-id}
+{x-cdp-user-id or ""}
+{x-cdp-user-name or ""}
+{x-cdp-user-roles or ""}
+{x-cdp-auth-timestamp}
+{x-cdp-auth-nonce}
+```
+
+Empty-string placeholders must be included for absent optional fields — the
+field count and separator positions are fixed. See
+`CognitoClientIdAuthenticationHandler.ComputeSignature` for the authoritative
+implementation and `docs/adr/0003-hmac-canonical-v2-timestamp-nonce.md` for
+the rationale.
 
 ## AWS resources to provision
 

@@ -123,3 +123,12 @@ or replay the nonce out of band. A regression test in
   and `Development_environment_without_shared_secret_allows_header_only_request`
   continue to pass, confirming the epr-7vz fail-closed behaviour is
   intact.
+
+## Amendment
+
+The configuration key was originally named `Auth:SharedSecret` (ASP.NET Core
+section syntax, environment variable form `Auth__SharedSecret`). It was
+subsequently renamed to `AUTH_SHARED_SECRET` to align with the CDP convention
+of uppercase underscore secret names (e.g. `NOTIFY_API_KEY`). References to
+`Auth:SharedSecret` in the Context and Decision sections above reflect the
+original name at the time this ADR was written.
