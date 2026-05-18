@@ -56,6 +56,7 @@ internal sealed class WorkItemOpenApiExampleTransformer : IOpenApiDocumentTransf
     {
         foreach (var pathItem in document.Paths.Values)
         {
+            if (pathItem.Operations is null) continue;
             foreach (var operation in pathItem.Operations.Values)
             {
                 if (operation.OperationId is null ||
@@ -64,7 +65,7 @@ internal sealed class WorkItemOpenApiExampleTransformer : IOpenApiDocumentTransf
                     continue;
                 }
 
-                if (operation.RequestBody?.Content.TryGetValue(
+                if (operation.RequestBody?.Content?.TryGetValue(
                         "application/json", out var mediaType) == true)
                 {
                     mediaType.Example = example;
