@@ -63,7 +63,13 @@ internal sealed class ReAccreditationType : IWorkItemType
     // sla-extend transitions, and added OperatorEmail to the payload to
     // drive GOV.UK Notify sends. Bump template version so in-flight v2
     // items keep rendering against their captured snapshot.
-    public string TemplateVersion => "v3";
+    // RA-132: approve now transitions directly from
+    // assessment-in-progress → approved (skipping the separate
+    // awaiting-decision dwell state) and the approval service stamps
+    // AccreditationId, AccreditationStartDate and SlaClock on the
+    // payload. v3 items must keep rendering against their snapshot so
+    // bump to v4.
+    public string TemplateVersion => "v4";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -97,9 +103,14 @@ internal sealed class ReAccreditationType : IWorkItemType
         new WorkItemTransition(
             "submit-for-decision", "Submit for decision",
             s_assessmentInProgress.Id, s_awaitingDecision.Id),
+        // RA-132: approve fires directly from assessment-in-progress
+        // (skipping the awaiting-decision dwell state); the dedicated
+        // ReAccreditationApprovalService owns the side-effects
+        // (accreditation id, SLA clock, audit trail). Reject still goes
+        // through awaiting-decision via the generic engine.
         new WorkItemTransition(
             "approve", "Approve",
-            s_awaitingDecision.Id, s_approved.Id,
+            s_assessmentInProgress.Id, s_approved.Id,
             RequiredRoles: s_decisionMakerRoles),
         new WorkItemTransition(
             "reject", "Reject",

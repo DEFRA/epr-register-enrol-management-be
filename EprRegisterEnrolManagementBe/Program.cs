@@ -3,6 +3,7 @@ using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Health;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils;
+using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.Utils.Http;
@@ -97,6 +98,14 @@ static void ConfigureServices(WebApplicationBuilder builder)
         .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"]);
 
     ConfigureWorkItems(builder);
+
+    // RA-132: in-process background-task queue + hosted worker. Used by
+    // the re-accreditation approval service to fan out post-approval
+    // side-effects (audit appends, future "publishing" events) on a
+    // freshly-scoped service provider so HTTP request scope teardown
+    // does not unwind them.
+    services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+    services.AddHostedService<QueuedHostedService>();
 }
 
 [ExcludeFromCodeCoverage]

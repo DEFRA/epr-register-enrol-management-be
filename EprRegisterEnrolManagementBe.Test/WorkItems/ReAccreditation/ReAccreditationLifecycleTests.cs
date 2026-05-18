@@ -47,15 +47,15 @@ public class ReAccreditationLifecycleTests
         Assert.True((await engine.ApplyActionAsync(workItem.Id, "payment-received", user, ct)).IsSuccess);
 
         await CompleteAll(engine, workItem.Id, type, "assessment-in-progress", user, ct);
-        Assert.True((await engine.ApplyActionAsync(workItem.Id, "submit-for-decision", user, ct)).IsSuccess);
-
-        await CompleteAll(engine, workItem.Id, type, "awaiting-decision", user, ct);
+        // RA-132: approve now goes directly from assessment-in-progress
+        // to approved; the awaiting-decision intermediate is no longer
+        // part of the happy-path approval walk.
         Assert.True((await engine.ApplyActionAsync(workItem.Id, "approve", user, ct)).IsSuccess);
 
         Assert.Equal("approved", workItem.StateId);
 
-        // 2 + 1 + 3 + 1 = 7 task completions + 4 transitions = 11 audit entries.
-        Assert.Equal(11, workItem.AuditLog.Count);
+        // 2 + 1 + 3 = 6 task completions + 3 transitions = 9 audit entries.
+        Assert.Equal(9, workItem.AuditLog.Count);
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"
             && e.Details.GetValueOrDefault("actionId") == "duly-make");
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"

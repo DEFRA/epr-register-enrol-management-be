@@ -119,8 +119,14 @@ public sealed class WorkItem
     /// Free-form, type-specific payload supplied by the upstream caller. Stored
     /// verbatim so modules can interpret it however they choose. Persisted as a
     /// BSON sub-document; the API converts to/from JSON at the boundary.
+    ///
+    /// Mutable (RA-132) so that engine-driven mutations such as the
+    /// re-accreditation approve service can swap the payload as part of
+    /// the same atomic <see cref="IWorkItemPersistence.ReplaceAsync"/>
+    /// that records the state transition and audit entries — keeping the
+    /// state, payload and audit log consistent on disk.
     /// </summary>
-    public BsonDocument Payload { get; init; } = new();
+    public BsonDocument Payload { get; set; } = new();
 
     /// <summary>
     /// Append-only audit narrative attached to the work item by assessors
