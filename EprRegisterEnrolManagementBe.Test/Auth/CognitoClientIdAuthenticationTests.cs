@@ -440,7 +440,7 @@ public class CognitoClientIdAuthenticationTests
                 {
                     config.AddInMemoryCollection(new Dictionary<string, string?>
                     {
-                        ["Auth:SharedSecret"] = sharedSecret
+                        ["AUTH_SHARED_SECRET"] = sharedSecret
                     });
                 });
             }

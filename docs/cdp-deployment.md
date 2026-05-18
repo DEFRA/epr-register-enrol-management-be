@@ -34,7 +34,7 @@ Create via the CDP self-service portal under the service's "secrets" tab:
 
 | Secret               | Notes                                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `Auth__SharedSecret` | HMAC shared secret used by the BFF to sign trust headers (see [BFF signing contract](#bff-signing-contract) below). **Required in all non-Development environments.** The service will reject every authenticated request with `401` until this is set. Generate with `openssl rand -base64 32`. |
+| `AUTH_SHARED_SECRET` | HMAC shared secret used by the BFF to sign trust headers (see [BFF signing contract](#bff-signing-contract) below). **Required in all non-Development environments.** The service will reject every authenticated request with `401` until this is set. Generate with `openssl rand -base64 32`. |
 | `NOTIFY_API_KEY`     | GOV.UK Notify API key. When absent the service boots with a no-op Notify client — notifications are logged but not sent. |
 
 ## BFF signing contract
@@ -49,7 +49,7 @@ signature, are rejected with `401`.
 | `x-cdp-cognito-client-id` | CDP-injected Cognito client ID (unchanged — CDP sets this).                                      |
 | `x-cdp-auth-timestamp`    | ISO-8601 UTC instant the BFF assembled the request (e.g. `2026-05-18T10:00:00Z`). Must be within 5 minutes of the backend clock. |
 | `x-cdp-auth-nonce`        | Per-request opaque random token minted by the BFF (e.g. base64url of 16 random bytes). Single-use — a replayed nonce is rejected for 10 minutes. |
-| `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below) keyed with `Auth__SharedSecret`.         |
+| `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below) keyed with `AUTH_SHARED_SECRET`.         |
 
 ### Canonical payload (v2)
 
