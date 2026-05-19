@@ -99,10 +99,12 @@ public class ProxyHttpMessageHandlerTests
         // Drive the resolver via process env vars set inside the test
         // and torn down on exit. Outbound traffic is HTTPS, so when
         // both are set HTTPS_PROXY must win.
-        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "http://https-proxy.local:8443");
+        // On Windows env vars are case-insensitive, so null-clearings must
+        // come before value-settings so the last write wins.
         using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
-        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
         using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "http://https-proxy.local:8443");
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
 
         Assert.Equal("http://https-proxy.local:8443", ProxyHttpMessageHandler.ResolveProxyEnvironmentValue());
     }
@@ -112,8 +114,8 @@ public class ProxyHttpMessageHandlerTests
     {
         using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", null);
         using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
-        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
         using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
 
         Assert.Equal("http://http-proxy.local:3128", ProxyHttpMessageHandler.ResolveProxyEnvironmentValue());
     }
@@ -147,10 +149,10 @@ public class ProxyHttpMessageHandlerTests
     {
         // A bare `export HTTPS_PROXY=` shouldn't override a real
         // HTTP_PROXY value or wedge UseProxy=true with an empty URI.
-        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "");
         using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
-        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
         using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "");
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", "http://http-proxy.local:3128");
 
         Assert.Equal("http://http-proxy.local:3128", ProxyHttpMessageHandler.ResolveProxyEnvironmentValue());
     }
@@ -267,10 +269,10 @@ public class ProxyHttpMessageHandlerTests
     [Fact]
     public void Production_constructor_succeeds_when_HTTPS_PROXY_is_set()
     {
-        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "http://proxy.local:3128");
         using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
         using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
         using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "http://proxy.local:3128");
         var env = HostEnvironment("Production");
 
         using var handler = new ProxyHttpMessageHandler(

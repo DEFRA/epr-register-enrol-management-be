@@ -43,7 +43,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
         SubmittedAt = DateTime.UtcNow.AddDays(-10),
         LastModifiedAt = DateTime.UtcNow,
         SubmittedBy = "test-client",
-        SlaClock = new SlaClock
+        SlaClock = new WorkItemSlaClock
         {
             StartedAt = DateTime.UtcNow.AddDays(-10),
             TargetDuration = TimeSpan.FromDays(84),

@@ -1391,6 +1391,9 @@ public class WorkItemEndpointsTests
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
+            // Prevent the seeder from writing seed data into the test DB.
+            builder.UseSetting("WorkItems:SeedOnStartup", "false");
+
             builder.ConfigureServices(services =>
             {
                 services.RemoveAll<IWorkItemPersistence>();
@@ -1408,6 +1411,16 @@ public class WorkItemEndpointsTests
                             clientFactory,
                             sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>())));
                 services.AddSingleton<IWorkItemType>(new TestWorkItemType(TypeId, "Test type", tasksByState: _tasksByState));
+
+                // SlaBreachBackgroundService calls QueryAsync at startup which
+                // sets Recording.LastQuery and contaminates tests that assert
+                // the query was never issued.
+                var slaBreachDescriptor = services.FirstOrDefault(
+                    d => d.ImplementationType == typeof(SlaBreachBackgroundService));
+                if (slaBreachDescriptor is not null)
+                {
+                    services.Remove(slaBreachDescriptor);
+                }
             });
         }
 
