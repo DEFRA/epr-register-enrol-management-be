@@ -23,6 +23,11 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
+        // RA-132: accreditation-id generator + module-scoped approval
+        // service that owns the bespoke approval workflow (id issuance,
+        // SLA clock stop, queued publishing).
+        services.AddSingleton<IAccreditationIdGenerator, AccreditationIdGenerator>();
+        services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)

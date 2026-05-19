@@ -449,6 +449,119 @@ public class ReAccreditationEndpointTests
         };
     }
 
+    private static WorkItem BuildAssessmentInProgress(Guid id, string submittedBy)
+    {
+        var type = new ReAccreditationType();
+        return new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "assessment-in-progress",
+            SubmittedBy = submittedBy,
+            Payload = new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["registrationNumber"] = "EX-001"
+            },
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion
+        };
+    }
+
+    // -------------------- RA-132: Approve endpoint --------------------
+
+    [Fact]
+    public async Task Approve_returns_ok_and_transitions_to_approved_for_decision_maker()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        Assert.Equal("approved", persisted!.StateId);
+        // 1 for the approval ReplaceAsync, +1 for the queued publishing
+        // audit, +1 for the notification hook's audit-sent entry.
+        Assert.True(persisted.Version >= 1);
+        var payload = MongoDB.Bson.Serialization.BsonSerializer
+            .Deserialize<ReAccreditationPayload>(persisted.Payload);
+        Assert.False(string.IsNullOrEmpty(payload.AccreditationId));
+        Assert.NotNull(payload.AccreditationStartDate);
+        Assert.NotNull(payload.SlaClock?.StoppedAt);
+    }
+
+    [Fact]
+    public async Task Approve_returns_not_found_for_missing_work_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/approve", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Approve_returns_not_found_for_cross_tenant_caller()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, "other-tenant"), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task Approve_returns_forbidden_when_caller_lacks_decision_maker_role()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, roles: []);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task Approve_returns_bad_request_when_not_in_assessment_in_progress()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
     /// <summary>
     /// Wraps real persistence and runs <paramref name="onBeforeReplace"/>
     /// just before delegating to <see cref="ReplaceAsync"/> for a chosen
