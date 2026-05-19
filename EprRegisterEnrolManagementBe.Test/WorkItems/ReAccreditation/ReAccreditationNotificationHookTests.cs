@@ -99,9 +99,9 @@ public class ReAccreditationNotificationHookTests
         await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         await notifyClient.DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, default);
+            .SendEmailAsync(default!, default!, default!, default!, ct);
         await auditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class ReAccreditationNotificationHookTests
         await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         await notifyClient.DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, default);
+            .SendEmailAsync(default!, default!, default!, default!, ct);
         await auditAppender.Received(1).AppendAsync(
             workItem.Id,
             "notification-skipped",
@@ -228,9 +228,9 @@ public class ReAccreditationNotificationHookTests
         await sut.OnActionAppliedAsync(workItem, actionId, fromStateId: "submitted", s_user, ct);
 
         await notifyClient.DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, default);
+            .SendEmailAsync(default!, default!, default!, default!, ct);
         await auditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]
@@ -305,5 +305,54 @@ public class ReAccreditationNotificationHookTests
         Assert.Equal("Acme Ltd", captured!["organisation_name"]);
         Assert.Equal("EX-001", captured["registration_number"]);
         Assert.Equal(workItem.Id.ToString(), captured["reference"]);
+    }
+
+    // ─────── RA-132: Decision personalisation extras ───────
+
+    [Fact]
+    public async Task OnActionAppliedAsync_includes_accreditation_id_and_start_date_in_Decision_personalisation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(stateId: "approved");
+        workItem.Payload["accreditationId"] = "RA-12345678";
+        workItem.Payload["accreditationStartDate"] = new DateTime(2025, 2, 3, 0, 0, 0, DateTimeKind.Utc);
+
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "approve", "assessment-in-progress", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("RA-12345678", captured!["accreditation_id"]);
+        Assert.Equal("2025-02-03", captured["accreditation_start_date"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_omits_accreditation_keys_when_payload_lacks_them()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(stateId: "rejected");
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.DoesNotContain("accreditation_id", captured!.Keys);
+        Assert.DoesNotContain("accreditation_start_date", captured.Keys);
     }
 }

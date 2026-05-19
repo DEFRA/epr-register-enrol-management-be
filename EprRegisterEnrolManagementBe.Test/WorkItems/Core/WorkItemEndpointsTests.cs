@@ -461,7 +461,7 @@ public class WorkItemEndpointsTests
         // The structural property under test is "persistence is never
         // consulted" — verifying it requires a stub that records calls,
         // not a real database. Kept as a substitute deliberately.
-        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, cancellationToken);
     }
 
     [Fact]
@@ -497,7 +497,7 @@ public class WorkItemEndpointsTests
         var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
         Assert.Empty(ok.Value!.Items);
         Assert.Equal(0, ok.Value.TotalCount);
-        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, cancellationToken);
     }
 
     [Fact]

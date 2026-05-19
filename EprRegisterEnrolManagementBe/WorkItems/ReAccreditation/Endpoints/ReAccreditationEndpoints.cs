@@ -54,6 +54,16 @@ internal static class ReAccreditationEndpoints
             .WithName("RecordReAccreditationPaymentCompleted")
             .RequireAuthorization();
 
+        // RA-132: bespoke approve endpoint. The generic
+        // /work-items/{id}/actions/approve transition still exists in the
+        // template snapshot, but the module-owned route is the canonical
+        // path because it stamps the accreditation id / SLA clock and
+        // queues the publishing job; routing through the framework's
+        // generic action handler would skip those side effects.
+        group.MapPost("/{id:guid}/approve", Approve)
+            .WithName("ApproveReAccreditation")
+            .RequireAuthorization();
+
         return app;
     }
 
@@ -217,6 +227,47 @@ internal static class ReAccreditationEndpoints
         }
 
         return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+    }
+
+    /// <summary>
+    /// RA-132: approve a re-accreditation work item. Delegates to the
+    /// module-scoped <see cref="IReAccreditationApprovalService"/> so the
+    /// bespoke approval workflow (accreditation id issuance, SLA clock
+    /// stop, queued publishing job) runs atomically with the state
+    /// transition. Failure codes map onto problem statuses with the same
+    /// vocabulary the framework's <c>/actions/{actionId}</c> endpoint
+    /// uses.
+    /// </summary>
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Approve(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationApprovalService approvalService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        var result = await approvalService.ApproveAsync(id, httpContext.User, cancellationToken);
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var status = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
+            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
+            WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest
+        };
+
+        return TypedResults.Problem(
+            title: "Could not approve re-accreditation",
+            detail: result.Message,
+            statusCode: status);
     }
 }
 

@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -22,11 +23,21 @@ public class ReAccreditationLifecycleTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var engine = new WorkItemService(
             new WorkItemRegistry([type]), persistence, NullLogger<WorkItemService>.Instance);
+        var idGenerator = Substitute.For<IAccreditationIdGenerator>();
+        idGenerator.Generate().Returns("RA-TEST00000000");
+        var approvalService = new ReAccreditationApprovalService(
+            persistence,
+            idGenerator,
+            Substitute.For<IBackgroundTaskQueue>(),
+            [],
+            NullLogger<ReAccreditationApprovalService>.Instance);
 
+        const string tenantClientId = "test-client";
         var workItem = new WorkItem
         {
             TypeId = ReAccreditationType.Id,
             StateId = type.InitialState.Id,
+            SubmittedBy = tenantClientId,
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
             TemplateVersion = type.TemplateVersion
         };
@@ -36,6 +47,7 @@ public class ReAccreditationLifecycleTests
         [
             new Claim("user:id", "alice-1"),
             new Claim("user:name", "Alice Example"),
+            new Claim("cognito:client_id", tenantClientId),
             new Claim(ClaimTypes.Role, ReAccreditationType.DecisionMakerRole)
         ], "test"));
 
@@ -47,14 +59,17 @@ public class ReAccreditationLifecycleTests
         Assert.True((await engine.ApplyActionAsync(workItem.Id, "payment-received", user, ct)).IsSuccess);
 
         await CompleteAll(engine, workItem.Id, type, "assessment-in-progress", user, ct);
-        Assert.True((await engine.ApplyActionAsync(workItem.Id, "submit-for-decision", user, ct)).IsSuccess);
-
-        await CompleteAll(engine, workItem.Id, type, "awaiting-decision", user, ct);
-        Assert.True((await engine.ApplyActionAsync(workItem.Id, "approve", user, ct)).IsSuccess);
+        // RA-132: approve goes through the bespoke ReAccreditationApprovalService,
+        // not the generic engine — the generic engine no longer registers the
+        // approve transition so it cannot silently produce an item missing the
+        // accreditation id, SLA clock and audit entries.
+        Assert.True((await approvalService.ApproveAsync(workItem.Id, user, ct)).IsSuccess);
 
         Assert.Equal("approved", workItem.StateId);
 
-        // 2 + 1 + 3 + 1 = 7 task completions + 4 transitions = 11 audit entries.
+        // 2 + 1 + 3 = 6 task completions + 2 engine transitions +
+        // 3 approval audit entries (action-applied, sla-clock-stopped,
+        // accreditation-issued) = 11 total.
         Assert.Equal(11, workItem.AuditLog.Count);
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"
             && e.Details.GetValueOrDefault("actionId") == "duly-make");

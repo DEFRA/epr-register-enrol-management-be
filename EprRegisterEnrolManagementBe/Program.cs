@@ -3,6 +3,7 @@ using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Health;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils;
+using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.Utils.Http;
@@ -98,6 +99,14 @@ static void ConfigureServices(WebApplicationBuilder builder)
         .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"]);
 
     ConfigureWorkItems(builder);
+
+    // RA-132: in-process background-task queue + hosted worker. Used by
+    // the re-accreditation approval service to fan out post-approval
+    // side-effects (audit appends, future "publishing" events) on a
+    // freshly-scoped service provider so HTTP request scope teardown
+    // does not unwind them.
+    services.AddSingleton<IBackgroundTaskQueue, BackgroundTaskQueue>();
+    services.AddHostedService<QueuedHostedService>();
 }
 
 [ExcludeFromCodeCoverage]
@@ -109,6 +118,13 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // See docs in EprRegisterEnrolManagementBe/WorkItems/Core for the contract a module must implement.
     services.AddWorkItemFramework();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
+    // RA-131: SLA extend / override is a cross-cutting framework concern
+    // (universal rules: team-leader gate, max-extension cap, audit shape,
+    // operator notify on extend via post-action hooks) so it lives next
+    // to the framework, not in a module.
+    services.AddOptions<SlaConfig>()
+        .Bind(builder.Configuration.GetSection("WorkItems:Sla"));
+    services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>();
     services.AddHostedService<SlaBreachBackgroundService>();
 
@@ -128,13 +144,13 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
         .AddCognitoClientId();
 
     // Bind options lazily via PostConfigure so test fixtures that add
-    // Auth:SharedSecret via WebApplicationFactory.ConfigureAppConfiguration
+    // AUTH_SHARED_SECRET via WebApplicationFactory.ConfigureAppConfiguration
     // (which fires during builder.Build(), after this method runs) can still
     // override the value.
     services.AddOptions<CognitoClientIdAuthenticationOptions>(CognitoClientIdDefaults.AuthenticationScheme)
         .Configure<IConfiguration>((options, config) =>
         {
-            options.SharedSecret = config.GetValue<string>("Auth:SharedSecret");
+            options.SharedSecret = config.GetValue<string>("AUTH_SHARED_SECRET");
             options.MaxClientIdLength = config.GetValue("Auth:MaxClientIdLength", options.MaxClientIdLength);
             options.MaxUserIdLength = config.GetValue("Auth:MaxUserIdLength", options.MaxUserIdLength);
             options.MaxUserNameLength = config.GetValue("Auth:MaxUserNameLength", options.MaxUserNameLength);
@@ -409,5 +425,10 @@ static void ConfigureEndpoints(WebApplication app)
     }
 
     app.MapWorkItemFrameworkEndpoints();
+    // RA-131: framework-level SLA extend / override routes; mounted
+    // outside MapWorkItemFrameworkEndpoints so the SLA surface can grow
+    // (extend / override today, started / stopped / projection later)
+    // without bloating the core endpoint group.
+    app.MapWorkItemSlaEndpoints();
     app.MapWorkItemModules();
 }

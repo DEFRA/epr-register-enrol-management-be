@@ -233,7 +233,7 @@ public class CognitoClientIdAuthenticationHandler(
             // shared secret. Emit a single warning per process so the
             // downgrade is visible without spamming the log.
             Logger.LogWarning(
-                "CognitoClientIdAuthentication: SharedSecret not configured — operating in header-trust mode. This is allowed only because the host environment is '{Environment}'. Set Auth:SharedSecret in any non-Development deployment.",
+                "CognitoClientIdAuthentication: SharedSecret not configured — operating in header-trust mode. This is allowed only because the host environment is '{Environment}'. Set AUTH_SHARED_SECRET in any non-Development deployment.",
                 hostEnvironment.EnvironmentName);
         }
 

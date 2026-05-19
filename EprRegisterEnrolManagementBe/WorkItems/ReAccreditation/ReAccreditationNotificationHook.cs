@@ -202,6 +202,20 @@ internal sealed class ReAccreditationNotificationHook(
             personalisation["decision"] = string.Equals(actionId, "approve", StringComparison.OrdinalIgnoreCase)
                 ? "Approved"
                 : "Rejected";
+
+            // RA-132: include the accreditation id and start date when an
+            // approval has stamped them on the payload, so the Decision
+            // template can reference them in its body. Keys are only added
+            // when present so the Notify template's "if available" branches
+            // see the field as missing rather than empty.
+            if (!string.IsNullOrEmpty(payload.AccreditationId))
+            {
+                personalisation["accreditation_id"] = payload.AccreditationId;
+            }
+            if (payload.AccreditationStartDate is { } startDate)
+            {
+                personalisation["accreditation_start_date"] = startDate.ToString("yyyy-MM-dd");
+            }
         }
 
         return personalisation;

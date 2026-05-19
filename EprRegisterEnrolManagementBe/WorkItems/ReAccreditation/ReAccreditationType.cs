@@ -96,10 +96,12 @@ internal sealed class ReAccreditationType : IWorkItemType
         new WorkItemTransition(
             "submit-for-decision", "Submit for decision",
             s_assessmentInProgress.Id, s_awaitingDecision.Id),
-        new WorkItemTransition(
-            "approve", "Approve",
-            s_awaitingDecision.Id, s_approved.Id,
-            RequiredRoles: s_decisionMakerRoles),
+        // RA-132: approve is handled exclusively by ReAccreditationApprovalService
+        // via POST /work-items/re-accreditation/{id}/approve. The transition is NOT
+        // registered here so the generic engine rejects any attempt to call
+        // /work-items/{id}/actions/approve, preventing a caller from bypassing the
+        // bespoke side-effects (accreditation id issuance, SLA clock stop, queued
+        // publishing job). Reject still goes through awaiting-decision via the generic engine.
         new WorkItemTransition(
             "reject", "Reject",
             s_awaitingDecision.Id, s_rejected.Id,
