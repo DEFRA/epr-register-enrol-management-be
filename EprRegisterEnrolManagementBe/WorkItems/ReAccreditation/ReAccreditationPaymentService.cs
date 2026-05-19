@@ -54,14 +54,15 @@ internal sealed class ReAccreditationPaymentService(
                 $"Work item {workItemId} is in state '{workItem.StateId}'; payment-completed requires '{DulyMadeState}'.");
         }
 
-        // paidAt must be UTC and not in the future (server-validated).
-        if (request.PaidAt.Kind == DateTimeKind.Local)
+        // paidAt must be UTC. Unspecified-kind values (no Z / +00:00 suffix in JSON)
+        // are rejected rather than silently re-labelled — they could be hours off.
+        if (request.PaidAt.Kind != DateTimeKind.Utc)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
-                "'paidAt' must be UTC.");
+                "'paidAt' must be UTC (use the Z or +00:00 suffix).");
         }
-        var paidAt = DateTime.SpecifyKind(request.PaidAt, DateTimeKind.Utc);
+        var paidAt = request.PaidAt;
         var now = timeProvider.GetUtcNow().UtcDateTime;
         if (paidAt > now.AddMinutes(5))
         {
@@ -92,7 +93,7 @@ internal sealed class ReAccreditationPaymentService(
         AppendPaymentAudit(workItem, "sla-clock-started", "SLA clock started", request, paidAt, new()
         {
             ["startedAt"] = paidAt.ToString("O"),
-            ["targetDays"] = "84"
+            ["targetDays"] = workItem.SlaClock!.TargetDuration.TotalDays.ToString()
         });
         if (previousAssigneeId is not null)
         {

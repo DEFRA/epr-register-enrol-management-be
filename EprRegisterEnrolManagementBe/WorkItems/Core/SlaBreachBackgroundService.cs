@@ -13,8 +13,6 @@ internal sealed class SlaBreachBackgroundService(
     ILogger<SlaBreachBackgroundService> logger,
     IConfiguration configuration) : BackgroundService
 {
-    private static readonly TimeSpan s_defaultInterval = TimeSpan.FromHours(24);
-
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var interval = configuration.GetValue("SlaBreachJob:IntervalHours", 24.0);
@@ -98,7 +96,7 @@ internal sealed class SlaBreachBackgroundService(
                 Details = new Dictionary<string, string?>
                 {
                     ["startedAt"] = full.SlaClock.StartedAt.ToString("O"),
-                    ["targetDays"] = "84",
+                    ["targetDays"] = full.SlaClock.TargetDuration.TotalDays.ToString(),
                     ["detectedAt"] = now.ToString("O")
                 }
             });

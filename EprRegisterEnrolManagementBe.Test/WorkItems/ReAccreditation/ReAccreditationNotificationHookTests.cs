@@ -216,6 +216,8 @@ public class ReAccreditationNotificationHookTests
 
     [Theory]
     [InlineData("withdraw")]
+    [InlineData("assign")]
+    [InlineData("unassign")]
     public async Task OnActionAppliedAsync_ignores_unmapped_actions(string actionId)
     {
         var ct = TestContext.Current.CancellationToken;
