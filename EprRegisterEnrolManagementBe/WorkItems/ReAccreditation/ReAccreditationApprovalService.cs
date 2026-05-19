@@ -4,6 +4,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using ReAccreditationSlaClock = EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.SlaClock;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -208,7 +209,7 @@ internal sealed class ReAccreditationApprovalService(
         {
             AccreditationId = accreditationId,
             AccreditationStartDate = accreditationStartDate,
-            SlaClock = new SlaClock(stoppedAt)
+            SlaClock = new ReAccreditationSlaClock(stoppedAt)
         };
 
         workItem.ReplacePayload(updated.ToBsonDocument());
