@@ -113,7 +113,7 @@ public static class SlaEndpoints
             if (startedElement.ValueKind != JsonValueKind.String ||
                 !DateTime.TryParse(startedElement.GetString(),
                     System.Globalization.CultureInfo.InvariantCulture,
-                    System.Globalization.DateTimeStyles.RoundtripKind | System.Globalization.DateTimeStyles.AssumeUniversal,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
                     out var parsedStart))
             {
                 return Problem("Invalid SLA request",
