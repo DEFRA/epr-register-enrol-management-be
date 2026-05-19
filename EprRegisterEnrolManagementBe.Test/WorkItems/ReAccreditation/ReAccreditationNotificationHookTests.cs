@@ -99,9 +99,9 @@ public class ReAccreditationNotificationHookTests
         await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         await notifyClient.DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, default);
+            .SendEmailAsync(default!, default!, default!, default!, ct);
         await auditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]
@@ -117,7 +117,7 @@ public class ReAccreditationNotificationHookTests
         await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         await notifyClient.DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, default);
+            .SendEmailAsync(default!, default!, default!, default!, ct);
         await auditAppender.Received(1).AppendAsync(
             workItem.Id,
             "notification-skipped",
@@ -228,9 +228,9 @@ public class ReAccreditationNotificationHookTests
         await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
 
         await notifyClient.DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, default);
+            .SendEmailAsync(default!, default!, default!, default!, ct);
         await auditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]

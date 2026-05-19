@@ -41,5 +41,13 @@
     <PackageReference Include="Swashbuckle.AspNetCore.SwaggerUI" Version="9.0.6" />
   </ItemGroup>
 
+  <!-- Explicit overrides to silence NU19xx vulnerability warnings on
+       transitive packages pulled in by GovukNotify / MongoDB.Driver. -->
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="SharpCompress" Version="0.48.1" />
+    <PackageReference Include="Snappier" Version="1.3.1" />
+  </ItemGroup>
+
 
 </Project>
