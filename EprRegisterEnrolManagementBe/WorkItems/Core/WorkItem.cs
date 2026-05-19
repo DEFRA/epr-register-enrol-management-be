@@ -155,6 +155,15 @@ public sealed class WorkItem
     public List<WorkItemAuditEntry> AuditLog { get; init; } = new();
 
     /// <summary>
+    /// RA-131: per-item SLA clock. Null until the qualifying lifecycle
+    /// event starts the clock (RA-130 will add the trigger); once
+    /// started, it can be extended or overridden by a team leader via
+    /// <see cref="ISlaService"/>. Optional so legacy and in-flight items
+    /// continue to deserialise cleanly.
+    /// </summary>
+    public SlaClock? SlaClock { get; set; }
+
+    /// <summary>
     /// Optimistic concurrency token. Incremented by
     /// <see cref="IWorkItemPersistence.ReplaceAsync"/> on every successful
     /// save and used as a filter so two concurrent writers cannot silently

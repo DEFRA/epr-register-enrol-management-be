@@ -117,6 +117,13 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // See docs in EprRegisterEnrolManagementBe/WorkItems/Core for the contract a module must implement.
     services.AddWorkItemFramework();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
+    // RA-131: SLA extend / override is a cross-cutting framework concern
+    // (universal rules: team-leader gate, max-extension cap, audit shape,
+    // operator notify on extend via post-action hooks) so it lives next
+    // to the framework, not in a module.
+    services.AddOptions<SlaConfig>()
+        .Bind(builder.Configuration.GetSection("WorkItems:Sla"));
+    services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>();
 
     // The seeder writes records referencing stub user ids, so it is
@@ -416,5 +423,10 @@ static void ConfigureEndpoints(WebApplication app)
     }
 
     app.MapWorkItemFrameworkEndpoints();
+    // RA-131: framework-level SLA extend / override routes; mounted
+    // outside MapWorkItemFrameworkEndpoints so the SLA surface can grow
+    // (extend / override today, started / stopped / projection later)
+    // without bloating the core endpoint group.
+    app.MapWorkItemSlaEndpoints();
     app.MapWorkItemModules();
 }
