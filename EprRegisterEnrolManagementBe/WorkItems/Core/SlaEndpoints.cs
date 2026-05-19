@@ -71,8 +71,8 @@ public static class SlaEndpoints
         if (!TryGetString(body, "reason", out var reason))
         {
             return Problem("Invalid request",
-                "'reason' is required and must be a string.",
-                StatusCodes.Status400BadRequest);
+                "'reason' is required and must be a non-empty string.",
+                StatusCodes.Status422UnprocessableEntity);
         }
 
         var result = await slaService.ExtendAsync(id, additional, reason!, httpContext.User, cancellationToken);
@@ -126,8 +126,8 @@ public static class SlaEndpoints
         if (!TryGetString(body, "reason", out var reason))
         {
             return Problem("Invalid request",
-                "'reason' is required and must be a string.",
-                StatusCodes.Status400BadRequest);
+                "'reason' is required and must be a non-empty string.",
+                StatusCodes.Status422UnprocessableEntity);
         }
 
         var result = await slaService.OverrideAsync(

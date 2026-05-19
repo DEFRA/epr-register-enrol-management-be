@@ -142,7 +142,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     [Fact]
-    public async Task ExtendSla_returns_400_when_reason_missing()
+    public async Task ExtendSla_returns_422_when_reason_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var slaService = Substitute.For<ISlaService>();
@@ -153,7 +153,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
             WorkItemId, body, TeamLeaderContext(), slaService, engine, cancellationToken);
 
         var problem = Assert.IsType<ProblemHttpResult>(result.Result);
-        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+        Assert.Equal(StatusCodes.Status422UnprocessableEntity, problem.StatusCode);
     }
 
     // ── OverrideSla — handler unit tests ──────────────────────────────────────
@@ -239,7 +239,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     [Fact]
-    public async Task OverrideSla_returns_400_when_reason_missing()
+    public async Task OverrideSla_returns_422_when_reason_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var slaService = Substitute.For<ISlaService>();
@@ -250,7 +250,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
             WorkItemId, body, TeamLeaderContext(), slaService, engine, cancellationToken);
 
         var problem = Assert.IsType<ProblemHttpResult>(result.Result);
-        Assert.Equal(StatusCodes.Status400BadRequest, problem.StatusCode);
+        Assert.Equal(StatusCodes.Status422UnprocessableEntity, problem.StatusCode);
     }
 
     [Fact]
