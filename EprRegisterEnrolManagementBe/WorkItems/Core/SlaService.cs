@@ -295,7 +295,7 @@ public sealed class SlaService : ISlaService
         return SlaActionResult.Success(workItem);
     }
 
-    private static Dictionary<string, string?> Snapshot(SlaClock clock) => new()
+    private static Dictionary<string, string?> Snapshot(WorkItemSlaClock clock) => new()
     {
         ["startedAt"] = clock.StartedAt.ToString("o", CultureInfo.InvariantCulture),
         ["targetDuration"] = XmlConvert.ToString(clock.TargetDuration),

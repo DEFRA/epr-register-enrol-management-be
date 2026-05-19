@@ -14,14 +14,20 @@ public sealed class WorkItemSlaClock
     public DateTime StartedAt { get; set; }
 
     /// <summary>
-    /// Target duration as a <see cref="TimeSpan"/> computed from the
-    /// persisted <see cref="TargetDurationTicks"/> (Int64) so BSON
-    /// serialization does not require a custom serializer for TimeSpan.
+    /// Target duration for the SLA window. Stored as ticks (<see cref="TargetDurationTicks"/>)
+    /// in BSON so MongoDB does not need a custom TimeSpan serializer; this
+    /// property is the ergonomic façade used by all application code.
+    /// Defaults to 84 days (12 weeks). Mutable so <see cref="ISlaService"/>
+    /// can extend or override the window without replacing the whole clock.
     /// </summary>
     [BsonIgnore]
-    public TimeSpan TargetDuration => TimeSpan.FromTicks(TargetDurationTicks);
+    public TimeSpan TargetDuration
+    {
+        get => TimeSpan.FromTicks(TargetDurationTicks);
+        set => TargetDurationTicks = value.Ticks;
+    }
 
-    /// <summary>Backing field for <see cref="TargetDuration"/>. Stored as ticks (Int64).</summary>
+    /// <summary>Backing store for <see cref="TargetDuration"/>. Written to MongoDB as a plain Int64.</summary>
     [BsonElement("targetDuration")]
     public long TargetDurationTicks { get; set; } = TimeSpan.FromDays(84).Ticks; // 12 weeks
 
