@@ -236,6 +236,12 @@ public sealed class SlaService : ISlaService
             }
             newStartedAt = startedAtUtc;
         }
+        else
+        {
+            // BA confirmed (RA-131): omitting newStartedAt should default the
+            // clock start to today rather than preserving the existing value.
+            newStartedAt = now;
+        }
 
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
@@ -251,22 +257,12 @@ public sealed class SlaService : ISlaService
                 $"Work item '{workItemId}' has no SLA clock started — extend / override is unavailable.");
         }
 
-        var maxExtension = TimeSpan.FromDays(_config.CurrentValue.MaxExtensionDays);
-        var increase = newTargetDuration - workItem.SlaClock.TargetDuration;
-        if (increase > maxExtension)
-        {
-            return SlaActionResult.Failure(
-                SlaActionFailureCode.InvalidRequest,
-                $"Override would increase the target duration by more than the configured maximum of " +
-                $"{_config.CurrentValue.MaxExtensionDays} day(s) per call.");
-        }
+        // No cap on override — regulators agree duration offline with operators
+        // (BA confirmed RA-131; no legislative mandate for a maximum).
 
         var before = Snapshot(workItem.SlaClock);
         workItem.SlaClock.TargetDuration = newTargetDuration;
-        if (newStartedAt is { } resolvedStart)
-        {
-            workItem.SlaClock.StartedAt = resolvedStart;
-        }
+        workItem.SlaClock.StartedAt = newStartedAt.Value;
         var after = Snapshot(workItem.SlaClock);
         workItem.LastModifiedAt = now;
 

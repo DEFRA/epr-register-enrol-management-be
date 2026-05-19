@@ -365,7 +365,7 @@ public class SlaServiceTests
     }
 
     [Fact]
-    public async Task OverrideAsync_preserves_started_at_when_not_provided()
+    public async Task OverrideAsync_defaults_started_at_to_now_when_not_provided()
     {
         var originalStart = UtcNow.AddDays(-10);
         var workItem = WorkItemWithClock(startedAt: originalStart);
@@ -376,7 +376,8 @@ public class SlaServiceTests
             workItem.Id, TimeSpan.FromDays(84), null, "Just change target",
             TeamLeader(), TestContext.Current.CancellationToken);
 
-        Assert.Equal(originalStart, result.WorkItem!.SlaClock!.StartedAt);
+        // BA confirmed (RA-131): omitting newStartedAt should default to today.
+        Assert.Equal(UtcNow, result.WorkItem!.SlaClock!.StartedAt);
     }
 
     [Fact]
@@ -439,15 +440,15 @@ public class SlaServiceTests
     }
 
     [Fact]
-    public async Task OverrideAsync_allows_decrease_regardless_of_max_extension()
+    public async Task OverrideAsync_allows_any_duration_increase()
     {
-        var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromDays(84));
+        var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromDays(14));
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
             .Returns(workItem);
 
-        // Decrease by more than 31 days — this is fine (not an extension)
+        // BA confirmed (RA-131): no cap on override — regulators agree offline.
         var result = await BuildService(maxExtensionDays: 7).OverrideAsync(
-            workItem.Id, TimeSpan.FromDays(14), null, "Shortening it",
+            workItem.Id, TimeSpan.FromDays(365), null, "Long regulatory extension",
             TeamLeader(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
@@ -506,22 +507,6 @@ public class SlaServiceTests
 
         Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
         Assert.Contains("future", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task OverrideAsync_returns_invalid_request_when_increase_exceeds_max()
-    {
-        var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromDays(84));
-        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
-            .Returns(workItem);
-
-        // max = 7 days; increase = 84 → 92 = 8 days
-        var result = await BuildService(maxExtensionDays: 7).OverrideAsync(
-            workItem.Id, TimeSpan.FromDays(92), null, "reason",
-            TeamLeader(), TestContext.Current.CancellationToken);
-
-        Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
-        Assert.Contains("7", result.Message);
     }
 
     [Fact]
