@@ -28,7 +28,9 @@ public sealed record WorkItemResponse(
     DateTime? AssignedAt = null,
     string? AssignedBy = null,
     IReadOnlyCollection<WorkItemNoteResponse>? Notes = null,
-    IReadOnlyCollection<WorkItemAuditEntryResponse>? AuditLog = null);
+    IReadOnlyCollection<WorkItemAuditEntryResponse>? AuditLog = null,
+    TimeSpan? SlaRemaining = null,
+    WorkItemSlaState? SlaState = null);
 
 /// <summary>
 /// Wire shape for a single note attached to a work item (RA-96). Returned

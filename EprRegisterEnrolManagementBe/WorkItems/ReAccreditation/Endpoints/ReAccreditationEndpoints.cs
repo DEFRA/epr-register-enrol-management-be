@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -44,6 +45,13 @@ internal static class ReAccreditationEndpoints
             .WithName("RecordReAccreditationDecisionRationale")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxRationaleBodyBytes))
+            .RequireAuthorization();
+
+        // Operator-backend endpoint for when payment is confirmed programmatically.
+        // Not yet wired to the caseworker UI — caseworkers use the payment-received
+        // engine action instead. Reserved for future operator backend integration.
+        group.MapPost("/{id:guid}/payment-completed", RecordPaymentCompleted)
+            .WithName("RecordReAccreditationPaymentCompleted")
             .RequireAuthorization();
 
         return app;
@@ -181,7 +189,37 @@ internal static class ReAccreditationEndpoints
 
         return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
     }
+
+    /// <summary>
+    /// Operator-backend endpoint for programmatic payment confirmation.
+    /// Stamps the SLA clock from the operator-supplied <c>paidAt</c> timestamp,
+    /// transitions directly to <c>assessment-in-progress</c>, and records
+    /// four operator-attributed audit entries. Not yet wired to the caseworker
+    /// UI — caseworkers use the <c>payment-received</c> engine action instead.
+    /// Reserved for future operator backend integration.
+    /// </summary>
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> RecordPaymentCompleted(
+        [FromRoute] Guid id,
+        [FromBody] PaymentCompletedRequest request,
+        [FromServices] IReAccreditationPaymentService paymentService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        var result = await paymentService.RecordPaymentAsync(id, request, cancellationToken);
+        if (!result.IsSuccess)
+        {
+            return result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound
+                ? TypedResults.NotFound()
+                : TypedResults.Problem(
+                    title: "Could not record payment",
+                    detail: result.Message,
+                    statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+    }
 }
+
 internal sealed record ReAccreditationRecommendationResponse(string Recommendation, string Rationale);
 
 /// <summary>Request body for <see cref="ReAccreditationEndpoints.RecordDecisionRationale"/>.</summary>

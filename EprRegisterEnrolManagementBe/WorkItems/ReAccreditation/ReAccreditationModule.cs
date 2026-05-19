@@ -20,8 +20,10 @@ internal sealed class ReAccreditationModule : IWorkItemModule
     {
         services.AddSingleton<INationResolver, NationResolver>();
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
+        services.AddSingleton<IReAccreditationPaymentService, ReAccreditationPaymentService>();
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
+        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationSlaStampHook>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
     }
 

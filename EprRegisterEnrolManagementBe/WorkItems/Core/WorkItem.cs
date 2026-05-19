@@ -141,6 +141,13 @@ public sealed class WorkItem
     public List<WorkItemAuditEntry> AuditLog { get; init; } = new();
 
     /// <summary>
+    /// SLA clock stamped when the operator completes payment (moves the item
+    /// into <c>assessment-in-progress</c>). <c>null</c> for items that have
+    /// not yet received payment (pre-payment states).
+    /// </summary>
+    public WorkItemSlaClock? SlaClock { get; set; }
+
+    /// <summary>
     /// Optimistic concurrency token. Incremented by
     /// <see cref="IWorkItemPersistence.ReplaceAsync"/> on every successful
     /// save and used as a filter so two concurrent writers cannot silently

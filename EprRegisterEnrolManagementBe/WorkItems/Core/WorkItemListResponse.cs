@@ -47,4 +47,6 @@ public sealed record WorkItemListItemResponse(
     string? AssignedToId = null,
     string? AssignedToName = null,
     DateTime? AssignedAt = null,
-    string? AssignedBy = null);
+    string? AssignedBy = null,
+    TimeSpan? SlaRemaining = null,
+    WorkItemSlaState? SlaState = null);

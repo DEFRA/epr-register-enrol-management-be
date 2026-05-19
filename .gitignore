@@ -272,3 +272,4 @@ library.db
 appsettings.*.local.json
 appsettings.Local.json
 secrets.json
+*.lscache

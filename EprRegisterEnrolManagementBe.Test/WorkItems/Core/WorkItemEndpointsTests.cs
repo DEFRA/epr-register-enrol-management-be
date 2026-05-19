@@ -450,7 +450,7 @@ public class WorkItemEndpointsTests
                 new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
         };
 
-        var result = await WorkItemEndpoints.GetAll(httpContext, persistence, engine, cancellationToken);
+        var result = await WorkItemEndpoints.GetAll(httpContext, persistence, engine, TimeProvider.System, cancellationToken);
 
         var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
         Assert.NotNull(ok.Value);
@@ -492,7 +492,7 @@ public class WorkItemEndpointsTests
                 new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
         };
 
-        var result = await WorkItemEndpoints.GetAll(httpContext, persistence, engine, cancellationToken);
+        var result = await WorkItemEndpoints.GetAll(httpContext, persistence, engine, TimeProvider.System, cancellationToken);
 
         var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
         Assert.Empty(ok.Value!.Items);
