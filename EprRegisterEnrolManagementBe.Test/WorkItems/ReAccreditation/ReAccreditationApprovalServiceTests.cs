@@ -52,7 +52,7 @@ public class ReAccreditationApprovalServiceTests
         ], "test"));
 
     private static WorkItem BuildWorkItem(
-        string stateId = "assessment-in-progress",
+        string stateId = "awaiting-decision",
         string? submittedBy = OwnerClientId,
         BsonDocument? payload = null,
         string typeId = ReAccreditationType.Id)
@@ -138,7 +138,7 @@ public class ReAccreditationApprovalServiceTests
             Arg.Any<Func<IServiceProvider, CancellationToken, Task>>(),
             Arg.Any<CancellationToken>());
         await sut.Hooks[0].Received(1).OnActionAppliedAsync(
-            workItem, "approve", "assessment-in-progress", Arg.Any<ClaimsPrincipal>(), ct);
+            workItem, "approve", "awaiting-decision", Arg.Any<ClaimsPrincipal>(), ct);
     }
 
     [Fact]
@@ -247,8 +247,8 @@ public class ReAccreditationApprovalServiceTests
     [Theory]
     [InlineData("submitted")]
     [InlineData("duly-made")]
-    [InlineData("awaiting-decision")]
-    public async Task Returns_InvalidTransition_for_non_assessment_in_progress_states(string stateId)
+    [InlineData("assessment-in-progress")]
+    public async Task Returns_InvalidTransition_when_not_in_awaiting_decision_state(string stateId)
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
@@ -323,7 +323,7 @@ public class ReAccreditationApprovalServiceTests
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
         // Hand back a fresh work-item per call so each retry sees a
-        // clean assessment-in-progress doc (the production load would).
+        // clean awaiting-decision doc (the production load would).
         sut.Persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns(_ => BuildWorkItem());
 

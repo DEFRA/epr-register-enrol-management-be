@@ -15,7 +15,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// service:
 /// <list type="bullet">
 ///   <item>Validates the work item exists, is a re-accreditation, is
-///   readable by the caller, is in <c>assessment-in-progress</c>, and that
+///   readable by the caller, is in <c>awaiting-decision</c>, and that
 ///   the caller holds the decision-maker role.</item>
 ///   <item>Stamps a fresh accreditation id, today's date as the
 ///   <c>AccreditationStartDate</c>, and a non-null
@@ -46,7 +46,7 @@ internal sealed class ReAccreditationApprovalService(
     TimeProvider? timeProvider = null) : IReAccreditationApprovalService
 {
     private const int MaxAttempts = 3;
-    private const string FromStateId = "assessment-in-progress";
+    private const string FromStateId = "awaiting-decision";
     private const string ToStateId = "approved";
     private const string ActionId = "approve";
 

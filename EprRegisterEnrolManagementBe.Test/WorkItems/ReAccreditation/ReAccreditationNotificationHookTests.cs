@@ -329,7 +329,7 @@ public class ReAccreditationNotificationHookTests
 
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(workItem, "approve", "assessment-in-progress", s_user, ct);
+        await sut.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
 
         Assert.NotNull(captured);
         Assert.Equal("RA-12345678", captured!["accreditation_id"]);

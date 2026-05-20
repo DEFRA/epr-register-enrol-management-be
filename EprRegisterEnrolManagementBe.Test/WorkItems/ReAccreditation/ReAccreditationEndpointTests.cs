@@ -478,7 +478,7 @@ public class ReAccreditationEndpointTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
 
         var response = await client.PostAsync(
             $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
@@ -536,25 +536,25 @@ public class ReAccreditationEndpointTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
 
         var response = await client.PostAsync(
             $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.Equal("awaiting-decision", persisted!.StateId);
     }
 
     [Fact]
-    public async Task Approve_returns_bad_request_when_not_in_assessment_in_progress()
+    public async Task Approve_returns_bad_request_when_not_in_awaiting_decision()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
 
         var response = await client.PostAsync(
             $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
