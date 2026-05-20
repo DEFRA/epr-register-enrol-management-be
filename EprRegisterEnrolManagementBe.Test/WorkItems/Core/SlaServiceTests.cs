@@ -74,7 +74,7 @@ public class SlaServiceTests
             SubmittedAt = UtcNow.AddDays(-10),
             LastModifiedAt = UtcNow.AddDays(-10),
             SubmittedBy = "test-client",
-            SlaClock = new SlaClock
+            SlaClock = new WorkItemSlaClock
             {
                 StartedAt = startedAt ?? UtcNow.AddDays(-10),
                 TargetDuration = targetDuration ?? TimeSpan.FromDays(84),

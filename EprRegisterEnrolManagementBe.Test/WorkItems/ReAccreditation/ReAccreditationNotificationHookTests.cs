@@ -214,8 +214,11 @@ public class ReAccreditationNotificationHookTests
         Assert.Equal(expectedDecision, capturedPersonalisation!["decision"]);
     }
 
-    [Fact]
-    public async Task OnActionAppliedAsync_ignores_unmapped_actions()
+    [Theory]
+    [InlineData("withdraw")]
+    [InlineData("assign")]
+    [InlineData("unassign")]
+    public async Task OnActionAppliedAsync_ignores_unmapped_actions(string actionId)
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -224,8 +227,7 @@ public class ReAccreditationNotificationHookTests
         var workItem = BuildWorkItem();
         var sut = BuildSut(notifyClient, auditAppender);
 
-        // "withdraw" has no template mapping
-        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId: "submitted", s_user, ct);
 
         await notifyClient.DidNotReceiveWithAnyArgs()
             .SendEmailAsync(default!, default!, default!, default!, ct);

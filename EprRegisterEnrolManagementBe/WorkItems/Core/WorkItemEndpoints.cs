@@ -194,6 +194,7 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
+        [FromServices] TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
@@ -203,13 +204,14 @@ public static class WorkItemEndpoints
             // leaking the existence of items the caller cannot see.
             return TypedResults.NotFound();
         }
-        return TypedResults.Ok(ToResponse(engine.Project(workItem)));
+        return TypedResults.Ok(ToResponse(engine.Project(workItem), timeProvider));
     }
 
     internal static async Task<Results<Ok<WorkItemListResponse>, ProblemHttpResult>> GetAll(
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
+        [FromServices] TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var query = WorkItemQueryBinding.FromQueryString(httpContext.Request.Query);
@@ -248,7 +250,7 @@ public static class WorkItemEndpoints
         var page = await persistence.QueryAsync(query, cancellationToken);
 
         var items = page.Items
-            .Select(w => ToListItemResponse(engine.Project(w)))
+            .Select(w => ToListItemResponse(engine.Project(w), timeProvider))
             .ToList();
 
         return TypedResults.Ok(new WorkItemListResponse(items, page.TotalCount, page.Page, page.PageSize));
@@ -489,11 +491,11 @@ public static class WorkItemEndpoints
     }
 
     private static Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult> ToHttpResult(
-        WorkItemActionResult result, IWorkItemService engine)
+        WorkItemActionResult result, IWorkItemService engine, TimeProvider? timeProvider = null)
     {
         if (result.IsSuccess)
         {
-            return TypedResults.Ok(ToResponse(engine.Project(result.WorkItem!)));
+            return TypedResults.Ok(ToResponse(engine.Project(result.WorkItem!), timeProvider));
         }
 
         return result.FailureCode switch
@@ -529,9 +531,13 @@ public static class WorkItemEndpoints
         };
     }
 
-    internal static WorkItemResponse ToResponse(WorkItemEngineProjection projection)
+    internal static WorkItemResponse ToResponse(
+        WorkItemEngineProjection projection,
+        TimeProvider? timeProvider = null)
     {
         var w = projection.WorkItem;
+        var now = timeProvider?.GetUtcNow().UtcDateTime;
+        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now);
         return new WorkItemResponse(
             w.Id,
             w.TypeId,
@@ -574,7 +580,21 @@ public static class WorkItemEndpoints
                     x.Entry.CreatedAt,
                     x.Entry.CreatedBy,
                     x.Entry.CreatedByName))
-                .ToList());
+                .ToList(),
+            slaRemaining,
+            slaState);
+    }
+
+    internal static (TimeSpan? Remaining, WorkItemSlaState? State) ComputeSla(
+        WorkItemSlaClock? clock, DateTime? now)
+    {
+        if (clock is null || now is null)
+        {
+            return (null, null);
+        }
+        var remaining = clock.Remaining(now.Value);
+        var state = clock.ComputeState(now.Value);
+        return (remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, state);
     }
 
     /// <summary>
@@ -585,9 +605,13 @@ public static class WorkItemEndpoints
     /// dominate the payload of a 100-row page even though no list view
     /// renders them.
     /// </summary>
-    internal static WorkItemListItemResponse ToListItemResponse(WorkItemEngineProjection projection)
+    internal static WorkItemListItemResponse ToListItemResponse(
+        WorkItemEngineProjection projection,
+        TimeProvider? timeProvider = null)
     {
         var w = projection.WorkItem;
+        var now = timeProvider?.GetUtcNow().UtcDateTime;
+        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now);
         return new WorkItemListItemResponse(
             w.Id,
             w.TypeId,
@@ -602,6 +626,8 @@ public static class WorkItemEndpoints
             w.AssignedToId,
             w.AssignedToName,
             w.AssignedAt,
-            w.AssignedBy);
+            w.AssignedBy,
+            slaRemaining,
+            slaState);
     }
 }

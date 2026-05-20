@@ -54,6 +54,7 @@ static void ConfigureServices(WebApplicationBuilder builder)
     services.AddExceptionHandler<ExceptionLoggingHandler>();
     services.AddProblemDetails();
     services.AddValidation();
+    services.AddSingleton(TimeProvider.System);
 
     // Built-in .NET 10 OpenAPI document generation. Document only — no
     // Swagger UI is wired up (that ships in a separate package). The
@@ -125,6 +126,7 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
         .Bind(builder.Configuration.GetSection("WorkItems:Sla"));
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>();
+    services.AddHostedService<SlaBreachBackgroundService>();
 
     // The seeder writes records referencing stub user ids, so it is
     // gated to Development hosts even when WorkItems:SeedOnStartup=true.

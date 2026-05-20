@@ -59,14 +59,9 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     public string TypeId => Id;
     public string DisplayName => "Re-accreditation";
-    // RA-123: introduced duly-made state plus duly-make / payment-received /
-    // sla-extend transitions, and added OperatorEmail to the payload to
-    // drive GOV.UK Notify sends. Bump template version so in-flight v2
-    // items keep rendering against their captured snapshot.
-    // RA-132: approval is handled exclusively by ReAccreditationApprovalService
-    // (POST /work-items/re-accreditation/{id}/approve). That service stamps
-    // AccreditationId, AccreditationStartDate and SlaClock on the payload.
-    // v3 items must keep rendering against their captured snapshot so bump to v4.
+    // v4: added duly-made state, reorganised per-state tasks (confirm-application-completeness
+    // moves to submitted; confirm-registration-fee-paid moves to duly-made).
+    // Bump so in-flight v3 items render against their captured snapshot.
     public string TemplateVersion => "v4";
     public WorkItemState InitialState => s_submitted;
 
@@ -87,7 +82,7 @@ internal sealed class ReAccreditationType : IWorkItemType
             "duly-make", "Mark as duly made",
             s_submitted.Id, s_dulyMade.Id),
         new WorkItemTransition(
-            "payment-received", "Record payment received",
+            "payment-received", "Payment received",
             s_dulyMade.Id, s_assessmentInProgress.Id),
 
         // SLA extension is a self-loop on assessment-in-progress; it

@@ -16,7 +16,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <list type="bullet">
 ///   <item>Submission                                  → <c>SubmissionConfirmation</c></item>
 ///   <item>Action <c>duly-make</c>                     → <c>DulyMade</c></item>
-///   <item>Action <c>payment-received</c>              → <c>AssessmentInProgress</c></item>
+///   <item>Action <c>payment-received</c>               → <c>AssessmentInProgress</c></item>
 ///   <item>Action <c>sla-extend</c>                    → <c>SlaExtended</c></item>
 ///   <item>Action <c>approve</c> / <c>reject</c>       → <c>Decision</c></item>
 /// </list>
@@ -34,7 +34,7 @@ internal sealed class ReAccreditationNotificationHook(
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["duly-make"] = ("DulyMade", "Application marked duly made"),
-            ["payment-received"] = ("AssessmentInProgress", "Payment received; assessment in progress"),
+            ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
             ["sla-extend"] = ("SlaExtended", "SLA extended"),
             ["approve"] = ("Decision", "Decision recorded: approved"),
             ["reject"] = ("Decision", "Decision recorded: rejected")
