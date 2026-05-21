@@ -84,8 +84,21 @@ internal sealed class ArchiveBackgroundService(
                 continue;
             }
 
+            var approvedAt = item.LastModifiedAt;
+
             full.Payload[ArchivedAtPayloadKey] = new BsonDateTime(now);
             full.LastModifiedAt = now;
+            full.AuditLog.Add(new WorkItemAuditEntry
+            {
+                Action = "archived",
+                ActionDisplayName = "Archived",
+                CreatedAt = now,
+                Details = new Dictionary<string, string?>
+                {
+                    ["approvedAt"] = approvedAt.ToString("O"),
+                    ["archivedAt"] = now.ToString("O")
+                }
+            });
 
             try
             {
@@ -93,7 +106,7 @@ internal sealed class ArchiveBackgroundService(
                 stamped++;
                 logger.LogInformation(
                     "Archived work item {WorkItemId} ({TypeId}); approved at {ApprovedAt}.",
-                    full.Id, full.TypeId, item.LastModifiedAt);
+                    full.Id, full.TypeId, approvedAt);
             }
             catch (WorkItemConcurrencyException)
             {

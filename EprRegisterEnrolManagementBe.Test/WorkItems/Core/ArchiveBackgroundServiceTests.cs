@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -140,5 +141,49 @@ public class ArchiveBackgroundServiceTests
         await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
 
         await sut.Persistence.DidNotReceive().ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_concurrency_exception_on_replace_is_swallowed()
+    {
+        var item = ApprovedItem(daysAgo: ArchiveBackgroundService.ArchiveAfterDays + 1);
+        var sut = Build([item]);
+
+        sut.Persistence
+            .ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>())
+            .Throws(new WorkItemConcurrencyException(item.Id, 0));
+
+        var ex = await Record.ExceptionAsync(
+            () => sut.Service.RunOnceAsync(TestContext.Current.CancellationToken));
+
+        Assert.Null(ex);
+        await sut.Persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_get_by_id_returns_null_skips_replace()
+    {
+        // Simulates the item being deleted between the list query and the full-load.
+        var item = ApprovedItem(daysAgo: ArchiveBackgroundService.ArchiveAfterDays + 1);
+        var sut = Build([item]);
+
+        sut.Persistence
+            .GetByIdAsync(item.Id, Arg.Any<CancellationToken>())
+            .Returns((WorkItem?)null);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        await sut.Persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_stamps_last_modified_at_to_now()
+    {
+        var item = ApprovedItem(daysAgo: ArchiveBackgroundService.ArchiveAfterDays + 1);
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(s_fixedNow.UtcDateTime, item.LastModifiedAt);
     }
 }
