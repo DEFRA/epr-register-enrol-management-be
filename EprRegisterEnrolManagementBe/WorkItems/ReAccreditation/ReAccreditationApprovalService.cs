@@ -1,7 +1,10 @@
+using System.Globalization;
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using ReAccreditationSlaClock = EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.SlaClock;
@@ -43,15 +46,17 @@ internal sealed class ReAccreditationApprovalService(
     IBackgroundTaskQueue backgroundTaskQueue,
     IEnumerable<IWorkItemPostActionHook> postActionHooks,
     ILogger<ReAccreditationApprovalService> logger,
+    IOptions<AccreditationConfig> accreditationOptions,
     TimeProvider? timeProvider = null) : IReAccreditationApprovalService
 {
     private const int MaxAttempts = 3;
-    private const string FromStateId = "assessment-in-progress";
+    private const string FromStateId = "awaiting-decision";
     private const string ToStateId = "approved";
     private const string ActionId = "approve";
 
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly IWorkItemPostActionHook[] _postActionHooks = postActionHooks.ToArray();
+    private readonly AccreditationConfig _accreditationConfig = accreditationOptions.Value;
 
     public async Task<WorkItemActionResult> ApproveAsync(
         Guid workItemId,
@@ -87,6 +92,32 @@ internal sealed class ReAccreditationApprovalService(
                     $"Work item {workItemId} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.");
             }
 
+            // RA-133: idempotent re-approve. If the payload already
+            // carries an accreditation id and the item is in the
+            // approved state, return success without re-stamping or
+            // re-emitting audit/notification side-effects. An id
+            // present on a non-approved item indicates a corrupt
+            // record — surface it as an InvalidTransition so the
+            // operator investigates.
+            var existingAccreditationId = TryReadString(workItem.Payload, "accreditationId");
+            if (!string.IsNullOrWhiteSpace(existingAccreditationId))
+            {
+                if (string.Equals(workItem.StateId, ToStateId, StringComparison.OrdinalIgnoreCase))
+                {
+                    return WorkItemActionResult.Success(workItem);
+                }
+
+                logger.LogWarning(
+                    "Work item {WorkItemId} carries accreditation id {AccreditationId} but is in state " +
+                    "{StateId}; refusing to re-issue.",
+                    workItem.Id, existingAccreditationId, workItem.StateId);
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.InvalidTransition,
+                    $"Work item '{workItemId}' already carries accreditation id " +
+                    $"'{existingAccreditationId}' but is in state '{workItem.StateId}'. " +
+                    "Manual investigation required.");
+            }
+
             if (string.Equals(workItem.StateId, ToStateId, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(workItem.StateId, "rejected", StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(workItem.StateId, "withdrawn", StringComparison.OrdinalIgnoreCase))
@@ -113,10 +144,34 @@ internal sealed class ReAccreditationApprovalService(
 
             var now = _timeProvider.GetUtcNow();
             var nowUtc = now.UtcDateTime;
-            var accreditationId = accreditationIdGenerator.Generate();
-            var accreditationStartDate = DateOnly.FromDateTime(nowUtc);
+            var accreditationYear = _accreditationConfig.CurrentYear;
+            var material = ResolveFirstMaterial(workItem.Payload);
 
-            if (!TryApplyApprovalToPayload(workItem, accreditationId, accreditationStartDate, now))
+            string accreditationId;
+            try
+            {
+                accreditationId = await accreditationIdGenerator.GenerateAsync(
+                    material, accreditationYear, cancellationToken);
+            }
+            catch (InvalidOperationException ex)
+            {
+                logger.LogError(ex,
+                    "Failed to generate a unique accreditation id for work item {WorkItemId}.",
+                    workItem.Id);
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.InvalidTransition,
+                    $"Work item '{workItemId}' could not be approved: a unique accreditation id " +
+                    "could not be generated. Try again, or contact support if the problem persists.");
+            }
+
+            // RA-133: start date is 1 Jan of the configured year, OR
+            // today's date when approval happens after 1 Jan of that
+            // year (the accreditation cannot start in the past).
+            var jan1 = new DateOnly(accreditationYear, 1, 1);
+            var today = DateOnly.FromDateTime(nowUtc);
+            var accreditationStartDate = today > jan1 ? today : jan1;
+
+            if (!TryApplyApprovalToPayload(workItem, accreditationId, accreditationStartDate, accreditationYear, now))
             {
                 return WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.InvalidTransition,
@@ -143,7 +198,8 @@ internal sealed class ReAccreditationApprovalService(
             AppendAudit(workItem, "accreditation-issued", "Accreditation issued", user, nowUtc, new()
             {
                 ["accreditationId"] = accreditationId,
-                ["startDate"] = accreditationStartDate.ToString("yyyy-MM-dd")
+                ["startDate"] = accreditationStartDate.ToString("yyyy-MM-dd"),
+                ["accreditationYear"] = accreditationYear.ToString(CultureInfo.InvariantCulture)
             });
 
             try
@@ -185,6 +241,7 @@ internal sealed class ReAccreditationApprovalService(
         WorkItem workItem,
         string accreditationId,
         DateOnly accreditationStartDate,
+        int accreditationYear,
         DateTimeOffset stoppedAt)
     {
         // Deserialise → with-mutate → reserialise so the mongo-driver's
@@ -209,11 +266,33 @@ internal sealed class ReAccreditationApprovalService(
         {
             AccreditationId = accreditationId,
             AccreditationStartDate = accreditationStartDate,
+            AccreditationYear = accreditationYear,
             SlaClock = new ReAccreditationSlaClock(stoppedAt)
         };
 
         workItem.ReplacePayload(updated.ToBsonDocument());
         return true;
+    }
+
+    private static string? ResolveFirstMaterial(BsonDocument? payload)
+    {
+        if (payload is null)
+        {
+            return null;
+        }
+        if (payload.TryGetValue("materialsHandled", out var raw) &&
+            raw is BsonArray array && array.Count > 0)
+        {
+            var first = array[0];
+            if (!first.IsBsonNull)
+            {
+                return first.ToString();
+            }
+        }
+        // Fallback: the create form (RA-127) submits a single-value
+        // `material` field. Read it so the accreditation id gets the
+        // correct material initial instead of defaulting to "X".
+        return TryReadString(payload, "material");
     }
 
     private async Task EnqueuePublishingAuditAsync(

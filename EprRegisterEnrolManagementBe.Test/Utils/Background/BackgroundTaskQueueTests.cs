@@ -35,10 +35,11 @@ public class BackgroundTaskQueueTests
     [Fact]
     public async Task QueueAsync_throws_when_workItem_is_null()
     {
+        var ct = TestContext.Current.CancellationToken;
         var sut = new BackgroundTaskQueue();
 
         await Assert.ThrowsAsync<ArgumentNullException>(
-            () => sut.QueueAsync(workItem: null!));
+            () => sut.QueueAsync(workItem: null!, ct));
     }
 
     [Fact]
