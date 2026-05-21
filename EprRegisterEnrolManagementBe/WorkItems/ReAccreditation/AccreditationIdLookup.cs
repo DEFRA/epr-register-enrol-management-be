@@ -31,5 +31,16 @@ internal sealed class AccreditationIdLookup(
     }
 
     protected override List<CreateIndexModel<WorkItem>> DefineIndexes(
-        IndexKeysDefinitionBuilder<WorkItem> builder) => [];
+        IndexKeysDefinitionBuilder<WorkItem> builder)
+    {
+        // Sparse unique index so ExistsAsync uses an index scan rather than a
+        // full collection scan, and as a DB-level backstop against two
+        // concurrent approvals stamping the same accreditation id (TOCTOU).
+        // Sparse excludes documents that have no payload.accreditationId field
+        // (i.e. unapproved work items) from the index entirely.
+        var accreditationId = new CreateIndexModel<WorkItem>(
+            builder.Ascending("payload.accreditationId"),
+            new CreateIndexOptions { Unique = true, Sparse = true });
+        return [accreditationId];
+    }
 }
