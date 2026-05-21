@@ -1412,14 +1412,20 @@ public class WorkItemEndpointsTests
                             sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>())));
                 services.AddSingleton<IWorkItemType>(new TestWorkItemType(TypeId, "Test type", tasksByState: _tasksByState));
 
-                // SlaBreachBackgroundService calls QueryAsync at startup which
-                // sets Recording.LastQuery and contaminates tests that assert
-                // the query was never issued.
+                // Background services call QueryAsync at startup which sets
+                // Recording.LastQuery and contaminates tests that assert the
+                // query was never issued. Remove both offenders.
                 var slaBreachDescriptor = services.FirstOrDefault(
                     d => d.ImplementationType == typeof(SlaBreachBackgroundService));
                 if (slaBreachDescriptor is not null)
                 {
                     services.Remove(slaBreachDescriptor);
+                }
+                var archiveDescriptor = services.FirstOrDefault(
+                    d => d.ImplementationType == typeof(ArchiveBackgroundService));
+                if (archiveDescriptor is not null)
+                {
+                    services.Remove(archiveDescriptor);
                 }
             });
         }

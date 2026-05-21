@@ -52,6 +52,15 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <see cref="EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.Nation"/>
 /// enum members (e.g. <c>England</c>, <c>NorthernIreland</c>).
 /// </param>
+/// <param name="IncludeArchived">
+/// When <c>false</c> (the default), items whose <see cref="WorkItem.StateId"/>
+/// is <c>"approved"</c> are excluded from the results. The approved state is the
+/// only archive trigger in the current workflow; items arrive there as the BPMN
+/// happy-path terminal step and are hidden from the active worklist to keep it
+/// focused on in-flight work. Pass <c>true</c> to reveal them (e.g. when the
+/// user ticks "Show archived"). Background jobs that need to scan approved items
+/// (e.g. <c>ArchiveBackgroundService</c>) must also pass <c>true</c>.
+/// </param>
 public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? TypeIds = null,
     IReadOnlyCollection<string>? StateIds = null,
@@ -61,7 +70,8 @@ public sealed record WorkItemQuery(
     int Page = 1,
     int PageSize = 20,
     string? SubmittedBy = null,
-    IReadOnlyCollection<string>? Nations = null)
+    IReadOnlyCollection<string>? Nations = null,
+    bool IncludeArchived = false)
 {
     public const int DefaultPageSize = 20;
     public const int MinPageSize = 1;

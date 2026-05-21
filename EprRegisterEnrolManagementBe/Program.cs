@@ -127,6 +127,7 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>();
     services.AddHostedService<SlaBreachBackgroundService>();
+    services.AddHostedService<ArchiveBackgroundService>();
 
     // The seeder writes records referencing stub user ids, so it is
     // gated to Development hosts even when WorkItems:SeedOnStartup=true.
