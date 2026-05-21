@@ -6,7 +6,7 @@ namespace EprRegisterEnrolManagementBe.Test.Utils.Background;
 
 public class QueuedHostedServiceTests
 {
-    private sealed class Marker { public int Value; }
+    private sealed class Marker { }
 
     private static ServiceProvider BuildRootProvider()
     {

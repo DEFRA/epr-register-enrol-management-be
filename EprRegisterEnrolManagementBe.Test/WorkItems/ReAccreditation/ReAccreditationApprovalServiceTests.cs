@@ -196,7 +196,7 @@ public class ReAccreditationApprovalServiceTests
         var result = await sut.Service.ApproveAsync(Guid.NewGuid(), AnonymousUser(), ct);
 
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
-        await sut.Persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, default);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, ct);
     }
 
     [Fact]
@@ -303,7 +303,7 @@ public class ReAccreditationApprovalServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         // Persistence must not have been called — the corrupt item is left unchanged.
-        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         // The original payload should be untouched.
         Assert.Equal("not-a-date", workItem.Payload["accreditationStartDate"].AsString);
     }
@@ -380,10 +380,11 @@ public class ReAccreditationApprovalServiceTests
     [Fact]
     public async Task ApproveAsync_throws_when_user_is_null()
     {
+        var ct = TestContext.Current.CancellationToken;
         var sut = Build();
 
         await Assert.ThrowsAsync<ArgumentNullException>(
-            () => sut.Service.ApproveAsync(Guid.NewGuid(), user: null!));
+            () => sut.Service.ApproveAsync(Guid.NewGuid(), user: null!, ct));
     }
 
     // ─────────────────────────── RA-133 ────────────────────────────────
@@ -506,11 +507,11 @@ public class ReAccreditationApprovalServiceTests
         Assert.True(result.IsSuccess);
         // No re-stamping, no audit entries, no persistence, no fan-out.
         Assert.Empty(workItem.AuditLog);
-        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
-        await sut.IdGenerator.DidNotReceiveWithAnyArgs().GenerateAsync(default, default, default);
-        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        await sut.IdGenerator.DidNotReceiveWithAnyArgs().GenerateAsync(default, default, ct);
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
         await sut.Hooks[0].DidNotReceiveWithAnyArgs().OnActionAppliedAsync(
-            default!, default!, default!, default!, default);
+            default!, default!, default!, default!, ct);
     }
 
     [Fact]
@@ -528,8 +529,8 @@ public class ReAccreditationApprovalServiceTests
         var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
-        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
-        await sut.IdGenerator.DidNotReceiveWithAnyArgs().GenerateAsync(default, default, default);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        await sut.IdGenerator.DidNotReceiveWithAnyArgs().GenerateAsync(default, default, ct);
     }
 
     [Fact]
@@ -546,6 +547,6 @@ public class ReAccreditationApprovalServiceTests
         var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
-        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 }
