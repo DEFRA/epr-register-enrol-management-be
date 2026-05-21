@@ -1,3 +1,5 @@
+using MongoDB.Bson.Serialization.Attributes;
+
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 
 /// <summary>
@@ -8,7 +10,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 /// Stored on the work item envelope as a free-form BSON sub-document; this
 /// record is the module's interpretation of that document, deserialised on
 /// demand when the module needs to reason about the payload.
+///
+/// Marked <see cref="BsonIgnoreExtraElementsAttribute"/> so envelope-level
+/// fields stamped onto the payload by the core <c>WorkItemService</c>
+/// (e.g. <c>applicationReference</c>, <c>source</c>, <c>siteAddressLine1</c>)
+/// do not cause deserialisation to fail when the module re-reads its
+/// own slice of the payload.
 /// </summary>
+[BsonIgnoreExtraElements]
 internal sealed record ReAccreditationPayload
 {
     public string? OrganisationName { get; init; }

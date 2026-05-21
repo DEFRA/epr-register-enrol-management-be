@@ -50,7 +50,7 @@ internal sealed class ReAccreditationApprovalService(
     TimeProvider? timeProvider = null) : IReAccreditationApprovalService
 {
     private const int MaxAttempts = 3;
-    private const string FromStateId = "assessment-in-progress";
+    private const string FromStateId = "awaiting-decision";
     private const string ToStateId = "approved";
     private const string ActionId = "approve";
 
@@ -276,16 +276,23 @@ internal sealed class ReAccreditationApprovalService(
 
     private static string? ResolveFirstMaterial(BsonDocument? payload)
     {
-        if (payload is null || !payload.TryGetValue("materialsHandled", out var raw))
+        if (payload is null)
         {
             return null;
         }
-        if (raw is not BsonArray array || array.Count == 0)
+        if (payload.TryGetValue("materialsHandled", out var raw) &&
+            raw is BsonArray array && array.Count > 0)
         {
-            return null;
+            var first = array[0];
+            if (!first.IsBsonNull)
+            {
+                return first.ToString();
+            }
         }
-        var first = array[0];
-        return first.IsBsonNull ? null : first.ToString();
+        // Fallback: the create form (RA-127) submits a single-value
+        // `material` field. Read it so the accreditation id gets the
+        // correct material initial instead of defaulting to "X".
+        return TryReadString(payload, "material");
     }
 
     private async Task EnqueuePublishingAuditAsync(
