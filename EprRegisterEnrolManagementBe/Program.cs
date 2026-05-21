@@ -124,6 +124,10 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // to the framework, not in a module.
     services.AddOptions<SlaConfig>()
         .Bind(builder.Configuration.GetSection("WorkItems:Sla"));
+    // RA-133: accreditation issuance config (current year drives the
+    // generated AccreditationId year segment and AccreditationStartDate).
+    services.AddOptions<AccreditationConfig>()
+        .Bind(builder.Configuration.GetSection("Accreditation"));
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>();
     services.AddHostedService<SlaBreachBackgroundService>();

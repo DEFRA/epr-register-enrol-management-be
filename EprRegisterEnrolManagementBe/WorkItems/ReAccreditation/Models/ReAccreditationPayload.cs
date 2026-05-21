@@ -55,6 +55,15 @@ internal sealed record ReAccreditationPayload
     public DateOnly? AccreditationStartDate { get; init; }
 
     /// <summary>
+    /// Four-digit accreditation year stamped at approval time
+    /// (RA-133). Sourced from the <c>Accreditation:CurrentYear</c>
+    /// configuration setting and used to derive both the year segment
+    /// of <see cref="AccreditationId"/> and the
+    /// <see cref="AccreditationStartDate"/>.
+    /// </summary>
+    public int? AccreditationYear { get; init; }
+
+    /// <summary>
     /// RA-132 SLA clock state. Set by the approval service when the
     /// clock is stopped on approval.
     /// </summary>
