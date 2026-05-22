@@ -18,6 +18,7 @@ internal static class WorkItemQueryBinding
     internal const string PageParam = "page";
     internal const string PageSizeParam = "pageSize";
     internal const string NationParam = "nation";
+    internal const string IncludeArchivedParam = "includeArchived";
 
     /// <summary>
     /// Name of the tenancy-isolation field on <see cref="WorkItemQuery"/>.
@@ -52,7 +53,8 @@ internal static class WorkItemQueryBinding
             UnassignedOnly: ReadBool(query, UnassignedOnlyParam),
             Page: ReadInt(query, PageParam, defaultValue: 1),
             PageSize: ReadInt(query, PageSizeParam, defaultValue: WorkItemQuery.DefaultPageSize),
-            Nations: ReadNations(query, NationParam));
+            Nations: ReadNations(query, NationParam),
+            IncludeArchived: ReadBool(query, IncludeArchivedParam));
         // NB: SubmittedBy is intentionally omitted from the constructor
         // call above. Do not add it. See WorkItemQuery.SubmittedBy.
     }

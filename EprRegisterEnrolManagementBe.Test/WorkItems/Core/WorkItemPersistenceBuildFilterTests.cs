@@ -23,9 +23,18 @@ public class WorkItemPersistenceBuildFilterTests
     }
 
     [Fact]
-    public void EmptyQueryRendersEmptyFilter()
+    public void DefaultQueryExcludesApprovedState()
     {
+        // IncludeArchived defaults to false — approved items are hidden.
         var doc = Render(new WorkItemQuery());
+
+        Assert.Equal("approved", doc["stateId"]["$ne"].AsString);
+    }
+
+    [Fact]
+    public void IncludeArchivedTrueRendersEmptyFilter()
+    {
+        var doc = Render(new WorkItemQuery(IncludeArchived: true));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -33,7 +42,8 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void TypeIdsRenderAsInClause()
     {
-        var doc = Render(new WorkItemQuery(TypeIds: new[] { "re-accreditation", "registration" }));
+        // Use IncludeArchived: true to isolate the typeId assertion.
+        var doc = Render(new WorkItemQuery(TypeIds: new[] { "re-accreditation", "registration" }, IncludeArchived: true));
 
         var expected = new BsonDocument("typeId", new BsonDocument("$in",
             new BsonArray { "re-accreditation", "registration" }));
@@ -43,7 +53,8 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void StateIdsRenderAsInClause()
     {
-        var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted", "in-review" }));
+        // Use IncludeArchived: true to isolate the stateId assertion.
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted", "in-review" }, IncludeArchived: true));
 
         var expected = new BsonDocument("stateId", new BsonDocument("$in",
             new BsonArray { "submitted", "in-review" }));
@@ -51,9 +62,45 @@ public class WorkItemPersistenceBuildFilterTests
     }
 
     [Fact]
+    public void StateIdsWithArchiveExclusionCombinesBothConditionsOnStateId()
+    {
+        // The MongoDB C# driver merges $in and $ne on the same field into a
+        // single sub-document when combining them with And(), so the rendered
+        // filter does NOT use an explicit $and wrapper.
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted" }));
+
+        // Both stateId conditions must appear in the rendered document.
+        var stateDoc = doc["stateId"].AsBsonDocument;
+        Assert.Equal("submitted", stateDoc["$in"].AsBsonArray[0].AsString);
+        Assert.Equal("approved", stateDoc["$ne"].AsString);
+    }
+
+    [Fact]
+    public void StateIdsContainingApprovedSkipsArchiveExclusion()
+    {
+        // When the caller explicitly filters to StateIds=["approved"],
+        // adding $ne:"approved" would make the query unsatisfiable.
+        // The exclusion must be omitted in this case.
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "approved" }));
+
+        var stateDoc = doc["stateId"].AsBsonDocument;
+        Assert.True(stateDoc.Contains("$in"), "Expected $in clause for approved.");
+        Assert.False(stateDoc.Contains("$ne"), "$ne:approved must not be added when StateIds already includes approved.");
+    }
+
+    [Fact]
+    public void StateIdsContainingApprovedAmongOthersSkipsArchiveExclusion()
+    {
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "approved", "submitted" }));
+
+        var stateDoc = doc["stateId"].AsBsonDocument;
+        Assert.False(stateDoc.Contains("$ne"), "$ne:approved must not be added when approved is in StateIds.");
+    }
+
+    [Fact]
     public void SearchRendersCaseInsensitiveOrAcrossIdAndSubmittedBy()
     {
-        var doc = Render(new WorkItemQuery(Search: "  alice  "));
+        var doc = Render(new WorkItemQuery(Search: "  alice  ", IncludeArchived: true));
 
         // Trimmed search needle.
         var pattern = new BsonRegularExpression("alice", "i");
@@ -66,7 +113,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void SearchEscapesRegexMetacharacters()
     {
-        var doc = Render(new WorkItemQuery(Search: "a.b*c"));
+        var doc = Render(new WorkItemQuery(Search: "a.b*c", IncludeArchived: true));
 
         var or = doc["$or"].AsBsonArray;
         var rendered = or[0]["_id"].AsBsonRegularExpression.Pattern;
@@ -79,7 +126,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankSearchIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(Search: "   "));
+        var doc = Render(new WorkItemQuery(Search: "   ", IncludeArchived: true));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -87,7 +134,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void AssigneeIdAloneRendersAsEquality()
     {
-        var doc = Render(new WorkItemQuery(AssigneeId: " user-1 "));
+        var doc = Render(new WorkItemQuery(AssigneeId: " user-1 ", IncludeArchived: true));
 
         Assert.Equal("user-1", doc["assignedToId"].AsString);
     }
@@ -95,7 +142,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void UnassignedOnlyAloneRendersAsNullEquality()
     {
-        var doc = Render(new WorkItemQuery(UnassignedOnly: true));
+        var doc = Render(new WorkItemQuery(UnassignedOnly: true, IncludeArchived: true));
 
         Assert.Equal(BsonNull.Value, doc["assignedToId"]);
     }
@@ -103,7 +150,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void AssigneeIdWithUnassignedOnlyRendersAsOr()
     {
-        var doc = Render(new WorkItemQuery(AssigneeId: "user-1", UnassignedOnly: true));
+        var doc = Render(new WorkItemQuery(AssigneeId: "user-1", UnassignedOnly: true, IncludeArchived: true));
 
         var or = doc["$or"].AsBsonArray;
         Assert.Equal(2, or.Count);
@@ -114,7 +161,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankAssigneeIdIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(AssigneeId: "   "));
+        var doc = Render(new WorkItemQuery(AssigneeId: "   ", IncludeArchived: true));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -122,7 +169,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void SubmittedByRendersAsEquality()
     {
-        var doc = Render(new WorkItemQuery(SubmittedBy: " bob "));
+        var doc = Render(new WorkItemQuery(SubmittedBy: " bob ", IncludeArchived: true));
 
         Assert.Equal("bob", doc["submittedBy"].AsString);
     }
@@ -130,7 +177,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankSubmittedByIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(SubmittedBy: "   "));
+        var doc = Render(new WorkItemQuery(SubmittedBy: "   ", IncludeArchived: true));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -138,13 +185,14 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void MultipleClausesAreCombined()
     {
-        // The driver collapses And() over distinct field names into a single
-        // flat document; only colliding keys force an explicit $and.
+        // Use IncludeArchived: true so the only stateId clause is the $in from
+        // StateIds, which lets the driver collapse everything into a flat doc.
         var doc = Render(new WorkItemQuery(
             TypeIds: new[] { "re-accreditation" },
             StateIds: new[] { "submitted" },
             AssigneeId: "user-1",
-            SubmittedBy: "bob"));
+            SubmittedBy: "bob",
+            IncludeArchived: true));
 
         Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
         Assert.Equal("submitted", doc["stateId"]["$in"].AsBsonArray[0].AsString);
@@ -157,7 +205,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void NationsRendersAsInClauseOnPayloadNation()
     {
-        var doc = Render(new WorkItemQuery(Nations: new[] { "England", "Scotland" }));
+        var doc = Render(new WorkItemQuery(Nations: new[] { "England", "Scotland" }, IncludeArchived: true));
 
         var inArr = doc["payload.nation"]["$in"].AsBsonArray;
         Assert.Equal(2, inArr.Count);
@@ -168,7 +216,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void SingleNationRendersAsInClause()
     {
-        var doc = Render(new WorkItemQuery(Nations: new[] { "Wales" }));
+        var doc = Render(new WorkItemQuery(Nations: new[] { "Wales" }, IncludeArchived: true));
 
         Assert.Equal("Wales", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
     }
@@ -176,7 +224,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void EmptyNationsIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(Nations: Array.Empty<string>()));
+        var doc = Render(new WorkItemQuery(Nations: Array.Empty<string>(), IncludeArchived: true));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -184,7 +232,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void NullNationsIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(Nations: null));
+        var doc = Render(new WorkItemQuery(Nations: null, IncludeArchived: true));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -194,7 +242,8 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(
             TypeIds: new[] { "re-accreditation" },
-            Nations: new[] { "England" }));
+            Nations: new[] { "England" },
+            IncludeArchived: true));
 
         Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
         Assert.Equal("England", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
