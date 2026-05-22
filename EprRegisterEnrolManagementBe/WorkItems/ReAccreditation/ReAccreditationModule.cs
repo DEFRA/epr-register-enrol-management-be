@@ -27,7 +27,9 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
         // RA-132: accreditation-id generator + module-scoped approval
         // service that owns the bespoke approval workflow (id issuance,
-        // SLA clock stop, queued publishing).
+        // SLA clock stop, queued publishing). RA-133: the generator
+        // now consults a Mongo-backed lookup for uniqueness.
+        services.AddSingleton<IAccreditationIdLookup, AccreditationIdLookup>();
         services.AddSingleton<IAccreditationIdGenerator, AccreditationIdGenerator>();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
     }

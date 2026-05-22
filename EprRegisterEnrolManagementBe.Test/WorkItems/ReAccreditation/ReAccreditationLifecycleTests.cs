@@ -1,8 +1,10 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -24,13 +26,15 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]), persistence, NullLogger<WorkItemService>.Instance);
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
-        idGenerator.Generate().Returns("RA-TEST00000000");
+        idGenerator.GenerateAsync(Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns("ACC-2027-X-TEST0000");
         var approvalService = new ReAccreditationApprovalService(
             persistence,
             idGenerator,
             Substitute.For<IBackgroundTaskQueue>(),
             [],
-            NullLogger<ReAccreditationApprovalService>.Instance);
+            NullLogger<ReAccreditationApprovalService>.Instance,
+            Options.Create(new AccreditationConfig { CurrentYear = 2027 }));
 
         const string tenantClientId = "test-client";
         var workItem = new WorkItem
@@ -59,6 +63,9 @@ public class ReAccreditationLifecycleTests
         Assert.True((await engine.ApplyActionAsync(workItem.Id, "payment-received", user, ct)).IsSuccess);
 
         await CompleteAll(engine, workItem.Id, type, "assessment-in-progress", user, ct);
+        Assert.True((await engine.ApplyActionAsync(workItem.Id, "submit-for-decision", user, ct)).IsSuccess);
+
+        await CompleteAll(engine, workItem.Id, type, "awaiting-decision", user, ct);
         // RA-132: approve goes through the bespoke ReAccreditationApprovalService,
         // not the generic engine — the generic engine no longer registers the
         // approve transition so it cannot silently produce an item missing the
@@ -67,10 +74,11 @@ public class ReAccreditationLifecycleTests
 
         Assert.Equal("approved", workItem.StateId);
 
-        // 2 + 1 + 3 = 6 task completions + 2 engine transitions +
+        // 2 + 1 + 3 + 1 = 7 task completions + 3 engine transitions
+        // (duly-make, payment-received, submit-for-decision) +
         // 3 approval audit entries (action-applied, sla-clock-stopped,
-        // accreditation-issued) = 11 total.
-        Assert.Equal(11, workItem.AuditLog.Count);
+        // accreditation-issued) = 13 total.
+        Assert.Equal(13, workItem.AuditLog.Count);
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"
             && e.Details.GetValueOrDefault("actionId") == "duly-make");
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"
