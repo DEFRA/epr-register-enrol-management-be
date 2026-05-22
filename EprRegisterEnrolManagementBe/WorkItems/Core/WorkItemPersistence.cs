@@ -193,7 +193,12 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
         // Archive exclusion: hide approved items by default so the active
         // worklist stays focused on in-flight work. Pass IncludeArchived=true
         // to reveal them (e.g. for the "Show archived" filter or background jobs).
-        if (!query.IncludeArchived)
+        // Skip the exclusion when StateIds already contains "approved" — combining
+        // $in:["approved"] with $ne:"approved" on the same field makes the query
+        // unsatisfiable (matches nothing).
+        var stateFilterIncludesApproved =
+            query.StateIds?.Contains("approved", StringComparer.OrdinalIgnoreCase) ?? false;
+        if (!query.IncludeArchived && !stateFilterIncludesApproved)
         {
             clauses.Add(builder.Ne(w => w.StateId, "approved"));
         }

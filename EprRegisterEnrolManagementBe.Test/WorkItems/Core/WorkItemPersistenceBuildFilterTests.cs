@@ -76,6 +76,28 @@ public class WorkItemPersistenceBuildFilterTests
     }
 
     [Fact]
+    public void StateIdsContainingApprovedSkipsArchiveExclusion()
+    {
+        // When the caller explicitly filters to StateIds=["approved"],
+        // adding $ne:"approved" would make the query unsatisfiable.
+        // The exclusion must be omitted in this case.
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "approved" }));
+
+        var stateDoc = doc["stateId"].AsBsonDocument;
+        Assert.True(stateDoc.Contains("$in"), "Expected $in clause for approved.");
+        Assert.False(stateDoc.Contains("$ne"), "$ne:approved must not be added when StateIds already includes approved.");
+    }
+
+    [Fact]
+    public void StateIdsContainingApprovedAmongOthersSkipsArchiveExclusion()
+    {
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "approved", "submitted" }));
+
+        var stateDoc = doc["stateId"].AsBsonDocument;
+        Assert.False(stateDoc.Contains("$ne"), "$ne:approved must not be added when approved is in StateIds.");
+    }
+
+    [Fact]
     public void SearchRendersCaseInsensitiveOrAcrossIdAndSubmittedBy()
     {
         var doc = Render(new WorkItemQuery(Search: "  alice  ", IncludeArchived: true));

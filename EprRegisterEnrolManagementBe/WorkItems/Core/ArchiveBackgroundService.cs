@@ -52,75 +52,97 @@ internal sealed class ArchiveBackgroundService(
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var archiveThreshold = now - TimeSpan.FromDays(ArchiveAfterDays);
 
-        // IncludeArchived=true so the approved-exclusion filter does not hide
-        // the items this job specifically needs to process.
-        var query = new WorkItemQuery(
-            StateIds: ["approved"],
-            IncludeArchived: true,
-            PageSize: WorkItemQuery.MaxPageSize);
-
-        var page = await persistence.QueryAsync(query, cancellationToken);
+        var batchSize = Math.Clamp(
+            configuration.GetValue("ArchiveJob:BatchSize", WorkItemQuery.MaxPageSize),
+            WorkItemQuery.MinPageSize,
+            WorkItemQuery.MaxPageSize);
 
         var stamped = 0;
-        foreach (var item in page.Items)
+        var totalScanned = 0;
+        var pageNumber = 1;
+
+        while (true)
         {
-            // Skip items that haven't been in the approved state long enough.
-            // Spec requires ">7 days", so items at exactly the threshold are not yet eligible.
-            if (item.LastModifiedAt >= archiveThreshold)
-            {
-                continue;
-            }
+            // IncludeArchived=true so the approved-exclusion filter does not hide
+            // the items this job specifically needs to process.
+            var query = new WorkItemQuery(
+                StateIds: ["approved"],
+                IncludeArchived: true,
+                Page: pageNumber,
+                PageSize: batchSize);
 
-            // Skip items that are already stamped (idempotent).
-            if (item.Payload.Contains(ArchivedAtPayloadKey))
-            {
-                continue;
-            }
+            var page = await persistence.QueryAsync(query, cancellationToken);
+            totalScanned += page.Items.Count;
 
-            // Re-load the full document (QueryAsync strips notes/audit).
-            var full = await persistence.GetByIdAsync(item.Id, cancellationToken);
-            if (full is null || full.Payload.Contains(ArchivedAtPayloadKey))
+            foreach (var item in page.Items)
             {
-                continue;
-            }
+                // Skip items that are already stamped (idempotent).
+                if (item.Payload.Contains(ArchivedAtPayloadKey))
+                    continue;
 
-            var approvedAt = item.LastModifiedAt;
+                // Re-load the full document (QueryAsync strips notes/audit).
+                var full = await persistence.GetByIdAsync(item.Id, cancellationToken);
+                if (full is null || full.Payload.Contains(ArchivedAtPayloadKey))
+                    continue;
 
-            full.Payload[ArchivedAtPayloadKey] = new BsonDateTime(now);
-            full.LastModifiedAt = now;
-            full.AuditLog.Add(new WorkItemAuditEntry
-            {
-                Action = "archived",
-                ActionDisplayName = "Archived",
-                CreatedAt = now,
-                Details = new Dictionary<string, string?>
+                // Derive the approval timestamp from the audit log so that
+                // post-approval writes (notes, assignments, SLA stamps) that bump
+                // LastModifiedAt do not reset the 7-day clock. Falls back to
+                // LastModifiedAt for items that pre-date audit entries.
+                var approvedAt = full.AuditLog
+                    .LastOrDefault(e =>
+                        e.Action == "action-applied" &&
+                        e.Details.TryGetValue("toStateId", out var to) &&
+                        to == "approved")
+                    ?.CreatedAt ?? full.LastModifiedAt;
+
+                // Skip items that haven't been in the approved state long enough.
+                // Spec requires ">7 days", so items at exactly the threshold are not yet eligible.
+                if (approvedAt >= archiveThreshold)
+                    continue;
+
+                full.Payload[ArchivedAtPayloadKey] = new BsonDateTime(now);
+                full.LastModifiedAt = now;
+                full.AuditLog.Add(new WorkItemAuditEntry
                 {
-                    ["approvedAt"] = approvedAt.ToString("O"),
-                    ["archivedAt"] = now.ToString("O")
-                }
-            });
+                    Action = "archived",
+                    ActionDisplayName = "Archived",
+                    CreatedAt = now,
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["approvedAt"] = approvedAt.ToString("O"),
+                        ["archivedAt"] = now.ToString("O")
+                    }
+                });
 
-            try
-            {
-                await persistence.ReplaceAsync(full, cancellationToken);
-                stamped++;
-                logger.LogInformation(
-                    "Archived work item {WorkItemId} ({TypeId}); approved at {ApprovedAt}.",
-                    full.Id, full.TypeId, approvedAt);
+                try
+                {
+                    await persistence.ReplaceAsync(full, cancellationToken);
+                    stamped++;
+                    logger.LogInformation(
+                        "Archived work item {WorkItemId} ({TypeId}); approved at {ApprovedAt}.",
+                        full.Id, full.TypeId, approvedAt);
+                }
+                catch (WorkItemConcurrencyException)
+                {
+                    logger.LogWarning(
+                        "Concurrency conflict stamping archivedAt on work item {WorkItemId}; will retry next run.",
+                        full.Id);
+                }
             }
-            catch (WorkItemConcurrencyException)
-            {
-                logger.LogWarning(
-                    "Concurrency conflict stamping archivedAt on work item {WorkItemId}; will retry next run.",
-                    full.Id);
-            }
+
+            // A partial page means we've reached the end of the result set.
+            if (page.Items.Count < batchSize)
+                break;
+
+            pageNumber++;
         }
 
-        if (stamped > 0 || page.Items.Count > 0)
+        if (stamped > 0 || totalScanned > 0)
         {
             logger.LogInformation(
                 "Archive job completed: {Total} approved items scanned, {Stamped} newly archived.",
-                page.Items.Count, stamped);
+                totalScanned, stamped);
         }
     }
 }
