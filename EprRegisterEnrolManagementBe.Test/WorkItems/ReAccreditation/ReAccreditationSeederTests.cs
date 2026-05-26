@@ -10,19 +10,26 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// assignment performed through <c>WorkItemService.AssignAsync</c> —
 /// most importantly, the assignee id is distinct from the id of the
 /// user who made the assignment.
+///
+/// RA-175: also pins the seed-data fixes — correct camelCase BSON keys,
+/// audit log entries, applicant email, and nation derived via
+/// <see cref="INationResolver"/>.
 /// </summary>
 public class ReAccreditationSeederTests
 {
+    private static ReAccreditationSeeder BuildSeeder() =>
+        new(new NationResolver());
+
+    private static FakeTimeProvider BuildTime() =>
+        new(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
+
     [Fact]
     public void Build_attributes_assignment_to_seeder_sentinel_not_to_assignee()
     {
         // epr-ce4 regression guard: setting AssignedBy = AssignedToId
         // would falsify the audit trail to claim the assignee assigned
         // themselves.
-        var seeder = new ReAccreditationSeeder();
-        var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
-
-        var items = seeder.Build(new ReAccreditationType(), time).ToList();
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
 
         Assert.NotEmpty(items);
 
@@ -51,4 +58,118 @@ public class ReAccreditationSeederTests
         Assert.Contains(":", ReAccreditationSeeder.SeederAssignedBy);
         Assert.StartsWith("system:", ReAccreditationSeeder.SeederAssignedBy);
     }
+
+    // RA-175 regression guards -----------------------------------------------
+
+    [Fact]
+    public void Build_every_item_has_work_item_submitted_audit_entry()
+    {
+        // WorkItemService.SubmitAsync writes this entry for real items; the
+        // seeder must include it so the audit timeline starts at submission.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(items, item =>
+            Assert.Contains(item.AuditLog, e => e.Action == "work-item-submitted"));
+    }
+
+    [Fact]
+    public void Build_every_item_has_routed_to_nation_audit_entry()
+    {
+        // ReAccreditationNationRoutingHook writes this entry after a real
+        // submission; the seeder must include it so the timeline is realistic.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(items, item =>
+            Assert.Contains(item.AuditLog, e => e.Action == "routed-to-nation"));
+    }
+
+    [Fact]
+    public void Build_routed_to_nation_entry_nation_matches_payload_nation()
+    {
+        // The audit entry and the payload must agree on the nation value.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(items, item =>
+        {
+            var entry = Assert.Single(item.AuditLog, e => e.Action == "routed-to-nation");
+            var payloadNation = item.Payload.Contains("nation")
+                ? item.Payload["nation"].AsString
+                : null;
+            Assert.Equal(payloadNation, entry.Details["nation"]);
+        });
+    }
+
+    [Fact]
+    public void Build_assigned_items_have_assigned_audit_entry()
+    {
+        // Mirrors WorkItemService.AssignAsync — assigned items need an
+        // audit entry so the timeline shows who made the assignment.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var assignedItems = items.Where(i => i.AssignedToId is not null).ToList();
+
+        Assert.NotEmpty(assignedItems);
+        Assert.All(assignedItems, item =>
+            Assert.Contains(item.AuditLog, e => e.Action == "assigned"));
+    }
+
+    [Fact]
+    public void Build_every_item_has_camelCase_nation_in_payload()
+    {
+        // The MongoDB query filters on "payload.nation" (camelCase). The old
+        // seeder used "Nation" (PascalCase) which never matched the index.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(items, item =>
+        {
+            Assert.True(item.Payload.Contains("nation"),
+                $"Item {item.Id} missing camelCase 'nation' key in payload.");
+            Assert.False(item.Payload.Contains("Nation"),
+                $"Item {item.Id} has PascalCase 'Nation' key — must be camelCase.");
+        });
+    }
+
+    [Fact]
+    public void Build_every_item_has_operator_email_in_payload()
+    {
+        // RA-175: operator email was absent from seeded items, breaking any
+        // feature that reads or acts on the applicant email.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(items, item =>
+        {
+            Assert.True(item.Payload.Contains("operatorEmail"),
+                $"Item {item.Id} missing 'operatorEmail' in payload.");
+            var email = item.Payload["operatorEmail"].AsString;
+            Assert.False(string.IsNullOrWhiteSpace(email),
+                $"Item {item.Id} has blank operatorEmail.");
+        });
+    }
+
+    [Fact]
+    public void Build_nation_is_derived_from_postcode_via_resolver()
+    {
+        // Spot-check a Scotland postcode (EH1 3BN) to confirm the seeder
+        // calls INationResolver.Resolve rather than hard-coding strings.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var scottishItem = items.Single(i =>
+            i.Payload.Contains("siteAddressPostcode") &&
+            i.Payload["siteAddressPostcode"].AsString.StartsWith("EH", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Equal("Scotland", scottishItem.Payload["nation"].AsString);
+    }
+
+    [Fact]
+    public void Build_audit_log_chronological_order()
+    {
+        // Audit entries must be in submission order so the timeline view
+        // renders correctly without a sort.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(items, item =>
+        {
+            var timestamps = item.AuditLog.Select(e => e.CreatedAt).ToList();
+            Assert.Equal(timestamps.OrderBy(t => t).ToList(), timestamps);
+        });
+    }
 }
+

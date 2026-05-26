@@ -37,6 +37,7 @@ public sealed class WorkItemSeederHostedServiceIdempotencyTests
         _services = new ServiceCollection()
             .AddSingleton<IWorkItemPersistence>(_persistence)
             .AddSingleton<IWorkItemRegistry>(registry)
+            .AddSingleton<INationResolver, NationResolver>()
             .AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>()
             .BuildServiceProvider();
     }
@@ -127,6 +128,7 @@ public sealed class WorkItemSeederHostedServiceIdempotencyTests
             var services = new ServiceCollection()
                 .AddSingleton<IWorkItemPersistence>(persistence)
                 .AddSingleton<IWorkItemRegistry>(registry)
+                .AddSingleton<INationResolver, NationResolver>()
                 .AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>()
                 .BuildServiceProvider();
             var config = new ConfigurationBuilder()
