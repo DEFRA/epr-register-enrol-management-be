@@ -17,7 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out code
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
       - name: Setup .NET
         uses: actions/setup-dotnet@v5
         with:
@@ -27,6 +27,32 @@ jobs:
         run: dotnet format style --verify-no-changes
       - name: Test
         run: dotnet test
+
+  test-e2e:
+    name: Run E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check for matching e2e test branch
+        id: e2e-branch
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          if git ls-remote --heads https://github.com/DEFRA/epr-register-enrol-mgmt-tests.git "$BRANCH" | grep -q .; then
+            echo "ref=$BRANCH" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build management-be docker image
+        run: docker build -t defradigital/epr-register-enrol-management-be:${{ github.sha }} .
+
+      - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
+        uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@main
+        with:
+          management-be: ${{ github.sha }}
+          branch: ${{ steps.e2e-branch.outputs.ref }}
+
     ## SonarCloud
     ## Uncomment to unable SonarCloud scan
     ## Requires project to be set up in SonarCloud
