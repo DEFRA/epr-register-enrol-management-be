@@ -72,7 +72,7 @@ internal sealed class GovukNotifyClient : INotifyClient
             // alongside transport failures in the dashboard.
             _log.Log(
                 LogLevel.Error,
-                "Notify send aborted: template not configured for {TemplateKey}",
+                "Notify send aborted: template not configured",
                 BuildProperties(
                     outcome: "failure",
                     duration: timer.Elapsed,
@@ -197,8 +197,8 @@ internal sealed class GovukNotifyClient : INotifyClient
                             ["event.category"] = EventCategory,
                             ["event.action"] = EventAction,
                             ["event.outcome"] = "failure",
-                            ["AttemptNumber"] = args.AttemptNumber + 1,
-                            ["RetryDelayMs"] = (long)args.RetryDelay.TotalMilliseconds
+                            ["event.attempt"] = args.AttemptNumber + 1,
+                            ["notify.retry_delay_ms"] = (long)args.RetryDelay.TotalMilliseconds
                         },
                         exception: args.Outcome.Exception);
                     return ValueTask.CompletedTask;
