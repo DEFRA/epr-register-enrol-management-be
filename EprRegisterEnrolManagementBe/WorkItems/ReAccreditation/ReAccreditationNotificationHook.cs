@@ -123,8 +123,24 @@ internal sealed class ReAccreditationNotificationHook(
 
         var personalisation = BuildPersonalisation(payload!, workItem, templateKey, actionId);
 
+        // Entry log: surfaces in docker / CDP logs the moment the hook
+        // hands off to the Notify client. Combined with the
+        // "Notify send starting" entry log in GovukNotifyClient this
+        // makes a hanging Notify endpoint diagnosable from logs alone.
+        logger.LogInformation(
+            "Sending {Description} notification for work item {WorkItemId} " +
+            "(template={TemplateKey}, reference={Reference})",
+            description, workItem.Id, templateKey, reference);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         var result = await notifyClient.SendEmailAsync(
             templateKey, recipient, personalisation, reference, cancellationToken);
+        sw.Stop();
+
+        logger.LogInformation(
+            "Notification dispatch completed for work item {WorkItemId} " +
+            "(template={TemplateKey}, success={NotifySuccess}, durationMs={NotifyDurationMs})",
+            workItem.Id, templateKey, result.IsSuccess, sw.ElapsedMilliseconds);
 
         var details = new Dictionary<string, string?>
         {
