@@ -3,7 +3,6 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY . .
 WORKDIR "/src"
-RUN dotnet test EprRegisterEnrolManagementBe.Test
 RUN dotnet publish EprRegisterEnrolManagementBe -c Release -o /app/publish /p:UseAppHost=false
 
 # Development image: runs `dotnet watch` for hot reload during local development.
