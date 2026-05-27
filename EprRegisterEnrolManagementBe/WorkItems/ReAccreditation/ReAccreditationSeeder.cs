@@ -13,8 +13,15 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// Assignee ids match the stub-auth users in the frontend
 /// (<c>stub-standard-1</c>, <c>stub-assign-1</c>) so the "My work items"
 /// filter works immediately after a stub login.
+///
+/// RA-175: <see cref="INationResolver"/> is injected so the seeder calls
+/// the same postcode-to-nation routing logic that
+/// <see cref="ReAccreditationNationRoutingHook"/> applies to real
+/// submissions. This ensures seeded items carry a correctly-derived
+/// <c>payload.nation</c> value and appear under the right nation filter
+/// in the work queue.
 /// </summary>
-internal sealed class ReAccreditationSeeder : IWorkItemSeeder
+internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IWorkItemSeeder
 {
     /// <summary>
     /// Sentinel <see cref="WorkItem.AssignedBy"/> value attributed to the
@@ -38,6 +45,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // Newly submitted, no one has picked it up yet.
         yield return Build(
             seedKey: "acme-recycling",
+            postcode: "SW1A 1AA",
             submittedDaysAgo: 1,
             stateId: "submitted",
             payload: new BsonDocument
@@ -47,8 +55,8 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["materialsHandled"] = new BsonArray { "plastic", "glass" },
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
-                ["SiteAddressPostcode"] = "SW1A 1AA",
-                ["Nation"] = "England"
+                ["operatorEmail"] = "acme.recycling@example.com",
+                ["siteAddressPostcode"] = "SW1A 1AA"
             },
             submittedBy: "stub-portal-client",
             now: now);
@@ -57,6 +65,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // has work to do.
         yield return Build(
             seedKey: "northern-plastics",
+            postcode: "EH1 3BN",
             submittedDaysAgo: 3,
             stateId: "submitted",
             payload: new BsonDocument
@@ -66,8 +75,8 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["materialsHandled"] = new BsonArray { "plastic" },
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 1,
-                ["SiteAddressPostcode"] = "EH1 3BN",
-                ["Nation"] = "Scotland"
+                ["operatorEmail"] = "northern.plastics@example.com",
+                ["siteAddressPostcode"] = "EH1 3BN"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-standard-1",
@@ -79,6 +88,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // tasks.
         yield return Build(
             seedKey: "riverside-glass",
+            postcode: "CF10 1AA",
             submittedDaysAgo: 9,
             stateId: "assessment-in-progress",
             payload: new BsonDocument
@@ -88,8 +98,8 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["materialsHandled"] = new BsonArray { "glass", "metal" },
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 2,
-                ["SiteAddressPostcode"] = "CF10 1AA",
-                ["Nation"] = "Wales"
+                ["operatorEmail"] = "riverside.glass@example.com",
+                ["siteAddressPostcode"] = "CF10 1AA"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -117,6 +127,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // the assigner pending the rationale being recorded.
         yield return Build(
             seedKey: "coastal-materials",
+            postcode: "BT1 1AA",
             submittedDaysAgo: 15,
             stateId: "awaiting-decision",
             payload: new BsonDocument
@@ -126,8 +137,8 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["materialsHandled"] = new BsonArray { "plastic", "paper", "card" },
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 0,
-                ["SiteAddressPostcode"] = "BT1 1AA",
-                ["Nation"] = "NorthernIreland"
+                ["operatorEmail"] = "coastal.materials@example.com",
+                ["siteAddressPostcode"] = "BT1 1AA"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -156,6 +167,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // "no further actions" rendering path.
         yield return Build(
             seedKey: "heritage-paper",
+            postcode: "BS1 4DJ",
             submittedDaysAgo: 32,
             stateId: "approved",
             payload: new BsonDocument
@@ -165,8 +177,8 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["materialsHandled"] = new BsonArray { "paper", "card" },
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 0,
-                ["SiteAddressPostcode"] = "BS1 4DJ",
-                ["Nation"] = "England"
+                ["operatorEmail"] = "heritage.paper@example.com",
+                ["siteAddressPostcode"] = "BS1 4DJ"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -198,6 +210,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // Additional Scotland item — submitted, unassigned.
         yield return Build(
             seedKey: "clyde-composites",
+            postcode: "G1 1AA",
             submittedDaysAgo: 5,
             stateId: "submitted",
             payload: new BsonDocument
@@ -207,8 +220,8 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["materialsHandled"] = new BsonArray { "plastic", "metal" },
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
-                ["SiteAddressPostcode"] = "G1 1AA",
-                ["Nation"] = "Scotland"
+                ["operatorEmail"] = "clyde.composites@example.com",
+                ["siteAddressPostcode"] = "G1 1AA"
             },
             submittedBy: "stub-portal-client",
             now: now);
@@ -216,6 +229,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // Additional Wales item — assessment in progress.
         yield return Build(
             seedKey: "swansea-textiles",
+            postcode: "SA1 1AA",
             submittedDaysAgo: 11,
             stateId: "assessment-in-progress",
             payload: new BsonDocument
@@ -225,8 +239,8 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["materialsHandled"] = new BsonArray { "glass" },
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 1,
-                ["SiteAddressPostcode"] = "SA1 1AA",
-                ["Nation"] = "Wales"
+                ["operatorEmail"] = "swansea.textiles@example.com",
+                ["siteAddressPostcode"] = "SA1 1AA"
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -252,6 +266,7 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         // Additional Northern Ireland item — submitted, unassigned.
         yield return Build(
             seedKey: "belfast-fibres",
+            postcode: "BT7 1AA",
             submittedDaysAgo: 2,
             stateId: "submitted",
             payload: new BsonDocument
@@ -261,15 +276,27 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
                 ["materialsHandled"] = new BsonArray { "paper", "card" },
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
-                ["SiteAddressPostcode"] = "BT7 1AA",
-                ["Nation"] = "NorthernIreland"
+                ["operatorEmail"] = "belfast.fibres@example.com",
+                ["siteAddressPostcode"] = "BT7 1AA"
             },
             submittedBy: "stub-portal-client",
             now: now);
     }
 
-    private static WorkItem Build(
+    /// <summary>
+    /// Build a single seeded work item with a realistic audit trail.
+    ///
+    /// RA-175: the method is no longer <c>static</c> so it can access
+    /// the injected <see cref="INationResolver"/> to derive
+    /// <c>payload.nation</c> from the postcode using the same logic that
+    /// <see cref="ReAccreditationNationRoutingHook"/> applies to real
+    /// submissions. The audit log mirrors what
+    /// <see cref="WorkItemService"/> and the hooks write, so the seeded
+    /// items have a plausible processing history.
+    /// </summary>
+    private WorkItem Build(
         string seedKey,
+        string postcode,
         int submittedDaysAgo,
         string stateId,
         BsonDocument payload,
@@ -283,6 +310,13 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
         var assignedAt = assignedToId is null ? (DateTime?)null : submittedAt.AddHours(2);
         var lastModifiedAt = assignedAt
             ?? (completedTasks is null ? submittedAt : submittedAt.AddHours(1));
+
+        // RA-175: derive nation from postcode using the same resolver as
+        // ReAccreditationNationRoutingHook so the camelCase payload.nation
+        // key matches the MongoDB index and the nation filter in the work
+        // queue correctly surfaces this item.
+        var nation = nationResolver.Resolve(postcode);
+        payload["nation"] = nation.ToString();
 
         var workItem = new WorkItem
         {
@@ -312,6 +346,62 @@ internal sealed class ReAccreditationSeeder : IWorkItemSeeder
             {
                 workItem.CompletedTaskIdsByState[state] = new HashSet<string>(tasks, StringComparer.OrdinalIgnoreCase);
             }
+        }
+
+        // RA-175: seed a realistic audit trail so the timeline view has
+        // plausible history.  Mirrors what WorkItemService.SubmitAsync and
+        // the post-submission hooks append for real items.
+
+        // Birth event (mirrors WorkItemService.SubmitAsync).
+        workItem.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "work-item-submitted",
+            ActionDisplayName = "Work item submitted",
+            Details = new Dictionary<string, string?>
+            {
+                ["typeId"] = ReAccreditationType.Id,
+                ["stateId"] = stateId,
+                ["source"] = "seeder",
+                ["clientId"] = submittedBy
+            },
+            CreatedAt = submittedAt,
+            CreatedBy = submittedBy,
+            CreatedByName = null
+        });
+
+        // Nation routing event (mirrors ReAccreditationNationRoutingHook).
+        workItem.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "routed-to-nation",
+            ActionDisplayName = "Routed to nation",
+            Details = new Dictionary<string, string?>
+            {
+                ["nation"] = nation.ToString(),
+                ["derivedFrom"] = "site-address"
+            },
+            CreatedAt = submittedAt.AddSeconds(1),
+            CreatedBy = null,
+            CreatedByName = null
+        });
+
+        // Assignment event for assigned items (mirrors WorkItemService.AssignAsync).
+        if (assignedToId is not null && assignedAt is not null)
+        {
+            workItem.AuditLog.Add(new WorkItemAuditEntry
+            {
+                Action = "assigned",
+                ActionDisplayName = "Assigned",
+                Details = new Dictionary<string, string?>
+                {
+                    ["assigneeId"] = assignedToId,
+                    ["assigneeName"] = assignedToName,
+                    ["previousAssigneeId"] = null,
+                    ["previousAssigneeName"] = null
+                },
+                CreatedAt = assignedAt.Value,
+                CreatedBy = SeederAssignedBy,
+                CreatedByName = null
+            });
         }
 
         return workItem;
