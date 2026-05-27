@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Notifications;
+using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -43,7 +44,25 @@ public class ReAccreditationNotificationHookTests
         IWorkItemAuditAppender auditAppender) =>
         new(notifyClient,
             auditAppender,
+            InlineQueue(),
             NullLogger<ReAccreditationNotificationHook>.Instance);
+
+    /// <summary>
+    /// Returns an <see cref="IBackgroundTaskQueue"/> substitute that
+    /// runs the queued callback synchronously, so tests can assert on
+    /// the dispatched Notify call / audit append immediately after
+    /// awaiting the hook method.
+    /// </summary>
+    private static IBackgroundTaskQueue InlineQueue()
+    {
+        var queue = Substitute.For<IBackgroundTaskQueue>();
+        queue.QueueAsync(
+                Arg.Any<Func<IServiceProvider, CancellationToken, Task>>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call => call.Arg<Func<IServiceProvider, CancellationToken, Task>>()
+                .Invoke(Substitute.For<IServiceProvider>(), call.Arg<CancellationToken>()));
+        return queue;
+    }
 
     // ─────────────────────────── OnSubmittedAsync ───────────────────────────
 

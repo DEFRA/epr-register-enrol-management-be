@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Notifications;
+using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging;
@@ -21,13 +22,27 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   <item>Action <c>approve</c> / <c>reject</c>       → <c>Decision</c></item>
 /// </list>
 ///
-/// Failures are recorded as a <c>notification-failed</c> audit entry
-/// on the work item and never re-thrown so a Notify outage cannot
-/// unwind the originating mutation.
+/// <para>
+/// The Notify call itself is dispatched on
+/// <see cref="IBackgroundTaskQueue"/> rather than awaited on the
+/// request thread. This keeps the originating HTTP request inside
+/// CDP's 5s ingress budget when the Notify endpoint is slow or
+/// unreachable, and means a Notify outage cannot stall (or fail) the
+/// work-item mutation. A follow-up will move this onto a durable
+/// transactional outbox (see bd issue).
+/// </para>
+///
+/// <para>
+/// Failures inside the queued callback are recorded as a
+/// <c>notification-failed</c> audit entry on the work item and never
+/// re-thrown so a Notify outage cannot unwind the originating
+/// mutation.
+/// </para>
 /// </summary>
 internal sealed class ReAccreditationNotificationHook(
     INotifyClient notifyClient,
     IWorkItemAuditAppender auditAppender,
+    IBackgroundTaskQueue backgroundTaskQueue,
     ILogger<ReAccreditationNotificationHook> logger) : IWorkItemPostActionHook
 {
     private static readonly Dictionary<string, (string TemplateKey, string Description)> s_actionTemplates =
@@ -122,25 +137,54 @@ internal sealed class ReAccreditationNotificationHook(
         }
 
         var personalisation = BuildPersonalisation(payload!, workItem, templateKey, actionId);
+        var workItemId = workItem.Id;
 
-        // Entry log: surfaces in docker / CDP logs the moment the hook
-        // hands off to the Notify client. Combined with the
-        // "Notify send starting" entry log in GovukNotifyClient this
-        // makes a hanging Notify endpoint diagnosable from logs alone.
+        // Dispatch the Notify call on the background task queue so the
+        // originating HTTP request returns inside CDP's 5s ingress
+        // budget regardless of Notify latency. ClaimsPrincipal,
+        // personalisation and the workItem id are safe to capture by
+        // value into the closure; INotifyClient and
+        // IWorkItemAuditAppender are singletons.
         logger.LogInformation(
-            "Sending {Description} notification for work item {WorkItemId} " +
+            "Queueing {Description} notification for work item {WorkItemId} " +
             "(template={TemplateKey}, reference={Reference})",
-            description, workItem.Id, templateKey, reference);
+            description, workItemId, templateKey, reference);
 
+        await backgroundTaskQueue.QueueAsync(
+            (_, ct) => DispatchAsync(
+                workItemId, templateKey, description, recipient, personalisation, reference, user, ct),
+            cancellationToken);
+    }
+
+    private async Task DispatchAsync(
+        Guid workItemId,
+        string templateKey,
+        string description,
+        string recipient,
+        Dictionary<string, string> personalisation,
+        string reference,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var result = await notifyClient.SendEmailAsync(
-            templateKey, recipient, personalisation, reference, cancellationToken);
+        NotifySendResult result;
+        try
+        {
+            result = await notifyClient.SendEmailAsync(
+                templateKey, recipient, personalisation, reference, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Defence in depth: GovukNotifyClient already swallows SDK
+            // exceptions and returns a Failure result. If a future
+            // INotifyClient impl leaks one, log it and treat as
+            // failure so the audit entry still lands.
+            logger.LogError(ex,
+                "Unexpected exception dispatching {TemplateKey} notification for work item {WorkItemId}",
+                templateKey, workItemId);
+            result = NotifySendResult.Failure(ex.Message);
+        }
         sw.Stop();
-
-        logger.LogInformation(
-            "Notification dispatch completed for work item {WorkItemId} " +
-            "(template={TemplateKey}, success={NotifySuccess}, durationMs={NotifyDurationMs})",
-            workItem.Id, templateKey, result.IsSuccess, sw.ElapsedMilliseconds);
 
         var details = new Dictionary<string, string?>
         {
@@ -152,8 +196,13 @@ internal sealed class ReAccreditationNotificationHook(
 
         if (result.IsSuccess)
         {
+            logger.LogInformation(
+                "Sent {Description} notification for work item {WorkItemId} " +
+                "(template={TemplateKey}, providerMessageId={ProviderMessageId}, durationMs={NotifyDurationMs})",
+                description, workItemId, templateKey, result.ProviderMessageId, sw.ElapsedMilliseconds);
+
             var appended = await auditAppender.AppendAsync(
-                workItem.Id,
+                workItemId,
                 action: "notification-sent",
                 actionDisplayName: $"{description} email sent",
                 details,
@@ -163,14 +212,25 @@ internal sealed class ReAccreditationNotificationHook(
             {
                 logger.LogWarning(
                     "notification-sent audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
-                    workItem.Id, templateKey);
+                    workItemId, templateKey);
             }
         }
         else
         {
             details["errorMessage"] = result.ErrorMessage;
+
+            // LogError (not LogWarning) so the failure is surfaced in
+            // dev console + CDP error dashboards. Includes the Notify
+            // error message so the cause (timeout, 403 wrong key, 400
+            // bad template, ...) is visible without having to read the
+            // audit log on the work item.
+            logger.LogError(
+                "Failed to send {Description} notification for work item {WorkItemId} " +
+                "(template={TemplateKey}, durationMs={NotifyDurationMs}): {NotifyError}",
+                description, workItemId, templateKey, sw.ElapsedMilliseconds, result.ErrorMessage);
+
             var appended = await auditAppender.AppendAsync(
-                workItem.Id,
+                workItemId,
                 action: "notification-failed",
                 actionDisplayName: $"{description} email failed",
                 details,
@@ -180,7 +240,7 @@ internal sealed class ReAccreditationNotificationHook(
             {
                 logger.LogWarning(
                     "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
-                    workItem.Id, templateKey);
+                    workItemId, templateKey);
             }
         }
     }
