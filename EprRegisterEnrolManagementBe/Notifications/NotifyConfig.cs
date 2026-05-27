@@ -22,4 +22,13 @@ public sealed class NotifyConfig
     /// services with different ids.
     /// </summary>
     public Dictionary<string, string> Templates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Per-attempt timeout (seconds) applied around each call into the
+    /// GovukNotify SDK. Defaults to 15s — short enough that a hanging
+    /// Notify endpoint surfaces as a logged failure inside the BFF's
+    /// request budget instead of stalling the originating HTTP request.
+    /// Set to 0 to disable the timeout.
+    /// </summary>
+    public int RequestTimeoutSeconds { get; set; } = 15;
 }

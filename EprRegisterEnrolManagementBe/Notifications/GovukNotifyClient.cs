@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Notify.Interfaces;
 using Polly;
 using Polly.Retry;
+using Polly.Timeout;
 
 namespace EprRegisterEnrolManagementBe.Notifications;
 
@@ -52,7 +53,7 @@ internal sealed class GovukNotifyClient : INotifyClient
         _client = client;
         _config = options.Value;
         _log = log;
-        _retryPipeline = retryPipeline ?? BuildRetryPipeline(log);
+        _retryPipeline = retryPipeline ?? BuildRetryPipeline(log, _config.RequestTimeoutSeconds);
     }
 
     public async Task<NotifySendResult> SendEmailAsync(
@@ -90,6 +91,23 @@ internal sealed class GovukNotifyClient : INotifyClient
         var typedPersonalisation = personalisation.ToDictionary(
             kv => kv.Key,
             kv => (dynamic)kv.Value);
+
+        // Entry log so OpenSearch / docker logs show the call was even
+        // attempted. Without this a hanging Notify endpoint looks like
+        // "the hook silently did nothing".
+        _log.Log(
+            LogLevel.Information,
+            "Notify send starting",
+            BuildProperties(
+                outcome: "unknown",
+                duration: TimeSpan.Zero,
+                reference: reference,
+                extras: new Dictionary<string, object?>
+                {
+                    ["notify.template_key"] = templateKey,
+                    ["notify.recipient_domain"] = ExtractEmailDomain(toEmail),
+                    ["notify.timeout_seconds"] = _config.RequestTimeoutSeconds
+                }));
 
         try
         {
@@ -172,15 +190,20 @@ internal sealed class GovukNotifyClient : INotifyClient
     }
 
     /// <summary>
-    /// 3 attempts with exponential backoff (1s, 2s, 4s). Retries any
-    /// exception thrown by the SDK — its <c>NotifyClientException</c>
-    /// is the wrapper for both transport and API errors and there is
-    /// no public sub-class to discriminate transient from terminal
-    /// failures.
+    /// 3 attempts with exponential backoff (1s, 2s, 4s) wrapped around a
+    /// per-attempt timeout. The timeout guards against the GovukNotify
+    /// SDK's default 100s HttpClient timeout, which (combined with retries)
+    /// can otherwise stall the caller for several minutes.
+    /// Retries any exception thrown by the SDK — its
+    /// <c>NotifyClientException</c> is the wrapper for both transport and
+    /// API errors and there is no public sub-class to discriminate
+    /// transient from terminal failures.
     /// </summary>
     private static ResiliencePipeline BuildRetryPipeline(
-        IStructuredLogger<GovukNotifyClient> log) =>
-        new ResiliencePipelineBuilder()
+        IStructuredLogger<GovukNotifyClient> log,
+        int requestTimeoutSeconds)
+    {
+        var builder = new ResiliencePipelineBuilder()
             .AddRetry(new RetryStrategyOptions
             {
                 MaxRetryAttempts = 2,
@@ -203,7 +226,44 @@ internal sealed class GovukNotifyClient : INotifyClient
                         exception: args.Outcome.Exception);
                     return ValueTask.CompletedTask;
                 }
-            })
-            .Build();
+            });
+
+        if (requestTimeoutSeconds > 0)
+        {
+            // Strategy order matters: retry is outer, timeout is inner so
+            // the timeout applies to each attempt individually.
+            builder.AddTimeout(new TimeoutStrategyOptions
+            {
+                Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
+                OnTimeout = args =>
+                {
+                    log.Log(
+                        LogLevel.Warning,
+                        "Notify send attempt timed out",
+                        new Dictionary<string, object?>
+                        {
+                            ["event.category"] = EventCategory,
+                            ["event.action"] = EventAction,
+                            ["event.outcome"] = "failure",
+                            ["event.reason"] = "attempt_timeout",
+                            ["notify.timeout_seconds"] = (long)args.Timeout.TotalSeconds
+                        });
+                    return ValueTask.CompletedTask;
+                }
+            });
+        }
+
+        return builder.Build();
+    }
+
+    private static string? ExtractEmailDomain(string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return null;
+        }
+        var at = email.LastIndexOf('@');
+        return at >= 0 && at < email.Length - 1 ? email[(at + 1)..] : null;
+    }
 }
 

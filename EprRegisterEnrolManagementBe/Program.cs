@@ -30,6 +30,8 @@ static WebApplication BuildApp(string[] args)
 
     var app = builder.Build();
 
+    LogNotifyClientRegistration(app);
+
     ConfigureMiddleware(app);
     ConfigureEndpoints(app);
 
@@ -256,6 +258,7 @@ static void ConfigureNotifications(IServiceCollection services, IConfiguration c
         .Bind(configuration.GetSection("Notify"));
 
     var apiKey = configuration.GetValue<string>("NOTIFY_API_KEY");
+
     if (string.IsNullOrWhiteSpace(apiKey))
     {
         services.AddSingleton<INotifyClient, NoOpNotifyClient>();
@@ -351,6 +354,31 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
                       .DisallowCredentials();
             });
         });
+}
+
+/// <summary>
+/// Emit a single startup log entry naming the registered
+/// <see cref="INotifyClient"/> implementation and the active Notify
+/// configuration. Surfaces silent misconfiguration (missing API key,
+/// wrong base URI) in docker / CDP logs the moment the host starts.
+/// </summary>
+[ExcludeFromCodeCoverage]
+static void LogNotifyClientRegistration(WebApplication app)
+{
+    var notifyClient = app.Services.GetRequiredService<INotifyClient>();
+    var notifyOptions = app.Services
+        .GetRequiredService<Microsoft.Extensions.Options.IOptions<NotifyConfig>>()
+        .Value;
+    var apiKeyConfigured = !string.IsNullOrWhiteSpace(
+        app.Configuration.GetValue<string>("NOTIFY_API_KEY"));
+    app.Logger.LogInformation(
+        "Notify integration: client={NotifyClientType} apiKeyConfigured={ApiKeyConfigured} " +
+        "baseUri={NotifyBaseUri} timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
+        notifyClient.GetType().FullName,
+        apiKeyConfigured,
+        string.IsNullOrWhiteSpace(notifyOptions.BaseUri) ? "<sdk-default>" : notifyOptions.BaseUri,
+        notifyOptions.RequestTimeoutSeconds,
+        notifyOptions.Templates.Count);
 }
 
 [ExcludeFromCodeCoverage]
