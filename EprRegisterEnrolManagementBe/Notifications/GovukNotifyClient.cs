@@ -126,7 +126,7 @@ internal sealed class GovukNotifyClient : INotifyClient
                     outcome: "failure",
                     duration: timer.Elapsed,
                     reference: reference,
-                    reason: $"send_failed_after_retries:{templateKey}",
+                    reason: "send_failed_after_retries",
                     extras: new Dictionary<string, object?>
                     {
                         ["notify.template_key"] = templateKey

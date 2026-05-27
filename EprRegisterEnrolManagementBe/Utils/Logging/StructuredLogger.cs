@@ -76,12 +76,13 @@ internal sealed class StructuredLogger<T>(ILogger<T> logger) : IStructuredLogger
         IReadOnlyDictionary<string, object?> properties,
         Exception? exception = null)
     {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(properties);
+
         if (!_logger.IsEnabled(level))
         {
             return;
         }
-        ArgumentNullException.ThrowIfNull(message);
-        ArgumentNullException.ThrowIfNull(properties);
 
         // BeginScope with an IEnumerable<KeyValuePair<string, object?>>
         // is the Serilog-recognised way to attach ad-hoc structured

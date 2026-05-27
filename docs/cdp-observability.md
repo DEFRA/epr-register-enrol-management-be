@@ -72,10 +72,10 @@ environment.
 | `event.reason`                             | Meaning                                                                |
 | ------------------------------------------ | ---------------------------------------------------------------------- |
 | `template_not_configured`                  | `NotifyConfig.Templates` is missing the requested template key.        |
-| `send_failed_after_retries:<TemplateKey>`  | All 3 SDK attempts failed; original exception attached as `error.*`.   |
+| `send_failed_after_retries`                | All 3 SDK attempts failed; original exception attached as `error.*`.   |
 
 The platform-injected `x-cdp-request-id` is already enriched onto every
-log line as `trace.id` (see [`cdp-tracing.md`](./cdp-tracing.md)) so
+log line as `trace.id` so
 correlating an outbound failure with the originating BFF request is a
 single OpenSearch filter:
 

@@ -225,7 +225,7 @@ public class GovukNotifyClientTests
                 && (string)p["event.action"]! == "send_email"
                 && (string)p["event.outcome"]! == "failure"
                 && (string)p["event.reference"]! == "ref-x"
-                && (string)p["event.reason"]! == "send_failed_after_retries:DulyMade"),
+                && (string)p["event.reason"]! == "send_failed_after_retries"),
             boom);
 
         // NB: the test substitutes a zero-delay ResiliencePipeline that
