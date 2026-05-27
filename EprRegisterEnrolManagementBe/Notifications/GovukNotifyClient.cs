@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Notify.Interfaces;
@@ -21,24 +23,36 @@ namespace EprRegisterEnrolManagementBe.Notifications;
 /// proxy is honoured via the <c>HTTP_PROXY</c> / <c>HTTPS_PROXY</c>
 /// env vars because the SDK uses the default
 /// <see cref="System.Net.Http.HttpClient"/> which respects them.
+///
+/// <para>
+/// Diagnostic logging goes through <see cref="IStructuredLogger{T}"/>
+/// with the dotted-ECS shape (<c>event.category=notify</c>,
+/// <c>event.action=send_email</c>, <c>event.outcome</c>,
+/// <c>event.reason</c>, <c>event.duration</c>, <c>event.reference</c>)
+/// so failed sends can be queried in OpenSearch on CDP — see
+/// <c>docs/cdp-observability.md</c>.
+/// </para>
 /// </summary>
 internal sealed class GovukNotifyClient : INotifyClient
 {
+    internal const string EventCategory = "notify";
+    internal const string EventAction = "send_email";
+
     private readonly IAsyncNotificationClient _client;
     private readonly NotifyConfig _config;
-    private readonly ILogger<GovukNotifyClient> _logger;
+    private readonly IStructuredLogger<GovukNotifyClient> _log;
     private readonly ResiliencePipeline _retryPipeline;
 
     public GovukNotifyClient(
         IAsyncNotificationClient client,
         IOptions<NotifyConfig> options,
-        ILogger<GovukNotifyClient> logger,
+        IStructuredLogger<GovukNotifyClient> log,
         ResiliencePipeline? retryPipeline = null)
     {
         _client = client;
         _config = options.Value;
-        _logger = logger;
-        _retryPipeline = retryPipeline ?? BuildRetryPipeline(logger);
+        _log = log;
+        _retryPipeline = retryPipeline ?? BuildRetryPipeline(log);
     }
 
     public async Task<NotifySendResult> SendEmailAsync(
@@ -48,11 +62,26 @@ internal sealed class GovukNotifyClient : INotifyClient
         string reference,
         CancellationToken cancellationToken = default)
     {
+        var timer = Stopwatch.StartNew();
+
         if (!_config.Templates.TryGetValue(templateKey, out var templateId)
             || string.IsNullOrWhiteSpace(templateId))
         {
             var error = $"No Notify template configured for key '{templateKey}'.";
-            _logger.LogWarning("Notify send aborted: {Error}", error);
+            // Misconfiguration: emit a failure entry so it shows up
+            // alongside transport failures in the dashboard.
+            _log.Log(
+                LogLevel.Error,
+                "Notify send aborted: template not configured for {TemplateKey}",
+                BuildProperties(
+                    outcome: "failure",
+                    duration: timer.Elapsed,
+                    reference: reference,
+                    reason: "template_not_configured",
+                    extras: new Dictionary<string, object?>
+                    {
+                        ["notify.template_key"] = templateKey
+                    }));
             return NotifySendResult.Failure(error);
         }
 
@@ -72,6 +101,14 @@ internal sealed class GovukNotifyClient : INotifyClient
                     reference).ConfigureAwait(false),
                 cancellationToken).ConfigureAwait(false);
 
+            _log.Log(
+                LogLevel.Information,
+                "Notify send succeeded",
+                BuildProperties(
+                    outcome: "success",
+                    duration: timer.Elapsed,
+                    reference: reference));
+
             return NotifySendResult.Success(response.id);
         }
         catch (OperationCanceledException)
@@ -80,11 +117,58 @@ internal sealed class GovukNotifyClient : INotifyClient
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex,
-                "Notify send failed after retries: template={TemplateKey} to={Recipient} reference={Reference}",
-                templateKey, toEmail, reference);
+            // Final, post-retry failure. Attach the exception so ECS
+            // error.* fields carry the SDK's diagnostic detail.
+            _log.Log(
+                LogLevel.Error,
+                "Notify send failed after retries",
+                BuildProperties(
+                    outcome: "failure",
+                    duration: timer.Elapsed,
+                    reference: reference,
+                    reason: $"send_failed_after_retries:{templateKey}",
+                    extras: new Dictionary<string, object?>
+                    {
+                        ["notify.template_key"] = templateKey
+                    }),
+                exception: ex);
             return NotifySendResult.Failure(ex.Message);
         }
+    }
+
+    /// <summary>
+    /// Build the common dotted-ECS property bag for a Notify log
+    /// entry. <paramref name="duration"/> is converted to nanoseconds
+    /// per the ECS <c>event.duration</c> convention (1 TimeSpan tick
+    /// == 100ns, so we preserve Stopwatch precision).
+    /// </summary>
+    private static IReadOnlyDictionary<string, object?> BuildProperties(
+        string outcome,
+        TimeSpan duration,
+        string? reference,
+        string? reason = null,
+        IReadOnlyDictionary<string, object?>? extras = null)
+    {
+        var props = new Dictionary<string, object?>
+        {
+            ["event.category"] = EventCategory,
+            ["event.action"] = EventAction,
+            ["event.outcome"] = outcome,
+            ["event.duration"] = duration.Ticks * 100,
+            ["event.reference"] = reference
+        };
+        if (reason is not null)
+        {
+            props["event.reason"] = reason;
+        }
+        if (extras is not null)
+        {
+            foreach (var (k, v) in extras)
+            {
+                props[k] = v;
+            }
+        }
+        return props;
     }
 
     /// <summary>
@@ -94,7 +178,8 @@ internal sealed class GovukNotifyClient : INotifyClient
     /// no public sub-class to discriminate transient from terminal
     /// failures.
     /// </summary>
-    private static ResiliencePipeline BuildRetryPipeline(ILogger logger) =>
+    private static ResiliencePipeline BuildRetryPipeline(
+        IStructuredLogger<GovukNotifyClient> log) =>
         new ResiliencePipelineBuilder()
             .AddRetry(new RetryStrategyOptions
             {
@@ -104,11 +189,21 @@ internal sealed class GovukNotifyClient : INotifyClient
                 ShouldHandle = new PredicateBuilder().Handle<Exception>(),
                 OnRetry = args =>
                 {
-                    logger.LogWarning(args.Outcome.Exception,
-                        "Notify send attempt {Attempt} failed; retrying after {Delay}",
-                        args.AttemptNumber + 1, args.RetryDelay);
+                    log.Log(
+                        LogLevel.Warning,
+                        "Notify send attempt failed; will retry",
+                        new Dictionary<string, object?>
+                        {
+                            ["event.category"] = EventCategory,
+                            ["event.action"] = EventAction,
+                            ["event.outcome"] = "failure",
+                            ["AttemptNumber"] = args.AttemptNumber + 1,
+                            ["RetryDelayMs"] = (long)args.RetryDelay.TotalMilliseconds
+                        },
+                        exception: args.Outcome.Exception);
                     return ValueTask.CompletedTask;
                 }
             })
             .Build();
 }
+

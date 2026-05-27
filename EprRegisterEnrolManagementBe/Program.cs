@@ -56,6 +56,11 @@ static void ConfigureServices(WebApplicationBuilder builder)
     services.AddValidation();
     services.AddSingleton(TimeProvider.System);
 
+    // Generic structured-logging facade: caller-defined property bag,
+    // routed through ILogger<T> so source-context is preserved. Open
+    // generic so consumers depend on IStructuredLogger<TTheirComponent>.
+    services.AddSingleton(typeof(IStructuredLogger<>), typeof(StructuredLogger<>));
+
     // Built-in .NET 10 OpenAPI document generation. Document only — no
     // Swagger UI is wired up (that ships in a separate package). The
     // document is exposed unauthenticated at /openapi/v1.json by

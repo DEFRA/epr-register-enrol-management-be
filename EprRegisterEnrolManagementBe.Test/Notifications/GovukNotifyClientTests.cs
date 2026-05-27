@@ -1,5 +1,6 @@
 using EprRegisterEnrolManagementBe.Notifications;
-using Microsoft.Extensions.Logging.Abstractions;
+using EprRegisterEnrolManagementBe.Utils.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Notify.Interfaces;
 using Notify.Models.Responses;
@@ -24,13 +25,14 @@ public class GovukNotifyClientTests
 
     private static GovukNotifyClient BuildSut(
         IAsyncNotificationClient inner,
-        NotifyConfig? config = null)
+        NotifyConfig? config = null,
+        IStructuredLogger<GovukNotifyClient>? log = null)
     {
         config ??= ConfigWithTemplates(("DulyMade", "template-guid-1"));
         return new GovukNotifyClient(
             inner,
             Options.Create(config),
-            NullLogger<GovukNotifyClient>.Instance);
+            log ?? Substitute.For<IStructuredLogger<GovukNotifyClient>>());
     }
 
     /// <summary>
@@ -141,7 +143,7 @@ public class GovukNotifyClientTests
         var sut = new GovukNotifyClient(
             inner,
             Options.Create(config),
-            NullLogger<GovukNotifyClient>.Instance,
+            Substitute.For<IStructuredLogger<GovukNotifyClient>>(),
             retryPipeline: ZeroDelayRetryPipeline());
 
         var result = await sut.SendEmailAsync(
@@ -171,7 +173,7 @@ public class GovukNotifyClientTests
         var sut = new GovukNotifyClient(
             inner,
             Options.Create(config),
-            NullLogger<GovukNotifyClient>.Instance,
+            Substitute.For<IStructuredLogger<GovukNotifyClient>>(),
             retryPipeline: ZeroDelayRetryPipeline());
 
         var result = await sut.SendEmailAsync(
@@ -186,5 +188,107 @@ public class GovukNotifyClientTests
             Arg.Any<string>(), Arg.Any<string>(),
             Arg.Any<Dictionary<string, dynamic>>(),
             Arg.Any<string>());
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_emits_ecs_failure_log_when_retries_exhausted()
+    {
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        var boom = new Exception("persistent failure");
+        inner.SendEmailAsync(
+                Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>())
+            .ThrowsAsync(boom);
+
+        var log = Substitute.For<IStructuredLogger<GovukNotifyClient>>();
+        var sut = new GovukNotifyClient(
+            inner,
+            Options.Create(ConfigWithTemplates(("DulyMade", "t-id"))),
+            log,
+            retryPipeline: ZeroDelayRetryPipeline());
+
+        await sut.SendEmailAsync(
+            "DulyMade", "op@ex.com",
+            new Dictionary<string, string>(), "ref-x",
+            TestContext.Current.CancellationToken);
+
+        // Terminal error carries the ECS event.* + error.* shape
+        // OpenSearch queries depend on. Asserted via the injected
+        // IStructuredLogger mock — no need to reach into ILogger
+        // scope state.
+        log.Received(1).Log(
+            LogLevel.Error,
+            Arg.Any<string>(),
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                (string)p["event.category"]! == "notify"
+                && (string)p["event.action"]! == "send_email"
+                && (string)p["event.outcome"]! == "failure"
+                && (string)p["event.reference"]! == "ref-x"
+                && (string)p["event.reason"]! == "send_failed_after_retries:DulyMade"),
+            boom);
+
+        // NB: the test substitutes a zero-delay ResiliencePipeline that
+        // omits the OnRetry hook, so retry-attempt warnings are exercised
+        // separately via the production BuildRetryPipeline path.
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_emits_ecs_failure_log_when_template_missing()
+    {
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        var log = Substitute.For<IStructuredLogger<GovukNotifyClient>>();
+        var sut = new GovukNotifyClient(
+            inner,
+            Options.Create(new NotifyConfig()),
+            log);
+
+        await sut.SendEmailAsync(
+            "MissingKey", "op@ex.com",
+            new Dictionary<string, string>(), "ref-m",
+            TestContext.Current.CancellationToken);
+
+        log.Received(1).Log(
+            LogLevel.Error,
+            Arg.Any<string>(),
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                (string)p["event.category"]! == "notify"
+                && (string)p["event.action"]! == "send_email"
+                && (string)p["event.outcome"]! == "failure"
+                && (string)p["event.reason"]! == "template_not_configured"
+                && (string)p["notify.template_key"]! == "MissingKey"),
+            null);
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_emits_ecs_success_log_on_happy_path()
+    {
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner.SendEmailAsync(
+                Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>())
+            .Returns(new EmailNotificationResponse { id = "ok" });
+
+        var log = Substitute.For<IStructuredLogger<GovukNotifyClient>>();
+        var sut = new GovukNotifyClient(
+            inner,
+            Options.Create(ConfigWithTemplates(("DulyMade", "t-id"))),
+            log);
+
+        await sut.SendEmailAsync(
+            "DulyMade", "op@ex.com",
+            new Dictionary<string, string>(), "ref-ok",
+            TestContext.Current.CancellationToken);
+
+        log.Received(1).Log(
+            LogLevel.Information,
+            Arg.Any<string>(),
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                (string)p["event.category"]! == "notify"
+                && (string)p["event.action"]! == "send_email"
+                && (string)p["event.outcome"]! == "success"
+                && (string)p["event.reference"]! == "ref-ok"),
+            null);
     }
 }
