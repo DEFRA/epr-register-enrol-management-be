@@ -1,8 +1,11 @@
 ﻿# Build stage image
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
+COPY EprRegisterEnrolManagementBe.sln ./
+COPY EprRegisterEnrolManagementBe/EprRegisterEnrolManagementBe.csproj EprRegisterEnrolManagementBe/
+COPY EprRegisterEnrolManagementBe.Test/EprRegisterEnrolManagementBe.Test.csproj EprRegisterEnrolManagementBe.Test/
+RUN dotnet restore EprRegisterEnrolManagementBe.sln
 COPY . .
-WORKDIR "/src"
 RUN dotnet publish EprRegisterEnrolManagementBe -c Release -o /app/publish /p:UseAppHost=false
 
 # Development image: runs `dotnet watch` for hot reload during local development.
