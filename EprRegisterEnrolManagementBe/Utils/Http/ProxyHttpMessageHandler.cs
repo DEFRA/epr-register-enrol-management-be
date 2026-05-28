@@ -103,6 +103,69 @@ public class ProxyHttpMessageHandler : HttpClientHandler
             Environment.GetEnvironmentVariable("HTTP_PROXY"),
             Environment.GetEnvironmentVariable("http_proxy"));
 
+    /// <summary>
+    /// Build a process-wide <see cref="IWebProxy"/> from the same
+    /// HTTP(S)_PROXY / NO_PROXY env vars the per-client handler uses,
+    /// for assignment to <see cref="HttpClient.DefaultProxy"/> at
+    /// startup.
+    ///
+    /// <para>
+    /// Most outbound HTTP from this service goes through
+    /// <see cref="HttpClientFactoryExtensions"/> with our explicit
+    /// <see cref="ProxyHttpMessageHandler"/>, but the GovukNotify SDK
+    /// constructs its own bare <see cref="HttpClient"/> internally and
+    /// therefore relies on <see cref="HttpClient.DefaultProxy"/>. In a
+    /// CDP container, .NET's automatic env-var-to-DefaultProxy
+    /// detection does not reliably fire (the runtime initialises
+    /// <c>DefaultProxy</c> lazily and CDP injects env vars in a way
+    /// that the auto-detector misses in this environment), so the SDK
+    /// attempts a direct egress, hits the platform's deny-all firewall
+    /// (cdp-documentation/how-to/proxy.md) and hangs on the TLS
+    /// handshake until the per-attempt Polly timeout fires. Setting
+    /// <see cref="HttpClient.DefaultProxy"/> explicitly at startup
+    /// closes that gap for every bare <see cref="HttpClient"/> in the
+    /// process.
+    /// </para>
+    ///
+    /// <para>
+    /// Returns <c>null</c> when no proxy env var is set, so the caller
+    /// can leave <see cref="HttpClient.DefaultProxy"/> at the
+    /// framework default (typical for local Development runs without
+    /// proxy infrastructure).
+    /// </para>
+    /// </summary>
+    internal static IWebProxy? BuildDefaultProxy() =>
+        BuildDefaultProxy(
+            ResolveProxyEnvironmentValue(),
+            Environment.GetEnvironmentVariable("NO_PROXY")
+                ?? Environment.GetEnvironmentVariable("no_proxy"));
+
+    /// <summary>
+    /// Test seam for <see cref="BuildDefaultProxy()"/>: takes the
+    /// resolved proxy URI and NO_PROXY value as explicit arguments so
+    /// scenarios can be driven without mutating process env vars.
+    /// </summary>
+    internal static IWebProxy? BuildDefaultProxy(string? proxyUri, string? noProxy)
+    {
+        if (string.IsNullOrWhiteSpace(proxyUri))
+        {
+            return null;
+        }
+
+        var (sanitisedAddress, credentials) = ParseProxyUri(proxyUri);
+        var webProxy = new WebProxy(sanitisedAddress) { BypassProxyOnLocal = true };
+        var bypassList = ParseNoProxy(noProxy);
+        if (bypassList.Length > 0)
+        {
+            webProxy.BypassList = bypassList;
+        }
+        if (credentials is not null)
+        {
+            webProxy.Credentials = credentials;
+        }
+        return webProxy;
+    }
+
     private static string? FirstNonEmpty(params string?[] candidates)
     {
         foreach (var value in candidates)

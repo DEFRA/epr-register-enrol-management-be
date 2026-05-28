@@ -53,6 +53,20 @@ static void ConfigureServices(WebApplicationBuilder builder)
     // Trust material must be loaded before anything creates outbound connections.
     services.LoadCustomTrustStoreFromEnvironment();
 
+    // HttpClient.DefaultProxy MUST also be set before any bare HttpClient
+    // is constructed. The GovukNotify SDK does `new HttpClient()` and
+    // therefore depends on DefaultProxy — in CDP the runtime's
+    // automatic env-var detection does not reliably fire, so we wire
+    // it from HTTP(S)_PROXY explicitly to keep outbound Notify traffic
+    // on the Squid proxy. Without this the SDK egresses direct and
+    // hangs on the platform's deny-all firewall
+    // (cdp-documentation/how-to/proxy.md).
+    var defaultProxy = ProxyHttpMessageHandler.BuildDefaultProxy();
+    if (defaultProxy is not null)
+    {
+        HttpClient.DefaultProxy = defaultProxy;
+    }
+
     services.AddExceptionHandler<ExceptionLoggingHandler>();
     services.AddProblemDetails();
     services.AddValidation();
