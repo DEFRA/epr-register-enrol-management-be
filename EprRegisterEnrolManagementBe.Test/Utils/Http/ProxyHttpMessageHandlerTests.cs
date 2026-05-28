@@ -350,6 +350,104 @@ public class ProxyHttpMessageHandlerTests
             }
         }
     }
+
+    // ---------------------- BuildDefaultProxy: HttpClient.DefaultProxy wiring ----------------------
+    //
+    // The GovukNotify SDK constructs its own bare HttpClient and so
+    // depends on HttpClient.DefaultProxy. These tests pin the contract
+    // of the BuildDefaultProxy builder Program.cs assigns to that
+    // static at startup. The test seam takes explicit (proxyUri,
+    // noProxy) arguments so we don't have to mutate process env vars
+    // and risk leaking into HttpClient.DefaultProxy itself.
+
+    [Fact]
+    public void BuildDefaultProxy_returns_null_when_no_proxy_uri_provided()
+    {
+        Assert.Null(ProxyHttpMessageHandler.BuildDefaultProxy(proxyUri: null, noProxy: null));
+        Assert.Null(ProxyHttpMessageHandler.BuildDefaultProxy(proxyUri: "", noProxy: null));
+        Assert.Null(ProxyHttpMessageHandler.BuildDefaultProxy(proxyUri: "   ", noProxy: null));
+    }
+
+    [Fact]
+    public void BuildDefaultProxy_returns_WebProxy_pointing_at_the_supplied_address()
+    {
+        var proxy = ProxyHttpMessageHandler.BuildDefaultProxy(
+            proxyUri: "http://proxy.local:3128", noProxy: null);
+
+        var webProxy = Assert.IsType<WebProxy>(proxy);
+        Assert.Equal("proxy.local", webProxy.Address!.Host);
+        Assert.Equal(3128, webProxy.Address.Port);
+        Assert.True(webProxy.BypassProxyOnLocal);
+    }
+
+    [Fact]
+    public void BuildDefaultProxy_strips_credentials_off_address_but_keeps_them_separate()
+    {
+        // Same contract as the per-client handler: a stray ToString() /
+        // log of HttpClient.DefaultProxy.Address must not leak the
+        // password baked into the env-var.
+        var proxy = ProxyHttpMessageHandler.BuildDefaultProxy(
+            proxyUri: "http://alice:s3cret@proxy.local:3128", noProxy: null);
+
+        var webProxy = Assert.IsType<WebProxy>(proxy);
+        Assert.Empty(webProxy.Address!.UserInfo);
+        Assert.DoesNotContain("s3cret", webProxy.Address.ToString());
+
+        var credentials = Assert.IsType<NetworkCredential>(webProxy.Credentials);
+        Assert.Equal("alice", credentials.UserName);
+        Assert.Equal("s3cret", credentials.Password);
+    }
+
+    [Fact]
+    public void BuildDefaultProxy_applies_no_proxy_bypass_list()
+    {
+        var proxy = ProxyHttpMessageHandler.BuildDefaultProxy(
+            proxyUri: "http://proxy.local:3128",
+            noProxy: "internal.example, .corp.example");
+
+        var webProxy = Assert.IsType<WebProxy>(proxy);
+        Assert.True(webProxy.IsBypassed(new Uri("https://api.internal.example/v1")));
+        Assert.True(webProxy.IsBypassed(new Uri("https://anything.corp.example/")));
+        Assert.False(webProxy.IsBypassed(new Uri("https://api.notifications.service.gov.uk/")));
+    }
+
+    [Fact]
+    public void BuildDefaultProxy_with_no_no_proxy_leaves_default_bypass_intact()
+    {
+        var proxy = ProxyHttpMessageHandler.BuildDefaultProxy(
+            proxyUri: "http://proxy.local:3128", noProxy: null);
+
+        var webProxy = Assert.IsType<WebProxy>(proxy);
+        Assert.False(webProxy.IsBypassed(new Uri("https://api.notifications.service.gov.uk/")));
+    }
+
+    [Fact]
+    public void BuildDefaultProxy_from_environment_reads_HTTPS_PROXY_and_NO_PROXY()
+    {
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+        using var _np2 = new ScopedEnvironmentVariable("no_proxy", null);
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", "http://proxy.local:3128");
+        using var _np = new ScopedEnvironmentVariable("NO_PROXY", "internal.example");
+
+        var proxy = ProxyHttpMessageHandler.BuildDefaultProxy();
+
+        var webProxy = Assert.IsType<WebProxy>(proxy);
+        Assert.Equal("proxy.local", webProxy.Address!.Host);
+        Assert.True(webProxy.IsBypassed(new Uri("https://internal.example/")));
+    }
+
+    [Fact]
+    public void BuildDefaultProxy_from_environment_returns_null_when_nothing_set()
+    {
+        using var _h = new ScopedEnvironmentVariable("HTTPS_PROXY", null);
+        using var _h2 = new ScopedEnvironmentVariable("https_proxy", null);
+        using var _l = new ScopedEnvironmentVariable("HTTP_PROXY", null);
+        using var _l2 = new ScopedEnvironmentVariable("http_proxy", null);
+
+        Assert.Null(ProxyHttpMessageHandler.BuildDefaultProxy());
+    }
 }
 
 /// <summary>
