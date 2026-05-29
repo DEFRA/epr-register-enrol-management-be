@@ -16,7 +16,10 @@ public class ReAccreditationNotificationHookTests
         new Claim("user:name", "Alice")
     ], "test"));
 
-    private static WorkItem BuildWorkItem(string stateId = "submitted", string? operatorEmail = "op@example.com")
+    private static WorkItem BuildWorkItem(
+        string stateId = "submitted",
+        string? operatorEmail = "op@example.com",
+        WorkItemSlaClock? slaClock = null)
     {
         var payload = new BsonDocument
         {
@@ -34,7 +37,8 @@ public class ReAccreditationNotificationHookTests
             StateId = stateId,
             Payload = payload,
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(new ReAccreditationType()),
-            TemplateVersion = "v3"
+            TemplateVersion = "v3",
+            SlaClock = slaClock
         };
     }
 
@@ -158,7 +162,6 @@ public class ReAccreditationNotificationHookTests
     [Theory]
     [InlineData("duly-make", "DulyMade")]
     [InlineData("payment-received", "AssessmentInProgress")]
-    [InlineData("sla-extend", "SlaExtended")]
     public async Task OnActionAppliedAsync_sends_correct_template_for_action(
         string actionId, string expectedTemplateKey)
     {
@@ -356,6 +359,91 @@ public class ReAccreditationNotificationHookTests
         Assert.NotNull(captured);
         Assert.DoesNotContain("accreditation_id", captured!.Keys);
         Assert.DoesNotContain("accreditation_start_date", captured.Keys);
+    }
+
+    // ─────── SlaExtended personalisation ───────
+
+    [Fact]
+    public async Task OnActionAppliedAsync_includes_sla_deadline_in_SlaExtended_personalisation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var slaClock = new WorkItemSlaClock
+        {
+            StartedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            TargetDuration = TimeSpan.FromDays(98) // extended from default 84 days
+        };
+        var workItem = BuildWorkItem(stateId: "assessment-in-progress", slaClock: slaClock);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "sla-extend", "assessment-in-progress", s_user, ct);
+
+        await notifyClient.Received(1).SendEmailAsync(
+            "SlaExtended",
+            "op@example.com",
+            Arg.Any<Dictionary<string, string>>(),
+            workItem.Id.ToString(),
+            ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("2026-04-09", captured!["sla_deadline"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_skips_SlaExtended_when_sla_clock_missing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+
+        var workItem = BuildWorkItem(stateId: "assessment-in-progress", slaClock: null);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "sla-extend", "assessment-in-progress", s_user, ct);
+
+        await notifyClient.DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, ct);
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id,
+            "notification-skipped",
+            Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["templateKey"] == "SlaExtended"
+                && d["reason"] == "missing-sla-clock"),
+            s_user,
+            ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_omits_sla_deadline_for_non_SlaExtended_templates()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var slaClock = new WorkItemSlaClock
+        {
+            StartedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        };
+        var workItem = BuildWorkItem(slaClock: slaClock);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.DoesNotContain("sla_deadline", captured!.Keys);
     }
 
     // ─────── Decision personalisation: decision_notes ───────
