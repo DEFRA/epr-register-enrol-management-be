@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -93,6 +94,34 @@ internal sealed class ReAccreditationNotificationHook(
         var payload = DeserialisePayload(workItem);
         var recipient = payload?.OperatorEmail;
         var reference = workItem.Id.ToString();
+
+        if (string.Equals(templateKey, "SlaExtended", StringComparison.OrdinalIgnoreCase)
+            && workItem.SlaClock is null)
+        {
+            logger.LogWarning(
+                "Skipping notification for work item {WorkItemId} ({TemplateKey}): SLA clock has not been started.",
+                workItem.Id, templateKey);
+            var appendedSkip = await auditAppender.AppendAsync(
+                workItem.Id,
+                action: "notification-skipped",
+                actionDisplayName: $"{description} email skipped",
+                details: new Dictionary<string, string?>
+                {
+                    ["templateKey"] = templateKey,
+                    ["reference"] = reference,
+                    ["reason"] = "missing-sla-clock"
+                },
+                user,
+                cancellationToken);
+            if (!appendedSkip)
+            {
+                logger.LogWarning(
+                    "notification-skipped audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                    workItem.Id, templateKey);
+            }
+
+            return;
+        }
 
         if (string.IsNullOrWhiteSpace(recipient))
         {
@@ -212,6 +241,13 @@ internal sealed class ReAccreditationNotificationHook(
             ["registration_number"] = payload.RegistrationNumber ?? string.Empty,
             ["reference"] = workItem.Id.ToString()
         };
+
+        if (string.Equals(templateKey, "SlaExtended", StringComparison.OrdinalIgnoreCase)
+            && workItem.SlaClock is { } slaClock)
+        {
+            personalisation["sla_deadline"] = (slaClock.StartedAt + slaClock.TargetDuration)
+                .ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        }
 
         if (string.Equals(templateKey, "Decision", StringComparison.OrdinalIgnoreCase))
         {
