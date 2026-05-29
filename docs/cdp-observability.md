@@ -91,6 +91,25 @@ container_name:"epr-register-enrol-management-be"
 trace.id:"<x-cdp-request-id>"
 ```
 
+### Template-drift contract tests
+
+`EprRegisterEnrolManagementBe.Test/Notifications/NotifyTemplateContractTests.cs`
+guards against "Notify template grew/renamed a `((placeholder))` and our
+code doesn't supply it" regressions. For each `(templateKey, templateId)`
+in `Notify:Templates`, the test fetches the live template body via the
+Notify SDK, extracts required placeholders, and asserts they are present
+in the dictionary the production `ReAccreditationNotificationHook` would
+send for that path (including `approve` and `reject` separately for the
+`Decision` template). Tests are tagged `[Trait("Category", "NotifyContract")]`.
+
+- Default PR build excludes the category (`dotnet test --filter "Category!=NotifyContract"`).
+- The `notify-contract` CI job runs them with `secrets.NOTIFY_API_KEY` and
+  is gated on the `NOTIFY_CONTRACT_TESTS_ENABLED` repository variable so
+  it only enters the required-checks surface once the dev API key secret
+  exists. It also runs on a nightly schedule.
+- Locally: `NOTIFY_API_KEY=… dotnet test --filter "Category=NotifyContract"`.
+  Without the env var the tests skip rather than fail.
+
 ## Adding a new logged operation
 
 1. In your component, take `IStructuredLogger<TYourComponent>` via DI.

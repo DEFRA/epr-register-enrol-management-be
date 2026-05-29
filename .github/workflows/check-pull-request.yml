@@ -10,6 +10,10 @@ on:
       - reopened
       - synchronize
       - ready_for_review
+  schedule:
+    # Nightly run picks up template drift between releases even when no
+    # PR has touched the codebase. UTC.
+    - cron: '0 3 * * *'
 
 jobs:
   pr-validator:
@@ -26,7 +30,29 @@ jobs:
       - name: Lint (dotnet format)
         run: dotnet format style --verify-no-changes
       - name: Test
-        run: dotnet test
+        # Exclude the live-Notify contract tests; they need an API key
+        # and are run by the dedicated notify-contract job below.
+        run: dotnet test --filter "Category!=NotifyContract"
+
+  notify-contract:
+    name: Notify Template Contract Tests
+    runs-on: ubuntu-latest
+    # Only run when the API key secret is configured. Without the secret
+    # the tests would all skip; gating the whole job keeps the PR check
+    # surface honest (no "passed by skipping" entries).
+    if: ${{ vars.NOTIFY_CONTRACT_TESTS_ENABLED == 'true' || github.event_name == 'schedule' }}
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: |
+            10.0
+      - name: Run Notify template contract tests
+        env:
+          NOTIFY_API_KEY: ${{ secrets.NOTIFY_API_KEY }}
+        run: dotnet test --filter "Category=NotifyContract"
 
   test-e2e:
     name: Run E2E Tests
