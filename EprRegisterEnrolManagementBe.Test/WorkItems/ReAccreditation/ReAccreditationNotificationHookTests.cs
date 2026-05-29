@@ -357,4 +357,120 @@ public class ReAccreditationNotificationHookTests
         Assert.DoesNotContain("accreditation_id", captured!.Keys);
         Assert.DoesNotContain("accreditation_start_date", captured.Keys);
     }
+
+    // ─────── Decision personalisation: decision_notes ───────
+
+    [Theory]
+    [InlineData("approve", "approved", "Approved — operator has fully demonstrated capacity for the requested tonnages.")]
+    [InlineData("reject", "rejected", "Rejected — insufficient evidence of downstream reprocessing capacity.")]
+    public async Task OnActionAppliedAsync_includes_decision_notes_from_latest_rationale_note(
+        string actionId, string toStateId, string rationale)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(stateId: toStateId);
+        // Older non-rationale note must not be selected.
+        workItem.Notes.Add(new WorkItemNote
+        {
+            Text = "Caseworker chase-up to operator on 2 Jan",
+            CreatedAt = new DateTime(2026, 1, 2, 10, 0, 0, DateTimeKind.Utc)
+        });
+        // Older rationale note must lose to the newer one.
+        workItem.Notes.Add(new WorkItemNote
+        {
+            Text = "[decision-rationale] superseded draft rationale",
+            CreatedAt = new DateTime(2026, 1, 3, 10, 0, 0, DateTimeKind.Utc)
+        });
+        workItem.Notes.Add(new WorkItemNote
+        {
+            Text = $"[decision-rationale] {rationale}",
+            CreatedAt = new DateTime(2026, 1, 4, 10, 0, 0, DateTimeKind.Utc)
+        });
+
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, actionId, "awaiting-decision", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal(rationale, captured!["decision_notes"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_falls_back_to_default_decision_notes_when_no_rationale_recorded()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(stateId: "approved");
+        // Non-rationale note present so we exercise the "no matching note"
+        // path rather than the "no notes at all" path.
+        workItem.Notes.Add(new WorkItemNote
+        {
+            Text = "Ad-hoc caseworker note",
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "approve", "assessment-in-progress", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("No additional notes recorded.", captured!["decision_notes"]);
+
+        // Send must still happen — decision_notes fallback never blocks
+        // the critical operator email.
+        await notifyClient.Received(1).SendEmailAsync(
+            "Decision",
+            "op@example.com",
+            Arg.Any<Dictionary<string, string>>(),
+            workItem.Id.ToString(),
+            ct);
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id,
+            "notification-sent",
+            Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d => d["templateKey"] == "Decision"),
+            s_user,
+            ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_omits_decision_notes_for_non_Decision_templates()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem();
+        workItem.Notes.Add(new WorkItemNote
+        {
+            Text = "[decision-rationale] should not leak into DulyMade",
+            CreatedAt = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc)
+        });
+
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.DoesNotContain("decision_notes", captured!.Keys);
+    }
 }

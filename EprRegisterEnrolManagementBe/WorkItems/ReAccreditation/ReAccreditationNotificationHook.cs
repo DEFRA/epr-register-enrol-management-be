@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
@@ -219,6 +220,15 @@ internal sealed class ReAccreditationNotificationHook(
                 ? "Approved"
                 : "Rejected";
 
+            // The Notify Decision template requires `decision_notes` — sourced
+            // from the rationale captured by RecordDecisionRationale, which
+            // is persisted as a note prefixed with DecisionRationaleNotePrefix.
+            // Task gating means a rationale note should always be present by
+            // the time approve/reject fires; the fallback is a defensive
+            // last-resort so a missing-rationale data inconsistency never
+            // blocks this critical operator email.
+            personalisation["decision_notes"] = ResolveDecisionNotes(workItem);
+
             // RA-132: include the accreditation id and start date when an
             // approval has stamped them on the payload, so the Decision
             // template can reference them in its body. Keys are only added
@@ -235,5 +245,27 @@ internal sealed class ReAccreditationNotificationHook(
         }
 
         return personalisation;
+    }
+
+    private static string ResolveDecisionNotes(WorkItem workItem)
+    {
+        var prefix = ReAccreditationEndpointsRationale.DecisionRationaleNotePrefix;
+        // Latest rationale wins — a decision-maker may have recorded the
+        // rationale, walked away, and re-recorded it before pressing
+        // approve/reject. Iterate newest-first by CreatedAt so a re-ordered
+        // Notes collection cannot surface a stale rationale.
+        var latest = workItem.Notes
+            .Where(n => n.Text is not null
+                        && n.Text.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(n => n.CreatedAt)
+            .FirstOrDefault();
+
+        if (latest is null)
+        {
+            return "No additional notes recorded.";
+        }
+
+        var body = latest.Text.AsSpan(prefix.Length).Trim();
+        return body.IsEmpty ? "No additional notes recorded." : body.ToString();
     }
 }

@@ -181,7 +181,7 @@ internal static class ReAccreditationEndpoints
                 statusCode: StatusCodes.Status400BadRequest);
         }
 
-        var noteText = $"[decision-rationale] {rationale}";
+        var noteText = $"{ReAccreditationEndpointsRationale.DecisionRationaleNotePrefix} {rationale}";
         // Atomic compound mutation (see IWorkItemService.AddNoteAndCompleteTaskAsync):
         // both the note and the task completion are persisted in a single
         // ReplaceAsync, so a concurrency conflict or other persistence
@@ -284,4 +284,11 @@ internal static partial class ReAccreditationEndpointsRationale
     /// permitting short "approved — meets all criteria" decisions.
     /// </summary>
     public const int MinRationaleLength = 10;
+
+    /// <summary>
+    /// Marker prefix used on the rationale note body. Also the discriminator
+    /// the Decision notification hook uses to locate the latest rationale
+    /// note when building <c>decision_notes</c> personalisation.
+    /// </summary>
+    public const string DecisionRationaleNotePrefix = "[decision-rationale]";
 }
