@@ -178,9 +178,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
         var orgName = query.NormalisedOrgName;
         if (!string.IsNullOrEmpty(orgName))
         {
-            var escaped = System.Text.RegularExpressions.Regex.Escape(orgName);
-            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
-            clauses.Add(builder.Regex("payload.organisationName", pattern));
+            clauses.Add(builder.Text(orgName, new TextSearchOptions { CaseSensitive = false }));
         }
 
         var assigneeId = query.NormalisedAssigneeId;
@@ -278,7 +276,15 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             builder.Combine(
                 builder.Ascending("payload.nation"),
                 builder.Ascending(w => w.StateId)));
-        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState];
+        // Search by org name: text index supports word-level case-insensitive $text queries.
+        // Only one text index is allowed per collection; scope it to organisationName.
+        var orgNameText = new CreateIndexModel<WorkItem>(
+            builder.Text("payload.organisationName"));
+        // Search by org ID / applicationReference: ascending index lets anchored prefix
+        // regex queries avoid a full collection scan.
+        var applicationReference = new CreateIndexModel<WorkItem>(
+            builder.Ascending("payload.applicationReference"));
+        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference];
     }
 }
 
