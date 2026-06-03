@@ -122,7 +122,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_five_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_seven_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -138,7 +138,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(5, keyDocs.Count);
+        Assert.Equal(7, keyDocs.Count);
         Assert.Contains(keyDocs, k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"stateId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"assignedToId\" : 1") && k.Contains("\"submittedAt\" : -1"));
@@ -146,6 +146,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             k.Contains("\"submittedAt\" : -1") && !k.Contains("typeId") && !k.Contains("stateId") && !k.Contains("assignedToId"));
         // RA-125: nation + stateId compound index for fast nation-filtered worklist queries.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.nation\" : 1") && k.Contains("\"stateId\" : 1"));
+        // Search indexes added for org name text search and applicationReference prefix search.
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.organisationName\""));
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.applicationReference\" : 1"));
     }
 
     [Fact]
