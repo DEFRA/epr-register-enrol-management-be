@@ -159,6 +159,30 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
                 builder.Regex(nameof(WorkItem.SubmittedBy), pattern)));
         }
 
+        var orgId = query.NormalisedOrgId;
+        if (!string.IsNullOrEmpty(orgId))
+        {
+            var escaped = System.Text.RegularExpressions.Regex.Escape(orgId);
+            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            clauses.Add(builder.Regex("payload.applicationReference", pattern));
+        }
+
+        var registrationId = query.NormalisedRegistrationId;
+        if (!string.IsNullOrEmpty(registrationId))
+        {
+            var escaped = System.Text.RegularExpressions.Regex.Escape(registrationId);
+            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            clauses.Add(builder.Regex("_id", pattern));
+        }
+
+        var orgName = query.NormalisedOrgName;
+        if (!string.IsNullOrEmpty(orgName))
+        {
+            var escaped = System.Text.RegularExpressions.Regex.Escape(orgName);
+            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            clauses.Add(builder.Regex("payload.organisationName", pattern));
+        }
+
         var assigneeId = query.NormalisedAssigneeId;
         if (assigneeId is not null && query.UnassignedOnly)
         {

@@ -71,7 +71,10 @@ public sealed record WorkItemQuery(
     int PageSize = 20,
     string? SubmittedBy = null,
     IReadOnlyCollection<string>? Nations = null,
-    bool IncludeArchived = false)
+    bool IncludeArchived = false,
+    string? OrgId = null,
+    string? RegistrationId = null,
+    string? OrgName = null)
 {
     public const int DefaultPageSize = 20;
     public const int MinPageSize = 1;
@@ -110,6 +113,18 @@ public sealed record WorkItemQuery(
     /// <summary>Trimmed submitted-by, or <c>null</c> if blank/whitespace.</summary>
     public string? NormalisedSubmittedBy =>
         string.IsNullOrWhiteSpace(SubmittedBy) ? null : SubmittedBy.Trim();
+
+    /// <summary>Trimmed org id (payload.applicationReference), or <c>null</c> if blank/whitespace.</summary>
+    public string? NormalisedOrgId =>
+        string.IsNullOrWhiteSpace(OrgId) ? null : OrgId.Trim();
+
+    /// <summary>Trimmed registration id (work item _id prefix), or <c>null</c> if blank/whitespace.</summary>
+    public string? NormalisedRegistrationId =>
+        string.IsNullOrWhiteSpace(RegistrationId) ? null : RegistrationId.Trim();
+
+    /// <summary>Trimmed org name (payload.organisationName), or <c>null</c> if blank/whitespace.</summary>
+    public string? NormalisedOrgName =>
+        string.IsNullOrWhiteSpace(OrgName) ? null : OrgName.Trim();
 }
 
 /// <summary>
