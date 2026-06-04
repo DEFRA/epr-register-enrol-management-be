@@ -318,6 +318,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         var nation = nationResolver.Resolve(postcode);
         payload["nation"] = nation.ToString();
 
+        // RA-196: ensure applicationReference is in the payload.
+        var applicationReference = GenerateDeterministicReference(seedKey);
+        payload["applicationReference"] = applicationReference;
+
         var workItem = new WorkItem
         {
             // Deterministic id keyed by (TypeId, seedKey) so re-running
@@ -362,7 +366,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["typeId"] = ReAccreditationType.Id,
                 ["stateId"] = stateId,
                 ["source"] = "seeder",
-                ["clientId"] = submittedBy
+                ["clientId"] = submittedBy,
+                ["applicationReference"] = applicationReference
             },
             CreatedAt = submittedAt,
             CreatedBy = submittedBy,
@@ -405,5 +410,16 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         }
 
         return workItem;
+    }
+
+    private static string GenerateDeterministicReference(string seedKey)
+    {
+        var input = System.Text.Encoding.UTF8.GetBytes(seedKey);
+        var hash = System.Security.Cryptography.SHA1.HashData(input);
+
+        // Simple stable uint from first 4 bytes
+        uint val = ((uint)hash[0] << 24) | ((uint)hash[1] << 16) | ((uint)hash[2] << 8) | (uint)hash[3];
+        var digits = 100_000_000 + (val % 900_000_000);
+        return $"RA-{digits}";
     }
 }
