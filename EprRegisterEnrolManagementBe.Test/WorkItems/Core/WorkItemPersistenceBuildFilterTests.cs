@@ -298,11 +298,12 @@ public class WorkItemPersistenceBuildFilterTests
     }
 
     [Fact]
-    public void OrgNameRendersAsTextSearch()
+    public void OrgNameRendersAsTextSearchPhrase()
     {
         var doc = Render(new WorkItemQuery(OrgName: "  Acme Ltd  ", IncludeArchived: true));
 
-        Assert.Equal("Acme Ltd", doc["$text"]["$search"].AsString);
+        // Quoted phrase prevents OR word-matching against common words.
+        Assert.Equal("\"Acme Ltd\"", doc["$text"]["$search"].AsString);
     }
 
     [Fact]

@@ -178,7 +178,9 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
         var orgName = query.NormalisedOrgName;
         if (!string.IsNullOrEmpty(orgName))
         {
-            clauses.Add(builder.Text(orgName, new TextSearchOptions { CaseSensitive = false }));
+            // Wrap in quotes for phrase matching: prevents OR word-matching where common
+            // words like "Org" in the query accidentally match unrelated items.
+            clauses.Add(builder.Text($"\"{orgName}\"", new TextSearchOptions { CaseSensitive = false }));
         }
 
         var assigneeId = query.NormalisedAssigneeId;
