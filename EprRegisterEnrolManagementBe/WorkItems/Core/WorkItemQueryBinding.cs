@@ -19,6 +19,9 @@ internal static class WorkItemQueryBinding
     internal const string PageSizeParam = "pageSize";
     internal const string NationParam = "nation";
     internal const string IncludeArchivedParam = "includeArchived";
+    internal const string OrgIdParam = "orgId";
+    internal const string RegistrationIdParam = "registrationId";
+    internal const string OrgNameParam = "orgName";
 
     /// <summary>
     /// Name of the tenancy-isolation field on <see cref="WorkItemQuery"/>.
@@ -54,7 +57,10 @@ internal static class WorkItemQueryBinding
             Page: ReadInt(query, PageParam, defaultValue: 1),
             PageSize: ReadInt(query, PageSizeParam, defaultValue: WorkItemQuery.DefaultPageSize),
             Nations: ReadNations(query, NationParam),
-            IncludeArchived: ReadBool(query, IncludeArchivedParam));
+            IncludeArchived: ReadBool(query, IncludeArchivedParam),
+            OrgId: ReadString(query, OrgIdParam),
+            RegistrationId: ReadString(query, RegistrationIdParam),
+            OrgName: ReadString(query, OrgNameParam));
         // NB: SubmittedBy is intentionally omitted from the constructor
         // call above. Do not add it. See WorkItemQuery.SubmittedBy.
     }

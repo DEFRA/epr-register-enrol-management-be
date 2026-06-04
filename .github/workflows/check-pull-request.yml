@@ -47,10 +47,31 @@ jobs:
       - name: Build management-be docker image
         run: docker build -t defradigital/epr-register-enrol-management-be:${{ github.sha }} .
 
+      - name: Check for matching management-fe branch
+        id: fe-branch
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          if git ls-remote --heads https://github.com/DEFRA/epr-register-enrol-management-fe.git "$BRANCH" | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout and build matching management-fe
+        if: steps.fe-branch.outputs.exists == 'true'
+        id: build-fe
+        run: |
+          git clone --branch ${{ github.head_ref }} --depth 1 https://github.com/DEFRA/epr-register-enrol-management-fe.git _fe
+          cd _fe
+          SHA=$(git rev-parse --short HEAD)
+          docker build -t defradigital/epr-register-enrol-management-fe:$SHA .
+          echo "tag=$SHA" >> "$GITHUB_OUTPUT"
+
       - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
         uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@main
         with:
           management-be: ${{ github.sha }}
+          management-fe: ${{ steps.build-fe.outputs.tag }}
           branch: ${{ steps.e2e-branch.outputs.ref }}
 
     ## SonarCloud

@@ -248,4 +248,69 @@ public class WorkItemPersistenceBuildFilterTests
         Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
         Assert.Equal("England", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
     }
+
+    // ──────────────────────────── OrgId / RegistrationId / OrgName ──────────────────────────────
+
+    [Fact]
+    public void OrgIdRendersAsCaseInsensitiveRegexOnApplicationReference()
+    {
+        var doc = Render(new WorkItemQuery(OrgId: "  EPR-123  ", IncludeArchived: true));
+
+        var regex = doc["payload.applicationReference"].AsBsonRegularExpression;
+        Assert.Contains("EPR-123", regex.Pattern);
+        Assert.Equal("i", regex.Options);
+    }
+
+    [Fact]
+    public void OrgIdEscapesRegexMetacharacters()
+    {
+        var doc = Render(new WorkItemQuery(OrgId: "a.b*", IncludeArchived: true));
+
+        var pattern = doc["payload.applicationReference"].AsBsonRegularExpression.Pattern;
+        Assert.Contains(@"\.", pattern);
+        Assert.Contains(@"\*", pattern);
+    }
+
+    [Fact]
+    public void BlankOrgIdIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(OrgId: "   ", IncludeArchived: true));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void RegistrationIdRendersAsCaseInsensitiveRegexOnId()
+    {
+        var doc = Render(new WorkItemQuery(RegistrationId: "  abc-123  ", IncludeArchived: true));
+
+        var regex = doc["_id"].AsBsonRegularExpression;
+        Assert.Contains("abc-123", regex.Pattern);
+        Assert.Equal("i", regex.Options);
+    }
+
+    [Fact]
+    public void BlankRegistrationIdIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(RegistrationId: "   ", IncludeArchived: true));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void OrgNameRendersAsTextSearchPhrase()
+    {
+        var doc = Render(new WorkItemQuery(OrgName: "  Acme Ltd  ", IncludeArchived: true));
+
+        // Quoted phrase prevents OR word-matching against common words.
+        Assert.Equal("\"Acme Ltd\"", doc["$text"]["$search"].AsString);
+    }
+
+    [Fact]
+    public void BlankOrgNameIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(OrgName: "   ", IncludeArchived: true));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
 }
