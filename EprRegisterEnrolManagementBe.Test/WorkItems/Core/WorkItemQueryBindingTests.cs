@@ -157,4 +157,40 @@ public class WorkItemQueryBindingTests
 
         Assert.False(query.IncludeArchived);
     }
+
+    // ──────────────────────────── OrgId / RegistrationId / OrgName ──────────────────────────────
+
+    [Fact]
+    public void OrgIdIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("orgId", "EPR-123")));
+
+        Assert.Equal("EPR-123", query.OrgId);
+    }
+
+    [Fact]
+    public void RegistrationIdIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("registrationId", "abc-123")));
+
+        Assert.Equal("abc-123", query.RegistrationId);
+    }
+
+    [Fact]
+    public void OrgNameIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("orgName", "Acme Ltd")));
+
+        Assert.Equal("Acme Ltd", query.OrgName);
+    }
+
+    [Fact]
+    public void MissingOrgFieldsDefaultToNull()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.OrgId);
+        Assert.Null(query.RegistrationId);
+        Assert.Null(query.OrgName);
+    }
 }

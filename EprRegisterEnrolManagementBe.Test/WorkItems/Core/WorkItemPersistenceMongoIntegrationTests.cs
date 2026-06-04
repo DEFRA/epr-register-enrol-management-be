@@ -146,8 +146,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             k.Contains("\"submittedAt\" : -1") && !k.Contains("typeId") && !k.Contains("stateId") && !k.Contains("assignedToId"));
         // RA-125: nation + stateId compound index for fast nation-filtered worklist queries.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.nation\" : 1") && k.Contains("\"stateId\" : 1"));
-        // Search indexes added for org name text search and applicationReference prefix search.
-        Assert.Contains(keyDocs, k => k.Contains("\"payload.organisationName\""));
+        // Text index for org name search — the key doc always contains "_fts":"text".
+        Assert.Contains(keyDocs, k => k.Contains("\"_fts\" : \"text\""));
+        // Ascending index for applicationReference prefix search.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.applicationReference\" : 1"));
     }
 
