@@ -52,6 +52,7 @@ jobs:
         with:
           management-be: ${{ github.sha }}
           branch: ${{ steps.e2e-branch.outputs.ref }}
+          journey-test-pr: 'true'
 
     ## SonarCloud
     ## Uncomment to unable SonarCloud scan
