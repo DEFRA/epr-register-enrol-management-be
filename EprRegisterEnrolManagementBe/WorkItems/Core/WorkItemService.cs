@@ -217,6 +217,22 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
+
+        // RA-196: ensure applicationReference and source are in the payload.
+        // If the caller provided them in the submission metadata (the standard
+        // BFF pattern), they are mirrored here so every consumer can find
+        // them in payload.applicationReference without parsing the audit log.
+        if (submissionMetadata != null)
+        {
+            foreach (var key in new[] { "source", "applicationReference" })
+            {
+                if (submissionMetadata.TryGetValue(key, out var val) && val != null && !payload.Contains(key))
+                {
+                    payload[key] = val;
+                }
+            }
+        }
+
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
         var workItem = new WorkItem
         {
