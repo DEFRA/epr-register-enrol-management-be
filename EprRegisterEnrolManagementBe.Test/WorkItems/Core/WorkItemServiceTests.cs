@@ -1554,11 +1554,12 @@ public class WorkItemServiceTests
     }
 
     [Fact]
-    public async Task Submit_throws_after_exhausting_reference_attempts()
+    public async Task Submit_returns_a_structured_failure_after_exhausting_reference_attempts()
     {
-        // RA-219: if every candidate collides, the engine gives up after
-        // MaxApplicationReferenceAttempts with a clear, typed error rather
-        // than looping forever.
+        // RA-219 PR review: if every candidate collides, the engine gives up
+        // after MaxApplicationReferenceAttempts and returns a structured
+        // ApplicationReferenceExhausted failure (which the endpoint maps to a
+        // clean 503) rather than throwing past the endpoint as a 500.
         var type = BuildType();
         const string Taken = "RA-999999999";
         await SeedAsync(configure: w =>
@@ -1573,10 +1574,14 @@ public class WorkItemServiceTests
             _time,
             referenceGenerator: generator);
 
-        await Assert.ThrowsAsync<ApplicationReferenceCollisionException>(() =>
-            service.SubmitAsync(
-                type, new BsonDocument(), "test-client", AuditUser(),
-                cancellationToken: TestContext.Current.CancellationToken));
+        var result = await service.SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(
+            WorkItemActionFailureCode.ApplicationReferenceExhausted, result.FailureCode);
+        Assert.Contains("applicationReference", result.Message);
         Assert.Equal(
             WorkItemService.MaxApplicationReferenceAttempts, generator.CallCount);
 

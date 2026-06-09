@@ -302,14 +302,30 @@ public sealed class WorkItemService : IWorkItemService
                 await _persistence.CreateAsync(workItem, cancellationToken);
                 break;
             }
+            // Only retry on a duplicate-key error that is actually the
+            // applicationReference unique index. Keying on the DuplicateKey
+            // category alone would silently swallow (and misreport as a
+            // reference collision) a future unrelated unique index — so we
+            // also require the write error to name the applicationReference
+            // index; anything else propagates unchanged.
             catch (MongoWriteException ex)
-                when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+                when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey
+                    && IsApplicationReferenceDuplicate(ex))
             {
                 if (attempt >= MaxApplicationReferenceAttempts)
                 {
-                    throw new ApplicationReferenceCollisionException(
+                    // RA-219 PR review: surface exhaustion as a structured
+                    // failure the endpoint already maps to a clean
+                    // ProblemDetails response, rather than throwing past the
+                    // endpoint as an unhandled 500.
+                    _logger.LogError(
+                        ex,
+                        "Failed to generate a unique applicationReference after {Attempts} attempts",
+                        MaxApplicationReferenceAttempts);
+                    return WorkItemActionResult.Failure(
+                        WorkItemActionFailureCode.ApplicationReferenceExhausted,
                         $"Failed to generate a unique applicationReference after " +
-                        $"{MaxApplicationReferenceAttempts} attempts.", ex);
+                        $"{MaxApplicationReferenceAttempts} attempts.");
                 }
                 _logger.LogWarning(
                     "applicationReference {ApplicationReference} collided on attempt {Attempt}; regenerating",
@@ -325,6 +341,21 @@ public sealed class WorkItemService : IWorkItemService
 
         return WorkItemActionResult.Success(workItem);
     }
+
+    /// <summary>
+    /// True when a duplicate-key write error was raised by the
+    /// <c>payload.applicationReference</c> unique index specifically. The
+    /// driver puts the offending index name in the write error message
+    /// (e.g. <c>E11000 duplicate key error ... index: payload.applicationReference_1 ...</c>),
+    /// so a substring match on the field name is sufficient to tell our
+    /// collision apart from any other unique index that might exist now or
+    /// in future. Defensive against a null message.
+    /// </summary>
+    private const string ApplicationReferenceField = "applicationReference";
+
+    private static bool IsApplicationReferenceDuplicate(MongoWriteException ex) =>
+        ex.WriteError?.Message?.Contains(
+            ApplicationReferenceField, StringComparison.OrdinalIgnoreCase) == true;
 
     public async Task<WorkItemActionResult> CompleteTaskAsync(
         Guid workItemId,

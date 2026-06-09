@@ -521,6 +521,44 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Submit_maps_applicationReference_exhaustion_to_a_503_problem()
+    {
+        // RA-219 PR review: when the engine cannot allocate a unique
+        // applicationReference it returns ApplicationReferenceExhausted, which
+        // the Submit endpoint must surface as a clean 503 ProblemDetails — not
+        // let it escape as an unhandled 500.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var type = new TestWorkItemType(TypeId, "Test type");
+        var registry = new WorkItemRegistry([type]);
+        var engine = Substitute.For<IWorkItemService>();
+        engine
+            .SubmitAsync(
+                Arg.Any<IWorkItemType>(),
+                Arg.Any<MongoDB.Bson.BsonDocument>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.ApplicationReferenceExhausted,
+                "Failed to generate a unique applicationReference after 5 attempts."));
+
+        var body = JsonDocument.Parse($"{{\"typeId\":\"{TypeId}\"}}").RootElement;
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
+        };
+
+        var result = await WorkItemEndpoints.Submit(body, httpContext, registry, engine, cancellationToken);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(
+            Microsoft.AspNetCore.Http.StatusCodes.Status503ServiceUnavailable, problem.StatusCode);
+        Assert.Contains("applicationReference", problem.ProblemDetails.Detail);
+    }
+
+    [Fact]
     public async Task Get_list_rejects_page_above_cap_with_400()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

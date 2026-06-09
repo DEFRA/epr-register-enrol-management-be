@@ -47,20 +47,6 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 }
 
 /// <summary>
-/// Thrown when the engine cannot find a free <c>applicationReference</c>
-/// within the bounded retry budget (RA-219). Surfacing a dedicated type
-/// lets callers / tests distinguish a genuine exhaustion from any other
-/// write failure.
-/// </summary>
-public sealed class ApplicationReferenceCollisionException : Exception
-{
-    public ApplicationReferenceCollisionException(string message, Exception innerException)
-        : base(message, innerException)
-    {
-    }
-}
-
-/// <summary>
 /// DI helper so the generator is registered in exactly one place, mirroring
 /// the framework's other Core service registrations.
 /// </summary>

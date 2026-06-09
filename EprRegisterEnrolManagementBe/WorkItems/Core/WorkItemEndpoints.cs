@@ -171,6 +171,14 @@ public static class WorkItemEndpoints
                         title: "Authentication required",
                         detail: result.Message,
                         statusCode: StatusCodes.Status401Unauthorized),
+                // RA-219: applicationReference exhaustion is transient and
+                // server-side, so surface a clean 503 (retryable) rather than
+                // letting the engine throw past this handler as a 500.
+                WorkItemActionFailureCode.ApplicationReferenceExhausted
+                    => TypedResults.Problem(
+                        title: "Submission temporarily unavailable",
+                        detail: result.Message,
+                        statusCode: StatusCodes.Status503ServiceUnavailable),
                 _ => TypedResults.Problem(
                     title: "Invalid request",
                     detail: result.Message,

@@ -161,6 +161,79 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     }
 
     [Fact]
+    public async Task EnsureIndexes_reconciles_a_pre_existing_non_unique_applicationReference_index_on_startup()
+    {
+        // RA-219 PR review (BLOCKING): on any environment that already carries
+        // the OLD non-unique payload.applicationReference index (RA-196 shipped
+        // it), MongoDB raises IndexOptionsConflict (code 85) when CreateMany is
+        // asked for the new unique+sparse index with the identical key. That
+        // breaks service startup. This test reproduces the deploy condition and
+        // proves the reconcile recovers it.
+        var freshDb = MongoIntegrationFixture.NewDatabaseName("work_items_reconcile");
+        var factory = new TestMongoDbClientFactory(_fixture.ConnectionString, freshDb);
+        try
+        {
+            var collection = factory.GetCollection<WorkItem>("workItems");
+
+            // Stand up the OLD index: same key, NON-unique, NON-sparse — the
+            // exact shape that conflicts with RA-219's tightened definition.
+            collection.Indexes.CreateOne(
+                new CreateIndexModel<WorkItem>(
+                    Builders<WorkItem>.IndexKeys.Ascending("payload.applicationReference"),
+                    new CreateIndexOptions { Unique = false, Sparse = false }),
+                cancellationToken: TestContext.Current.CancellationToken);
+
+            // Constructing the persistence runs EnsureIndexes in its base ctor.
+            // Before the fix this threw MongoCommandException (code 85); now it
+            // must complete cleanly.
+            var ex = Record.Exception(() =>
+                new WorkItemPersistence(factory, NullLoggerFactory.Instance));
+            Assert.Null(ex);
+
+            // And the index must have been migrated to unique + sparse.
+            var indexes = await (await collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
+                .ToListAsync(TestContext.Current.CancellationToken);
+            var appRefIndex = indexes.Single(i =>
+                i["key"].AsBsonDocument.Contains("payload.applicationReference"));
+            Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
+            Assert.True(appRefIndex.GetValue("sparse", false).ToBoolean());
+        }
+        finally
+        {
+            await factory.GetClient().DropDatabaseAsync(freshDb);
+        }
+    }
+
+    [Fact]
+    public async Task EnsureIndexes_is_idempotent_when_the_indexes_already_match()
+    {
+        // The reconcile must not drop/recreate when nothing changed: running
+        // the persistence ctor twice against the same database is a no-op the
+        // second time (CreateMany succeeds, no conflict path taken).
+        var freshDb = MongoIntegrationFixture.NewDatabaseName("work_items_idempotent");
+        var factory = new TestMongoDbClientFactory(_fixture.ConnectionString, freshDb);
+        try
+        {
+            _ = new WorkItemPersistence(factory, NullLoggerFactory.Instance);
+            var ex = Record.Exception(() =>
+                new WorkItemPersistence(factory, NullLoggerFactory.Instance));
+            Assert.Null(ex);
+
+            var collection = factory.GetCollection<WorkItem>("workItems");
+            var indexes = await (await collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
+                .ToListAsync(TestContext.Current.CancellationToken);
+            var appRefIndex = indexes.Single(i =>
+                i["key"].AsBsonDocument.Contains("payload.applicationReference"));
+            Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
+            Assert.True(appRefIndex.GetValue("sparse", false).ToBoolean());
+        }
+        finally
+        {
+            await factory.GetClient().DropDatabaseAsync(freshDb);
+        }
+    }
+
+    [Fact]
     public async Task Unique_applicationReference_index_rejects_a_second_document_with_the_same_reference()
     {
         // RA-219: prove the unique constraint is live — a duplicate
