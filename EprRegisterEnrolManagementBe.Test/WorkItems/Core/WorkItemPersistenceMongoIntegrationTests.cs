@@ -150,6 +150,58 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Contains(keyDocs, k => k.Contains("\"_fts\" : \"text\""));
         // Ascending index for applicationReference prefix search.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.applicationReference\" : 1"));
+
+        // RA-219: that index must be UNIQUE (enforce one ref per work item /
+        // give the engine a collision signal) and SPARSE (legacy docs without
+        // the field are not indexed, so they cannot trip the constraint).
+        var appRefIndex = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("payload.applicationReference"));
+        Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
+        Assert.True(appRefIndex.GetValue("sparse", false).ToBoolean());
+    }
+
+    [Fact]
+    public async Task Unique_applicationReference_index_rejects_a_second_document_with_the_same_reference()
+    {
+        // RA-219: prove the unique constraint is live — a duplicate
+        // payload.applicationReference is rejected with a DuplicateKey write
+        // error (the very signal the engine retries on).
+        var now = _time.GetUtcNow().UtcDateTime;
+        WorkItem Build() => new()
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            Payload = new MongoDB.Bson.BsonDocument { ["applicationReference"] = "RA-123456789" }
+        };
+
+        await _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken);
+
+        var ex = await Assert.ThrowsAsync<MongoDB.Driver.MongoWriteException>(() =>
+            _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken));
+        Assert.Equal(
+            MongoDB.Driver.ServerErrorCategory.DuplicateKey, ex.WriteError?.Category);
+    }
+
+    [Fact]
+    public async Task Sparse_applicationReference_index_allows_multiple_documents_without_a_reference()
+    {
+        // RA-219: legacy / reference-less documents must coexist — the sparse
+        // option means they are simply not indexed, so two of them do not
+        // collide on the unique constraint.
+        var now = _time.GetUtcNow().UtcDateTime;
+        WorkItem Build() => new()
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now
+        };
+
+        await _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken);
+        await _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken);
+        // No exception: sparse index does not constrain documents missing the key.
     }
 
     [Fact]

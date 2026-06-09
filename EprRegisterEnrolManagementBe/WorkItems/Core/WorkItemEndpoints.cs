@@ -135,9 +135,15 @@ public static class WorkItemEndpoints
         var submittedBy = httpContext.User.FindFirstValue("cognito:client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        // RA-126: optional caller-supplied audit context. Both fields are
-        // strings when present; reject other JSON types up front so a
+        // RA-126: optional caller-supplied audit context. 'source' is a
+        // string when present; reject other JSON types up front so a
         // malformed body cannot silently degrade the audit record.
+        //
+        // RA-219: 'applicationReference' is NO LONGER accepted from the
+        // client. The backend generates it server-side during submission;
+        // any value the client puts in the body is ignored (not validated,
+        // not passed through) so a caller can never spoof or collide a
+        // reference.
         Dictionary<string, string?>? submissionMetadata = null;
         if (body.TryGetProperty("source", out var sourceElement))
         {
@@ -147,15 +153,6 @@ public static class WorkItemEndpoints
             }
             (submissionMetadata ??= new Dictionary<string, string?>(StringComparer.Ordinal))
                 ["source"] = sourceElement.GetString();
-        }
-        if (body.TryGetProperty("applicationReference", out var applicationReferenceElement))
-        {
-            if (applicationReferenceElement.ValueKind != JsonValueKind.String)
-            {
-                return BadRequest("Invalid request body", "'applicationReference' must be a string.");
-            }
-            (submissionMetadata ??= new Dictionary<string, string?>(StringComparer.Ordinal))
-                ["applicationReference"] = applicationReferenceElement.GetString();
         }
 
         // Routed through the engine so the framework owns audit-log
