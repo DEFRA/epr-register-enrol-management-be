@@ -40,7 +40,14 @@ public enum WorkItemActionFailureCode
     /// audit entries that cannot be tied back to a real human, so without
     /// this claim we 401 the request rather than persist a placeholder.
     /// </summary>
-    MissingActorIdentity
+    MissingActorIdentity,
+    /// <summary>
+    /// The engine could not allocate a unique <c>applicationReference</c>
+    /// within its bounded retry budget (RA-219). This is a transient
+    /// server-side condition rather than a client error, so the endpoint maps
+    /// it to a 503 and the caller can safely retry the submission.
+    /// </summary>
+    ApplicationReferenceExhausted
 }
 
 /// <summary>

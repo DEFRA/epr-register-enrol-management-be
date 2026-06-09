@@ -26,6 +26,10 @@ public static class WorkItemModuleExtensions
             new WorkItemRegistry(sp.GetServices<IWorkItemType>()));
         services.AddSingleton<IWorkItemService, WorkItemService>();
         services.AddSingleton<IWorkItemAuditAppender, WorkItemAuditAppender>();
+        // RA-219: server-side applicationReference generation is a framework
+        // concern (the engine owns the submission birth event), so the
+        // generator is registered alongside the engine it backs.
+        services.AddApplicationReferenceGenerator();
         return services;
     }
 

@@ -120,6 +120,13 @@ public class WorkItemEndpointsTests
         Assert.Equal("v1", body.TemplateVersion);
         Assert.Equal(JsonValueKind.Object, body.Payload.ValueKind);
         Assert.Equal("Acme", body.Payload.GetProperty("applicantName").GetString());
+
+        // RA-219: the 201 body must carry the server-generated reference at
+        // payload.applicationReference so the BFF can display it. The same
+        // value must be what was persisted.
+        var responseRef = body.Payload.GetProperty("applicationReference").GetString();
+        Assert.Matches(@"^RA-\d{9}$", responseRef);
+        Assert.Equal(persisted.Payload["applicationReference"].AsString, responseRef);
     }
 
     [Fact]
@@ -183,6 +190,7 @@ public class WorkItemEndpointsTests
         {
             typeId = TypeId,
             source = "operator-fe",
+            // RA-219: a client-supplied applicationReference is IGNORED.
             applicationReference = "APP-123",
             payload = new { applicantName = "Acme" }
         }, cancellationToken);
@@ -199,7 +207,10 @@ public class WorkItemEndpointsTests
         Assert.Equal("operator-fe", entry.Details["source"]);
         Assert.Equal("test-client", entry.Details["clientId"]);
         Assert.Equal("alice-1", entry.Details["userId"]);
-        Assert.Equal("APP-123", entry.Details["applicationReference"]);
+        // RA-219: the server-generated reference, not the ignored client value.
+        var auditedRef = entry.Details["applicationReference"];
+        Assert.NotEqual("APP-123", auditedRef);
+        Assert.Matches(@"^RA-\d{9}$", auditedRef);
     }
 
     [Fact]
@@ -221,20 +232,24 @@ public class WorkItemEndpointsTests
         var entry = Assert.Single(persisted!.AuditLog);
         Assert.True(entry.Details.ContainsKey("source"));
         Assert.Null(entry.Details["source"]);
+        // RA-219: applicationReference is always generated server-side, so
+        // even with no submission metadata the birth entry carries a real
+        // RA-######### value rather than null.
         Assert.True(entry.Details.ContainsKey("applicationReference"));
-        Assert.Null(entry.Details["applicationReference"]);
+        Assert.Matches(@"^RA-\d{9}$", entry.Details["applicationReference"]);
         Assert.Equal("test-client", entry.Details["clientId"]);
         Assert.Equal("alice-1", entry.Details["userId"]);
     }
 
     [Theory]
     [InlineData("source", "'source' must be a string.")]
-    [InlineData("applicationReference", "'applicationReference' must be a string.")]
     public async Task Post_rejects_non_string_submission_metadata_field(string field, string expectedDetail)
     {
         // RA-126: reject malformed metadata up front rather than
         // silently coercing / dropping it — that would leave the audit
-        // record degraded without the caller noticing.
+        // record degraded without the caller noticing. RA-219: only
+        // 'source' is caller-supplied now; 'applicationReference' is
+        // generated server-side and any client value is ignored.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory();
         using var client = factory.CreateClient();
@@ -267,7 +282,12 @@ public class WorkItemEndpointsTests
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
         var persisted = await factory.Persistence.GetByIdAsync(body!.Id, cancellationToken);
         Assert.NotNull(persisted);
-        Assert.Empty(persisted!.Payload);
+        // RA-219: even with no client payload the engine stamps the
+        // server-generated applicationReference, so the payload is no longer
+        // empty — it carries exactly that one field.
+        var field = Assert.Single(persisted!.Payload.Names);
+        Assert.Equal("applicationReference", field);
+        Assert.Matches(@"^RA-\d{9}$", persisted.Payload["applicationReference"].AsString);
     }
 
     [Fact]
@@ -498,6 +518,44 @@ public class WorkItemEndpointsTests
         Assert.Empty(ok.Value!.Items);
         Assert.Equal(0, ok.Value.TotalCount);
         await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, cancellationToken);
+    }
+
+    [Fact]
+    public async Task Submit_maps_applicationReference_exhaustion_to_a_503_problem()
+    {
+        // RA-219 PR review: when the engine cannot allocate a unique
+        // applicationReference it returns ApplicationReferenceExhausted, which
+        // the Submit endpoint must surface as a clean 503 ProblemDetails — not
+        // let it escape as an unhandled 500.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var type = new TestWorkItemType(TypeId, "Test type");
+        var registry = new WorkItemRegistry([type]);
+        var engine = Substitute.For<IWorkItemService>();
+        engine
+            .SubmitAsync(
+                Arg.Any<IWorkItemType>(),
+                Arg.Any<MongoDB.Bson.BsonDocument>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.ApplicationReferenceExhausted,
+                "Failed to generate a unique applicationReference after 5 attempts."));
+
+        var body = JsonDocument.Parse($"{{\"typeId\":\"{TypeId}\"}}").RootElement;
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
+        };
+
+        var result = await WorkItemEndpoints.Submit(body, httpContext, registry, engine, cancellationToken);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(
+            Microsoft.AspNetCore.Http.StatusCodes.Status503ServiceUnavailable, problem.StatusCode);
+        Assert.Contains("applicationReference", problem.ProblemDetails.Detail);
     }
 
     [Fact]
