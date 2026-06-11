@@ -162,8 +162,8 @@ public class ReAccreditationDulyMadeSnapshotMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, default);
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, ct);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
