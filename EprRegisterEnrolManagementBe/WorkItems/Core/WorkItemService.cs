@@ -203,7 +203,7 @@ public sealed class WorkItemService : IWorkItemService
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
         TimeProvider? timeProvider = null,
-        IEnumerable<IWorkItemPostTaskHook>? postTaskHooks = null)
+        IEnumerable<IWorkItemPostTaskHook>? postTaskHooks = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IApplicationReferenceGenerator? referenceGenerator = null)
     {
