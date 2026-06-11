@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
+using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -23,8 +24,17 @@ public class ReAccreditationLifecycleTests
         var ct = TestContext.Current.CancellationToken;
         var type = new ReAccreditationType();
         var persistence = Substitute.For<IWorkItemPersistence>();
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg-id"));
+        var dulyMadeHook = new ReAccreditationDulyMadeHook(
+            persistence, notifyClient, auditAppender,
+            TimeProvider.System, NullLogger<ReAccreditationDulyMadeHook>.Instance);
         var engine = new WorkItemService(
-            new WorkItemRegistry([type]), persistence, NullLogger<WorkItemService>.Instance);
+            new WorkItemRegistry([type]), persistence, NullLogger<WorkItemService>.Instance,
+            postTaskHooks: [dulyMadeHook]);
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
         idGenerator.GenerateAsync(Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns("ACC-2027-X-TEST0000");
@@ -55,9 +65,10 @@ public class ReAccreditationLifecycleTests
             new Claim(ClaimTypes.Role, ReAccreditationType.DecisionMakerRole)
         ], "test"));
 
-        // Per-state task completion → action.
+        // Completing all submitted-state tasks auto-triggers the hook which
+        // transitions the item to duly-made (no separate action call needed).
         await CompleteAll(engine, workItem.Id, type, "submitted", user, ct);
-        Assert.True((await engine.ApplyActionAsync(workItem.Id, "duly-make", user, ct)).IsSuccess);
+        Assert.Equal("duly-made", workItem.StateId);
 
         await CompleteAll(engine, workItem.Id, type, "duly-made", user, ct);
         Assert.True((await engine.ApplyActionAsync(workItem.Id, "payment-received", user, ct)).IsSuccess);
@@ -74,11 +85,11 @@ public class ReAccreditationLifecycleTests
 
         Assert.Equal("approved", workItem.StateId);
 
-        // 2 + 1 + 3 + 1 = 7 task completions + 3 engine transitions
-        // (duly-make, payment-received, submit-for-decision) +
-        // 3 approval audit entries (action-applied, sla-clock-stopped,
-        // accreditation-issued) = 13 total.
-        Assert.Equal(13, workItem.AuditLog.Count);
+        // 2 task-completed (submitted) + 1 action-applied:duly-make + 1 sla-clock-started (hook)
+        // + 1 task-completed (duly-made) + 1 action-applied:payment-received
+        // + 3 task-completed (assessment-in-progress) + 1 action-applied:submit-for-decision
+        // + 1 task-completed (awaiting-decision) + 3 approval entries = 14 total.
+        Assert.Equal(14, workItem.AuditLog.Count);
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"
             && e.Details.GetValueOrDefault("actionId") == "duly-make");
         Assert.Contains(workItem.AuditLog, e => e.Action == "action-applied"

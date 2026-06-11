@@ -2,6 +2,7 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -46,6 +47,14 @@ public class WorkItemServiceCompoundTests
             _persistence,
             NullLogger<WorkItemService>.Instance,
             _time);
+
+    private WorkItemService BuildServiceWithTaskHooks(IWorkItemType type, params IWorkItemPostTaskHook[] hooks) =>
+        new(
+            new WorkItemRegistry([type]),
+            _persistence,
+            NullLogger<WorkItemService>.Instance,
+            _time,
+            postTaskHooks: hooks);
 
     private static TestWorkItemType BuildType() =>
         new(
@@ -270,6 +279,25 @@ public class WorkItemServiceCompoundTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task AddNoteAndCompleteTaskAsync_fires_task_hooks_when_last_task_completed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = await SeedAsync();
+        var hook = Substitute.For<IWorkItemPostTaskHook>();
+
+        var result = await BuildServiceWithTaskHooks(BuildType(), hook).AddNoteAndCompleteTaskAsync(
+            workItem.Id, "record-rationale", "All criteria met.",
+            User(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        await hook.Received(1).OnAllTasksCompletedAsync(
+            Arg.Is<WorkItem>(w => w.Id == workItem.Id),
+            "submitted",
+            Arg.Any<ClaimsPrincipal>(),
+            ct);
     }
 
     private sealed class CompoundFakeTimeProvider(DateTime utcNow) : TimeProvider

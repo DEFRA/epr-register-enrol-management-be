@@ -26,6 +26,7 @@ public static class WorkItemModuleExtensions
             new WorkItemRegistry(sp.GetServices<IWorkItemType>()));
         services.AddSingleton<IWorkItemService, WorkItemService>();
         services.AddSingleton<IWorkItemAuditAppender, WorkItemAuditAppender>();
+        services.AddHostedService<WorkItemMigrationHostedService>();
         return services;
     }
 
