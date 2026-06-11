@@ -1431,7 +1431,8 @@ public class WorkItemServiceTests
         // appended to the birth entry's Details alongside the existing
         // typeId / stateId / templateVersion keys. CreatedAt must be the
         // server-side receipt time from the injected TimeProvider, not a
-        // client-supplied value.
+        // client-supplied value. RA-219: applicationReference is generated
+        // server-side; a client-supplied value in metadata is ignored.
         var type = BuildType();
         var metadata = new Dictionary<string, string?>
         {
@@ -1455,7 +1456,9 @@ public class WorkItemServiceTests
         Assert.Equal("operator-fe", entry.Details["source"]);
         Assert.Equal("test-client", entry.Details["clientId"]);
         Assert.Equal("alice-1", entry.Details["userId"]);
-        Assert.Equal("APP-123", entry.Details["applicationReference"]);
+        // RA-219: generated reference, not the ignored "APP-123" client value.
+        Assert.NotEqual("APP-123", entry.Details["applicationReference"]);
+        Assert.Matches(@"^RA-\d{9}$", entry.Details["applicationReference"]);
     }
 
     [Fact]
@@ -1463,7 +1466,9 @@ public class WorkItemServiceTests
     {
         // RA-126: when the caller passes no metadata the four keys still
         // appear on Details. clientId / userId resolve from claims;
-        // source / applicationReference are null.
+        // source is null. RA-219: applicationReference is always generated
+        // server-side, so it is a real RA-######### value even with no
+        // metadata.
         var type = BuildType();
 
         var result = await BuildService(type).SubmitAsync(
@@ -1477,9 +1482,132 @@ public class WorkItemServiceTests
         Assert.True(entry.Details.ContainsKey("source"));
         Assert.Null(entry.Details["source"]);
         Assert.True(entry.Details.ContainsKey("applicationReference"));
-        Assert.Null(entry.Details["applicationReference"]);
+        Assert.Matches(@"^RA-\d{9}$", entry.Details["applicationReference"]);
         Assert.Equal("test-client", entry.Details["clientId"]);
         Assert.Equal("alice-1", entry.Details["userId"]);
+    }
+
+    [Fact]
+    public async Task Submit_generates_a_server_side_applicationReference_into_the_payload()
+    {
+        // RA-219: the engine generates payload.applicationReference itself.
+        var type = BuildType();
+
+        var result = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        Assert.True(fetched.Payload.Contains("applicationReference"));
+        Assert.Matches(@"^RA-\d{9}$", fetched.Payload["applicationReference"].AsString);
+    }
+
+    [Fact]
+    public async Task Submit_ignores_any_client_supplied_applicationReference_in_the_payload()
+    {
+        // RA-219: a value the client smuggles into the payload body must be
+        // overwritten by the server-generated reference, never honoured.
+        var type = BuildType();
+        var payload = new BsonDocument { ["applicationReference"] = "CLIENT-OWNED-REF" };
+
+        var result = await BuildService(type).SubmitAsync(
+            type, payload, "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        var stored = fetched.Payload["applicationReference"].AsString;
+        Assert.NotEqual("CLIENT-OWNED-REF", stored);
+        Assert.Matches(@"^RA-\d{9}$", stored);
+    }
+
+    [Fact]
+    public async Task Submit_retries_on_a_unique_reference_collision_and_succeeds()
+    {
+        // RA-219: a collision on the unique payload.applicationReference index
+        // is recovered by regenerating. Seed a document that already holds the
+        // first candidate, then drive the engine with a scripted generator
+        // whose first draw collides and second draw is free.
+        var type = BuildType();
+        const string Taken = "RA-111111111";
+        const string Free = "RA-222222222";
+        await SeedAsync(configure: w =>
+            w.Payload = new BsonDocument { ["applicationReference"] = Taken });
+
+        var generator = new ScriptedReferenceGenerator(Taken, Free);
+        var service = new WorkItemService(
+            new WorkItemRegistry([type]),
+            _persistence,
+            NullLogger<WorkItemService>.Instance,
+            _time,
+            referenceGenerator: generator);
+
+        var result = await service.SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        Assert.Equal(Free, fetched.Payload["applicationReference"].AsString);
+        Assert.Equal(2, generator.CallCount);
+    }
+
+    [Fact]
+    public async Task Submit_returns_a_structured_failure_after_exhausting_reference_attempts()
+    {
+        // RA-219 PR review: if every candidate collides, the engine gives up
+        // after MaxApplicationReferenceAttempts and returns a structured
+        // ApplicationReferenceExhausted failure (which the endpoint maps to a
+        // clean 503) rather than throwing past the endpoint as a 500.
+        var type = BuildType();
+        const string Taken = "RA-999999999";
+        await SeedAsync(configure: w =>
+            w.Payload = new BsonDocument { ["applicationReference"] = Taken });
+
+        // Always returns the already-taken reference, so every attempt collides.
+        var generator = new ScriptedReferenceGenerator(Taken);
+        var service = new WorkItemService(
+            new WorkItemRegistry([type]),
+            _persistence,
+            NullLogger<WorkItemService>.Instance,
+            _time,
+            referenceGenerator: generator);
+
+        var result = await service.SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(
+            WorkItemActionFailureCode.ApplicationReferenceExhausted, result.FailureCode);
+        Assert.Contains("applicationReference", result.Message);
+        Assert.Equal(
+            WorkItemService.MaxApplicationReferenceAttempts, generator.CallCount);
+
+        // Nothing extra was persisted beyond the seeded collision doc.
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(TypeIds: [TypeId], Page: 1, PageSize: 10),
+            TestContext.Current.CancellationToken);
+        Assert.Single(page.Items);
+    }
+
+    /// <summary>
+    /// Deterministic generator for the collision tests. Returns the supplied
+    /// values in order; once the script is exhausted it repeats the last
+    /// value (so "always collides" is expressed with a single value).
+    /// </summary>
+    private sealed class ScriptedReferenceGenerator(params string[] values)
+        : IApplicationReferenceGenerator
+    {
+        public int CallCount { get; private set; }
+
+        public string Generate()
+        {
+            var value = values[Math.Min(CallCount, values.Length - 1)];
+            CallCount++;
+            return value;
+        }
     }
 
     /// <summary>

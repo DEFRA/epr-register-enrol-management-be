@@ -33,5 +33,16 @@ public static class MongoConventions
         // missing.
         BsonSerializer.TryRegisterSerializer(
             new EnumSerializer<WorkItemTaskStatus>(BsonType.String));
+
+        // RA-176: persist DateOnly as a plain ISO date string ("yyyy-MM-dd")
+        // rather than the driver's default BSON DateTime. The default emits
+        // an extended-JSON object ({"$date": ...}) when the payload is
+        // serialised for the frontend, which the BFF then renders as the
+        // literal "[object Object]" (e.g. the issued accreditation start
+        // date). A string representation round-trips cleanly through the
+        // frontend's date formatter and still deserialises legacy DateTime
+        // documents back to DateOnly.
+        BsonSerializer.TryRegisterSerializer(
+            new DateOnlySerializer(BsonType.String));
     }
 }

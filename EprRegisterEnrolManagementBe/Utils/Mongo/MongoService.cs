@@ -32,6 +32,11 @@ public abstract class MongoService<T>
             "Ensuring index is created if it does not exist for collection {CollectionNamespaceCollectionName} in DB {DatabaseDatabaseNamespace}",
             Collection.CollectionNamespace.CollectionName,
             Collection.Database.DatabaseNamespace);
-        Collection.Indexes.CreateMany(indexes);
+
+        // Delegate to the reconciler so a deploy that tightens an existing
+        // index's options (e.g. RA-219 making payload.applicationReference
+        // unique+sparse) does not break startup with an IndexOptionsConflict
+        // against the older copy still on the server.
+        MongoIndexReconciler.EnsureIndexes(Collection, indexes, Logger);
     }
 }

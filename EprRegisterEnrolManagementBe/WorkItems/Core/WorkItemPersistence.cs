@@ -284,8 +284,17 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             builder.Text("payload.organisationName"));
         // Search by org ID / applicationReference: ascending index lets anchored prefix
         // regex queries avoid a full collection scan.
+        //
+        // RA-219: the backend now owns reference generation, so the index is
+        // UNIQUE to enforce one applicationReference per work item and to give
+        // the engine a duplicate-key signal to retry on. It is SPARSE so legacy
+        // documents that predate server-side generation (and therefore have no
+        // payload.applicationReference) are simply not indexed and cannot trip
+        // the unique constraint — only documents that actually carry the field
+        // are constrained, and every new submission sets it.
         var applicationReference = new CreateIndexModel<WorkItem>(
-            builder.Ascending("payload.applicationReference"));
+            builder.Ascending("payload.applicationReference"),
+            new CreateIndexOptions { Unique = true, Sparse = true });
         return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference];
     }
 }

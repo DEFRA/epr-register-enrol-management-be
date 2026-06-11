@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
@@ -180,20 +181,31 @@ public sealed class WorkItemService : IWorkItemService
     /// </summary>
     public const string AssignRole = "assign";
 
+    /// <summary>
+    /// Maximum number of <c>applicationReference</c> candidates the engine
+    /// tries before giving up on a submission. The suffix keyspace is 10^9,
+    /// so even with a large backlog a collision is rare; five attempts make
+    /// the probability of a spurious failure negligible while bounding the
+    /// work done per submission (RA-219).
+    /// </summary>
+    public const int MaxApplicationReferenceAttempts = 5;
+
     private readonly IWorkItemRegistry _registry;
     private readonly IWorkItemPersistence _persistence;
     private readonly ILogger<WorkItemService> _logger;
     private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
     private readonly IReadOnlyCollection<IWorkItemPostTaskHook> _postTaskHooks;
     private readonly TimeProvider _timeProvider;
+    private readonly IApplicationReferenceGenerator _referenceGenerator;
 
     public WorkItemService(
         IWorkItemRegistry registry,
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
         TimeProvider? timeProvider = null,
-        IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IEnumerable<IWorkItemPostTaskHook>? postTaskHooks = null)
+        IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
+        IApplicationReferenceGenerator? referenceGenerator = null)
     {
         this._registry = registry;
         this._persistence = persistence;
@@ -201,6 +213,7 @@ public sealed class WorkItemService : IWorkItemService
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
         _postTaskHooks = postTaskHooks?.ToArray() ?? Array.Empty<IWorkItemPostTaskHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _referenceGenerator = referenceGenerator ?? new ApplicationReferenceGenerator();
     }
 
     public async Task<WorkItemActionResult> SubmitAsync(
@@ -221,60 +234,107 @@ public sealed class WorkItemService : IWorkItemService
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
 
-        // RA-196: ensure applicationReference and source are in the payload.
-        // If the caller provided them in the submission metadata (the standard
-        // BFF pattern), they are mirrored here so every consumer can find
-        // them in payload.applicationReference without parsing the audit log.
-        if (submissionMetadata != null)
+        // RA-196: ensure 'source' is in the payload. If the caller provided
+        // it in the submission metadata (the standard BFF pattern) it is
+        // mirrored here so consumers can find it without parsing the audit
+        // log. RA-219: 'applicationReference' is NO LONGER caller-supplied —
+        // any client-supplied value is ignored; the engine generates it
+        // server-side below.
+        if (submissionMetadata != null
+            && submissionMetadata.TryGetValue("source", out var sourceVal)
+            && sourceVal != null
+            && !payload.Contains("source"))
         {
-            foreach (var key in new[] { "source", "applicationReference" })
-            {
-                if (submissionMetadata.TryGetValue(key, out var val) && val != null && !payload.Contains(key))
-                {
-                    payload[key] = val;
-                }
-            }
+            payload["source"] = sourceVal;
         }
 
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
-        var workItem = new WorkItem
-        {
-            TypeId = type.TypeId,
-            StateId = type.InitialState.Id,
-            SubmittedAt = now,
-            LastModifiedAt = now,
-            SubmittedBy = submittedBy,
-            TemplateSnapshot = snapshot,
-            TemplateVersion = snapshot.TemplateVersion,
-            Payload = payload
-        };
 
-        // Birth event: the audit timeline must start at submission rather
-        // than the first task completion. Appended to the in-memory list
-        // before the single CreateAsync call so the document and its first
-        // audit entry land in storage together.
-        //
-        // RA-126: enrich the birth entry with the originating BFF /
-        // application context so audit consumers can reconstruct who
-        // submitted from where without joining back to request logs.
-        // 'source' / 'applicationReference' are caller-supplied (BFF /
-        // operator FE forward whichever apply); 'clientId' is the
-        // Cognito client id forwarded by the CDP gateway; 'userId' is
-        // the end-user identity claim required for any mutation.
-        AppendAudit(workItem, "work-item-submitted", "Work item submitted", user, now, new()
+        // RA-219: the backend owns the applicationReference. Generate one
+        // server-side and persist; on the (rare) unique-index collision
+        // regenerate and retry up to MaxApplicationReferenceAttempts times.
+        // The reference is stamped onto both the payload (for consumers /
+        // the BFF, at payload.applicationReference) and the birth audit
+        // entry on each attempt so a retried reference stays consistent
+        // across the document and its audit timeline.
+        WorkItem? workItem = null;
+        for (var attempt = 1; ; attempt++)
         {
-            ["typeId"] = type.TypeId,
-            ["stateId"] = workItem.StateId,
-            ["templateVersion"] = snapshot.TemplateVersion,
-            ["source"] = submissionMetadata is not null
-                && submissionMetadata.TryGetValue("source", out var src) ? src : null,
-            ["clientId"] = user.FindFirstValue("cognito:client_id"),
-            ["userId"] = ResolveActorUserId(user),
-            ["applicationReference"] = submissionMetadata is not null
-                && submissionMetadata.TryGetValue("applicationReference", out var appRef) ? appRef : null
-        });
+            var applicationReference = _referenceGenerator.Generate();
+            payload["applicationReference"] = applicationReference;
 
-        await _persistence.CreateAsync(workItem, cancellationToken);
+            workItem = new WorkItem
+            {
+                TypeId = type.TypeId,
+                StateId = type.InitialState.Id,
+                SubmittedAt = now,
+                LastModifiedAt = now,
+                SubmittedBy = submittedBy,
+                TemplateSnapshot = snapshot,
+                TemplateVersion = snapshot.TemplateVersion,
+                Payload = payload
+            };
+
+            // Birth event: the audit timeline must start at submission rather
+            // than the first task completion. Appended to the in-memory list
+            // before the single CreateAsync call so the document and its first
+            // audit entry land in storage together.
+            //
+            // RA-126: enrich the birth entry with the originating BFF /
+            // application context so audit consumers can reconstruct who
+            // submitted from where without joining back to request logs.
+            // 'source' is caller-supplied (BFF / operator FE forward it);
+            // 'clientId' is the Cognito client id forwarded by the CDP
+            // gateway; 'userId' is the end-user identity claim required for
+            // any mutation. RA-219: 'applicationReference' is the
+            // server-generated value.
+            AppendAudit(workItem, "work-item-submitted", "Work item submitted", user, now, new()
+            {
+                ["typeId"] = type.TypeId,
+                ["stateId"] = workItem.StateId,
+                ["templateVersion"] = snapshot.TemplateVersion,
+                ["source"] = submissionMetadata is not null
+                    && submissionMetadata.TryGetValue("source", out var src) ? src : null,
+                ["clientId"] = user.FindFirstValue("cognito:client_id"),
+                ["userId"] = ResolveActorUserId(user),
+                ["applicationReference"] = applicationReference
+            });
+
+            try
+            {
+                await _persistence.CreateAsync(workItem, cancellationToken);
+                break;
+            }
+            // Only retry on a duplicate-key error that is actually the
+            // applicationReference unique index. Keying on the DuplicateKey
+            // category alone would silently swallow (and misreport as a
+            // reference collision) a future unrelated unique index — so we
+            // also require the write error to name the applicationReference
+            // index; anything else propagates unchanged.
+            catch (MongoWriteException ex)
+                when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey
+                    && IsApplicationReferenceDuplicate(ex))
+            {
+                if (attempt >= MaxApplicationReferenceAttempts)
+                {
+                    // RA-219 PR review: surface exhaustion as a structured
+                    // failure the endpoint already maps to a clean
+                    // ProblemDetails response, rather than throwing past the
+                    // endpoint as an unhandled 500.
+                    _logger.LogError(
+                        ex,
+                        "Failed to generate a unique applicationReference after {Attempts} attempts",
+                        MaxApplicationReferenceAttempts);
+                    return WorkItemActionResult.Failure(
+                        WorkItemActionFailureCode.ApplicationReferenceExhausted,
+                        $"Failed to generate a unique applicationReference after " +
+                        $"{MaxApplicationReferenceAttempts} attempts.");
+                }
+                _logger.LogWarning(
+                    "applicationReference {ApplicationReference} collided on attempt {Attempt}; regenerating",
+                    applicationReference, attempt);
+            }
+        }
 
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} by {User}",
@@ -284,6 +344,21 @@ public sealed class WorkItemService : IWorkItemService
 
         return WorkItemActionResult.Success(workItem);
     }
+
+    /// <summary>
+    /// True when a duplicate-key write error was raised by the
+    /// <c>payload.applicationReference</c> unique index specifically. The
+    /// driver puts the offending index name in the write error message
+    /// (e.g. <c>E11000 duplicate key error ... index: payload.applicationReference_1 ...</c>),
+    /// so a substring match on the field name is sufficient to tell our
+    /// collision apart from any other unique index that might exist now or
+    /// in future. Defensive against a null message.
+    /// </summary>
+    private const string ApplicationReferenceField = "applicationReference";
+
+    private static bool IsApplicationReferenceDuplicate(MongoWriteException ex) =>
+        ex.WriteError?.Message?.Contains(
+            ApplicationReferenceField, StringComparison.OrdinalIgnoreCase) == true;
 
     public async Task<WorkItemActionResult> CompleteTaskAsync(
         Guid workItemId,
