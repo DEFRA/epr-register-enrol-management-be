@@ -39,6 +39,7 @@ public class NotifyTemplateContractTests
     public static TheoryData<string?, string, bool> LifecycleEvents() => new()
     {
         { null, "SubmissionConfirmation", false },
+        { "duly-make", "DulyMade", false },
         { "payment-received", "AssessmentInProgress", false },
         { "sla-extend", "SlaExtended", true },
         { "approve", "Decision", false },
@@ -86,6 +87,10 @@ public class NotifyTemplateContractTests
             $"personalisation placeholder(s): {string.Join(", ", missing)}. " +
             $"Supplied keys: {string.Join(", ", captured!.Keys.OrderBy(k => k))}.");
 
+        // Notify also 400s on UNEXPECTED personalisation keys, so the captured
+        // keys must be a subset of the template's full allowed set (required +
+        // optional). A surplus key here would be silently accepted by the
+        // superset check above but rejected live by Notify.
         var allowed = NotifyTemplateContract.AllowedPlaceholders[templateKey];
         var surplus = captured!.Keys
             .Where(key => !allowed.Contains(key))

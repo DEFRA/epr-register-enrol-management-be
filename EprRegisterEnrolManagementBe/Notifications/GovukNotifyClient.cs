@@ -92,6 +92,16 @@ internal sealed class GovukNotifyClient : INotifyClient
             kv => kv.Key,
             kv => (dynamic)kv.Value);
 
+        // RA-201: sorted, comma-joined KEY NAMES only (never values — those
+        // may carry org names / PII). Surfacing the keys we sent makes a
+        // template/personalisation mismatch — e.g. the template wants
+        // ((sla_deadline)) but we only sent
+        // "organisation_name,reference,registration_number" — obvious in
+        // OpenSearch when correlated with the SDK's
+        // "Missing personalisation: ..." failure message.
+        var personalisationKeys = string.Join(
+            ',', personalisation.Keys.OrderBy(k => k, StringComparer.Ordinal));
+
         // Entry log so OpenSearch / docker logs show the call was even
         // attempted. Without this a hanging Notify endpoint looks like
         // "the hook silently did nothing".
@@ -106,7 +116,8 @@ internal sealed class GovukNotifyClient : INotifyClient
                 {
                     ["notify.template_key"] = templateKey,
                     ["notify.recipient_domain"] = ExtractEmailDomain(toEmail),
-                    ["notify.timeout_seconds"] = _config.RequestTimeoutSeconds
+                    ["notify.timeout_seconds"] = _config.RequestTimeoutSeconds,
+                    ["notify.personalisation_keys"] = personalisationKeys
                 }));
 
         try
@@ -147,7 +158,8 @@ internal sealed class GovukNotifyClient : INotifyClient
                     reason: "send_failed_after_retries",
                     extras: new Dictionary<string, object?>
                     {
-                        ["notify.template_key"] = templateKey
+                        ["notify.template_key"] = templateKey,
+                        ["notify.personalisation_keys"] = personalisationKeys
                     }),
                 exception: ex);
             return NotifySendResult.Failure(ex.Message);
