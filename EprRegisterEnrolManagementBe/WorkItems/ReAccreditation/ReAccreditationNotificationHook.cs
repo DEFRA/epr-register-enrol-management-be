@@ -227,7 +227,11 @@ internal sealed class ReAccreditationNotificationHook(
             // is always present).
             if (workItem.SlaClock is { } slaClock)
             {
-                var deadline = slaClock.StartedAt + slaClock.TargetDuration;
+                // Take the .Date (drop the time-of-day) before formatting so a
+                // non-UTC / non-midnight StartedAt cannot shift the rendered
+                // deadline onto an adjacent calendar day. For the normal UTC
+                // path this is a no-op.
+                var deadline = (slaClock.StartedAt + slaClock.TargetDuration).Date;
                 personalisation["sla_deadline"] =
                     deadline.ToString("d MMMM yyyy", CultureInfo.GetCultureInfo("en-GB"));
             }

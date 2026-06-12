@@ -53,6 +53,30 @@ internal static class NotifyTemplateContract
             ["Decision"] = Set("organisation_name", "registration_number", "reference", "decision"),
         };
 
+    /// <summary>
+    /// Template key → the FULL set of personalisation placeholders the hook is
+    /// permitted to supply for that template (required keys plus any optional,
+    /// conditionally-added keys). GOV.UK Notify rejects a send with a 400 not
+    /// only on a MISSING required key but also on an UNEXPECTED/surplus key, so
+    /// the contract test asserts the captured keys are a subset of this set.
+    ///
+    /// For every template except Decision the allowed set equals the required
+    /// set. The Decision template additionally allows the optional
+    /// <c>accreditation_id</c> / <c>accreditation_start_date</c> placeholders
+    /// that the hook stamps on the approve path.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> AllowedPlaceholders =
+        new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["SubmissionConfirmation"] = RequiredPlaceholders["SubmissionConfirmation"],
+            ["DulyMade"] = RequiredPlaceholders["DulyMade"],
+            ["AssessmentInProgress"] = RequiredPlaceholders["AssessmentInProgress"],
+            ["SlaExtended"] = RequiredPlaceholders["SlaExtended"],
+            ["Decision"] = Set(
+                "organisation_name", "registration_number", "reference", "decision",
+                "accreditation_id", "accreditation_start_date"),
+        };
+
     private static IReadOnlySet<string> Set(params string[] keys) =>
         new HashSet<string>(keys, StringComparer.OrdinalIgnoreCase);
 }

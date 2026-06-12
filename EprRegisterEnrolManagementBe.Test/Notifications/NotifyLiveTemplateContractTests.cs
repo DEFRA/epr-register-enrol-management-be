@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Configuration;
 using Notify.Client;
 
 namespace EprRegisterEnrolManagementBe.Test.Notifications;
@@ -26,17 +27,54 @@ namespace EprRegisterEnrolManagementBe.Test.Notifications;
 /// </summary>
 public class NotifyLiveTemplateContractTests
 {
-    // Production template GUIDs from appsettings.json. Overridable per key via
-    // NOTIFY_TEMPLATE_<key> so the test can target the preview service.
+    // Production template GUIDs, loaded from the service's appsettings.json
+    // ("Notify:Templates") rather than duplicated here, so a rotated GUID can
+    // never silently drift out of sync with what the service actually sends.
+    // Overridable per key via NOTIFY_TEMPLATE_<key> so the test can target the
+    // preview service.
     private static readonly IReadOnlyDictionary<string, string> s_defaultTemplateIds =
-        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        LoadTemplateIdsFromAppSettings();
+
+    private static IReadOnlyDictionary<string, string> LoadTemplateIdsFromAppSettings()
+    {
+        var config = new ConfigurationBuilder()
+            .AddJsonFile(LocateAppSettings(), optional: false)
+            .Build();
+
+        var templates = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var child in config.GetSection("Notify:Templates").GetChildren())
         {
-            ["SubmissionConfirmation"] = "fde9a462-9bae-484a-b7f3-946e74113040",
-            ["DulyMade"] = "358599cb-ca0f-4d47-bdee-8af975727695",
-            ["AssessmentInProgress"] = "72848955-6025-47cb-97a9-b23f03d5a07f",
-            ["SlaExtended"] = "330bcfba-a0b0-432d-a3d0-cc15546faf6f",
-            ["Decision"] = "ca62135b-848a-4059-a06f-1bcc01bfebac",
-        };
+            if (!string.IsNullOrWhiteSpace(child.Value))
+            {
+                templates[child.Key] = child.Value;
+            }
+        }
+
+        return templates;
+    }
+
+    // Walk up from the test assembly's location to the directory containing the
+    // solution file, then resolve the service project's appsettings.json. This
+    // is robust to the build-output depth and avoids copying appsettings.json
+    // into the test project.
+    private static string LocateAppSettings()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && dir.GetFiles("EprRegisterEnrolManagementBe.sln").Length == 0)
+        {
+            dir = dir.Parent;
+        }
+
+        if (dir is null)
+        {
+            throw new InvalidOperationException(
+                "Could not locate EprRegisterEnrolManagementBe.sln above " +
+                $"'{AppContext.BaseDirectory}' to resolve appsettings.json.");
+        }
+
+        return Path.Combine(
+            dir.FullName, "EprRegisterEnrolManagementBe", "appsettings.json");
+    }
 
     // ((token)) — Notify personalisation placeholders. Optional-block syntax
     // ((token??default)) is normalised to the token name.
