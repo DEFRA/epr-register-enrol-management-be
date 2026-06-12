@@ -234,6 +234,86 @@ public class GovukNotifyClientTests
     }
 
     [Fact]
+    public async Task SendEmailAsync_failure_log_includes_sorted_personalisation_keys()
+    {
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner.SendEmailAsync(
+                Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>())
+            .ThrowsAsync(new Exception("Missing personalisation: sla_deadline"));
+
+        var log = Substitute.For<IStructuredLogger<GovukNotifyClient>>();
+        var sut = new GovukNotifyClient(
+            inner,
+            Options.Create(ConfigWithTemplates(("SlaExtended", "t-id"))),
+            log,
+            retryPipeline: ZeroDelayRetryPipeline());
+
+        // Deliberately unsorted insertion order — the log must emit them sorted.
+        var personalisation = new Dictionary<string, string>
+        {
+            ["registration_number"] = "EX-001",
+            ["organisation_name"] = "Acme",
+            ["reference"] = "ref",
+        };
+
+        await sut.SendEmailAsync(
+            "SlaExtended", "op@ex.com",
+            personalisation, "ref-keys",
+            TestContext.Current.CancellationToken);
+
+        // RA-201: sorted, comma-joined KEY NAMES (values never logged).
+        log.Received(1).Log(
+            LogLevel.Error,
+            Arg.Any<string>(),
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                (string)p["event.reason"]! == "send_failed_after_retries"
+                && (string)p["notify.personalisation_keys"]!
+                    == "organisation_name,reference,registration_number"),
+            Arg.Any<Exception>());
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_entry_log_includes_sorted_personalisation_keys()
+    {
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner.SendEmailAsync(
+                Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>())
+            .Returns(new EmailNotificationResponse { id = "ok" });
+
+        var log = Substitute.For<IStructuredLogger<GovukNotifyClient>>();
+        var sut = new GovukNotifyClient(
+            inner,
+            Options.Create(ConfigWithTemplates(("SlaExtended", "t-id"))),
+            log);
+
+        var personalisation = new Dictionary<string, string>
+        {
+            ["registration_number"] = "EX-001",
+            ["organisation_name"] = "Acme",
+            ["sla_deadline"] = "1 January 2026",
+            ["reference"] = "ref",
+        };
+
+        await sut.SendEmailAsync(
+            "SlaExtended", "op@ex.com",
+            personalisation, "ref-entry",
+            TestContext.Current.CancellationToken);
+
+        // Entry log ("Notify send starting") carries the keys for diagnosis.
+        log.Received(1).Log(
+            LogLevel.Information,
+            "Notify send starting",
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                (string)p["notify.personalisation_keys"]!
+                    == "organisation_name,reference,registration_number,sla_deadline"),
+            null);
+    }
+
+    [Fact]
     public async Task SendEmailAsync_emits_ecs_failure_log_when_template_missing()
     {
         var inner = Substitute.For<IAsyncNotificationClient>();

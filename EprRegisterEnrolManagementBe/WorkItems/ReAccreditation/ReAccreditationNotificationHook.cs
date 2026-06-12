@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -212,6 +213,29 @@ internal sealed class ReAccreditationNotificationHook(
             ["registration_number"] = payload.RegistrationNumber ?? string.Empty,
             ["reference"] = workItem.Id.ToString()
         };
+
+        if (string.Equals(templateKey, "SlaExtended", StringComparison.OrdinalIgnoreCase))
+        {
+            // RA-201: the SlaExtended Notify template body requires a
+            // ((sla_deadline)) placeholder. Without it Notify rejects the
+            // send with a 400 "Missing personalisation: sla_deadline" and
+            // the extend-SLA email never reaches the operator. The deadline
+            // is the SLA window end = clock start + target duration,
+            // rendered as operator-facing GOV.UK-style copy (e.g.
+            // "1 January 2026"). Guard for a missing clock so a malformed
+            // item never NREs the hook (after a successful extend the clock
+            // is always present).
+            if (workItem.SlaClock is { } slaClock)
+            {
+                // Take the .Date (drop the time-of-day) before formatting so a
+                // non-UTC / non-midnight StartedAt cannot shift the rendered
+                // deadline onto an adjacent calendar day. For the normal UTC
+                // path this is a no-op.
+                var deadline = (slaClock.StartedAt + slaClock.TargetDuration).Date;
+                personalisation["sla_deadline"] =
+                    deadline.ToString("d MMMM yyyy", CultureInfo.GetCultureInfo("en-GB"));
+            }
+        }
 
         if (string.Equals(templateKey, "Decision", StringComparison.OrdinalIgnoreCase))
         {
