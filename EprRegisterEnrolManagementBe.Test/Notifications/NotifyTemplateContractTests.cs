@@ -123,6 +123,20 @@ public class NotifyTemplateContractTests
             TypeId = ReAccreditationType.Id,
             StateId = "submitted",
             Payload = payload,
+            // RA-203: the Decision template requires a non-empty decision_notes
+            // placeholder, sourced from the latest work-item-level note. Supply
+            // one here so the approve/reject contract rows exercise the
+            // non-empty path and the "required placeholder may not be empty"
+            // assertion holds for the Decision template.
+            Notes =
+            [
+                new WorkItemNote
+                {
+                    Text = "Decision rationale recorded by the assessor.",
+                    CreatedAt = new DateTime(2025, 10, 9, 9, 30, 0, DateTimeKind.Utc),
+                    TaskId = null
+                }
+            ],
             SlaClock = needsSlaClock
                 ? new WorkItemSlaClock
                 {

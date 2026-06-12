@@ -47,10 +47,14 @@ internal static class NotifyTemplateContract
             // to 400 the send with "Missing personalisation: sla_deadline".
             ["SlaExtended"] = Set("organisation_name", "registration_number", "reference", "sla_deadline"),
 
-            // Decision template: base identity + the decision outcome. The
-            // accreditation_id / accreditation_start_date placeholders are
-            // optional (approval-only) and so are intentionally not required.
-            ["Decision"] = Set("organisation_name", "registration_number", "reference", "decision"),
+            // Decision template: base identity + the decision outcome + the
+            // decision notes. RA-203: decision_notes is REQUIRED — the Decision
+            // template body references ((decision_notes)) and Notify 400s the
+            // send with "Missing personalisation: decision_notes" if the key is
+            // absent (an empty value is permitted, so the hook always supplies
+            // it). The accreditation_id / accreditation_start_date placeholders
+            // remain optional (approval-only) and are intentionally not required.
+            ["Decision"] = Set("organisation_name", "registration_number", "reference", "decision", "decision_notes"),
         };
 
     /// <summary>
@@ -74,7 +78,7 @@ internal static class NotifyTemplateContract
             ["SlaExtended"] = RequiredPlaceholders["SlaExtended"],
             ["Decision"] = Set(
                 "organisation_name", "registration_number", "reference", "decision",
-                "accreditation_id", "accreditation_start_date"),
+                "decision_notes", "accreditation_id", "accreditation_start_date"),
         };
 
     private static IReadOnlySet<string> Set(params string[] keys) =>

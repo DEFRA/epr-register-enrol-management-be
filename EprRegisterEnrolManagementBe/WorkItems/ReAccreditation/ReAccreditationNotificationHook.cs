@@ -243,6 +243,22 @@ internal sealed class ReAccreditationNotificationHook(
                 ? "Approved"
                 : "Rejected";
 
+            // RA-203: the Decision Notify template body references a
+            // ((decision_notes)) placeholder. Without it Notify rejects the
+            // send with a 400 "Missing personalisation: decision_notes" and the
+            // approve/reject decision email never reaches the operator. The note
+            // is the most recent WORK-ITEM-LEVEL note (TaskId is null) captured
+            // on the FE approval interstitial before the transition; task-scoped
+            // notes are ignored. The key MUST always be present for this
+            // template (Notify 400s on a missing referenced placeholder, but an
+            // empty value is fine), so fall back to an empty string when there
+            // is no work-item-level note.
+            var decisionNote = workItem.Notes?
+                .Where(note => note.TaskId is null)
+                .OrderByDescending(note => note.CreatedAt)
+                .FirstOrDefault();
+            personalisation["decision_notes"] = decisionNote?.Text ?? string.Empty;
+
             // RA-132: include the accreditation id and start date when an
             // approval has stamped them on the payload, so the Decision
             // template can reference them in its body. Keys are only added

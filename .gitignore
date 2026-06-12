@@ -274,3 +274,8 @@ appsettings.*.local.json
 appsettings.Local.json
 secrets.json
 *.lscache
+
+# Coverage output
+cov/
+*.cobertura.xml
+coverage.json
