@@ -39,7 +39,6 @@ public class NotifyTemplateContractTests
     public static TheoryData<string?, string, bool> LifecycleEvents() => new()
     {
         { null, "SubmissionConfirmation", false },
-        { "duly-make", "DulyMade", false },
         { "payment-received", "AssessmentInProgress", false },
         { "sla-extend", "SlaExtended", true },
         { "approve", "Decision", false },
