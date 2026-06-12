@@ -206,6 +206,21 @@ internal sealed class ReAccreditationNotificationHook(
         }
     }
 
+    /// <summary>
+    /// Text of the most recent work-item-level note (one with no TaskId), or an
+    /// empty string when there is none. Notify 400s on a referenced placeholder
+    /// that is missing but accepts an empty value, so the lifecycle templates
+    /// that surface the latest case note (Withdrawn → <c>withdrawal_notes</c>,
+    /// Decision → <c>decision_notes</c>) always pass a present, possibly-empty
+    /// value. Task-scoped notes are deliberately ignored.
+    /// </summary>
+    private static string LatestWorkItemNoteText(WorkItem workItem) =>
+        workItem.Notes?
+            .Where(note => note.TaskId is null)
+            .OrderByDescending(note => note.CreatedAt)
+            .FirstOrDefault()?.Text
+        ?? string.Empty;
+
     private static Dictionary<string, string> BuildPersonalisation(
         ReAccreditationPayload payload,
         WorkItem workItem,
@@ -244,22 +259,12 @@ internal sealed class ReAccreditationNotificationHook(
 
         if (string.Equals(templateKey, "Withdrawn", StringComparison.OrdinalIgnoreCase))
         {
-            // RA-204: the Withdrawn Notify template body references a
-            // ((withdrawal_notes)) placeholder for the reason the application
-            // was withdrawn. Without it Notify rejects the send with a 400
-            // "Missing personalisation: withdrawal_notes" and the withdrawal
-            // email never reaches the operator. The note is the most recent
-            // WORK-ITEM-LEVEL note (TaskId is null) captured on the FE withdraw
-            // interstitial before the transition; task-scoped notes are
-            // ignored. The key MUST always be present for this template (Notify
-            // 400s on a missing referenced placeholder, but an empty value is
-            // fine), so fall back to an empty string when there is no
-            // work-item-level note.
-            var withdrawalNote = workItem.Notes?
-                .Where(note => note.TaskId is null)
-                .OrderByDescending(note => note.CreatedAt)
-                .FirstOrDefault();
-            personalisation["withdrawal_notes"] = withdrawalNote?.Text ?? string.Empty;
+            // RA-204: the Withdrawn template body references a
+            // ((withdrawal_notes)) placeholder carrying the reason the
+            // application was withdrawn (the latest case note captured on the FE
+            // withdraw interstitial). See LatestWorkItemNoteText for why the key
+            // is always present with an empty-string fallback.
+            personalisation["withdrawal_notes"] = LatestWorkItemNoteText(workItem);
         }
 
         if (string.Equals(templateKey, "Decision", StringComparison.OrdinalIgnoreCase))
@@ -268,21 +273,11 @@ internal sealed class ReAccreditationNotificationHook(
                 ? "Approved"
                 : "Rejected";
 
-            // RA-203: the Decision Notify template body references a
-            // ((decision_notes)) placeholder. Without it Notify rejects the
-            // send with a 400 "Missing personalisation: decision_notes" and the
-            // approve/reject decision email never reaches the operator. The note
-            // is the most recent WORK-ITEM-LEVEL note (TaskId is null) captured
-            // on the FE approval interstitial before the transition; task-scoped
-            // notes are ignored. The key MUST always be present for this
-            // template (Notify 400s on a missing referenced placeholder, but an
-            // empty value is fine), so fall back to an empty string when there
-            // is no work-item-level note.
-            var decisionNote = workItem.Notes?
-                .Where(note => note.TaskId is null)
-                .OrderByDescending(note => note.CreatedAt)
-                .FirstOrDefault();
-            personalisation["decision_notes"] = decisionNote?.Text ?? string.Empty;
+            // RA-203: the Decision template body references a ((decision_notes))
+            // placeholder carrying the latest case note captured on the FE
+            // approval interstitial. See LatestWorkItemNoteText for why the key
+            // is always present with an empty-string fallback.
+            personalisation["decision_notes"] = LatestWorkItemNoteText(workItem);
 
             // RA-132: include the accreditation id and start date when an
             // approval has stamped them on the payload, so the Decision
