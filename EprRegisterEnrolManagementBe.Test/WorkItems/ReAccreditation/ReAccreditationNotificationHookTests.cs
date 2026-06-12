@@ -19,7 +19,9 @@ public class ReAccreditationNotificationHookTests
     private static WorkItem BuildWorkItem(
         string stateId = "submitted",
         string? operatorEmail = "op@example.com",
-        WorkItemSlaClock? slaClock = null)
+        WorkItemSlaClock? slaClock = null,
+        IEnumerable<WorkItemNote>? notes = null,
+        bool nullNotes = false)
     {
         var payload = new BsonDocument
         {
@@ -37,10 +39,14 @@ public class ReAccreditationNotificationHookTests
             StateId = stateId,
             Payload = payload,
             SlaClock = slaClock,
+            Notes = nullNotes ? null! : (notes?.ToList() ?? new List<WorkItemNote>()),
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(new ReAccreditationType()),
             TemplateVersion = "v3"
         };
     }
+
+    private static WorkItemNote Note(string text, DateTime createdAt, string? taskId = null) =>
+        new() { Text = text, CreatedAt = createdAt, TaskId = taskId };
 
     private static ReAccreditationNotificationHook BuildSut(
         INotifyClient notifyClient,
@@ -216,6 +222,10 @@ public class ReAccreditationNotificationHookTests
         Assert.NotNull(capturedPersonalisation);
         var expectedDecision = actionId == "approve" ? "Approved" : "Rejected";
         Assert.Equal(expectedDecision, capturedPersonalisation!["decision"]);
+        // RA-203: decision_notes must always be present for the Decision
+        // template. With no work-item-level notes on this item it is empty.
+        Assert.True(capturedPersonalisation.ContainsKey("decision_notes"));
+        Assert.Equal(string.Empty, capturedPersonalisation["decision_notes"]);
     }
 
     [Theory]
@@ -360,6 +370,114 @@ public class ReAccreditationNotificationHookTests
         Assert.NotNull(captured);
         Assert.DoesNotContain("accreditation_id", captured!.Keys);
         Assert.DoesNotContain("accreditation_start_date", captured.Keys);
+    }
+
+    // ─────── RA-203: Decision personalisation (decision_notes) ───────
+
+    [Theory]
+    [InlineData("approve")]
+    [InlineData("reject")]
+    public async Task OnActionAppliedAsync_uses_latest_work_item_level_note_as_decision_notes(string actionId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        // Out-of-order CreatedAt so the OrderByDescending branch is exercised:
+        // the latest work-item-level note is the expected source.
+        var workItem = BuildWorkItem(stateId: "approved", notes:
+        [
+            Note("Older rationale", new DateTime(2025, 10, 1, 0, 0, 0, DateTimeKind.Utc)),
+            Note("Latest rationale", new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc)),
+            Note("Middle rationale", new DateTime(2025, 10, 5, 0, 0, 0, DateTimeKind.Utc)),
+        ]);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, actionId, "awaiting-decision", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("Latest rationale", captured!["decision_notes"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_ignores_task_scoped_notes_for_decision_notes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        // The most recent note is task-scoped (TaskId set) and must be ignored;
+        // the older work-item-level note is the expected source.
+        var workItem = BuildWorkItem(stateId: "approved", notes:
+        [
+            Note("Work-item rationale", new DateTime(2025, 10, 1, 0, 0, 0, DateTimeKind.Utc)),
+            Note("Task comment", new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc), taskId: "check-docs"),
+        ]);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("Work-item rationale", captured!["decision_notes"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_sets_empty_decision_notes_when_notes_collection_is_null()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        // Exercise the null-conditional (workItem.Notes is null) fallback arm.
+        var workItem = BuildWorkItem(stateId: "approved", nullNotes: true);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.ContainsKey("decision_notes"));
+        Assert.Equal(string.Empty, captured["decision_notes"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_sets_empty_decision_notes_when_no_work_item_level_notes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        // Only a task-scoped note exists, so there is no work-item-level note.
+        var workItem = BuildWorkItem(stateId: "rejected", notes:
+        [
+            Note("Task comment", new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc), taskId: "check-docs"),
+        ]);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.ContainsKey("decision_notes"));
+        Assert.Equal(string.Empty, captured["decision_notes"]);
     }
 
     // ─────── RA-201: SlaExtended personalisation (sla_deadline) ───────
