@@ -16,7 +16,10 @@ public class ReAccreditationNotificationHookTests
         new Claim("user:name", "Alice")
     ], "test"));
 
-    private static WorkItem BuildWorkItem(string stateId = "submitted", string? operatorEmail = "op@example.com")
+    private static WorkItem BuildWorkItem(
+        string stateId = "submitted",
+        string? operatorEmail = "op@example.com",
+        WorkItemSlaClock? slaClock = null)
     {
         var payload = new BsonDocument
         {
@@ -33,6 +36,7 @@ public class ReAccreditationNotificationHookTests
             TypeId = ReAccreditationType.Id,
             StateId = stateId,
             Payload = payload,
+            SlaClock = slaClock,
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(new ReAccreditationType()),
             TemplateVersion = "v3"
         };
@@ -356,5 +360,59 @@ public class ReAccreditationNotificationHookTests
         Assert.NotNull(captured);
         Assert.DoesNotContain("accreditation_id", captured!.Keys);
         Assert.DoesNotContain("accreditation_start_date", captured.Keys);
+    }
+
+    // ─────── RA-201: SlaExtended personalisation (sla_deadline) ───────
+
+    [Fact]
+    public async Task OnActionAppliedAsync_includes_sla_deadline_in_SlaExtended_personalisation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        // Clock started 2025-10-09 UTC + 84 days (12 weeks) => 2026-01-01.
+        var slaClock = new WorkItemSlaClock
+        {
+            StartedAt = new DateTime(2025, 10, 9, 9, 30, 0, DateTimeKind.Utc),
+            TargetDuration = TimeSpan.FromDays(84)
+        };
+        var workItem = BuildWorkItem(slaClock: slaClock);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "sla-extend", "assessment-in-progress", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("1 January 2026", captured!["sla_deadline"]);
+        // The other three required placeholders remain present.
+        Assert.Equal("Acme Ltd", captured["organisation_name"]);
+        Assert.Equal("EX-001", captured["registration_number"]);
+        Assert.Equal(workItem.Id.ToString(), captured["reference"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_omits_sla_deadline_when_clock_absent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(slaClock: null);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "sla-extend", "assessment-in-progress", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.DoesNotContain("sla_deadline", captured!.Keys);
     }
 }
