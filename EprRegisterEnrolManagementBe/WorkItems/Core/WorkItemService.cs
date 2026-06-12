@@ -14,18 +14,18 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// </summary>
 public interface IWorkItemService
 {/// <summary>
-    /// Create a brand-new work item of <paramref name="type"/> and persist
-    /// it. Captures a frozen template snapshot, stamps a server-side
-    /// submission timestamp from the injected <see cref="TimeProvider"/>,
-    /// and appends a single <c>work-item-submitted</c> entry to the new
-    /// work item's audit log so the audit timeline starts at the
-    /// document's birth event rather than the first task completion. The
-    /// audit entry and the document body are written in the same
-    /// <see cref="IWorkItemPersistence.CreateAsync"/> call. Mutations
-    /// require a <c>user:id</c> claim — calls without one return
-    /// <see cref="WorkItemActionFailureCode.MissingActorIdentity"/> and
-    /// nothing is persisted.
-    /// </summary>
+ /// Create a brand-new work item of <paramref name="type"/> and persist
+ /// it. Captures a frozen template snapshot, stamps a server-side
+ /// submission timestamp from the injected <see cref="TimeProvider"/>,
+ /// and appends a single <c>work-item-submitted</c> entry to the new
+ /// work item's audit log so the audit timeline starts at the
+ /// document's birth event rather than the first task completion. The
+ /// audit entry and the document body are written in the same
+ /// <see cref="IWorkItemPersistence.CreateAsync"/> call. Mutations
+ /// require a <c>user:id</c> claim — calls without one return
+ /// <see cref="WorkItemActionFailureCode.MissingActorIdentity"/> and
+ /// nothing is persisted.
+ /// </summary>
     Task<WorkItemActionResult> SubmitAsync(
         IWorkItemType type,
         BsonDocument payload,
@@ -34,7 +34,7 @@ public interface IWorkItemService
         IReadOnlyDictionary<string, string?>? submissionMetadata = null,
         CancellationToken cancellationToken = default);
 
-    
+
     Task<WorkItemActionResult> CompleteTaskAsync(
         Guid workItemId,
         string taskId,
@@ -194,6 +194,7 @@ public sealed class WorkItemService : IWorkItemService
     private readonly IWorkItemPersistence _persistence;
     private readonly ILogger<WorkItemService> _logger;
     private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
+    private readonly IReadOnlyCollection<IWorkItemPostTaskHook> _postTaskHooks;
     private readonly TimeProvider _timeProvider;
     private readonly IApplicationReferenceGenerator _referenceGenerator;
 
@@ -202,6 +203,7 @@ public sealed class WorkItemService : IWorkItemService
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
         TimeProvider? timeProvider = null,
+        IEnumerable<IWorkItemPostTaskHook>? postTaskHooks = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IApplicationReferenceGenerator? referenceGenerator = null)
     {
@@ -209,6 +211,7 @@ public sealed class WorkItemService : IWorkItemService
         this._persistence = persistence;
         this._logger = logger;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
+        _postTaskHooks = postTaskHooks?.ToArray() ?? Array.Empty<IWorkItemPostTaskHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
         _referenceGenerator = referenceGenerator ?? new ApplicationReferenceGenerator();
     }
@@ -397,7 +400,8 @@ public sealed class WorkItemService : IWorkItemService
         // source of truth for the new status set, but
         // CompletedTaskIdsByState is retained for one release cycle so
         // legacy readers continue to work. Keep them in lockstep.
-        SetTaskStatus(workItem, workItem.StateId, task.Id, WorkItemTaskStatus.Completed);
+        var completedStateId = workItem.StateId;
+        SetTaskStatus(workItem, completedStateId, task.Id, WorkItemTaskStatus.Completed);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.LastModifiedAt = now;
@@ -405,7 +409,7 @@ public sealed class WorkItemService : IWorkItemService
         {
             ["taskId"] = task.Id,
             ["taskDisplayName"] = task.DisplayName,
-            ["stateId"] = workItem.StateId
+            ["stateId"] = completedStateId
         });
         try
         {
@@ -418,6 +422,11 @@ public sealed class WorkItemService : IWorkItemService
         _logger.LogInformation(
             "Task {TaskId} marked complete on work item {WorkItemId} ({TypeId}) by {User}",
             task.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
+
+        if (!HasIncompleteTasks(template!, workItem))
+        {
+            await InvokeAllTasksCompletedHooksAsync(workItem, completedStateId, user, cancellationToken);
+        }
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -913,6 +922,9 @@ public sealed class WorkItemService : IWorkItemService
                 $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'.");
         }
 
+        // Capture before hooks may change it after the write.
+        var completedStateId = workItem.StateId;
+
         var now = _timeProvider.GetUtcNow().UtcDateTime;
 
         // Mutate in memory only — nothing is persisted until the single
@@ -940,20 +952,20 @@ public sealed class WorkItemService : IWorkItemService
         // completion half (matches CompleteTaskAsync's idempotency
         // contract: no audit entry for the no-op). The note is still
         // written — note writes are the caller's primary intent here.
-        var bucket = GetCompletedBucket(workItem, workItem.StateId);
+        var bucket = GetCompletedBucket(workItem, completedStateId);
         var taskNewlyCompleted = bucket.Add(task.Id);
         if (taskNewlyCompleted)
         {
             // epr-gl6: dual-write the per-task status map alongside the
             // legacy CompletedTaskIdsByState bucket so both sources of
             // truth stay in lockstep.
-            SetTaskStatus(workItem, workItem.StateId, task.Id, WorkItemTaskStatus.Completed);
+            SetTaskStatus(workItem, completedStateId, task.Id, WorkItemTaskStatus.Completed);
 
             AppendAudit(workItem, "task-completed", "Task completed", user, now, new()
             {
                 ["taskId"] = task.Id,
                 ["taskDisplayName"] = task.DisplayName,
-                ["stateId"] = workItem.StateId
+                ["stateId"] = completedStateId
             });
         }
 
@@ -976,6 +988,11 @@ public sealed class WorkItemService : IWorkItemService
             workItem.Id,
             workItem.TypeId,
             DescribeUser(user));
+
+        if (taskNewlyCompleted && !HasIncompleteTasks(template, workItem))
+        {
+            await InvokeAllTasksCompletedHooksAsync(workItem, completedStateId, user, cancellationToken);
+        }
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -1020,7 +1037,8 @@ public sealed class WorkItemService : IWorkItemService
         // epr-gl6: dual-write — keep CompletedTaskIdsByState in lockstep
         // with TaskStatusesByState so legacy readers (which only consume
         // the bucket) keep observing a consistent view.
-        SetTaskStatus(workItem, workItem.StateId, task.Id, status);
+        var changedStateId = workItem.StateId;
+        SetTaskStatus(workItem, changedStateId, task.Id, status);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.LastModifiedAt = now;
@@ -1028,7 +1046,7 @@ public sealed class WorkItemService : IWorkItemService
         {
             ["taskId"] = task.Id,
             ["taskDisplayName"] = task.DisplayName,
-            ["stateId"] = workItem.StateId,
+            ["stateId"] = changedStateId,
             ["fromStatus"] = currentStatus.ToString(),
             ["toStatus"] = status.ToString()
         });
@@ -1045,6 +1063,11 @@ public sealed class WorkItemService : IWorkItemService
         _logger.LogInformation(
             "Task {TaskId} on work item {WorkItemId} ({TypeId}) moved from {FromStatus} to {ToStatus} by {User}",
             task.Id, workItem.Id, workItem.TypeId, currentStatus, status, DescribeUser(user));
+
+        if (status == WorkItemTaskStatus.Completed && !HasIncompleteTasks(template!, workItem))
+        {
+            await InvokeAllTasksCompletedHooksAsync(workItem, changedStateId, user, cancellationToken);
+        }
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -1344,6 +1367,28 @@ public sealed class WorkItemService : IWorkItemService
                 _logger.LogError(ex,
                     "Post-action transition hook {HookType} failed for work item {WorkItemId} action {ActionId}",
                     hook.GetType().FullName, workItem.Id, actionId);
+            }
+        }
+    }
+
+    private async Task InvokeAllTasksCompletedHooksAsync(
+        WorkItem workItem,
+        string stateId,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        foreach (var hook in _postTaskHooks)
+        {
+            try
+            {
+                await hook.OnAllTasksCompletedAsync(workItem, stateId, user, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Post-task hook {HookType} failed for work item {WorkItemId} state {StateId}",
+                    hook.GetType().FullName, workItem.Id, stateId);
+                throw;
             }
         }
     }

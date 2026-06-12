@@ -16,11 +16,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// Mapping:
 /// <list type="bullet">
 ///   <item>Submission                                  → <c>SubmissionConfirmation</c></item>
-///   <item>Action <c>duly-make</c>                     → <c>DulyMade</c></item>
 ///   <item>Action <c>payment-received</c>               → <c>AssessmentInProgress</c></item>
 ///   <item>Action <c>sla-extend</c>                    → <c>SlaExtended</c></item>
 ///   <item>Action <c>approve</c> / <c>reject</c>       → <c>Decision</c></item>
 /// </list>
+///
+/// Note: the DulyMade notification is now sent by
+/// <see cref="ReAccreditationDulyMadeHook"/> as part of the automatic
+/// submitted→duly-made transition triggered by task completion.
 ///
 /// Failures are recorded as a <c>notification-failed</c> audit entry
 /// on the work item and never re-thrown so a Notify outage cannot
@@ -34,7 +37,6 @@ internal sealed class ReAccreditationNotificationHook(
     private static readonly Dictionary<string, (string TemplateKey, string Description)> s_actionTemplates =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            ["duly-make"] = ("DulyMade", "Application marked duly made"),
             ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
             ["sla-extend"] = ("SlaExtended", "SLA extended"),
             ["approve"] = ("Decision", "Decision recorded: approved"),
