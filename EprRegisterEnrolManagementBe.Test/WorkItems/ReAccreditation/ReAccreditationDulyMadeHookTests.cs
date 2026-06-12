@@ -206,7 +206,7 @@ public class ReAccreditationDulyMadeHookTests
     }
 
     [Fact]
-    public async Task OnAllTasksCompletedAsync_rolls_back_in_memory_state_when_persist_fails()
+    public async Task OnAllTasksCompletedAsync_throws_when_persist_fails_so_task_completion_returns_500()
     {
         var ct = TestContext.Current.CancellationToken;
         var persistence = Substitute.For<IWorkItemPersistence>();
@@ -216,14 +216,11 @@ public class ReAccreditationDulyMadeHookTests
             .Returns(Task.FromException(new InvalidOperationException("DB error")));
 
         var workItem = BuildWorkItem();
-        var auditCountBefore = workItem.AuditLog.Count;
         var sut = BuildSut(persistence, notifyClient, auditAppender);
 
-        await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct));
 
-        Assert.Equal("submitted", workItem.StateId);
-        Assert.Null(workItem.SlaClock);
-        Assert.Equal(auditCountBefore, workItem.AuditLog.Count);
         await notifyClient.DidNotReceiveWithAnyArgs()
             .SendEmailAsync(default!, default!, default!, default!, ct);
     }

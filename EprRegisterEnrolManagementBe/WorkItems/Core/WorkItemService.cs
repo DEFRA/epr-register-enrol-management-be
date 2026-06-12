@@ -1388,6 +1388,7 @@ public sealed class WorkItemService : IWorkItemService
                 _logger.LogError(ex,
                     "Post-task hook {HookType} failed for work item {WorkItemId} state {StateId}",
                     hook.GetType().FullName, workItem.Id, stateId);
+                throw;
             }
         }
     }

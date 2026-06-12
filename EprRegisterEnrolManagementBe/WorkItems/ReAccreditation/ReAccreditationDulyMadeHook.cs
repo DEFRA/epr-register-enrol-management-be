@@ -21,8 +21,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <c>payment-received</c> transition is applied, at which point it tracks
 /// the assessment period instead.
 ///
-/// Failures are swallowed and logged — a failed transition attempt does not
-/// unwind the originating task-completion write.
+/// Persistence failures propagate so the originating task-completion
+/// request returns 500 rather than silently leaving the work item stuck in
+/// <c>submitted</c> with no UI affordance to advance it.
 /// </summary>
 internal sealed class ReAccreditationDulyMadeHook(
     IWorkItemPersistence persistence,
@@ -47,9 +48,7 @@ internal sealed class ReAccreditationDulyMadeHook(
             return;
         }
 
-        var previousState = workItem.StateId;
-        var previousSlaClock = workItem.SlaClock;
-        var auditCountBefore = workItem.AuditLog.Count;
+        var fromStateId = workItem.StateId;
         var now = timeProvider.GetUtcNow().UtcDateTime;
         workItem.StateId = "duly-made";
         workItem.LastModifiedAt = now;
@@ -62,7 +61,7 @@ internal sealed class ReAccreditationDulyMadeHook(
             {
                 ["actionId"] = "duly-make",
                 ["actionDisplayName"] = "Mark as duly made",
-                ["fromStateId"] = previousState,
+                ["fromStateId"] = fromStateId,
                 ["toStateId"] = workItem.StateId
             },
             CreatedAt = now,
@@ -83,21 +82,7 @@ internal sealed class ReAccreditationDulyMadeHook(
             CreatedByName = user.FindFirstValue("user:name")
         });
 
-        try
-        {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex,
-                "Failed to persist auto-transition submitted→duly-made for work item {WorkItemId}; " +
-                "rolling back in-memory state.",
-                workItem.Id);
-            workItem.StateId = previousState;
-            workItem.SlaClock = previousSlaClock;
-            workItem.AuditLog.RemoveRange(auditCountBefore, workItem.AuditLog.Count - auditCountBefore);
-            return;
-        }
+        await persistence.ReplaceAsync(workItem, cancellationToken);
 
         logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) auto-transitioned submitted→duly-made " +
