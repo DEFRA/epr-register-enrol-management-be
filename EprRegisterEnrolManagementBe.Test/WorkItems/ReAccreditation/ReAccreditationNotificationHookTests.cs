@@ -229,7 +229,6 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Theory]
-    [InlineData("withdraw")]
     [InlineData("assign")]
     [InlineData("unassign")]
     public async Task OnActionAppliedAsync_ignores_unmapped_actions(string actionId)
@@ -532,5 +531,197 @@ public class ReAccreditationNotificationHookTests
 
         Assert.NotNull(captured);
         Assert.DoesNotContain("sla_deadline", captured!.Keys);
+    }
+
+    // ─────── RA-204: Withdrawn notification ───────
+
+    [Theory]
+    [InlineData("withdraw")]
+    [InlineData("withdraw-during-duly-made")]
+    [InlineData("withdraw-during-assessment")]
+    [InlineData("withdraw-during-decision")]
+    public async Task OnActionAppliedAsync_sends_Withdrawn_template_and_records_sent_audit_entry(string actionId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg-withdrawn"));
+
+        var workItem = BuildWorkItem(stateId: "withdrawn");
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId: "submitted", s_user, ct);
+
+        await notifyClient.Received(1).SendEmailAsync(
+            "Withdrawn",
+            "op@example.com",
+            Arg.Any<Dictionary<string, string>>(),
+            workItem.Id.ToString(),
+            ct);
+
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id,
+            "notification-sent",
+            Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["templateKey"] == "Withdrawn" && d["providerMessageId"] == "msg-withdrawn"),
+            s_user,
+            ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_records_skipped_audit_entry_for_Withdrawn_when_operator_email_missing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+
+        var workItem = BuildWorkItem(stateId: "withdrawn", operatorEmail: null);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+
+        await notifyClient.DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, ct);
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id,
+            "notification-skipped",
+            Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d => d["templateKey"] == "Withdrawn"),
+            s_user,
+            ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_records_failed_audit_entry_for_Withdrawn_when_notify_returns_failure()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Failure("503 Service Unavailable"));
+
+        var workItem = BuildWorkItem(stateId: "withdrawn");
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id,
+            "notification-failed",
+            Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["templateKey"] == "Withdrawn" && d["errorMessage"] == "503 Service Unavailable"),
+            s_user,
+            ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_uses_latest_work_item_level_note_as_withdrawal_notes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        // Out-of-order CreatedAt so the OrderByDescending branch is exercised:
+        // the latest work-item-level note is the expected source.
+        var workItem = BuildWorkItem(stateId: "withdrawn", notes:
+        [
+            Note("Older reason", new DateTime(2025, 10, 1, 0, 0, 0, DateTimeKind.Utc)),
+            Note("Latest reason", new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc)),
+            Note("Middle reason", new DateTime(2025, 10, 5, 0, 0, 0, DateTimeKind.Utc)),
+        ]);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("Latest reason", captured!["withdrawal_notes"]);
+        // Base keys remain present for the Withdrawn template.
+        Assert.Equal("Acme Ltd", captured["organisation_name"]);
+        Assert.Equal("EX-001", captured["registration_number"]);
+        Assert.Equal(workItem.Id.ToString(), captured["reference"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_ignores_task_scoped_notes_for_withdrawal_notes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        // The most recent note is task-scoped (TaskId set) and must be ignored;
+        // only a task-scoped note exists, so there is no work-item-level note
+        // and withdrawal_notes falls back to empty.
+        var workItem = BuildWorkItem(stateId: "withdrawn", notes:
+        [
+            Note("Task comment", new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc), taskId: "check-docs"),
+        ]);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.ContainsKey("withdrawal_notes"));
+        Assert.Equal(string.Empty, captured["withdrawal_notes"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_sets_empty_withdrawal_notes_when_no_notes()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(stateId: "withdrawn");
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.ContainsKey("withdrawal_notes"));
+        Assert.Equal(string.Empty, captured["withdrawal_notes"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_sets_empty_withdrawal_notes_when_notes_collection_is_null()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        // Exercise the null-conditional (workItem.Notes is null) fallback arm
+        // for the Withdrawn template.
+        var workItem = BuildWorkItem(stateId: "withdrawn", nullNotes: true);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.ContainsKey("withdrawal_notes"));
+        Assert.Equal(string.Empty, captured["withdrawal_notes"]);
     }
 }
