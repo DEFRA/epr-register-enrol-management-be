@@ -30,6 +30,7 @@ public static class WorkItemModuleExtensions
         // concern (the engine owns the submission birth event), so the
         // generator is registered alongside the engine it backs.
         services.AddApplicationReferenceGenerator();
+        services.AddHostedService<WorkItemMigrationHostedService>();
         return services;
     }
 

@@ -3,21 +3,23 @@ using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.Notifications;
 
 /// <summary>
-/// RA-201: drives <see cref="ReAccreditationNotificationHook"/> for every
-/// re-accreditation lifecycle event, captures the personalisation it hands to
-/// <c>INotifyClient</c>, and asserts the captured keys SATISFY (are a superset
-/// of) the required placeholders declared in <see cref="NotifyTemplateContract"/>.
+/// RA-201: drives the re-accreditation notification hooks for every lifecycle
+/// event, captures the personalisation handed to <c>INotifyClient</c>, and
+/// asserts the captured keys SATISFY (are a superset of) the required
+/// placeholders declared in <see cref="NotifyTemplateContract"/>.
 ///
-/// This is the regression guard that would have failed on the missing
-/// <c>sla_deadline</c> placeholder for the SlaExtended template. It does not
-/// touch the network — see <see cref="NotifyLiveTemplateContractTests"/> for
-/// the opt-in check against real Notify template bodies.
+/// The DulyMade notification is sent by <see cref="ReAccreditationDulyMadeHook"/>
+/// (auto-transition on task completion) rather than
+/// <see cref="ReAccreditationNotificationHook"/> (explicit action), so
+/// <see cref="DulyMade_personalisation_satisfies_template_contract"/> drives
+/// it through that hook separately.
 /// </summary>
 public class NotifyTemplateContractTests
 {
@@ -28,13 +30,15 @@ public class NotifyTemplateContractTests
     ], "test"));
 
     /// <summary>
-    /// Each lifecycle event: the action id (null = submission), the template
-    /// key it maps to, and whether it needs an SLA clock stamped on the item.
+    /// Each lifecycle event handled by <c>ReAccreditationNotificationHook</c>:
+    /// the action id (null = submission), the template key it maps to, and
+    /// whether it needs an SLA clock stamped on the item.
+    /// Note: duly-make is handled by <c>ReAccreditationDulyMadeHook</c> and
+    /// tested separately in <see cref="DulyMade_personalisation_satisfies_template_contract"/>.
     /// </summary>
     public static TheoryData<string?, string, bool> LifecycleEvents() => new()
     {
         { null, "SubmissionConfirmation", false },
-        { "duly-make", "DulyMade", false },
         { "payment-received", "AssessmentInProgress", false },
         { "sla-extend", "SlaExtended", true },
         { "approve", "Decision", false },
@@ -98,9 +102,61 @@ public class NotifyTemplateContractTests
             $"{string.Join(", ", surplus)}. " +
             $"Allowed keys: {string.Join(", ", allowed.OrderBy(k => k))}.");
 
-        // No required placeholder may be sent as null/empty — Notify treats an
-        // empty value differently from a present one and operator copy would
-        // render blank.
+        foreach (var key in required)
+        {
+            Assert.False(
+                string.IsNullOrEmpty(captured![key]),
+                $"Required placeholder '{key}' for template '{templateKey}' was empty.");
+        }
+    }
+
+    [Fact]
+    public async Task DulyMade_personalisation_satisfies_template_contract()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildRepresentativeWorkItem(false);
+        var sut = new ReAccreditationDulyMadeHook(
+            persistence, notifyClient, auditAppender,
+            new FakeTimeProvider(),
+            NullLogger<ReAccreditationDulyMadeHook>.Instance);
+
+        await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+
+        const string templateKey = "DulyMade";
+        var required = NotifyTemplateContract.RequiredPlaceholders[templateKey];
+        var missing = required
+            .Where(key => !captured!.ContainsKey(key))
+            .ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            $"Template '{templateKey}' (duly-make auto-transition) is missing required " +
+            $"personalisation placeholder(s): {string.Join(", ", missing)}. " +
+            $"Supplied keys: {string.Join(", ", captured!.Keys.OrderBy(k => k))}.");
+
+        var allowed = NotifyTemplateContract.AllowedPlaceholders[templateKey];
+        var surplus = captured!.Keys
+            .Where(key => !allowed.Contains(key))
+            .ToList();
+
+        Assert.True(
+            surplus.Count == 0,
+            $"Template '{templateKey}' (duly-make auto-transition) supplies " +
+            $"surplus personalisation placeholder(s) Notify would reject: " +
+            $"{string.Join(", ", surplus)}. " +
+            $"Allowed keys: {string.Join(", ", allowed.OrderBy(k => k))}.");
+
         foreach (var key in required)
         {
             Assert.False(
