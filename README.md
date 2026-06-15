@@ -165,6 +165,53 @@ allow-list. Tracing behaviour is documented in
 [`docs/cdp-tracing.md`](docs/cdp-tracing.md). Architecture decisions live
 under [`docs/adr/`](docs/adr/).
 
+## Startup migrations
+
+One-shot, corrective data migrations run on boot via a small harness
+(`StartupMigrationRunner`), invoked from `Program` **before
+`app.RunAsync()`** — i.e. before the host serves traffic and before
+`WorkItemPersistence` builds its Mongo indexes in its constructor.
+
+This exists because CDP gives no way to run an ad-hoc migration (e.g.
+`mongosh`) against a deployed database: any correction that must happen once
+per environment has to run inside the app itself. The first user was a
+de-duplication of `payload.applicationReference` after RA-219 made that index
+unique — an environment already holding duplicate (legacy) references could
+not build the index and crash-looped on startup.
+
+Each registered migration:
+
+- runs in its own DI scope;
+- is **best-effort** — a failure is logged and startup continues, so a
+  transient error can never wedge the host. The invariant the migration
+  supports (e.g. the unique index) remains the hard guarantee and surfaces any
+  unresolved state loudly;
+- should be **idempotent**, so re-running it on every boot is a no-op once it
+  has been applied.
+
+The harness is intentionally kept in place even when no migrations are
+registered, so adding the next one is a single line in `Program`:
+
+```csharp
+static Task RunStartupMigrations(WebApplication app) =>
+    StartupMigrationRunner.RunAsync(
+        app.Services,
+        app.Logger,
+        migrations:
+        [
+            // ("describe-the-correction", MyMigration.RunAsync),
+        ]);
+```
+
+A migration matches the `StartupMigrationRunner.StartupMigration` delegate
+`(IServiceProvider services, ILogger logger, CancellationToken ct)`; resolve
+what it needs from the scoped `services` (e.g. `IMongoDbClientFactory`).
+
+**Migrations are temporary.** Once a migration has run in every environment,
+delete it (and its registration) but leave the harness in place for the next
+one. Confirm it ran from the `Running startup migration {Migration}` /
+`Startup migration {Migration} complete` log lines before removing it.
+
 ## Licence
 
 THIS INFORMATION IS LICENSED UNDER THE CONDITIONS OF THE OPEN GOVERNMENT
