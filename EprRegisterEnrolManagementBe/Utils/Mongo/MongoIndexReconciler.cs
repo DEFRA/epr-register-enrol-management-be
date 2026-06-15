@@ -66,16 +66,39 @@ public static class MongoIndexReconciler
         return models.Select(m => m.Keys.Render(args)).ToList();
     }
 
+    /// <summary>MongoDB server error code for a duplicate-key violation (<c>E11000</c>).</summary>
+    private const int DuplicateKeyErrorCode = 11000;
+
     /// <summary>
-    /// Create the supplied indexes, recovering from an
-    /// <c>IndexOptionsConflict</c> by dropping the conflicting existing index
-    /// (matched on key spec) and retrying once.
+    /// Create the supplied indexes, recovering from two classes of deploy-time
+    /// failure:
+    /// <list type="bullet">
+    ///   <item>An <c>IndexOptionsConflict</c> (an existing index with the same
+    ///   key but different options) — resolved by dropping the conflicting
+    ///   copy and retrying.</item>
+    ///   <item>A duplicate-key failure building a <em>unique</em> index over
+    ///   data that already contains duplicates (<c>E11000</c>) — resolved by
+    ///   invoking <paramref name="resolveDuplicateData"/>, if supplied, to
+    ///   reconcile the offending documents, then retrying. This is what lets a
+    ///   deploy self-heal an environment whose collection predates a newly
+    ///   tightened unique index, rather than crash-looping on startup.</item>
+    /// </list>
     /// </summary>
+    /// <param name="resolveDuplicateData">
+    /// Optional callback invoked with the duplicate-key exception when a unique
+    /// index cannot build over existing data. It should make the offending
+    /// field unique (e.g. reassign duplicate values) and return <c>true</c>
+    /// when it changed something — the index build is then retried once.
+    /// Returning <c>false</c> (or supplying no callback) lets the original
+    /// failure propagate. The callback must only resolve duplicates it
+    /// understands and rethrow / return <c>false</c> for any other index.
+    /// </param>
     /// <returns>The names of any indexes that were dropped to resolve a conflict.</returns>
     public static IReadOnlyList<string> EnsureIndexes<T>(
         IMongoCollection<T> collection,
         IReadOnlyList<CreateIndexModel<T>> models,
-        ILogger logger)
+        ILogger logger,
+        Func<MongoCommandException, bool>? resolveDuplicateData = null)
     {
         ArgumentNullException.ThrowIfNull(collection);
         ArgumentNullException.ThrowIfNull(models);
@@ -88,7 +111,7 @@ public static class MongoIndexReconciler
 
         try
         {
-            collection.Indexes.CreateMany(models);
+            CreateManyResolvingDuplicateData(collection, models, logger, resolveDuplicateData);
             return Array.Empty<string>();
         }
         catch (MongoCommandException ex) when (IsIndexDefinitionConflict(ex))
@@ -102,9 +125,48 @@ public static class MongoIndexReconciler
 
             // Re-run the full batch now the conflicting copies are gone. Any
             // indexes that already matched are no-ops; the reconciled ones are
-            // recreated with the desired options.
-            collection.Indexes.CreateMany(models);
+            // recreated with the desired options. The recreate can itself trip
+            // a unique constraint over pre-existing data, so route it through
+            // the same duplicate-data resolution.
+            CreateManyResolvingDuplicateData(collection, models, logger, resolveDuplicateData);
             return dropped;
+        }
+    }
+
+    /// <summary>
+    /// Run <c>CreateMany</c>; if it fails with a duplicate-key error building a
+    /// unique index, give <paramref name="resolveDuplicateData"/> a chance to
+    /// reconcile the data and retry exactly once. The resolver is responsible
+    /// for generating replacement values that cannot re-collide, so a single
+    /// retry suffices.
+    /// </summary>
+    private static void CreateManyResolvingDuplicateData<T>(
+        IMongoCollection<T> collection,
+        IReadOnlyList<CreateIndexModel<T>> models,
+        ILogger logger,
+        Func<MongoCommandException, bool>? resolveDuplicateData)
+    {
+        try
+        {
+            collection.Indexes.CreateMany(models);
+        }
+        catch (MongoCommandException ex)
+            when (resolveDuplicateData is not null && IsDuplicateKeyBuildFailure(ex))
+        {
+            logger.LogWarning(
+                ex,
+                "Unique index build failed on collection {Collection} because the data contains duplicates; "
+                + "attempting to reconcile the data and retry.",
+                collection.CollectionNamespace.CollectionName);
+
+            if (!resolveDuplicateData(ex))
+            {
+                // The resolver did not recognise / could not fix this
+                // duplicate, so the failure must surface unchanged.
+                throw;
+            }
+
+            collection.Indexes.CreateMany(models);
         }
     }
 
@@ -115,6 +177,17 @@ public static class MongoIndexReconciler
     /// </summary>
     private static bool IsIndexDefinitionConflict(MongoCommandException ex) =>
         s_conflictCodes.Contains(ex.Code);
+
+    /// <summary>
+    /// True when a <c>createIndexes</c> command failed because building a
+    /// unique index would violate uniqueness against data already in the
+    /// collection (<c>E11000</c>). The server surfaces this as the command's
+    /// error code; older/driver variants only set it in the message, so check
+    /// both.
+    /// </summary>
+    private static bool IsDuplicateKeyBuildFailure(MongoCommandException ex) =>
+        ex.Code == DuplicateKeyErrorCode
+        || (ex.Message?.Contains("E11000", StringComparison.Ordinal) ?? false);
 
     private static IReadOnlyList<string> DropConflictingIndexes<T>(
         IMongoCollection<T> collection,

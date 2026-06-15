@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Cryptography;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using MongoDB.Bson;
@@ -296,6 +297,163 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             builder.Ascending("payload.applicationReference"),
             new CreateIndexOptions { Unique = true, Sparse = true });
         return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference];
+    }
+
+    /// <summary>
+    /// Recover the unique <c>payload.applicationReference</c> index when an
+    /// environment already holds duplicate references — e.g. legacy
+    /// client-supplied values such as <c>RA-2024-00123</c> that predate
+    /// server-side generation (RA-219). Without this, building the unique index
+    /// in the constructor fails with <c>E11000</c> and the service crash-loops
+    /// on startup; a redeploy alone cannot fix it because the dirty data is
+    /// untouched. We only handle the applicationReference index here — any other
+    /// duplicate-key build failure is left to propagate.
+    /// </summary>
+    protected override bool TryResolveDuplicateData(MongoCommandException ex)
+    {
+        if (!(ex.Message?.Contains("applicationReference", StringComparison.Ordinal) ?? false))
+        {
+            return false;
+        }
+
+        return ReconcileDuplicateApplicationReferences() > 0;
+    }
+
+    /// <summary>
+    /// Make every <c>payload.applicationReference</c> unique without deleting
+    /// any work item: within each group of documents sharing a reference, keep
+    /// the oldest (earliest <see cref="WorkItem.SubmittedAt"/>) unchanged and
+    /// reassign the rest a fresh, collision-checked reference in the canonical
+    /// <c>RA-#########</c> format, recording an audit-log entry per change.
+    /// Returns the number of references reassigned.
+    /// </summary>
+    private int ReconcileDuplicateApplicationReferences()
+    {
+        // Every reference already in use, so a regenerated value can never
+        // collide with one we keep or have just assigned.
+        var used = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var doc in Collection
+            .Find(Builders<WorkItem>.Filter.Exists("payload.applicationReference"))
+            .Project<BsonDocument>(Builders<WorkItem>.Projection.Include("payload.applicationReference"))
+            .ToEnumerable())
+        {
+            if (doc.TryGetValue("payload", out var payload)
+                && payload is BsonDocument payloadDoc
+                && payloadDoc.TryGetValue("applicationReference", out var reference)
+                && reference.IsString)
+            {
+                used.Add(reference.AsString);
+            }
+        }
+
+        // Group by reference, keeping only the references shared by >1 document.
+        var pipeline = new BsonDocument[]
+        {
+            new("$match", new BsonDocument(
+                "payload.applicationReference", new BsonDocument("$type", "string"))),
+            new("$group", new BsonDocument
+            {
+                { "_id", "$payload.applicationReference" },
+                {
+                    "members", new BsonDocument("$push", new BsonDocument
+                    {
+                        { "id", "$_id" },
+                        { "submittedAt", "$submittedAt" },
+                    })
+                },
+                { "count", new BsonDocument("$sum", 1) },
+            }),
+            new("$match", new BsonDocument("count", new BsonDocument("$gt", 1))),
+        };
+
+        var groups = Collection.Aggregate<BsonDocument>(pipeline).ToList();
+        if (groups.Count == 0)
+        {
+            return 0;
+        }
+
+        var reassigned = 0;
+        foreach (var group in groups)
+        {
+            var oldReference = group["_id"].AsString;
+            var members = group["members"].AsBsonArray
+                .Select(m => m.AsBsonDocument)
+                // Keep the oldest document; missing timestamps sort last so a
+                // real submission always wins the keep slot.
+                .OrderBy(m => m.GetValue("submittedAt", BsonNull.Value) is BsonDateTime dt
+                    ? dt.ToUniversalTime()
+                    : DateTime.MaxValue)
+                .ToList();
+
+            for (var i = 1; i < members.Count; i++)
+            {
+                var id = Guid.Parse(members[i]["id"].AsString);
+                var newReference = GenerateUnusedReference(used);
+                var entry = new WorkItemAuditEntry
+                {
+                    Action = "application-reference-reassigned",
+                    ActionDisplayName = "Application reference reassigned",
+                    CreatedAt = DateTime.UtcNow,
+                    CreatedBy = "system",
+                    CreatedByName = "Startup reconcile: duplicate application reference",
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["reason"] = "duplicate-application-reference",
+                        ["previousApplicationReference"] = oldReference,
+                        ["applicationReference"] = newReference,
+                    },
+                };
+
+                Collection.UpdateOne(
+                    Builders<WorkItem>.Filter.Eq(w => w.Id, id),
+                    Builders<WorkItem>.Update
+                        .Set("payload.applicationReference", newReference)
+                        .Push(w => w.AuditLog, entry));
+
+                reassigned++;
+                Logger.LogWarning(
+                    "Reassigned duplicate applicationReference {OldReference} -> {NewReference} on work item {WorkItemId}.",
+                    oldReference, newReference, id);
+            }
+        }
+
+        Logger.LogWarning(
+            "Reconciled {Count} duplicate payload.applicationReference value(s) so the unique index can build.",
+            reassigned);
+        return reassigned;
+    }
+
+    /// <summary>
+    /// Draw a fresh reference in the canonical <c>RA-#########</c> format (see
+    /// <see cref="ApplicationReferenceGenerator"/>) that is not already in
+    /// <paramref name="used"/>, recording it as used so callers in a loop never
+    /// re-collide.
+    /// </summary>
+    private static string GenerateUnusedReference(HashSet<string> used)
+    {
+        const int upperBoundExclusive = 1_000_000_000; // 10^9 — nine digits.
+        for (var attempt = 0; attempt < 1000; attempt++)
+        {
+            var candidate = string.Create(
+                ApplicationReferenceGenerator.Prefix.Length + ApplicationReferenceGenerator.DigitCount,
+                RandomNumberGenerator.GetInt32(upperBoundExclusive),
+                static (span, value) =>
+                {
+                    ApplicationReferenceGenerator.Prefix.AsSpan().CopyTo(span);
+                    value.TryFormat(
+                        span[ApplicationReferenceGenerator.Prefix.Length..],
+                        out _,
+                        "D" + ApplicationReferenceGenerator.DigitCount);
+                });
+
+            if (used.Add(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new InvalidOperationException(
+            "Could not generate a unique applicationReference after 1000 attempts.");
     }
 }
 

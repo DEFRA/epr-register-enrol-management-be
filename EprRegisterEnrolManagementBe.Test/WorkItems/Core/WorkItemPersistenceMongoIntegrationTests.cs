@@ -205,6 +205,86 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     }
 
     [Fact]
+    public async Task EnsureIndexes_reconciles_duplicate_applicationReference_data_on_startup()
+    {
+        // Production incident: an environment whose workItems collection already
+        // holds duplicate payload.applicationReference values (e.g. legacy
+        // client-supplied "RA-2024-00123" predating RA-219 server-side
+        // generation) cannot build the unique index — CreateMany fails with
+        // E11000 and the service crash-loops on startup, since a redeploy alone
+        // leaves the dirty data untouched. This reproduces that state and proves
+        // the persistence ctor self-heals: it reassigns the duplicates and the
+        // unique index then builds.
+        var freshDb = MongoIntegrationFixture.NewDatabaseName("work_items_dupe_data");
+        var factory = new TestMongoDbClientFactory(_fixture.ConnectionString, freshDb);
+        try
+        {
+            var collection = factory.GetCollection<WorkItem>("workItems");
+            var now = _time.GetUtcNow().UtcDateTime;
+
+            // Two documents sharing the same reference (no unique index exists
+            // yet on a fresh collection, so the duplicate insert is allowed).
+            // The OLDER one must keep the original reference.
+            var older = new WorkItem
+            {
+                TypeId = "re-accreditation",
+                StateId = "submitted",
+                SubmittedAt = now,
+                LastModifiedAt = now,
+                Payload = new BsonDocument { ["applicationReference"] = "RA-2024-00123" }
+            };
+            var newer = new WorkItem
+            {
+                TypeId = "re-accreditation",
+                StateId = "submitted",
+                SubmittedAt = now.AddMinutes(5),
+                LastModifiedAt = now.AddMinutes(5),
+                Payload = new BsonDocument { ["applicationReference"] = "RA-2024-00123" }
+            };
+            await collection.InsertOneAsync(older, cancellationToken: TestContext.Current.CancellationToken);
+            await collection.InsertOneAsync(newer, cancellationToken: TestContext.Current.CancellationToken);
+
+            // Constructing the persistence runs EnsureIndexes in its base ctor.
+            // Before the fix this threw MongoCommandException (E11000); now it
+            // must reconcile the data and complete cleanly.
+            var ex = Record.Exception(() =>
+                new WorkItemPersistence(factory, NullLoggerFactory.Instance));
+            Assert.Null(ex);
+
+            // The unique + sparse index must now exist.
+            var indexes = await (await collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
+                .ToListAsync(TestContext.Current.CancellationToken);
+            var appRefIndex = indexes.Single(i =>
+                i["key"].AsBsonDocument.Contains("payload.applicationReference"));
+            Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
+
+            // No work item was deleted; the references are now distinct.
+            var all = await (await collection.FindAsync(
+                Builders<WorkItem>.Filter.Empty,
+                cancellationToken: TestContext.Current.CancellationToken))
+                .ToListAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(2, all.Count);
+
+            var keptOlder = all.Single(w => w.Id == older.Id);
+            var reassignedNewer = all.Single(w => w.Id == newer.Id);
+
+            // The oldest keeps its original reference; the newer is reassigned a
+            // fresh canonical RA-######### value and carries an audit entry.
+            Assert.Equal("RA-2024-00123", keptOlder.Payload["applicationReference"].AsString);
+            var newReference = reassignedNewer.Payload["applicationReference"].AsString;
+            Assert.NotEqual("RA-2024-00123", newReference);
+            Assert.Matches(@"^RA-\d{9}$", newReference);
+            Assert.Contains(
+                reassignedNewer.AuditLog,
+                e => e.Action == "application-reference-reassigned");
+        }
+        finally
+        {
+            await factory.GetClient().DropDatabaseAsync(freshDb);
+        }
+    }
+
+    [Fact]
     public async Task EnsureIndexes_is_idempotent_when_the_indexes_already_match()
     {
         // The reconcile must not drop/recreate when nothing changed: running
