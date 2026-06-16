@@ -21,26 +21,15 @@ var app = BuildApp(args);
 await RunStartupMigrations(app);
 await app.RunAsync();
 
-// One-shot corrective data migrations that must complete BEFORE the host
-// starts (and therefore before WorkItemPersistence builds its indexes).
-// Best-effort: a failure here must never stop the host coming up — the unique
-// index build remains the hard guarantee and surfaces any unresolved state
-// loudly. Remove the applicationReference de-dupe once it has run everywhere
-// (epr-uf2).
+// One-shot, best-effort data migrations that run BEFORE the host starts (and
+// therefore before WorkItemPersistence builds its indexes). Register migrations
+// in the array below — each runs once per boot, should be idempotent, and must
+// be removed once it has run in every environment. The harness is kept in place
+// even when empty so the next correction is a one-line change. See the
+// "Startup migrations" section of the README.
 [ExcludeFromCodeCoverage]
-static async Task RunStartupMigrations(WebApplication app)
-{
-    try
-    {
-        await ApplicationReferenceDeduplicationMigration.RunAsync(app.Services);
-    }
-    catch (Exception ex)
-    {
-        app.Logger.LogError(
-            ex,
-            "Startup applicationReference de-dupe migration failed; continuing startup.");
-    }
-}
+static Task RunStartupMigrations(WebApplication app) =>
+    StartupMigrationRunner.RunAsync(app.Services, app.Logger, migrations: []);
 
 [ExcludeFromCodeCoverage]
 static WebApplication BuildApp(string[] args)
