@@ -18,7 +18,29 @@ using Notify.Interfaces;
 using Serilog;
 
 var app = BuildApp(args);
+await RunStartupMigrations(app);
 await app.RunAsync();
+
+// One-shot corrective data migrations that must complete BEFORE the host
+// starts (and therefore before WorkItemPersistence builds its indexes).
+// Best-effort: a failure here must never stop the host coming up — the unique
+// index build remains the hard guarantee and surfaces any unresolved state
+// loudly. Remove the applicationReference de-dupe once it has run everywhere
+// (epr-uf2).
+[ExcludeFromCodeCoverage]
+static async Task RunStartupMigrations(WebApplication app)
+{
+    try
+    {
+        await ApplicationReferenceDeduplicationMigration.RunAsync(app.Services);
+    }
+    catch (Exception ex)
+    {
+        app.Logger.LogError(
+            ex,
+            "Startup applicationReference de-dupe migration failed; continuing startup.");
+    }
+}
 
 [ExcludeFromCodeCoverage]
 static WebApplication BuildApp(string[] args)

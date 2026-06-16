@@ -17,7 +17,8 @@ namespace EprRegisterEnrolManagementBe.Test.Notifications;
 /// </list>
 ///
 /// Keys reflect what <c>ReAccreditationNotificationHook.BuildPersonalisation</c>
-/// supplies for the action that maps to each template. Optional placeholders
+/// and <c>ReAccreditationDulyMadeHook.SendDulyMadeNotificationAsync</c> supply
+/// for the action that maps to each template. Optional placeholders
 /// that the hook only adds conditionally (e.g. the Decision template's
 /// <c>accreditation_id</c> / <c>accreditation_start_date</c>, which are only
 /// stamped after an approval) are NOT listed as required, so the superset

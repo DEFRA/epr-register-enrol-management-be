@@ -59,10 +59,10 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     public string TypeId => Id;
     public string DisplayName => "Re-accreditation";
-    // v4: added duly-made state, reorganised per-state tasks (confirm-application-completeness
-    // moves to submitted; confirm-registration-fee-paid moves to duly-made).
-    // Bump so in-flight v3 items render against their captured snapshot.
-    public string TemplateVersion => "v4";
+    // v5: removed duly-make action — the submitted→duly-made transition is now
+    // triggered automatically by ReAccreditationDulyMadeHook when all
+    // submitted-state tasks are completed.
+    public string TemplateVersion => "v5";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -78,9 +78,6 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     public IReadOnlyCollection<WorkItemTransition> Transitions { get; } =
     [
-        new WorkItemTransition(
-            "duly-make", "Mark as duly made",
-            s_submitted.Id, s_dulyMade.Id),
         new WorkItemTransition(
             "payment-received", "Payment received",
             s_dulyMade.Id, s_assessmentInProgress.Id),
