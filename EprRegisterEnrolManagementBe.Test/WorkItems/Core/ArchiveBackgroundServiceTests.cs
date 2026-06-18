@@ -182,6 +182,28 @@ public class ArchiveBackgroundServiceTests
             Arg.Any<CancellationToken>());
     }
 
+    [Fact]
+    public async Task RunOnceAsync_returns_early_when_no_terminal_states_registered()
+    {
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var services = new ServiceCollection();
+        services.AddSingleton(persistence);
+
+        var service = new ArchiveBackgroundService(
+            services.BuildServiceProvider(),
+            new FakeTimeProvider(s_fixedNow),
+            NullLogger<ArchiveBackgroundService>.Instance,
+            new ConfigurationBuilder().Build(),
+            new WorkItemRegistry([]));
+
+        await service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        // With no terminal states the job must not query at all — an empty
+        // StateIds set would match every item rather than none.
+        await persistence.DidNotReceive().QueryAsync(
+            Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>());
+    }
+
     [Theory]
     [InlineData("approved")]
     [InlineData("rejected")]

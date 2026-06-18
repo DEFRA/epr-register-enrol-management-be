@@ -61,6 +61,14 @@ internal sealed class ArchiveBackgroundService(
 
         var terminalStateIds = TerminalStates.Ids(registry).ToList();
 
+        // No terminal states means nothing is archivable. Bail out explicitly:
+        // querying with an empty StateIds set would otherwise match every item
+        // rather than none, so we must not fall through to the scan loop.
+        if (terminalStateIds.Count == 0)
+        {
+            return;
+        }
+
         var stamped = 0;
         var totalScanned = 0;
         var pageNumber = 1;
