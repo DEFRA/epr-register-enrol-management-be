@@ -16,19 +16,28 @@ public class WorkItemPersistenceBuildFilterTests
     private static readonly IBsonSerializer<WorkItem> s_workItemSerializer =
         BsonSerializer.SerializerRegistry.GetSerializer<WorkItem>();
 
+    // The terminal-state set the production registry would expose for the
+    // shipping module (re-accreditation): approved/rejected/withdrawn.
+    private static readonly IReadOnlySet<string> s_terminalStateIds =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "approved", "rejected", "withdrawn"
+        };
+
     private static BsonDocument Render(WorkItemQuery query)
     {
-        var filter = WorkItemPersistence.BuildFilter(query);
+        var filter = WorkItemPersistence.BuildFilter(query, s_terminalStateIds);
         return filter.Render(new RenderArgs<WorkItem>(s_workItemSerializer, BsonSerializer.SerializerRegistry));
     }
 
     [Fact]
-    public void DefaultQueryExcludesApprovedState()
+    public void DefaultQueryExcludesAllTerminalStates()
     {
-        // IncludeArchived defaults to false — approved items are hidden.
+        // IncludeArchived defaults to false — every terminal state is hidden.
         var doc = Render(new WorkItemQuery());
 
-        Assert.Equal("approved", doc["stateId"]["$ne"].AsString);
+        var excluded = doc["stateId"]["$nin"].AsBsonArray.Select(v => v.AsString).ToHashSet();
+        Assert.Equal(s_terminalStateIds, excluded);
     }
 
     [Fact]
@@ -64,37 +73,70 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void StateIdsWithArchiveExclusionCombinesBothConditionsOnStateId()
     {
-        // The MongoDB C# driver merges $in and $ne on the same field into a
+        // The MongoDB C# driver merges $in and $nin on the same field into a
         // single sub-document when combining them with And(), so the rendered
-        // filter does NOT use an explicit $and wrapper.
+        // filter does NOT use an explicit $and wrapper. Requesting a
+        // non-terminal state ("submitted") still excludes all terminal states.
         var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted" }));
 
-        // Both stateId conditions must appear in the rendered document.
         var stateDoc = doc["stateId"].AsBsonDocument;
         Assert.Equal("submitted", stateDoc["$in"].AsBsonArray[0].AsString);
-        Assert.Equal("approved", stateDoc["$ne"].AsString);
+        var excluded = stateDoc["$nin"].AsBsonArray.Select(v => v.AsString).ToHashSet();
+        Assert.Equal(s_terminalStateIds, excluded);
     }
 
     [Fact]
-    public void StateIdsContainingApprovedSkipsArchiveExclusion()
+    public void ExplicitlyRequestedTerminalStateIsNotExcluded()
     {
-        // When the caller explicitly filters to StateIds=["approved"],
-        // adding $ne:"approved" would make the query unsatisfiable.
-        // The exclusion must be omitted in this case.
+        // When the caller explicitly filters to StateIds=["approved"], adding
+        // approved to $nin would make the query unsatisfiable. Approved must NOT
+        // be excluded; the other terminal states still are.
         var doc = Render(new WorkItemQuery(StateIds: new[] { "approved" }));
 
         var stateDoc = doc["stateId"].AsBsonDocument;
         Assert.True(stateDoc.Contains("$in"), "Expected $in clause for approved.");
-        Assert.False(stateDoc.Contains("$ne"), "$ne:approved must not be added when StateIds already includes approved.");
+        var excluded = stateDoc["$nin"].AsBsonArray.Select(v => v.AsString).ToHashSet();
+        Assert.DoesNotContain("approved", excluded);
+        Assert.Contains("rejected", excluded);
+        Assert.Contains("withdrawn", excluded);
     }
 
     [Fact]
-    public void StateIdsContainingApprovedAmongOthersSkipsArchiveExclusion()
+    public void RequestingEveryTerminalStateOmitsExclusionEntirely()
+    {
+        // If the caller asks for all terminal states, there is nothing left to
+        // exclude, so no $nin clause is emitted (an empty $nin is pointless and
+        // would let the driver fail to collapse the filter).
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "approved", "rejected", "withdrawn" }));
+
+        var stateDoc = doc["stateId"].AsBsonDocument;
+        Assert.True(stateDoc.Contains("$in"), "Expected $in clause.");
+        Assert.False(stateDoc.Contains("$nin"), "No $nin when every terminal state is explicitly requested.");
+    }
+
+    [Fact]
+    public void ExplicitlyRequestedTerminalStateAmongOthersIsNotExcluded()
     {
         var doc = Render(new WorkItemQuery(StateIds: new[] { "approved", "submitted" }));
 
         var stateDoc = doc["stateId"].AsBsonDocument;
-        Assert.False(stateDoc.Contains("$ne"), "$ne:approved must not be added when approved is in StateIds.");
+        var excluded = stateDoc["$nin"].AsBsonArray.Select(v => v.AsString).ToHashSet();
+        Assert.DoesNotContain("approved", excluded);
+        Assert.Contains("rejected", excluded);
+        Assert.Contains("withdrawn", excluded);
+    }
+
+    [Fact]
+    public void EmptyTerminalSetOmitsExclusion()
+    {
+        // Defensive: a registry with no terminal states must not emit a filter
+        // clause (an empty $nin would match everything but is wasteful).
+        var filter = WorkItemPersistence.BuildFilter(
+            new WorkItemQuery(),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        var doc = filter.Render(new RenderArgs<WorkItem>(s_workItemSerializer, BsonSerializer.SerializerRegistry));
+
+        Assert.Equal(new BsonDocument(), doc);
     }
 
     [Fact]

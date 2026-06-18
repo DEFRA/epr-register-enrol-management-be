@@ -4,18 +4,20 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
 /// Nightly background job that stamps <c>payload.archivedAt</c> (UTC ISO-8601)
-/// on every work item that has been in the <c>approved</c> state for more than
-/// <see cref="ArchiveAfterDays"/> days. The stamp is a presentation aid — the
-/// item stays in the <c>approved</c> state and the <c>GET /work-items</c> list
-/// already hides approved items by default (<c>includeArchived=false</c>). The
-/// UI surface the date so regulators know when archiving occurred.
+/// on every work item that has been in a terminal state
+/// (approved/rejected/withdrawn) for more than <see cref="ArchiveAfterDays"/>
+/// days. The stamp is a presentation aid — the item stays in its terminal
+/// state and the <c>GET /work-items</c> list already hides terminal-state items
+/// by default (<c>includeArchived=false</c>). The UI surfaces the date so
+/// regulators know when archiving occurred.
 /// Uses <see cref="TimeProvider"/> so tests can substitute time.
 /// </summary>
 internal sealed class ArchiveBackgroundService(
     IServiceProvider serviceProvider,
     TimeProvider timeProvider,
     ILogger<ArchiveBackgroundService> logger,
-    IConfiguration configuration) : BackgroundService
+    IConfiguration configuration,
+    IWorkItemRegistry registry) : BackgroundService
 {
     internal const int ArchiveAfterDays = 7;
     internal const string ArchivedAtPayloadKey = "archivedAt";
@@ -57,16 +59,18 @@ internal sealed class ArchiveBackgroundService(
             WorkItemQuery.MinPageSize,
             WorkItemQuery.MaxPageSize);
 
+        var terminalStateIds = TerminalStates.Ids(registry).ToList();
+
         var stamped = 0;
         var totalScanned = 0;
         var pageNumber = 1;
 
         while (true)
         {
-            // IncludeArchived=true so the approved-exclusion filter does not hide
-            // the items this job specifically needs to process.
+            // IncludeArchived=true so the terminal-state exclusion filter does
+            // not hide the items this job specifically needs to process.
             var query = new WorkItemQuery(
-                StateIds: ["approved"],
+                StateIds: terminalStateIds,
                 IncludeArchived: true,
                 Page: pageNumber,
                 PageSize: batchSize);
@@ -85,20 +89,24 @@ internal sealed class ArchiveBackgroundService(
                 if (full is null || full.Payload.Contains(ArchivedAtPayloadKey))
                     continue;
 
-                // Derive the approval timestamp from the audit log so that
-                // post-approval writes (notes, assignments, SLA stamps) that bump
-                // LastModifiedAt do not reset the 7-day clock. Falls back to
-                // LastModifiedAt for items that pre-date audit entries.
-                var approvedAt = full.AuditLog
+                // Derive the time the item entered its current terminal state
+                // from the audit log so that post-decision writes (notes,
+                // assignments, SLA stamps) that bump LastModifiedAt do not reset
+                // the 7-day clock. We match the LAST audit entry whose toStateId
+                // equals the item's current terminal state — approve (which
+                // bypasses the generic engine) and reject/withdraw (which go
+                // through it) all write an action-applied entry with that key.
+                // Falls back to LastModifiedAt for items that pre-date audit entries.
+                var enteredTerminalStateAt = full.AuditLog
                     .LastOrDefault(e =>
                         e.Action == "action-applied" &&
                         e.Details.TryGetValue("toStateId", out var to) &&
-                        to == "approved")
+                        string.Equals(to, full.StateId, StringComparison.OrdinalIgnoreCase))
                     ?.CreatedAt ?? full.LastModifiedAt;
 
-                // Skip items that haven't been in the approved state long enough.
+                // Skip items that haven't been in the terminal state long enough.
                 // Spec requires ">7 days", so items at exactly the threshold are not yet eligible.
-                if (approvedAt >= archiveThreshold)
+                if (enteredTerminalStateAt >= archiveThreshold)
                     continue;
 
                 full.Payload[ArchivedAtPayloadKey] = new BsonDateTime(now);
@@ -110,7 +118,7 @@ internal sealed class ArchiveBackgroundService(
                     CreatedAt = now,
                     Details = new Dictionary<string, string?>
                     {
-                        ["approvedAt"] = approvedAt.ToString("O"),
+                        ["enteredStateAt"] = enteredTerminalStateAt.ToString("O"),
                         ["archivedAt"] = now.ToString("O")
                     }
                 });
@@ -120,8 +128,8 @@ internal sealed class ArchiveBackgroundService(
                     await persistence.ReplaceAsync(full, cancellationToken);
                     stamped++;
                     logger.LogInformation(
-                        "Archived work item {WorkItemId} ({TypeId}); approved at {ApprovedAt}.",
-                        full.Id, full.TypeId, approvedAt);
+                        "Archived work item {WorkItemId} ({TypeId}); entered terminal state {StateId} at {EnteredStateAt}.",
+                        full.Id, full.TypeId, full.StateId, enteredTerminalStateAt);
                 }
                 catch (WorkItemConcurrencyException)
                 {
@@ -141,7 +149,7 @@ internal sealed class ArchiveBackgroundService(
         if (stamped > 0 || totalScanned > 0)
         {
             logger.LogInformation(
-                "Archive job completed: {Total} approved items scanned, {Stamped} newly archived.",
+                "Archive job completed: {Total} terminal-state items scanned, {Stamped} newly archived.",
                 totalScanned, stamped);
         }
     }

@@ -19,50 +19,82 @@ public class ArchiveBackgroundServiceTests
     private static readonly DateTimeOffset s_fixedNow =
         new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
 
+    // Registry whose single type declares the three terminal states the archive
+    // job must now treat uniformly (RA-224).
+    private static IWorkItemRegistry TerminalRegistry() =>
+        new WorkItemRegistry(new IWorkItemType[]
+        {
+            new TestWorkItemType(
+                "re-accreditation",
+                "Re-accreditation",
+                states: new[]
+                {
+                    new WorkItemState("submitted", "Submitted"),
+                    new WorkItemState("approved", "Approved", IsTerminal: true),
+                    new WorkItemState("rejected", "Rejected", IsTerminal: true),
+                    new WorkItemState("withdrawn", "Withdrawn", IsTerminal: true)
+                })
+        });
+
     /// <summary>
-    /// Builds an approved work item.
-    /// <paramref name="approvedDaysAgo"/> sets both the audit-log approval timestamp and
-    /// <c>LastModifiedAt</c> (the fallback path). Pass <paramref name="lastModifiedDaysAgo"/>
-    /// to simulate a post-approval write (note, assignment, SLA stamp) that bumps
-    /// <c>LastModifiedAt</c> without changing the actual approval time.
+    /// Builds a work item sitting in a terminal <paramref name="stateId"/>
+    /// (defaults to <c>approved</c>).
+    /// <paramref name="enteredDaysAgo"/> sets both the audit-log
+    /// "entered terminal state" timestamp and <c>LastModifiedAt</c> (the fallback
+    /// path). Pass <paramref name="lastModifiedDaysAgo"/> to simulate a
+    /// post-decision write (note, assignment, SLA stamp) that bumps
+    /// <c>LastModifiedAt</c> without changing the actual decision time.
     /// </summary>
-    private static WorkItem ApprovedItem(
-        int approvedDaysAgo,
+    private static WorkItem TerminalItem(
+        int enteredDaysAgo,
+        string stateId = "approved",
         bool alreadyArchived = false,
-        int? lastModifiedDaysAgo = null)
+        int? lastModifiedDaysAgo = null,
+        bool withAuditEntry = true)
     {
-        var approvedAt = s_fixedNow.AddDays(-approvedDaysAgo).UtcDateTime;
+        var enteredAt = s_fixedNow.AddDays(-enteredDaysAgo).UtcDateTime;
         var lastModified = lastModifiedDaysAgo.HasValue
             ? s_fixedNow.AddDays(-lastModifiedDaysAgo.Value).UtcDateTime
-            : approvedAt;
+            : enteredAt;
 
         var payload = new BsonDocument();
         if (alreadyArchived)
         {
-            payload[ArchiveBackgroundService.ArchivedAtPayloadKey] = new BsonDateTime(approvedAt);
+            payload[ArchiveBackgroundService.ArchivedAtPayloadKey] = new BsonDateTime(enteredAt);
         }
 
         var item = new WorkItem
         {
             TypeId = "re-accreditation",
-            StateId = "approved",
+            StateId = stateId,
             SubmittedBy = "test-client",
             Payload = payload,
             LastModifiedAt = lastModified,
-            SubmittedAt = approvedAt
+            SubmittedAt = enteredAt
         };
 
-        // Add the audit-log entry that the service uses to derive the approval time.
-        item.AuditLog.Add(new WorkItemAuditEntry
+        if (withAuditEntry)
         {
-            Action = "action-applied",
-            ActionDisplayName = "Approved",
-            CreatedAt = approvedAt,
-            Details = new Dictionary<string, string?> { ["toStateId"] = "approved" }
-        });
+            // The action-applied entry the service uses to derive when the item
+            // entered its terminal state (toStateId == current StateId).
+            item.AuditLog.Add(new WorkItemAuditEntry
+            {
+                Action = "action-applied",
+                ActionDisplayName = "Action applied",
+                CreatedAt = enteredAt,
+                Details = new Dictionary<string, string?> { ["toStateId"] = stateId }
+            });
+        }
 
         return item;
     }
+
+    // Back-compat shim for the original approved-only tests.
+    private static WorkItem ApprovedItem(
+        int approvedDaysAgo,
+        bool alreadyArchived = false,
+        int? lastModifiedDaysAgo = null) =>
+        TerminalItem(approvedDaysAgo, "approved", alreadyArchived, lastModifiedDaysAgo);
 
     private sealed record Sut(
         ArchiveBackgroundService Service,
@@ -91,7 +123,8 @@ public class ArchiveBackgroundServiceTests
         var service = new ArchiveBackgroundService(
             provider, time,
             NullLogger<ArchiveBackgroundService>.Instance,
-            config);
+            config,
+            TerminalRegistry());
 
         return new Sut(service, persistence);
     }
@@ -133,7 +166,7 @@ public class ArchiveBackgroundServiceTests
     }
 
     [Fact]
-    public async Task RunOnceAsync_queries_approved_items_with_include_archived()
+    public async Task RunOnceAsync_queries_all_terminal_states_with_include_archived()
     {
         var sut = Build();
 
@@ -143,8 +176,80 @@ public class ArchiveBackgroundServiceTests
             Arg.Is<WorkItemQuery>(q =>
                 q.StateIds != null &&
                 q.StateIds.Contains("approved") &&
+                q.StateIds.Contains("rejected") &&
+                q.StateIds.Contains("withdrawn") &&
                 q.IncludeArchived),
             Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    public async Task RunOnceAsync_stamps_archivedAt_on_old_item_in_any_terminal_state(string stateId)
+    {
+        var item = TerminalItem(
+            enteredDaysAgo: ArchiveBackgroundService.ArchiveAfterDays + 1,
+            stateId: stateId);
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(item.Payload.Contains(ArchiveBackgroundService.ArchivedAtPayloadKey));
+        await sut.Persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    public async Task RunOnceAsync_skips_recent_item_in_any_terminal_state(string stateId)
+    {
+        var item = TerminalItem(
+            enteredDaysAgo: ArchiveBackgroundService.ArchiveAfterDays - 1,
+            stateId: stateId);
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(item.Payload.Contains(ArchiveBackgroundService.ArchivedAtPayloadKey));
+        await sut.Persistence.DidNotReceive().ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_audit_entry_records_state_neutral_keys()
+    {
+        var item = TerminalItem(
+            enteredDaysAgo: ArchiveBackgroundService.ArchiveAfterDays + 1,
+            stateId: "rejected");
+        var enteredAt = item.AuditLog[0].CreatedAt;
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        var entry = item.AuditLog.Single(e => e.Action == "archived");
+        Assert.Equal("Archived", entry.ActionDisplayName);
+        Assert.Equal(s_fixedNow.UtcDateTime, entry.CreatedAt);
+        Assert.Equal(enteredAt.ToString("O"), entry.Details["enteredStateAt"]);
+        Assert.Equal(s_fixedNow.UtcDateTime.ToString("O"), entry.Details["archivedAt"]);
+        // The legacy approved-only key must be gone.
+        Assert.False(entry.Details.ContainsKey("approvedAt"));
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_uses_audit_entry_matching_current_terminal_state()
+    {
+        // An item rejected 8 days ago whose ONLY matching audit entry is the
+        // rejection. A note bumped LastModifiedAt to 2 days ago. The service
+        // must use the rejection audit time (eligible), not LastModifiedAt.
+        var item = TerminalItem(
+            enteredDaysAgo: ArchiveBackgroundService.ArchiveAfterDays + 1,
+            stateId: "withdrawn",
+            lastModifiedDaysAgo: 2);
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(item.Payload.Contains(ArchiveBackgroundService.ArchivedAtPayloadKey));
     }
 
     [Fact]
@@ -276,7 +381,8 @@ public class ArchiveBackgroundServiceTests
             services.BuildServiceProvider(),
             new FakeTimeProvider(s_fixedNow),
             NullLogger<ArchiveBackgroundService>.Instance,
-            config);
+            config,
+            TerminalRegistry());
 
         await service.RunOnceAsync(TestContext.Current.CancellationToken);
 
