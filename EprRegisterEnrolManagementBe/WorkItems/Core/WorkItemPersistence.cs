@@ -54,9 +54,40 @@ public interface IWorkItemPersistence
     Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default);
 }
 
-public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory, ILoggerFactory loggerFactory)
-    : MongoService<WorkItem>(connectionFactory, "workItems", loggerFactory), IWorkItemPersistence
+public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersistence
 {
+    // Computed once: the distinct terminal state ids across every registered
+    // type (RA-224). Used to hide finished work (approved/rejected/withdrawn)
+    // from the active worklist by default.
+    private readonly IReadOnlySet<string> _terminalStateIds;
+
+    public WorkItemPersistence(
+        IMongoDbClientFactory connectionFactory,
+        ILoggerFactory loggerFactory,
+        IWorkItemRegistry registry)
+        : base(connectionFactory, "workItems", loggerFactory)
+    {
+        _terminalStateIds = TerminalStates.Ids(registry);
+    }
+
+    /// <summary>
+    /// Test-only convenience overload that derives the terminal-state set from
+    /// the shipping module set (currently re-accreditation). Production wiring
+    /// always uses the registry-injecting constructor above; this keeps the
+    /// many persistence-layer integration tests that predate RA-224 from
+    /// having to thread a registry through, while still exercising the real
+    /// terminal-state behaviour.
+    /// </summary>
+    [ExcludeFromCodeCoverage]
+    internal WorkItemPersistence(
+        IMongoDbClientFactory connectionFactory,
+        ILoggerFactory loggerFactory)
+        : this(
+            connectionFactory,
+            loggerFactory,
+            new WorkItemRegistry([new ReAccreditation.ReAccreditationType()]))
+    {
+    }
     [ExcludeFromCodeCoverage]
     public async Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default)
     {
@@ -98,7 +129,7 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var filter = BuildFilter(query);
+        var filter = BuildFilter(query, _terminalStateIds);
 
         // Project away the per-item Notes and AuditLog collections
         // (epr-4pf): the list endpoint never renders them and they
@@ -130,7 +161,8 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
         return new WorkItemPage(items, totalCount, page, pageSize);
     }
 
-    internal static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
+    internal static FilterDefinition<WorkItem> BuildFilter(
+        WorkItemQuery query, IReadOnlySet<string> terminalStateIds)
     {
         var builder = Builders<WorkItem>.Filter;
         var clauses = new List<FilterDefinition<WorkItem>>();
@@ -214,17 +246,24 @@ public sealed class WorkItemPersistence(IMongoDbClientFactory connectionFactory,
             clauses.Add(builder.In("payload.nation", nations));
         }
 
-        // Archive exclusion: hide approved items by default so the active
-        // worklist stays focused on in-flight work. Pass IncludeArchived=true
-        // to reveal them (e.g. for the "Show archived" filter or background jobs).
-        // Skip the exclusion when StateIds already contains "approved" — combining
-        // $in:["approved"] with $ne:"approved" on the same field makes the query
-        // unsatisfiable (matches nothing).
-        var stateFilterIncludesApproved =
-            query.StateIds?.Contains("approved", StringComparer.OrdinalIgnoreCase) ?? false;
-        if (!query.IncludeArchived && !stateFilterIncludesApproved)
+        // Archive exclusion: hide finished work in any terminal state
+        // (approved/rejected/withdrawn) by default so the active worklist stays
+        // focused on in-flight work (RA-224). Pass IncludeArchived=true to reveal
+        // them (e.g. for the "Show archived" filter or background jobs).
+        //
+        // Any terminal state the caller explicitly requested via StateIds is
+        // left in place — combining $in:[X] with $nin:[X,...] on the same field
+        // would make the query unsatisfiable (matches nothing). So we only
+        // exclude terminal states that were NOT explicitly requested.
+        if (!query.IncludeArchived && terminalStateIds.Count > 0)
         {
-            clauses.Add(builder.Ne(w => w.StateId, "approved"));
+            var toExclude = terminalStateIds
+                .Where(id => !(query.StateIds?.Contains(id, StringComparer.OrdinalIgnoreCase) ?? false))
+                .ToList();
+            if (toExclude.Count > 0)
+            {
+                clauses.Add(builder.Nin(w => w.StateId, toExclude));
+            }
         }
 
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
