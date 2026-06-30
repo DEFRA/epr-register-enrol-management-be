@@ -19,6 +19,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
     public void RegisterServices(IServiceCollection services)
     {
         services.AddSingleton<INationResolver, NationResolver>();
+        services.AddSingleton<IRegulatorMailboxResolver, RegulatorMailboxResolver>();
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
         services.AddSingleton<IReAccreditationPaymentService, ReAccreditationPaymentService>();
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
