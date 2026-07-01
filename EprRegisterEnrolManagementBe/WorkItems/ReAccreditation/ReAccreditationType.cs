@@ -15,13 +15,35 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     private static readonly WorkItemState s_submitted = new("submitted", "Submitted");
     private static readonly WorkItemState s_dulyMade = new("duly-made", "Duly made");
-    private static readonly WorkItemState s_assessmentInProgress =
-        new("assessment-in-progress", "Assessment in progress");
-    private static readonly WorkItemState s_awaitingDecision =
-        new("awaiting-decision", "Awaiting decision");
-    private static readonly WorkItemState s_approved = new("approved", "Approved", IsTerminal: true);
-    private static readonly WorkItemState s_rejected = new("rejected", "Rejected", IsTerminal: true);
-    private static readonly WorkItemState s_withdrawn = new("withdrawn", "Withdrawn", IsTerminal: true);
+    private static readonly WorkItemState s_assessmentInProgress = new(
+        "assessment-in-progress",
+        "Assessment in progress"
+    );
+    private static readonly WorkItemState s_awaitingDecision = new(
+        "awaiting-decision",
+        "Awaiting decision"
+    );
+
+    // RA-211: not terminal — a queried application is paused pending regulator
+    // clarification, not a closed outcome like approved/rejected/withdrawn.
+    // No outgoing transition is declared yet; resuming from 'queried' back
+    // into the assessment flow is out of scope for this ticket.
+    private static readonly WorkItemState s_queried = new("queried", "Queried");
+    private static readonly WorkItemState s_approved = new(
+        "approved",
+        "Approved",
+        IsTerminal: true
+    );
+    private static readonly WorkItemState s_rejected = new(
+        "rejected",
+        "Rejected",
+        IsTerminal: true
+    );
+    private static readonly WorkItemState s_withdrawn = new(
+        "withdrawn",
+        "Withdrawn",
+        IsTerminal: true
+    );
 
     /// <summary>
     /// Role names that authorise approving or rejecting a re-accreditation.
@@ -31,7 +53,10 @@ internal sealed class ReAccreditationType : IWorkItemType
     /// </summary>
     public const string DecisionMakerRole = "reaccreditation-decision-maker";
 
-    private static readonly IReadOnlyCollection<string> s_decisionMakerRoles = new[] { DecisionMakerRole };
+    private static readonly IReadOnlyCollection<string> s_decisionMakerRoles = new[]
+    {
+        DecisionMakerRole,
+    };
 
     private static readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>> s_tasksByState =
         new(StringComparer.OrdinalIgnoreCase)
@@ -39,26 +64,30 @@ internal sealed class ReAccreditationType : IWorkItemType
             [s_submitted.Id] =
             [
                 new WorkItemTask("verify-organisation-details", "Verify organisation details"),
-                new WorkItemTask("confirm-application-completeness", "Confirm application is duly made")
+                new WorkItemTask(
+                    "confirm-application-completeness",
+                    "Confirm application is duly made"
+                ),
             ],
             [s_dulyMade.Id] =
             [
-                new WorkItemTask("confirm-registration-fee-paid", "Confirm registration fee paid")
+                new WorkItemTask("confirm-registration-fee-paid", "Confirm registration fee paid"),
             ],
             [s_assessmentInProgress.Id] =
             [
                 new WorkItemTask("review-compliance-history", "Review compliance history"),
                 new WorkItemTask("assess-technical-capacity", "Assess technical capacity"),
-                new WorkItemTask("assess-financial-capacity", "Assess financial capacity")
+                new WorkItemTask("assess-financial-capacity", "Assess financial capacity"),
             ],
             [s_awaitingDecision.Id] =
             [
-                new WorkItemTask("record-decision-rationale", "Record decision rationale")
-            ]
+                new WorkItemTask("record-decision-rationale", "Record decision rationale"),
+            ],
         };
 
     public string TypeId => Id;
     public string DisplayName => "Re-accreditation";
+
     // v5: removed duly-make action — the submitted→duly-made transition is now
     // triggered automatically by ReAccreditationDulyMadeHook when all
     // submitted-state tasks are completed.
@@ -71,28 +100,36 @@ internal sealed class ReAccreditationType : IWorkItemType
         s_dulyMade,
         s_assessmentInProgress,
         s_awaitingDecision,
+        s_queried,
         s_approved,
         s_rejected,
-        s_withdrawn
+        s_withdrawn,
     ];
 
     public IReadOnlyCollection<WorkItemTransition> Transitions { get; } =
     [
         new WorkItemTransition(
-            "payment-received", "Payment received",
-            s_dulyMade.Id, s_assessmentInProgress.Id),
-
+            "payment-received",
+            "Payment received",
+            s_dulyMade.Id,
+            s_assessmentInProgress.Id
+        ),
         // SLA extension is a self-loop on assessment-in-progress; it
         // bypasses the "all tasks complete" gate so an assessor can
         // record an extension at any time during assessment.
         new WorkItemTransition(
-            "sla-extend", "Extend SLA",
-            s_assessmentInProgress.Id, s_assessmentInProgress.Id,
-            RequiresAllTasksComplete: false),
-
+            "sla-extend",
+            "Extend SLA",
+            s_assessmentInProgress.Id,
+            s_assessmentInProgress.Id,
+            RequiresAllTasksComplete: false
+        ),
         new WorkItemTransition(
-            "submit-for-decision", "Submit for decision",
-            s_assessmentInProgress.Id, s_awaitingDecision.Id),
+            "submit-for-decision",
+            "Submit for decision",
+            s_assessmentInProgress.Id,
+            s_awaitingDecision.Id
+        ),
         // RA-132: approve is handled exclusively by ReAccreditationApprovalService
         // via POST /work-items/re-accreditation/{id}/approve. The transition is NOT
         // registered here so the generic engine rejects any attempt to call
@@ -100,26 +137,63 @@ internal sealed class ReAccreditationType : IWorkItemType
         // bespoke side-effects (accreditation id issuance, SLA clock stop, queued
         // publishing job). Reject still goes through awaiting-decision via the generic engine.
         new WorkItemTransition(
-            "reject", "Reject",
-            s_awaitingDecision.Id, s_rejected.Id,
-            RequiredRoles: s_decisionMakerRoles),
-
+            "reject",
+            "Reject",
+            s_awaitingDecision.Id,
+            s_rejected.Id,
+            RequiredRoles: s_decisionMakerRoles
+        ),
+        // RA-211: a case worker can query an application from either active
+        // review state when they need clarification before proceeding. Like
+        // sla-extend/withdraw, this bypasses the "all tasks complete" gate —
+        // a query can be raised at any point during review, not just once
+        // every task box is ticked.
+        new WorkItemTransition(
+            "query-during-assessment",
+            "Query",
+            s_assessmentInProgress.Id,
+            s_queried.Id,
+            RequiresAllTasksComplete: false
+        ),
+        new WorkItemTransition(
+            "query-during-decision",
+            "Query",
+            s_awaitingDecision.Id,
+            s_queried.Id,
+            RequiresAllTasksComplete: false
+        ),
         // Withdrawal is always available before a decision is recorded; it
         // bypasses the "all tasks complete" gate so an organisation can
         // withdraw at any point without an assessor having to first tick
         // every box.
         new WorkItemTransition(
-            "withdraw", "Withdraw",
-            s_submitted.Id, s_withdrawn.Id, RequiresAllTasksComplete: false),
+            "withdraw",
+            "Withdraw",
+            s_submitted.Id,
+            s_withdrawn.Id,
+            RequiresAllTasksComplete: false
+        ),
         new WorkItemTransition(
-            "withdraw-during-duly-made", "Withdraw",
-            s_dulyMade.Id, s_withdrawn.Id, RequiresAllTasksComplete: false),
+            "withdraw-during-duly-made",
+            "Withdraw",
+            s_dulyMade.Id,
+            s_withdrawn.Id,
+            RequiresAllTasksComplete: false
+        ),
         new WorkItemTransition(
-            "withdraw-during-assessment", "Withdraw",
-            s_assessmentInProgress.Id, s_withdrawn.Id, RequiresAllTasksComplete: false),
+            "withdraw-during-assessment",
+            "Withdraw",
+            s_assessmentInProgress.Id,
+            s_withdrawn.Id,
+            RequiresAllTasksComplete: false
+        ),
         new WorkItemTransition(
-            "withdraw-during-decision", "Withdraw",
-            s_awaitingDecision.Id, s_withdrawn.Id, RequiresAllTasksComplete: false)
+            "withdraw-during-decision",
+            "Withdraw",
+            s_awaitingDecision.Id,
+            s_withdrawn.Id,
+            RequiresAllTasksComplete: false
+        ),
     ];
 
     public IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId) =>

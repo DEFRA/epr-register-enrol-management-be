@@ -32,6 +32,8 @@ public class ReAccreditationTypeTests
         Assert.False(states["duly-made"].IsTerminal);
         Assert.False(states["assessment-in-progress"].IsTerminal);
         Assert.False(states["awaiting-decision"].IsTerminal);
+        Assert.True(states.ContainsKey("queried"));
+        Assert.False(states["queried"].IsTerminal);
     }
 
     [Theory]
@@ -41,12 +43,18 @@ public class ReAccreditationTypeTests
     // RA-132: approve is NOT a generic-engine transition; it is handled
     // exclusively by ReAccreditationApprovalService.
     [InlineData("reject", "awaiting-decision", "rejected", true)]
+    [InlineData("query-during-assessment", "assessment-in-progress", "queried", false)]
+    [InlineData("query-during-decision", "awaiting-decision", "queried", false)]
     [InlineData("withdraw", "submitted", "withdrawn", false)]
     [InlineData("withdraw-during-duly-made", "duly-made", "withdrawn", false)]
     [InlineData("withdraw-during-assessment", "assessment-in-progress", "withdrawn", false)]
     [InlineData("withdraw-during-decision", "awaiting-decision", "withdrawn", false)]
     public void Declares_expected_transition(
-        string actionId, string fromStateId, string toStateId, bool requiresAllTasksComplete)
+        string actionId,
+        string fromStateId,
+        string toStateId,
+        bool requiresAllTasksComplete
+    )
     {
         var transition = _type.Transitions.FirstOrDefault(t => t.ActionId == actionId);
 
@@ -57,12 +65,20 @@ public class ReAccreditationTypeTests
     }
 
     [Theory]
-    [InlineData("submitted", new[] { "verify-organisation-details", "confirm-application-completeness" })]
+    [InlineData(
+        "submitted",
+        new[] { "verify-organisation-details", "confirm-application-completeness" }
+    )]
     [InlineData("duly-made", new[] { "confirm-registration-fee-paid" })]
-    [InlineData("assessment-in-progress", new[]
-    {
-        "review-compliance-history", "assess-technical-capacity", "assess-financial-capacity"
-    })]
+    [InlineData(
+        "assessment-in-progress",
+        new[]
+        {
+            "review-compliance-history",
+            "assess-technical-capacity",
+            "assess-financial-capacity",
+        }
+    )]
     [InlineData("awaiting-decision", new[] { "record-decision-rationale" })]
     public void GetTasksForState_returns_expected_tasks(string stateId, string[] expectedTaskIds)
     {
