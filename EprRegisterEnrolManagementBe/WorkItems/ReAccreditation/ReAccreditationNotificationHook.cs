@@ -19,6 +19,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   <item>Action <c>payment-received</c>               → <c>AssessmentInProgress</c></item>
 ///   <item>Action <c>sla-extend</c>                    → <c>SlaExtended</c></item>
 ///   <item>Action <c>approve</c>                       → <c>Decision</c></item>
+///   <item>Action <c>query-during-assessment</c> / <c>query-during-decision</c> → <c>Queried</c></item>
 ///   <item>Action <c>withdraw</c> / <c>withdraw-during-*</c> → <c>Withdrawn</c></item>
 /// </list>
 ///
@@ -50,6 +51,8 @@ internal sealed class ReAccreditationNotificationHook(
         ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
         ["sla-extend"] = ("SlaExtended", "SLA extended"),
         ["approve"] = ("Decision", "Decision recorded: approved"),
+        ["query-during-assessment"] = ("Queried", "Application queried"),
+        ["query-during-decision"] = ("Queried", "Application queried"),
         ["withdraw"] = ("Withdrawn", "Application withdrawn"),
         ["withdraw-during-duly-made"] = ("Withdrawn", "Application withdrawn"),
         ["withdraw-during-assessment"] = ("Withdrawn", "Application withdrawn"),

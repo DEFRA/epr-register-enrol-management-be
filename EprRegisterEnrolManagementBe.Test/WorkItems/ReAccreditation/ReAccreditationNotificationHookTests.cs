@@ -209,6 +209,8 @@ public class ReAccreditationNotificationHookTests
     [Theory]
     [InlineData("payment-received", "AssessmentInProgress")]
     [InlineData("sla-extend", "SlaExtended")]
+    [InlineData("query-during-assessment", "Queried")]
+    [InlineData("query-during-decision", "Queried")]
     public async Task OnActionAppliedAsync_sends_correct_template_for_action(
         string actionId,
         string expectedTemplateKey
@@ -323,6 +325,110 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<Dictionary<string, string>>(),
                 workItem.Id.ToString(),
                 cancellationToken: ct
+            );
+    }
+
+    // ─────── RA-211: queried transition sends the Queried template ───────
+
+    [Theory]
+    [InlineData("query-during-assessment")]
+    [InlineData("query-during-decision")]
+    public async Task OnActionAppliedAsync_records_notification_sent_audit_entry_for_queried(
+        string actionId
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-queried"));
+
+        var workItem = BuildWorkItem(stateId: "queried");
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            actionId,
+            fromStateId: "assessment-in-progress",
+            s_user,
+            ct
+        );
+
+        // Exactly one send, exactly one notification-sent entry — same
+        // contract as every other lifecycle template.
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Queried",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                workItem.Id.ToString(),
+                cancellationToken: ct
+            );
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-sent",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "Queried" && d["providerMessageId"] == "msg-queried"
+                ),
+                s_user,
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_records_notification_failed_audit_entry_for_queried_after_retries_exhausted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        // INotifyClient.SendEmailAsync already encapsulates the 3-attempt
+        // retry (GovukNotifyClientTests covers that pipeline in isolation);
+        // at the hook level a Failure result is what "retries exhausted"
+        // looks like, and the hook's job is to turn that into the correct
+        // audit entry rather than throwing.
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Failure("503 Service Unavailable"));
+
+        var workItem = BuildWorkItem(stateId: "queried");
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-decision",
+            fromStateId: "awaiting-decision",
+            s_user,
+            ct
+        );
+
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-failed",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "Queried" && d["errorMessage"] == "503 Service Unavailable"
+                ),
+                s_user,
+                ct
             );
     }
 

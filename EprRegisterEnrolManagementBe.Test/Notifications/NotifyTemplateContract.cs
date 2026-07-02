@@ -75,8 +75,8 @@ internal static class NotifyTemplateContract
             // RA-211: queried notification. Base envelope identity only — the
             // template body itself (not personalisation) is responsible for
             // stating that the query detail follows separately from the
-            // regulator. Not yet sent by any hook (see RA102-w3v); declared
-            // here ahead of that wiring so the contract exists once it lands.
+            // regulator. Sent by ReAccreditationNotificationHook on the
+            // query-during-assessment / query-during-decision transitions.
             ["Queried"] = Set("organisation_name", "registration_number", "reference"),
         };
 

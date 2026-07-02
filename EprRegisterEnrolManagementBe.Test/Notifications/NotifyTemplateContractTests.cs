@@ -45,6 +45,7 @@ public class NotifyTemplateContractTests
         {
             { null, "SubmissionConfirmation", false },
             { "payment-received", "AssessmentInProgress", false },
+            { "query-during-assessment", "Queried", false },
             { "sla-extend", "SlaExtended", true },
             { "approve", "Decision", false },
         };
