@@ -30,15 +30,23 @@ internal sealed class ReAccreditationDulyMadeHook(
     INotifyClient notifyClient,
     IWorkItemAuditAppender auditAppender,
     TimeProvider timeProvider,
-    ILogger<ReAccreditationDulyMadeHook> logger) : IWorkItemPostTaskHook
+    ILogger<ReAccreditationDulyMadeHook> logger
+) : IWorkItemPostTaskHook
 {
     public async Task OnAllTasksCompletedAsync(
         WorkItem workItem,
         string stateId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.Equals(
+                workItem.TypeId,
+                ReAccreditationType.Id,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             return;
         }
@@ -53,41 +61,47 @@ internal sealed class ReAccreditationDulyMadeHook(
         workItem.StateId = "duly-made";
         workItem.LastModifiedAt = now;
         workItem.SlaClock = new WorkItemSlaClock { StartedAt = now };
-        workItem.AuditLog.Add(new WorkItemAuditEntry
-        {
-            Action = "action-applied",
-            ActionDisplayName = "Action applied",
-            Details = new Dictionary<string, string?>
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
             {
-                ["actionId"] = "duly-make",
-                ["actionDisplayName"] = "Mark as duly made",
-                ["fromStateId"] = fromStateId,
-                ["toStateId"] = workItem.StateId
-            },
-            CreatedAt = now,
-            CreatedBy = user.FindFirstValue("user:id"),
-            CreatedByName = user.FindFirstValue("user:name")
-        });
-        workItem.AuditLog.Add(new WorkItemAuditEntry
-        {
-            Action = "sla-clock-started",
-            ActionDisplayName = "SLA clock started",
-            Details = new Dictionary<string, string?>
+                Action = "action-applied",
+                ActionDisplayName = "Action applied",
+                Details = new Dictionary<string, string?>
+                {
+                    ["actionId"] = "duly-make",
+                    ["actionDisplayName"] = "Mark as duly made",
+                    ["fromStateId"] = fromStateId,
+                    ["toStateId"] = workItem.StateId,
+                },
+                CreatedAt = now,
+                CreatedBy = user.FindFirstValue("user:id"),
+                CreatedByName = user.FindFirstValue("user:name"),
+            }
+        );
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
             {
-                ["startedAt"] = now.ToString("O"),
-                ["targetDays"] = new WorkItemSlaClock().TargetDuration.TotalDays.ToString()
-            },
-            CreatedAt = now,
-            CreatedBy = user.FindFirstValue("user:id"),
-            CreatedByName = user.FindFirstValue("user:name")
-        });
+                Action = "sla-clock-started",
+                ActionDisplayName = "SLA clock started",
+                Details = new Dictionary<string, string?>
+                {
+                    ["startedAt"] = now.ToString("O"),
+                    ["targetDays"] = new WorkItemSlaClock().TargetDuration.TotalDays.ToString(),
+                },
+                CreatedAt = now,
+                CreatedBy = user.FindFirstValue("user:id"),
+                CreatedByName = user.FindFirstValue("user:name"),
+            }
+        );
 
         await persistence.ReplaceAsync(workItem, cancellationToken);
 
         logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) auto-transitioned submitted→duly-made " +
-            "after all submitted-state tasks were completed.",
-            workItem.Id, workItem.TypeId);
+            "Work item {WorkItemId} ({TypeId}) auto-transitioned submitted→duly-made "
+                + "after all submitted-state tasks were completed.",
+            workItem.Id,
+            workItem.TypeId
+        );
 
         await SendDulyMadeNotificationAsync(workItem, user, cancellationToken);
     }
@@ -95,7 +109,8 @@ internal sealed class ReAccreditationDulyMadeHook(
     private async Task SendDulyMadeNotificationAsync(
         WorkItem workItem,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ReAccreditationPayload? payload;
         try
@@ -104,9 +119,11 @@ internal sealed class ReAccreditationDulyMadeHook(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex,
+            logger.LogError(
+                ex,
                 "Failed to deserialise payload for work item {WorkItemId}; DulyMade notification skipped.",
-                workItem.Id);
+                workItem.Id
+            );
             return;
         }
 
@@ -117,7 +134,8 @@ internal sealed class ReAccreditationDulyMadeHook(
         {
             logger.LogInformation(
                 "Skipping DulyMade notification for work item {WorkItemId}: no operator email.",
-                workItem.Id);
+                workItem.Id
+            );
             await auditAppender.AppendAsync(
                 workItem.Id,
                 "notification-skipped",
@@ -126,10 +144,11 @@ internal sealed class ReAccreditationDulyMadeHook(
                 {
                     ["templateKey"] = "DulyMade",
                     ["reference"] = reference,
-                    ["reason"] = "missing-operator-email"
+                    ["reason"] = "missing-operator-email",
                 },
                 user,
-                cancellationToken);
+                cancellationToken
+            );
             return;
         }
 
@@ -137,36 +156,58 @@ internal sealed class ReAccreditationDulyMadeHook(
         {
             ["organisation_name"] = payload!.OrganisationName ?? string.Empty,
             ["registration_number"] = payload.RegistrationNumber ?? string.Empty,
-            ["reference"] = reference
+            ["reference"] = reference,
         };
 
         logger.LogInformation(
             "Sending DulyMade notification for work item {WorkItemId} (reference={Reference})",
-            workItem.Id, reference);
+            workItem.Id,
+            reference
+        );
+
+        // RA-211: region drives the reply-to mailbox (NotifyConfig.GetReplyToId);
+        // a missing/unresolvable Nation falls back to NotifyConfig.DefaultReplyToId.
+        var region = payload.Nation?.ToString();
 
         var result = await notifyClient.SendEmailAsync(
-            "DulyMade", recipient, personalisation, reference, cancellationToken);
+            "DulyMade",
+            recipient,
+            personalisation,
+            reference,
+            region,
+            cancellationToken
+        );
 
         var details = new Dictionary<string, string?>
         {
             ["templateKey"] = "DulyMade",
             ["recipient"] = recipient,
             ["reference"] = reference,
-            ["providerMessageId"] = result.ProviderMessageId
+            ["providerMessageId"] = result.ProviderMessageId,
         };
 
         if (result.IsSuccess)
         {
             await auditAppender.AppendAsync(
-                workItem.Id, "notification-sent", "Application marked duly made email sent",
-                details, user, cancellationToken);
+                workItem.Id,
+                "notification-sent",
+                "Application marked duly made email sent",
+                details,
+                user,
+                cancellationToken
+            );
         }
         else
         {
             details["errorMessage"] = result.ErrorMessage;
             await auditAppender.AppendAsync(
-                workItem.Id, "notification-failed", "Application marked duly made email failed",
-                details, user, cancellationToken);
+                workItem.Id,
+                "notification-failed",
+                "Application marked duly made email failed",
+                details,
+                user,
+                cancellationToken
+            );
         }
     }
 }

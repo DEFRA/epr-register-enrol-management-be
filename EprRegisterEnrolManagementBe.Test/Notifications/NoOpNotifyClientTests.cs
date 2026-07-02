@@ -59,7 +59,7 @@ public class NoOpNotifyClientTests
             "op@ex.com",
             new Dictionary<string, string>(),
             "ref-noop",
-            TestContext.Current.CancellationToken
+            cancellationToken: TestContext.Current.CancellationToken
         );
 
         // Same category/action as GovukNotifyClient so dashboards can

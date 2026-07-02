@@ -67,7 +67,7 @@ public class NotifyTemplateContractTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -137,7 +137,7 @@ public class NotifyTemplateContractTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 

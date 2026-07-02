@@ -32,7 +32,7 @@ public class ReAccreditationLifecycleTests
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg-id"));
         var dulyMadeHook = new ReAccreditationDulyMadeHook(

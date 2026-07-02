@@ -168,12 +168,17 @@ internal sealed class ReAccreditationNotificationHook(
             reference
         );
 
+        // RA-211: region drives the reply-to mailbox (NotifyConfig.GetReplyToId);
+        // a missing/unresolvable Nation falls back to NotifyConfig.DefaultReplyToId.
+        var region = payload!.Nation?.ToString();
+
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var result = await notifyClient.SendEmailAsync(
             templateKey,
             recipient,
             personalisation,
             reference,
+            region,
             cancellationToken
         );
         sw.Stop();

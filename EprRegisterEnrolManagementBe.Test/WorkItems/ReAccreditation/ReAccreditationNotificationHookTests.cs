@@ -2,6 +2,7 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using NSubstitute;
@@ -22,7 +23,8 @@ public class ReAccreditationNotificationHookTests
         string? operatorEmail = "op@example.com",
         WorkItemSlaClock? slaClock = null,
         IEnumerable<WorkItemNote>? notes = null,
-        bool nullNotes = false
+        bool nullNotes = false,
+        Nation? nation = null
     )
     {
         var payload = new BsonDocument
@@ -33,6 +35,10 @@ public class ReAccreditationNotificationHookTests
         if (operatorEmail is not null)
         {
             payload["operatorEmail"] = operatorEmail;
+        }
+        if (nation is not null)
+        {
+            payload["nation"] = nation.ToString();
         }
 
         return new WorkItem
@@ -74,7 +80,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg-id-1"));
 
@@ -90,7 +96,7 @@ public class ReAccreditationNotificationHookTests
                 "op@example.com",
                 Arg.Any<Dictionary<string, string>>(),
                 workItem.Id.ToString(),
-                ct
+                cancellationToken: ct
             );
 
         await auditAppender
@@ -129,7 +135,7 @@ public class ReAccreditationNotificationHookTests
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, ct);
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
         await auditAppender
             .DidNotReceiveWithAnyArgs()
             .AppendAsync(default, default!, default!, default!, default!, ct);
@@ -149,7 +155,7 @@ public class ReAccreditationNotificationHookTests
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, ct);
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
         await auditAppender
             .Received(1)
             .AppendAsync(
@@ -174,7 +180,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Failure("503 Service Unavailable"));
 
@@ -217,7 +223,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg-id"));
 
@@ -233,7 +239,90 @@ public class ReAccreditationNotificationHookTests
                 "op@example.com",
                 Arg.Any<Dictionary<string, string>>(),
                 workItem.Id.ToString(),
+                cancellationToken: ct
+            );
+    }
+
+    // ─────── RA-211: region resolved from payload.Nation ───────
+
+    [Fact]
+    public async Task OnActionAppliedAsync_passes_the_payloads_nation_as_region()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-id"));
+
+        var workItem = BuildWorkItem(nation: Nation.Wales);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "payment-received",
+            fromStateId: "duly-made",
+            s_user,
+            ct
+        );
+
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "AssessmentInProgress",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                workItem.Id.ToString(),
+                "Wales",
                 ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_passes_null_region_when_payload_has_no_nation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-id"));
+
+        var workItem = BuildWorkItem();
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "payment-received",
+            fromStateId: "duly-made",
+            s_user,
+            ct
+        );
+
+        // No nation on the payload: region falls through as null so
+        // GovukNotifyClient's NotifyConfig.DefaultReplyToId fallback applies
+        // rather than a bogus/empty region string.
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "AssessmentInProgress",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                workItem.Id.ToString(),
+                cancellationToken: ct
             );
     }
 
@@ -256,7 +345,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => capturedPersonalisation = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -278,7 +367,7 @@ public class ReAccreditationNotificationHookTests
                 "op@example.com",
                 Arg.Any<Dictionary<string, string>>(),
                 workItem.Id.ToString(),
-                ct
+                cancellationToken: ct
             );
 
         Assert.NotNull(capturedPersonalisation);
@@ -306,7 +395,7 @@ public class ReAccreditationNotificationHookTests
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, ct);
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
         await auditAppender
             .DidNotReceiveWithAnyArgs()
             .AppendAsync(default, default!, default!, default!, default!, ct);
@@ -333,7 +422,7 @@ public class ReAccreditationNotificationHookTests
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, ct);
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
         await auditAppender
             .DidNotReceiveWithAnyArgs()
             .AppendAsync(default, default!, default!, default!, default!, ct);
@@ -354,7 +443,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -392,7 +481,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -424,7 +513,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -460,7 +549,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -499,7 +588,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -526,7 +615,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -565,7 +654,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -606,7 +695,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -645,7 +734,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg-withdrawn"));
 
@@ -661,7 +750,7 @@ public class ReAccreditationNotificationHookTests
                 "op@example.com",
                 Arg.Any<Dictionary<string, string>>(),
                 workItem.Id.ToString(),
-                ct
+                cancellationToken: ct
             );
 
         await auditAppender
@@ -692,7 +781,7 @@ public class ReAccreditationNotificationHookTests
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, ct);
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
         await auditAppender
             .Received(1)
             .AppendAsync(
@@ -717,7 +806,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Failure("503 Service Unavailable"));
 
@@ -754,7 +843,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -794,7 +883,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -834,7 +923,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
@@ -861,7 +950,7 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                Arg.Any<CancellationToken>()
+                cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
