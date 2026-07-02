@@ -21,7 +21,52 @@ public sealed class NotifyConfig
     /// same code path works against Notify's preview / production
     /// services with different ids.
     /// </summary>
-    public Dictionary<string, string> Templates { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> Templates { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// RA-211: map of region/regulator identifier (e.g. a
+    /// <c>ReAccreditationPayload.Nation</c> value such as <c>England</c>) to
+    /// the Notify <c>reply_to_id</c> that should be used as the sender
+    /// identity for outbound emails relevant to that region, so replies land
+    /// in the correct regional regulator's no-reply mailbox.
+    ///
+    /// This is a developer working assumption pending Defra's actual
+    /// decision on shared vs. per-region sender addresses (RA-211) — it is
+    /// deliberately empty in shipped appsettings.json until that decision
+    /// lands. If Defra confirms a single shared address instead, this map
+    /// can stay empty and <see cref="DefaultReplyToId"/> alone covers every
+    /// send, with no further code change required.
+    /// </summary>
+    public Dictionary<string, string> RegionToReplyToId { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Notify <c>reply_to_id</c> used when the region is missing, unrecognised,
+    /// or has no entry in <see cref="RegionToReplyToId"/>. Also used for every
+    /// send when a single shared address is all Defra requires. <c>null</c>
+    /// means "no reply-to override" — the Notify template's own configured
+    /// sender identity is used, exactly as it is today.
+    /// </summary>
+    public string? DefaultReplyToId { get; set; }
+
+    /// <summary>
+    /// Resolve the Notify <c>reply_to_id</c> to use for a send relevant to
+    /// <paramref name="region"/>. Never throws: a missing, blank, or
+    /// unrecognised region falls back to <see cref="DefaultReplyToId"/>
+    /// (which may itself be <c>null</c>, meaning no override).
+    /// </summary>
+    public string? GetReplyToId(string? region)
+    {
+        if (
+            !string.IsNullOrWhiteSpace(region)
+            && RegionToReplyToId.TryGetValue(region, out var replyToId)
+        )
+        {
+            return replyToId;
+        }
+        return DefaultReplyToId;
+    }
 
     /// <summary>
     /// Per-attempt timeout (seconds) applied around each call into the
