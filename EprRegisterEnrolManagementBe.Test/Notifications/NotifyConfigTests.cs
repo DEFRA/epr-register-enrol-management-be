@@ -27,6 +27,26 @@ public class NotifyConfigTests
         Assert.Equal("reply-to-default", notifyConfig.DefaultReplyToId);
     }
 
+    // RA102-okg: proves the mechanism that lets a real Notify GUID be
+    // dropped into config with zero code changes once the template exists.
+    [Fact]
+    public void Binds_a_Queried_template_key_when_configured()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["Notify:Templates:Queried"] = "11111111-1111-1111-1111-111111111111",
+                }
+            )
+            .Build();
+
+        var notifyConfig = new NotifyConfig();
+        config.GetSection("Notify").Bind(notifyConfig);
+
+        Assert.Equal("11111111-1111-1111-1111-111111111111", notifyConfig.Templates["Queried"]);
+    }
+
     [Fact]
     public void GetReplyToId_resolves_a_configured_region_case_insensitively()
     {
@@ -85,6 +105,12 @@ public class NotifyConfigTests
         // sender addresses (RA-211) — see NotifyConfig.RegionToReplyToId doc.
         Assert.Empty(notifyConfig.RegionToReplyToId);
         Assert.Null(notifyConfig.DefaultReplyToId);
+
+        // RA102-okg: the key exists (so binding/lookup code never has to
+        // change) but is deliberately blank pending manual creation of the
+        // Queried template in the Notify portal — tracked as RA102-ust.
+        Assert.True(notifyConfig.Templates.ContainsKey("Queried"));
+        Assert.Equal(string.Empty, notifyConfig.Templates["Queried"]);
     }
 
     private static string LocateAppSettings()

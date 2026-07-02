@@ -35,7 +35,11 @@ internal static class NotifyTemplateContract
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.OrdinalIgnoreCase)
         {
             // Submission confirmation: base envelope identity only.
-            ["SubmissionConfirmation"] = Set("organisation_name", "registration_number", "reference"),
+            ["SubmissionConfirmation"] = Set(
+                "organisation_name",
+                "registration_number",
+                "reference"
+            ),
 
             // Duly-made notification: base envelope identity only.
             ["DulyMade"] = Set("organisation_name", "registration_number", "reference"),
@@ -46,7 +50,12 @@ internal static class NotifyTemplateContract
             // RA-201: the SlaExtended template body additionally requires the
             // new deadline. This was the missing placeholder that caused Notify
             // to 400 the send with "Missing personalisation: sla_deadline".
-            ["SlaExtended"] = Set("organisation_name", "registration_number", "reference", "sla_deadline"),
+            ["SlaExtended"] = Set(
+                "organisation_name",
+                "registration_number",
+                "reference",
+                "sla_deadline"
+            ),
 
             // Decision template: base identity + the decision outcome + the
             // decision notes. RA-203: decision_notes is REQUIRED — the Decision
@@ -55,7 +64,20 @@ internal static class NotifyTemplateContract
             // absent (an empty value is permitted, so the hook always supplies
             // it). The accreditation_id / accreditation_start_date placeholders
             // remain optional (approval-only) and are intentionally not required.
-            ["Decision"] = Set("organisation_name", "registration_number", "reference", "decision", "decision_notes"),
+            ["Decision"] = Set(
+                "organisation_name",
+                "registration_number",
+                "reference",
+                "decision",
+                "decision_notes"
+            ),
+
+            // RA-211: queried notification. Base envelope identity only — the
+            // template body itself (not personalisation) is responsible for
+            // stating that the query detail follows separately from the
+            // regulator. Not yet sent by any hook (see RA102-w3v); declared
+            // here ahead of that wiring so the contract exists once it lands.
+            ["Queried"] = Set("organisation_name", "registration_number", "reference"),
         };
 
     /// <summary>
@@ -78,8 +100,15 @@ internal static class NotifyTemplateContract
             ["AssessmentInProgress"] = RequiredPlaceholders["AssessmentInProgress"],
             ["SlaExtended"] = RequiredPlaceholders["SlaExtended"],
             ["Decision"] = Set(
-                "organisation_name", "registration_number", "reference", "decision",
-                "decision_notes", "accreditation_id", "accreditation_start_date"),
+                "organisation_name",
+                "registration_number",
+                "reference",
+                "decision",
+                "decision_notes",
+                "accreditation_id",
+                "accreditation_start_date"
+            ),
+            ["Queried"] = RequiredPlaceholders["Queried"],
         };
 
     private static IReadOnlySet<string> Set(params string[] keys) =>
