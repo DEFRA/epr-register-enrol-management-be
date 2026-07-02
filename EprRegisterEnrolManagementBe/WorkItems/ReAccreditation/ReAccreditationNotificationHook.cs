@@ -29,10 +29,28 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// Failures are recorded as a <c>notification-failed</c> audit entry
 /// on the work item and never re-thrown so a Notify outage cannot
 /// unwind the originating mutation.
+///
+/// RA-240: submission additionally sends a <c>RegulatorSubmission</c> email
+/// to the regional regulator shared mailbox (resolved from the work item's
+/// nation via <see cref="IRegulatorMailboxResolver"/>) alongside the
+/// operator's <c>SubmissionConfirmation</c>.
+///
+/// RA-237: assignment / re-assignment / unassignment sends an
+/// <c>OfficerAssignment</c> email to the same regulator shared mailbox via
+/// <see cref="OnAssignmentChangedAsync"/> — assignment is a first-class
+/// envelope operation, so <see cref="WorkItemService"/> fans it out through
+/// the post-action hooks explicitly.
+///
+/// When the regulator mailbox is unresolved (Scotland / Wales / NI
+/// placeholders until RA-244) the send is skipped and recorded as a
+/// <c>notification-skipped</c> audit entry with reason
+/// <c>missing-regulator-mailbox</c>; the originating mutation still succeeds.
 /// </summary>
 internal sealed class ReAccreditationNotificationHook(
     INotifyClient notifyClient,
     IWorkItemAuditAppender auditAppender,
+    IRegulatorMailboxResolver regulatorMailboxResolver,
+    IWorkItemPersistence persistence,
     ILogger<ReAccreditationNotificationHook> logger) : IWorkItemPostActionHook
 {
     private static readonly Dictionary<string, (string TemplateKey, string Description)> s_actionTemplates =
@@ -48,21 +66,33 @@ internal sealed class ReAccreditationNotificationHook(
             ["withdraw-during-decision"] = ("Withdrawn", "Application withdrawn")
         };
 
-    public Task OnSubmittedAsync(
+    public async Task OnSubmittedAsync(
         WorkItem workItem,
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
         if (!IsReAccreditation(workItem))
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        return SendAndRecordAsync(
+        // Operator-facing confirmation (RA-123).
+        await SendAndRecordAsync(
             workItem,
             templateKey: "SubmissionConfirmation",
             description: "Submission confirmation",
             actionId: null,
+            user,
+            cancellationToken);
+
+        // RA-240: regulator-facing submission notification to the regional
+        // shared mailbox. Skipped + audited when the nation's mailbox is
+        // unconfigured; the submission still succeeds.
+        await SendRegulatorEmailAsync(
+            workItem,
+            templateKey: "RegulatorSubmission",
+            description: "Regulator submission",
+            extraPersonalisation: null,
             user,
             cancellationToken);
     }
@@ -85,6 +115,48 @@ internal sealed class ReAccreditationNotificationHook(
         }
 
         return SendAndRecordAsync(workItem, mapping.TemplateKey, mapping.Description, actionId, user, cancellationToken);
+    }
+
+    public Task OnAssignmentChangedAsync(
+        WorkItem workItem,
+        WorkItemAssignmentChange change,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        if (!IsReAccreditation(workItem))
+        {
+            return Task.CompletedTask;
+        }
+
+        // RA-237: describe the change in operator-facing copy for the
+        // OfficerAssignment template. officer_name is the (post-change)
+        // assignee name — blank on unassign; changed_by is who performed
+        // the change. All keys carry empty-string defaults so a missing
+        // value never 400s Notify on a referenced placeholder.
+        var assignmentEvent = change switch
+        {
+            WorkItemAssignmentChange.Assigned => "assigned to an officer",
+            WorkItemAssignmentChange.Reassigned => "reassigned to a different officer",
+            WorkItemAssignmentChange.Unassigned => "unassigned",
+            _ => string.Empty
+        };
+
+        var extra = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["assignment_event"] = assignmentEvent,
+            ["officer_name"] = change == WorkItemAssignmentChange.Unassigned
+                ? string.Empty
+                : workItem.AssignedToName ?? string.Empty,
+            ["changed_by"] = workItem.AssignedBy ?? string.Empty
+        };
+
+        return SendRegulatorEmailAsync(
+            workItem,
+            templateKey: "OfficerAssignment",
+            description: $"Officer assignment ({assignmentEvent})",
+            extraPersonalisation: extra,
+            user,
+            cancellationToken);
     }
 
     private static bool IsReAccreditation(WorkItem workItem) =>
@@ -155,6 +227,152 @@ internal sealed class ReAccreditationNotificationHook(
             ["templateKey"] = templateKey,
             ["recipient"] = recipient,
             ["reference"] = reference,
+            ["providerMessageId"] = result.ProviderMessageId
+        };
+
+        if (result.IsSuccess)
+        {
+            var appended = await auditAppender.AppendAsync(
+                workItem.Id,
+                action: "notification-sent",
+                actionDisplayName: $"{description} email sent",
+                details,
+                user,
+                cancellationToken);
+            if (!appended)
+            {
+                logger.LogWarning(
+                    "notification-sent audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                    workItem.Id, templateKey);
+            }
+        }
+        else
+        {
+            details["errorMessage"] = result.ErrorMessage;
+            var appended = await auditAppender.AppendAsync(
+                workItem.Id,
+                action: "notification-failed",
+                actionDisplayName: $"{description} email failed",
+                details,
+                user,
+                cancellationToken);
+            if (!appended)
+            {
+                logger.LogWarning(
+                    "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                    workItem.Id, templateKey);
+            }
+        }
+    }
+
+    /// <summary>
+    /// RA-240 / RA-237: send an email to the regional regulator shared mailbox
+    /// resolved from the work item's nation. Mirrors
+    /// <see cref="SendAndRecordAsync"/>'s audit shape (notification-sent /
+    /// notification-failed) but resolves the recipient from
+    /// <see cref="IRegulatorMailboxResolver"/> rather than the operator email,
+    /// and skips with reason <c>missing-regulator-mailbox</c> (rather than
+    /// <c>missing-operator-email</c>) when the nation's mailbox is unconfigured
+    /// (Scotland / Wales / NI until RA-244). The originating mutation still
+    /// succeeds on skip / failure — this method never throws.
+    ///
+    /// <paramref name="extraPersonalisation"/> carries template-specific keys
+    /// (e.g. the OfficerAssignment event / officer_name / changed_by) merged on
+    /// top of the base organisation_name / registration_number / reference.
+    /// </summary>
+    private async Task SendRegulatorEmailAsync(
+        WorkItem workItem,
+        string templateKey,
+        string description,
+        Dictionary<string, string>? extraPersonalisation,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        var reference = workItem.Id.ToString();
+
+        // Determine the nation the same way the rest of the module does:
+        // ReAccreditationNationRoutingHook stamps payload.nation at submission
+        // and ReAccreditationPayload deserialises it here.
+        //
+        // Ordering caveat: at submission the NationRoutingHook stamps
+        // payload.nation onto a *re-fetched* copy of the work item, not the
+        // in-memory instance handed to this hook, so the instance we were
+        // passed can still lack payload.nation even though it is persisted.
+        // Re-read the persisted document (NationRoutingHook is registered
+        // before this hook, so its ReplaceAsync has already completed by the
+        // time we run) so the regulator send sees the routed nation. Fall back
+        // to the passed-in instance if the re-read comes back null (e.g. the
+        // item was concurrently deleted).
+        var persisted = await persistence.GetByIdAsync(workItem.Id, cancellationToken);
+        var payload = DeserialisePayload(persisted ?? workItem);
+
+        var nation = payload?.Nation;
+        var recipient = regulatorMailboxResolver.Resolve(nation);
+
+        if (string.IsNullOrWhiteSpace(recipient))
+        {
+            logger.LogInformation(
+                "Skipping {Description} notification for work item {WorkItemId} ({TemplateKey}): " +
+                "no configured regulator mailbox for nation {Nation}.",
+                description, workItem.Id, templateKey, nation?.ToString() ?? "(none)");
+            var skipAppended = await auditAppender.AppendAsync(
+                workItem.Id,
+                action: "notification-skipped",
+                actionDisplayName: $"{description} email skipped",
+                details: new Dictionary<string, string?>
+                {
+                    ["templateKey"] = templateKey,
+                    ["reference"] = reference,
+                    ["nation"] = nation?.ToString(),
+                    ["reason"] = "missing-regulator-mailbox"
+                },
+                user,
+                cancellationToken);
+            if (!skipAppended)
+            {
+                logger.LogWarning(
+                    "notification-skipped audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                    workItem.Id, templateKey);
+            }
+
+            return;
+        }
+
+        var personalisation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["organisation_name"] = payload?.OrganisationName ?? string.Empty,
+            ["registration_number"] = payload?.RegistrationNumber ?? string.Empty,
+            ["reference"] = reference
+        };
+        if (extraPersonalisation is not null)
+        {
+            foreach (var (key, value) in extraPersonalisation)
+            {
+                personalisation[key] = value;
+            }
+        }
+
+        logger.LogInformation(
+            "Sending {Description} notification for work item {WorkItemId} " +
+            "(template={TemplateKey}, reference={Reference})",
+            description, workItem.Id, templateKey, reference);
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var result = await notifyClient.SendEmailAsync(
+            templateKey, recipient, personalisation, reference, cancellationToken);
+        sw.Stop();
+
+        logger.LogInformation(
+            "Notification dispatch completed for work item {WorkItemId} " +
+            "(template={TemplateKey}, success={NotifySuccess}, durationMs={NotifyDurationMs})",
+            workItem.Id, templateKey, result.IsSuccess, sw.ElapsedMilliseconds);
+
+        var details = new Dictionary<string, string?>
+        {
+            ["templateKey"] = templateKey,
+            ["recipient"] = recipient,
+            ["reference"] = reference,
+            ["nation"] = nation?.ToString(),
             ["providerMessageId"] = result.ProviderMessageId
         };
 

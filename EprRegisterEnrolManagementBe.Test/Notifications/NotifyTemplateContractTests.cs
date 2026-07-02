@@ -2,6 +2,7 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -60,8 +61,15 @@ public class NotifyTemplateContractTests
             .Returns(NotifySendResult.Success("msg"));
 
         var workItem = BuildRepresentativeWorkItem(needsSlaClock);
+        // Resolver returns null so the RA-240 RegulatorSubmission send that
+        // OnSubmittedAsync now also fires is skipped — this test asserts the
+        // operator-facing lifecycle personalisation only, so leaving the
+        // regulator send off keeps `captured` pinned to the template under test.
+        var regulatorMailboxResolver = Substitute.For<IRegulatorMailboxResolver>();
+        regulatorMailboxResolver.Resolve(Arg.Any<Nation?>()).Returns((string?)null);
+        var persistence = Substitute.For<IWorkItemPersistence>();
         var sut = new ReAccreditationNotificationHook(
-            notifyClient, auditAppender,
+            notifyClient, auditAppender, regulatorMailboxResolver, persistence,
             NullLogger<ReAccreditationNotificationHook>.Instance);
 
         if (actionId is null)

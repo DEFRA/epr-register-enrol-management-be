@@ -56,6 +56,19 @@ internal static class NotifyTemplateContract
             // it). The accreditation_id / accreditation_start_date placeholders
             // remain optional (approval-only) and are intentionally not required.
             ["Decision"] = Set("organisation_name", "registration_number", "reference", "decision", "decision_notes"),
+
+            // RA-240: regulator-facing submission notification to the regional
+            // shared mailbox. Base envelope identity only.
+            ["RegulatorSubmission"] = Set("organisation_name", "registration_number", "reference"),
+
+            // RA-237: officer-assignment notification to the regional regulator
+            // shared mailbox. Base envelope identity plus the assignment event
+            // description, the officer name, and who made the change. All three
+            // extra keys are always supplied (empty-string defaults) so they are
+            // required, not optional.
+            ["OfficerAssignment"] = Set(
+                "organisation_name", "registration_number", "reference",
+                "assignment_event", "officer_name", "changed_by"),
         };
 
     /// <summary>
@@ -80,6 +93,8 @@ internal static class NotifyTemplateContract
             ["Decision"] = Set(
                 "organisation_name", "registration_number", "reference", "decision",
                 "decision_notes", "accreditation_id", "accreditation_start_date"),
+            ["RegulatorSubmission"] = RequiredPlaceholders["RegulatorSubmission"],
+            ["OfficerAssignment"] = RequiredPlaceholders["OfficerAssignment"],
         };
 
     private static IReadOnlySet<string> Set(params string[] keys) =>
