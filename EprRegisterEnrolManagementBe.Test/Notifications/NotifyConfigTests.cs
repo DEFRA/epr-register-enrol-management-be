@@ -106,11 +106,11 @@ public class NotifyConfigTests
         Assert.Empty(notifyConfig.RegionToReplyToId);
         Assert.Null(notifyConfig.DefaultReplyToId);
 
-        // RA102-okg: the key exists (so binding/lookup code never has to
-        // change) but is deliberately blank pending manual creation of the
-        // Queried template in the Notify portal — tracked as RA102-ust.
+        // RA102-ust: the Queried template was created in the Notify portal and
+        // its real GUID shipped in appsettings.json — guard against it ever
+        // silently reverting to blank.
         Assert.True(notifyConfig.Templates.ContainsKey("Queried"));
-        Assert.Equal(string.Empty, notifyConfig.Templates["Queried"]);
+        Assert.False(string.IsNullOrWhiteSpace(notifyConfig.Templates["Queried"]));
     }
 
     private static string LocateAppSettings()
