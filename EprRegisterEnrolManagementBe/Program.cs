@@ -6,6 +6,8 @@ using EprRegisterEnrolManagementBe.Utils;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Http;
 using EprRegisterEnrolManagementBe.Utils.Http;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using System.Diagnostics.CodeAnalysis;
@@ -115,6 +117,7 @@ static void ConfigureServices(WebApplicationBuilder builder)
     ConfigureMongo(services, configuration);
     ConfigureCors(services, configuration);
     ConfigureNotifications(services, configuration);
+    ConfigureReEx(services, configuration);
 
     services.AddOptions<LivenessHealthCheckOptions>()
         .Bind(configuration.GetSection("Liveness"))
@@ -267,6 +270,39 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
         .ValidateOnStart();
 
     services.AddSingleton<IMongoDbClientFactory, MongoDbClientFactory>();
+}
+
+/// <summary>
+/// ReEx accreditation client wiring. When <c>REEX_API_BASIC_AUTH_USERNAME</c>
+/// is absent or empty the stub client is registered so the service still boots
+/// in local and CI environments without ReEx credentials. When set, the real
+/// HTTP client is registered with Basic Auth behind
+/// <see cref="IReExAccreditationClient"/> and routed through the corporate proxy.
+/// The Base URL is read from the <c>ReExApi:BaseUrl</c> config section (same
+/// section name as the operator backend for consistency).
+/// </summary>
+[ExcludeFromCodeCoverage]
+static void ConfigureReEx(IServiceCollection services, IConfiguration configuration)
+{
+    services.AddOptions<ReExAccreditationConfig>()
+        .Bind(configuration.GetSection("ReExApi"));
+
+    var username = configuration.GetValue<string>("REEX_API_BASIC_AUTH_USERNAME");
+
+    if (string.IsNullOrWhiteSpace(username))
+    {
+        services.AddSingleton<IReExAccreditationClient, StubReExAccreditationClient>();
+        return;
+    }
+
+    services.Configure<ReExAccreditationCredentials>(creds =>
+    {
+        creds.Username = username;
+        creds.Password = configuration.GetValue<string>("REEX_API_BASIC_AUTH_PASSWORD") ?? string.Empty;
+    });
+    services.AddTransient<ReExBasicAuthHandler>();
+    services.AddHttpClientWithProxy<IReExAccreditationClient, HttpReExAccreditationClient>()
+        .AddHttpMessageHandler<ReExBasicAuthHandler>();
 }
 
 /// <summary>

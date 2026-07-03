@@ -27,6 +27,20 @@ internal sealed record ReAccreditationPayload
     public int? ComplianceIssuesReported { get; init; }
 
     /// <summary>
+    /// ReEx organisation identifier for the submitting operator. Used by the
+    /// prior-year endpoint to look up accreditation data from ReEx. Populated
+    /// by the operator backend at submission time; absent for work items created
+    /// through the case management form.
+    /// </summary>
+    public string? OperatorOrganisationId { get; init; }
+
+    /// <summary>
+    /// ReEx registration identifier for the submitting operator. Used together
+    /// with <see cref="OperatorOrganisationId"/> for prior-year lookups.
+    /// </summary>
+    public string? OperatorRegistrationId { get; init; }
+
+    /// <summary>
     /// Operator email address used as the GOV.UK Notify recipient for
     /// the lifecycle email templates wired up by
     /// <c>ReAccreditationNotificationHook</c> (RA-123). Optional —

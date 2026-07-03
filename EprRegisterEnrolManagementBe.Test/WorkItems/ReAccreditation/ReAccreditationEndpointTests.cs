@@ -6,6 +6,8 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -433,6 +435,187 @@ public class ReAccreditationEndpointTests
         Assert.Empty(persisted.Notes);
     }
 
+    // -------------------- GetPriorYear endpoint --------------------
+
+    [Fact]
+    public async Task PriorYear_returns_not_found_when_work_item_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/prior-year", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        await factory.ReExClient.DidNotReceiveWithAnyArgs()
+            .GetPriorYearAsync(default, default, default, default);
+    }
+
+    [Fact]
+    public async Task PriorYear_returns_problem_when_work_item_is_wrong_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = "some-other-type",
+            StateId = "submitted",
+            SubmittedBy = TenantClientId
+        }, cancellationToken);
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PriorYear_returns_not_found_when_reex_returns_null()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        factory.ReExClient
+            .GetPriorYearAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            SubmittedBy = TenantClientId,
+            Payload = new BsonDocument
+            {
+                ["operatorOrganisationId"] = "org-42",
+                ["operatorRegistrationId"] = "reg-99",
+                ["previousAccreditationYear"] = 2024
+            }
+        }, cancellationToken);
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task PriorYear_returns_ok_with_prior_year_data_from_reex()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var stubData = new PriorYearAccreditationDto
+        {
+            Year = 2024,
+            TonnageBand = "UpTo1000",
+            Authorisers = [new PriorYearAuthoriserDto { FullName = "Alice Smith", Email = "alice@example.com" }],
+            BusinessPlan = new PriorYearBusinessPlanDto { NewInfrastructurePercent = 20 }
+        };
+        factory.ReExClient
+            .GetPriorYearAsync("org-42", "reg-99", 2024, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<PriorYearAccreditationDto?>(stubData));
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            SubmittedBy = TenantClientId,
+            Payload = new BsonDocument
+            {
+                ["operatorOrganisationId"] = "org-42",
+                ["operatorRegistrationId"] = "reg-99",
+                ["previousAccreditationYear"] = 2024
+            }
+        }, cancellationToken);
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<PriorYearAccreditationDto>(cancellationToken);
+        Assert.NotNull(body);
+        Assert.Equal(2024, body!.Year);
+        Assert.Equal("UpTo1000", body.TonnageBand);
+        Assert.Single(body.Authorisers);
+        Assert.Equal("Alice Smith", body.Authorisers[0].FullName);
+        Assert.Equal("alice@example.com", body.Authorisers[0].Email);
+    }
+
+    [Fact]
+    public async Task PriorYear_passes_correct_identifiers_to_reex_client()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        string? capturedOrgId = null;
+        string? capturedRegId = null;
+        int? capturedYear = null;
+        factory.ReExClient
+            .GetPriorYearAsync(
+                Arg.Do<string?>(v => capturedOrgId = v),
+                Arg.Do<string?>(v => capturedRegId = v),
+                Arg.Do<int?>(v => capturedYear = v),
+                Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            SubmittedBy = TenantClientId,
+            Payload = new BsonDocument
+            {
+                ["operatorOrganisationId"] = "org-77",
+                ["operatorRegistrationId"] = "reg-88",
+                ["previousAccreditationYear"] = 2023
+            }
+        }, cancellationToken);
+
+        await client.GetAsync($"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
+
+        Assert.Equal("org-77", capturedOrgId);
+        Assert.Equal("reg-88", capturedRegId);
+        Assert.Equal(2023, capturedYear);
+    }
+
+    [Fact]
+    public async Task PriorYear_returns_not_found_for_cross_tenant_caller()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            SubmittedBy = "other-tenant"
+        }, cancellationToken);
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        await factory.ReExClient.DidNotReceiveWithAnyArgs()
+            .GetPriorYearAsync(default, default, default, default);
+    }
+
     // ------------------------------ Helpers ------------------------------
 
     private static WorkItem BuildAwaitingDecision(Guid id, string submittedBy)
@@ -607,6 +790,9 @@ public class ReAccreditationEndpointTests
         public IReAccreditationDecisionService DecisionService { get; } =
             Substitute.For<IReAccreditationDecisionService>();
 
+        public IReExAccreditationClient ReExClient { get; } =
+            Substitute.For<IReExAccreditationClient>();
+
         public ReAccreditationFactory(
             MongoIntegrationFixture fixture,
             string clientId = TenantClientId,
@@ -635,6 +821,7 @@ public class ReAccreditationEndpointTests
                 services.RemoveAll<IWorkItemPersistence>();
                 services.RemoveAll<IMongoDbClientFactory>();
                 services.RemoveAll<IReAccreditationDecisionService>();
+                services.RemoveAll<IReExAccreditationClient>();
 
                 var clientFactory = new TestMongoDbClientFactory(_fixture.ConnectionString, _databaseName);
                 services.AddSingleton<IMongoDbClientFactory>(clientFactory);
@@ -659,6 +846,7 @@ public class ReAccreditationEndpointTests
                 });
 
                 services.AddSingleton(DecisionService);
+                services.AddSingleton(ReExClient);
             });
         }
 
