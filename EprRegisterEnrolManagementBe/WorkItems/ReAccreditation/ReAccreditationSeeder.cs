@@ -52,6 +52,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Acme Recycling Ltd",
                 ["registrationNumber"] = "EPR-100023",
+                ["operatorRegistrationId"] = "reg-001",
                 ["materialsHandled"] = new BsonArray { "plastic", "glass" },
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
@@ -72,6 +73,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Northern Plastics Co-op",
                 ["registrationNumber"] = "EPR-100087",
+                ["operatorRegistrationId"] = "reg-002",
                 ["materialsHandled"] = new BsonArray { "plastic" },
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 1,
@@ -95,6 +97,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Riverside Glass Recovery",
                 ["registrationNumber"] = "EPR-099812",
+                ["operatorRegistrationId"] = "reg-003",
                 ["materialsHandled"] = new BsonArray { "glass", "metal" },
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 2,
@@ -134,6 +137,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Coastal Materials Group",
                 ["registrationNumber"] = "EPR-098774",
+                ["operatorRegistrationId"] = "reg-004",
                 ["materialsHandled"] = new BsonArray { "plastic", "paper", "card" },
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 0,
@@ -174,6 +178,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Heritage Paper Mills",
                 ["registrationNumber"] = "EPR-097215",
+                ["operatorRegistrationId"] = "reg-005",
                 ["materialsHandled"] = new BsonArray { "paper", "card" },
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 0,
@@ -217,6 +222,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Clyde Composites Ltd",
                 ["registrationNumber"] = "EPR-100134",
+                ["operatorRegistrationId"] = "reg-006",
                 ["materialsHandled"] = new BsonArray { "plastic", "metal" },
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
@@ -236,6 +242,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Swansea Textiles Recovery",
                 ["registrationNumber"] = "EPR-099441",
+                ["operatorRegistrationId"] = "reg-007",
                 ["materialsHandled"] = new BsonArray { "glass" },
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 1,
@@ -273,6 +280,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Belfast Fibres Co",
                 ["registrationNumber"] = "EPR-100198",
+                ["operatorRegistrationId"] = "reg-008",
                 ["materialsHandled"] = new BsonArray { "paper", "card" },
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,

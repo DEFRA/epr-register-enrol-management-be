@@ -146,6 +146,40 @@ public class ReAccreditationSeederTests
     }
 
     [Fact]
+    public void Build_every_item_has_operator_registration_id_in_payload()
+    {
+        // RA-223: the work-item detail page shows the operator's EPR
+        // registration id from payload.operatorRegistrationId (the value the
+        // legacy backend copies from application.RegistrationId). Without it
+        // every seeded/demo item — and the e2e journey — would render "—".
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(items, item =>
+        {
+            Assert.True(item.Payload.Contains("operatorRegistrationId"),
+                $"Item {item.Id} missing 'operatorRegistrationId' in payload.");
+            var registrationId = item.Payload["operatorRegistrationId"].AsString;
+            Assert.False(string.IsNullOrWhiteSpace(registrationId),
+                $"Item {item.Id} has blank operatorRegistrationId.");
+        });
+    }
+
+    [Fact]
+    public void Build_operator_registration_ids_are_distinct_per_item()
+    {
+        // RA-223: each seeded operator represents a distinct ReEx registration,
+        // so the ids must not collide — a duplicate would misrepresent two
+        // demo items as the same operator registration.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var registrationIds = items
+            .Select(i => i.Payload["operatorRegistrationId"].AsString)
+            .ToList();
+
+        Assert.Equal(registrationIds.Count, registrationIds.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public void Build_nation_is_derived_from_postcode_via_resolver()
     {
         // Spot-check a Scotland postcode (EH1 3BN) to confirm the seeder
