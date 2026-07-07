@@ -48,7 +48,8 @@ internal sealed class GovukNotifyClient : INotifyClient
         IAsyncNotificationClient client,
         IOptions<NotifyConfig> options,
         IStructuredLogger<GovukNotifyClient> log,
-        ResiliencePipeline? retryPipeline = null)
+        ResiliencePipeline? retryPipeline = null
+    )
     {
         _client = client;
         _config = options.Value;
@@ -61,12 +62,16 @@ internal sealed class GovukNotifyClient : INotifyClient
         string toEmail,
         Dictionary<string, string> personalisation,
         string reference,
-        CancellationToken cancellationToken = default)
+        string? region = null,
+        CancellationToken cancellationToken = default
+    )
     {
         var timer = Stopwatch.StartNew();
 
-        if (!_config.Templates.TryGetValue(templateKey, out var templateId)
-            || string.IsNullOrWhiteSpace(templateId))
+        if (
+            !_config.Templates.TryGetValue(templateKey, out var templateId)
+            || string.IsNullOrWhiteSpace(templateId)
+        )
         {
             var error = $"No Notify template configured for key '{templateKey}'.";
             // Misconfiguration: emit a failure entry so it shows up
@@ -81,16 +86,21 @@ internal sealed class GovukNotifyClient : INotifyClient
                     reason: "template_not_configured",
                     extras: new Dictionary<string, object?>
                     {
-                        ["notify.template_key"] = templateKey
-                    }));
+                        ["notify.template_key"] = templateKey,
+                    }
+                )
+            );
             return NotifySendResult.Failure(error);
         }
+
+        var replyToId = _config.GetReplyToId(region);
 
         // GovukNotify's API takes Dictionary<string, dynamic>. Project
         // strings into that shape — we never need to send richer types.
         var typedPersonalisation = personalisation.ToDictionary(
             kv => kv.Key,
-            kv => (dynamic)kv.Value);
+            kv => (dynamic)kv.Value
+        );
 
         // RA-201: sorted, comma-joined KEY NAMES only (never values — those
         // may carry org names / PII). Surfacing the keys we sent makes a
@@ -100,7 +110,9 @@ internal sealed class GovukNotifyClient : INotifyClient
         // OpenSearch when correlated with the SDK's
         // "Missing personalisation: ..." failure message.
         var personalisationKeys = string.Join(
-            ',', personalisation.Keys.OrderBy(k => k, StringComparer.Ordinal));
+            ',',
+            personalisation.Keys.OrderBy(k => k, StringComparer.Ordinal)
+        );
 
         // Entry log so OpenSearch / docker logs show the call was even
         // attempted. Without this a hanging Notify endpoint looks like
@@ -117,26 +129,36 @@ internal sealed class GovukNotifyClient : INotifyClient
                     ["notify.template_key"] = templateKey,
                     ["notify.recipient_domain"] = ExtractEmailDomain(toEmail),
                     ["notify.timeout_seconds"] = _config.RequestTimeoutSeconds,
-                    ["notify.personalisation_keys"] = personalisationKeys
-                }));
+                    ["notify.personalisation_keys"] = personalisationKeys,
+                    ["notify.region"] = region,
+                    ["notify.reply_to_configured"] = replyToId is not null,
+                }
+            )
+        );
 
         try
         {
-            var response = await _retryPipeline.ExecuteAsync(
-                async ct => await _client.SendEmailAsync(
-                    toEmail,
-                    templateId,
-                    typedPersonalisation,
-                    reference).ConfigureAwait(false),
-                cancellationToken).ConfigureAwait(false);
+            var response = await _retryPipeline
+                .ExecuteAsync(
+                    async ct =>
+                        await _client
+                            .SendEmailAsync(
+                                toEmail,
+                                templateId,
+                                typedPersonalisation,
+                                reference,
+                                replyToId
+                            )
+                            .ConfigureAwait(false),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
 
             _log.Log(
                 LogLevel.Information,
                 "Notify send succeeded",
-                BuildProperties(
-                    outcome: "success",
-                    duration: timer.Elapsed,
-                    reference: reference));
+                BuildProperties(outcome: "success", duration: timer.Elapsed, reference: reference)
+            );
 
             return NotifySendResult.Success(response.id);
         }
@@ -159,9 +181,11 @@ internal sealed class GovukNotifyClient : INotifyClient
                     extras: new Dictionary<string, object?>
                     {
                         ["notify.template_key"] = templateKey,
-                        ["notify.personalisation_keys"] = personalisationKeys
-                    }),
-                exception: ex);
+                        ["notify.personalisation_keys"] = personalisationKeys,
+                    }
+                ),
+                exception: ex
+            );
             return NotifySendResult.Failure(ex.Message);
         }
     }
@@ -177,7 +201,8 @@ internal sealed class GovukNotifyClient : INotifyClient
         TimeSpan duration,
         string? reference,
         string? reason = null,
-        IReadOnlyDictionary<string, object?>? extras = null)
+        IReadOnlyDictionary<string, object?>? extras = null
+    )
     {
         var props = new Dictionary<string, object?>
         {
@@ -185,7 +210,7 @@ internal sealed class GovukNotifyClient : INotifyClient
             ["event.action"] = EventAction,
             ["event.outcome"] = outcome,
             ["event.duration"] = duration.Ticks * 100,
-            ["event.reference"] = reference
+            ["event.reference"] = reference,
         };
         if (reason is not null)
         {
@@ -213,10 +238,11 @@ internal sealed class GovukNotifyClient : INotifyClient
     /// </summary>
     private static ResiliencePipeline BuildRetryPipeline(
         IStructuredLogger<GovukNotifyClient> log,
-        int requestTimeoutSeconds)
+        int requestTimeoutSeconds
+    )
     {
-        var builder = new ResiliencePipelineBuilder()
-            .AddRetry(new RetryStrategyOptions
+        var builder = new ResiliencePipelineBuilder().AddRetry(
+            new RetryStrategyOptions
             {
                 MaxRetryAttempts = 2,
                 BackoffType = DelayBackoffType.Exponential,
@@ -233,36 +259,41 @@ internal sealed class GovukNotifyClient : INotifyClient
                             ["event.action"] = EventAction,
                             ["event.outcome"] = "failure",
                             ["event.attempt"] = args.AttemptNumber + 1,
-                            ["notify.retry_delay_ms"] = (long)args.RetryDelay.TotalMilliseconds
+                            ["notify.retry_delay_ms"] = (long)args.RetryDelay.TotalMilliseconds,
                         },
-                        exception: args.Outcome.Exception);
+                        exception: args.Outcome.Exception
+                    );
                     return ValueTask.CompletedTask;
-                }
-            });
+                },
+            }
+        );
 
         if (requestTimeoutSeconds > 0)
         {
             // Strategy order matters: retry is outer, timeout is inner so
             // the timeout applies to each attempt individually.
-            builder.AddTimeout(new TimeoutStrategyOptions
-            {
-                Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
-                OnTimeout = args =>
+            builder.AddTimeout(
+                new TimeoutStrategyOptions
                 {
-                    log.Log(
-                        LogLevel.Warning,
-                        "Notify send attempt timed out",
-                        new Dictionary<string, object?>
-                        {
-                            ["event.category"] = EventCategory,
-                            ["event.action"] = EventAction,
-                            ["event.outcome"] = "failure",
-                            ["event.reason"] = "attempt_timeout",
-                            ["notify.timeout_seconds"] = (long)args.Timeout.TotalSeconds
-                        });
-                    return ValueTask.CompletedTask;
+                    Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
+                    OnTimeout = args =>
+                    {
+                        log.Log(
+                            LogLevel.Warning,
+                            "Notify send attempt timed out",
+                            new Dictionary<string, object?>
+                            {
+                                ["event.category"] = EventCategory,
+                                ["event.action"] = EventAction,
+                                ["event.outcome"] = "failure",
+                                ["event.reason"] = "attempt_timeout",
+                                ["notify.timeout_seconds"] = (long)args.Timeout.TotalSeconds,
+                            }
+                        );
+                        return ValueTask.CompletedTask;
+                    },
                 }
-            });
+            );
         }
 
         return builder.Build();
@@ -278,4 +309,3 @@ internal sealed class GovukNotifyClient : INotifyClient
         return at >= 0 && at < email.Length - 1 ? email[(at + 1)..] : null;
     }
 }
-

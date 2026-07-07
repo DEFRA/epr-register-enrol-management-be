@@ -21,7 +21,9 @@ internal sealed class NoOpNotifyClient(IStructuredLogger<NoOpNotifyClient> log) 
         string toEmail,
         Dictionary<string, string> personalisation,
         string reference,
-        CancellationToken cancellationToken = default)
+        string? region = null,
+        CancellationToken cancellationToken = default
+    )
     {
         log.Log(
             LogLevel.Information,
@@ -33,9 +35,10 @@ internal sealed class NoOpNotifyClient(IStructuredLogger<NoOpNotifyClient> log) 
                 ["event.outcome"] = "success",
                 ["event.duration"] = 0L,
                 ["event.reference"] = reference,
-                ["notify.template_key"] = templateKey
-            });
+                ["notify.template_key"] = templateKey,
+                ["notify.region"] = region,
+            }
+        );
         return Task.FromResult(NotifySendResult.Success(providerMessageId: null));
     }
 }
-
