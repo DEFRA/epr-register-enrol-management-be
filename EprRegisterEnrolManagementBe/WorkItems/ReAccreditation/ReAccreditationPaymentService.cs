@@ -215,11 +215,18 @@ internal sealed class ReAccreditationPaymentService(
             );
         }
 
+        // RA-248: surface the human-facing application reference (RA-#########)
+        // in the ((reference)) placeholder, falling back to the internal
+        // work-item Guid only for legacy/malformed items missing it.
+        var reference = string.IsNullOrWhiteSpace(payload?.ApplicationReference)
+            ? workItem.Id.ToString()
+            : payload.ApplicationReference;
+
         var personalisation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["organisation_name"] = payload?.OrganisationName ?? string.Empty,
             ["registration_number"] = payload?.RegistrationNumber ?? string.Empty,
-            ["reference"] = workItem.Id.ToString(),
+            ["reference"] = reference,
         };
 
         // RA-211: region drives the reply-to mailbox (NotifyConfig.GetReplyToId);
@@ -230,7 +237,7 @@ internal sealed class ReAccreditationPaymentService(
             "AssessmentInProgress",
             request.PaidByEmail,
             personalisation,
-            workItem.Id.ToString(),
+            reference,
             region,
             cancellationToken
         );
@@ -239,7 +246,7 @@ internal sealed class ReAccreditationPaymentService(
         {
             ["templateKey"] = "AssessmentInProgress",
             ["recipient"] = request.PaidByEmail,
-            ["reference"] = workItem.Id.ToString(),
+            ["reference"] = reference,
             ["providerMessageId"] = result.ProviderMessageId,
         };
 

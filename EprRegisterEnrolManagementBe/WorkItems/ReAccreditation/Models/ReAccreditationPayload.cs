@@ -22,6 +22,16 @@ internal sealed record ReAccreditationPayload
 {
     public string? OrganisationName { get; init; }
     public string? RegistrationNumber { get; init; }
+
+    /// <summary>
+    /// Human-facing application reference (RA-219, format RA-#########),
+    /// stamped onto the payload by the core WorkItemService at submission.
+    /// Surfaced as the ((reference)) GOV.UK Notify placeholder in lifecycle
+    /// emails (RA-248) so operators see the case reference rather than the
+    /// internal work-item Guid. Null only for legacy items predating RA-219.
+    /// </summary>
+    public string? ApplicationReference { get; init; }
+
     public List<string>? MaterialsHandled { get; init; }
     public int? PreviousAccreditationYear { get; init; }
     public int? ComplianceIssuesReported { get; init; }
