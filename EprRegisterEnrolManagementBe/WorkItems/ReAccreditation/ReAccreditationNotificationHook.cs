@@ -122,7 +122,13 @@ internal sealed class ReAccreditationNotificationHook(
     {
         var payload = DeserialisePayload(workItem);
         var recipient = payload?.OperatorEmail;
-        var reference = workItem.Id.ToString();
+        // RA-248: operators see the human-facing application reference
+        // (RA-#########) in the ((reference)) placeholder. Fall back to the
+        // internal work-item Guid only for legacy/malformed items missing the
+        // reference, so the placeholder is never blank.
+        var reference = string.IsNullOrWhiteSpace(payload?.ApplicationReference)
+            ? workItem.Id.ToString()
+            : payload.ApplicationReference;
 
         if (string.IsNullOrWhiteSpace(recipient))
         {
@@ -156,7 +162,13 @@ internal sealed class ReAccreditationNotificationHook(
             return;
         }
 
-        var personalisation = BuildPersonalisation(payload!, workItem, templateKey, actionId);
+        var personalisation = BuildPersonalisation(
+            payload!,
+            workItem,
+            templateKey,
+            reference,
+            actionId
+        );
 
         // Entry log: surfaces in docker / CDP logs the moment the hook
         // hands off to the Notify client. Combined with the
@@ -281,6 +293,7 @@ internal sealed class ReAccreditationNotificationHook(
         ReAccreditationPayload payload,
         WorkItem workItem,
         string templateKey,
+        string reference,
         string? actionId = null
     )
     {
@@ -288,7 +301,7 @@ internal sealed class ReAccreditationNotificationHook(
         {
             ["organisation_name"] = payload.OrganisationName ?? string.Empty,
             ["registration_number"] = payload.RegistrationNumber ?? string.Empty,
-            ["reference"] = workItem.Id.ToString(),
+            ["reference"] = reference,
         };
 
         if (string.Equals(templateKey, "SlaExtended", StringComparison.OrdinalIgnoreCase))

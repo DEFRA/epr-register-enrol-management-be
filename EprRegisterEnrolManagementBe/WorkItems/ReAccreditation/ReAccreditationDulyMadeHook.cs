@@ -128,7 +128,12 @@ internal sealed class ReAccreditationDulyMadeHook(
         }
 
         var recipient = payload?.OperatorEmail;
-        var reference = workItem.Id.ToString();
+        // RA-248: surface the human-facing application reference (RA-#########)
+        // in the ((reference)) placeholder, falling back to the internal
+        // work-item Guid only for legacy/malformed items missing it.
+        var reference = string.IsNullOrWhiteSpace(payload?.ApplicationReference)
+            ? workItem.Id.ToString()
+            : payload.ApplicationReference;
 
         if (string.IsNullOrWhiteSpace(recipient))
         {

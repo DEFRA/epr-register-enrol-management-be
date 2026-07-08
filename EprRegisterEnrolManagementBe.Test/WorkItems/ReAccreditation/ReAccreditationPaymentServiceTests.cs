@@ -28,18 +28,33 @@ public class ReAccreditationPaymentServiceTests
             PaidByEmail = "operator@example.com",
         };
 
-    private static WorkItem BuildWorkItem(string stateId = "duly-made") =>
-        new()
+    // RA-248: human-facing application reference stamped on the payload by the
+    // core WorkItemService; expected in the ((reference)) Notify placeholder.
+    private const string ApplicationReference = "RA-000123456";
+
+    private static WorkItem BuildWorkItem(
+        string stateId = "duly-made",
+        string? applicationReference = ApplicationReference
+    )
+    {
+        var payload = new BsonDocument
+        {
+            ["organisationName"] = "Acme Ltd",
+            ["registrationNumber"] = "EX-001",
+        };
+        if (applicationReference is not null)
+        {
+            payload["applicationReference"] = applicationReference;
+        }
+
+        return new WorkItem
         {
             TypeId = ReAccreditationType.Id,
             StateId = stateId,
             SubmittedBy = "test-client",
-            Payload = new BsonDocument
-            {
-                ["organisationName"] = "Acme Ltd",
-                ["registrationNumber"] = "EX-001",
-            },
+            Payload = payload,
         };
+    }
 
     private sealed record Sut(
         ReAccreditationPaymentService Service,
@@ -262,5 +277,102 @@ public class ReAccreditationPaymentServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
+    }
+
+    // ── RA-248: application reference drives the ((reference)) placeholder ────
+
+    [Fact]
+    public async Task RecordPaymentAsync_uses_application_reference_for_personalisation_send_and_audit()
+    {
+        var workItem = BuildWorkItem();
+        var sut = Build(workItem);
+
+        Dictionary<string, string>? captured = null;
+        Dictionary<string, string?>? auditDetails = null;
+        sut.NotifyClient.SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-1"));
+        sut.AuditAppender.AppendAsync(
+                Arg.Any<Guid>(),
+                "notification-sent",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string?>>(d => auditDetails = d),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+
+        var result = await sut.Service.RecordPaymentAsync(
+            workItem.Id,
+            ValidRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(captured);
+        Assert.Equal(ApplicationReference, captured!["reference"]);
+        await sut.NotifyClient.Received(1)
+            .SendEmailAsync(
+                "AssessmentInProgress",
+                "operator@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+        Assert.NotNull(auditDetails);
+        Assert.Equal(ApplicationReference, auditDetails!["reference"]);
+    }
+
+    [Fact]
+    public async Task RecordPaymentAsync_falls_back_to_work_item_id_when_application_reference_absent()
+    {
+        // Legacy item predating RA-219: no applicationReference on the payload.
+        var workItem = BuildWorkItem(applicationReference: null);
+        var sut = Build(workItem);
+
+        Dictionary<string, string>? captured = null;
+        Dictionary<string, string?>? auditDetails = null;
+        sut.NotifyClient.SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-1"));
+        sut.AuditAppender.AppendAsync(
+                Arg.Any<Guid>(),
+                "notification-sent",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string?>>(d => auditDetails = d),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+
+        var result = await sut.Service.RecordPaymentAsync(
+            workItem.Id,
+            ValidRequest(),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(captured);
+        Assert.Equal(workItem.Id.ToString(), captured!["reference"]);
+        await sut.NotifyClient.Received(1)
+            .SendEmailAsync(
+                "AssessmentInProgress",
+                "operator@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                workItem.Id.ToString(),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+        Assert.NotNull(auditDetails);
+        Assert.Equal(workItem.Id.ToString(), auditDetails!["reference"]);
     }
 }
