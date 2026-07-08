@@ -280,6 +280,31 @@ public class CognitoClientIdAuthenticationHandler(
         var authResult = await Context.AuthenticateAsync(Scheme.Name);
         var failureMessage = authResult.Failure?.Message;
 
+        // Log all incoming auth-relevant headers so operators can diagnose
+        // 401s without needing to correlate with the caller's own logs.
+        // The signature value is intentionally omitted — it is an HMAC
+        // digest, not a secret, but there is no diagnostic value in logging it.
+        Logger.LogWarning(
+            "CognitoClientId auth challenge on {Method} {Path}: {FailureReason}. " +
+            "Headers — {ClientIdHeader}: {ClientId}, " +
+            "{TimestampHeader}: {Timestamp}, " +
+            "{NonceHeader}: {Nonce}, " +
+            "{SignatureHeader} present: {SignaturePresent}, " +
+            "Content-Type: {ContentType}, Content-Length: {ContentLength}",
+            Request.Method,
+            Request.Path,
+            failureMessage ?? "(no failure message)",
+            Options.HeaderName,
+            Request.Headers.TryGetValue(Options.HeaderName, out var clientId) ? clientId.ToString() : "(absent)",
+            Options.TimestampHeaderName,
+            Request.Headers.TryGetValue(Options.TimestampHeaderName, out var ts) ? ts.ToString() : "(absent)",
+            Options.NonceHeaderName,
+            Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonce) ? nonce.ToString() : "(absent)",
+            Options.SignatureHeaderName,
+            Request.Headers.ContainsKey(Options.SignatureHeaderName),
+            Request.ContentType ?? "(absent)",
+            Request.ContentLength?.ToString() ?? "(absent)");
+
         Response.StatusCode = 401;
         var challenge = string.IsNullOrEmpty(failureMessage)
             ? Scheme.Name
