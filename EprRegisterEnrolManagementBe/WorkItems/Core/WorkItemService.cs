@@ -300,6 +300,10 @@ public sealed class WorkItemService : IWorkItemService
                 ["applicationReference"] = applicationReference
             });
 
+            _logger.LogInformation(
+                "Persisting work item {WorkItemId} typeId={TypeId} applicationReference={ApplicationReference} submittedBy={SubmittedBy} (attempt {Attempt})",
+                workItem.Id, type.TypeId, applicationReference, submittedBy, attempt);
+
             try
             {
                 await _persistence.CreateAsync(workItem, cancellationToken);
@@ -334,11 +338,23 @@ public sealed class WorkItemService : IWorkItemService
                     "applicationReference {ApplicationReference} collided on attempt {Attempt}; regenerating",
                     applicationReference, attempt);
             }
+            catch (Exception ex)
+            {
+                _logger.LogError(
+                    ex,
+                    "MongoDB write failed for work item {WorkItemId} typeId={TypeId} applicationReference={ApplicationReference} submittedBy={SubmittedBy}: {ExceptionType}",
+                    workItem.Id, type.TypeId, applicationReference, submittedBy, ex.GetType().Name);
+                throw;
+            }
         }
 
+        var persistedReference = payload.Contains("applicationReference")
+            ? payload["applicationReference"].AsString
+            : null;
+
         _logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} by {User}",
-            workItem.Id, workItem.TypeId, workItem.StateId, DescribeUser(user));
+            "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} applicationReference={ApplicationReference} by {User}",
+            workItem!.Id, workItem.TypeId, workItem.StateId, persistedReference, DescribeUser(user));
 
         await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
 
