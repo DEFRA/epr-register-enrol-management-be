@@ -1190,7 +1190,7 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
-    public async Task OnSubmittedAsync_falls_back_to_work_item_id_in_skipped_audit_when_reference_absent()
+    public async Task OnSubmittedAsync_uses_application_reference_in_skipped_audit()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1208,7 +1208,7 @@ public class ReAccreditationNotificationHookTests
             .Returns(true);
 
         // Missing operator email takes the skip path; payload is still present
-        // so the reference resolves from applicationReference when available.
+        // so the reference resolves from applicationReference.
         var workItem = BuildWorkItem(operatorEmail: null);
         var sut = BuildSut(notifyClient, auditAppender);
 
@@ -1216,5 +1216,35 @@ public class ReAccreditationNotificationHookTests
 
         Assert.NotNull(auditDetails);
         Assert.Equal(ApplicationReference, auditDetails!["reference"]);
+    }
+
+    [Fact]
+    public async Task OnSubmittedAsync_falls_back_to_work_item_id_in_skipped_audit_when_reference_absent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string?>? auditDetails = null;
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                "notification-skipped",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string?>>(d => auditDetails = d),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+
+        // Legacy item on the skip path: no operator email (skip) AND no
+        // applicationReference, so the skipped-audit reference falls back to
+        // the work-item Guid rather than being left blank.
+        var workItem = BuildWorkItem(operatorEmail: null, applicationReference: null);
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        Assert.NotNull(auditDetails);
+        Assert.Equal(workItem.Id.ToString(), auditDetails!["reference"]);
     }
 }
