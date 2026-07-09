@@ -275,6 +275,10 @@ internal sealed class ReAccreditationApprovalService(
         // [BsonIgnoreExtraElements] model dropped every unmodelled payload key
         // (applicationReference, source, siteAddress*, ...) on approval, which turned
         // the application ref into the work-item Guid downstream.
+        // Note: Merge is a shallow top-level merge — an unmodelled key nested
+        // *inside* a modelled top-level object would still be lost (that object is
+        // round-tripped through the model before overwriting). All keys at risk today
+        // (applicationReference, source, siteAddress*) are top-level, so they survive.
         var merged = (workItem.Payload ?? new BsonDocument()).DeepClone().AsBsonDocument;
         merged.Merge(updated.ToBsonDocument(), overwriteExistingElements: true);
         workItem.ReplacePayload(merged);

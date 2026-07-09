@@ -231,6 +231,31 @@ public class ReAccreditationApprovalServiceTests
     }
 
     [Fact]
+    public async Task ApproveAsync_succeeds_and_sets_approval_fields_when_stored_payload_is_null()
+    {
+        // RA-249: the merge tolerates a null stored Payload
+        // (`workItem.Payload ?? new BsonDocument()`) — approval still
+        // succeeds and stamps the four approval fields on a fresh payload.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build("ACC-2025-A-12345678");
+        var workItem = BuildWorkItem();
+        workItem.Payload = null!;
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(workItem.Payload);
+
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        Assert.Equal("ACC-2025-A-12345678", payload.AccreditationId);
+        Assert.Equal(DateOnly.FromDateTime(s_fixedNow.UtcDateTime), payload.AccreditationStartDate);
+        Assert.Equal(2025, payload.AccreditationYear);
+        Assert.NotNull(payload.SlaClock);
+        Assert.Equal(s_fixedNow, payload.SlaClock!.StoppedAt);
+    }
+
+    [Fact]
     public async Task Queued_publishing_audit_runs_against_scoped_appender_with_accreditation_id()
     {
         var ct = TestContext.Current.CancellationToken;
