@@ -270,7 +270,14 @@ internal sealed class ReAccreditationApprovalService(
             SlaClock = new ReAccreditationSlaClock(stoppedAt)
         };
 
-        workItem.ReplacePayload(updated.ToBsonDocument());
+        // RA-249: merge the modelled updates back over the *existing* payload rather
+        // than replacing it wholesale. A full replace against this
+        // [BsonIgnoreExtraElements] model dropped every unmodelled payload key
+        // (applicationReference, source, siteAddress*, ...) on approval, which turned
+        // the application ref into the work-item Guid downstream.
+        var merged = (workItem.Payload ?? new BsonDocument()).DeepClone().AsBsonDocument;
+        merged.Merge(updated.ToBsonDocument(), overwriteExistingElements: true);
+        workItem.ReplacePayload(merged);
         return true;
     }
 

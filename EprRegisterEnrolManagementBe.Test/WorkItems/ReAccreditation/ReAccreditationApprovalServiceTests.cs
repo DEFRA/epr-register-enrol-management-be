@@ -152,6 +152,85 @@ public class ReAccreditationApprovalServiceTests
     }
 
     [Fact]
+    public async Task ApproveAsync_preserves_unmodelled_payload_keys_and_sets_approval_fields()
+    {
+        // RA-249: approval must MERGE the modelled updates over the existing
+        // payload, not replace it. A full replace against the
+        // [BsonIgnoreExtraElements] model dropped every unmodelled key
+        // (applicationReference, source, siteAddress*), turning the
+        // application ref into the work-item Guid downstream.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build("ACC-2025-A-12345678");
+        var workItem = BuildWorkItem(payload: new BsonDocument
+        {
+            ["organisationName"] = "Acme Ltd",
+            ["registrationNumber"] = "EX-001",
+            // Unmodelled keys that the model would otherwise discard.
+            ["applicationReference"] = "RA-000000123",
+            ["source"] = "external-portal",
+            ["siteAddressLine1"] = "1 Recycling Way",
+            ["siteAddress"] = new BsonDocument
+            {
+                ["line1"] = "1 Recycling Way",
+                ["postcode"] = "AB1 2CD"
+            }
+        });
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess);
+
+        // Unmodelled keys survive with their original values.
+        Assert.Equal("RA-000000123", workItem.Payload["applicationReference"].AsString);
+        Assert.Equal("external-portal", workItem.Payload["source"].AsString);
+        Assert.Equal("1 Recycling Way", workItem.Payload["siteAddressLine1"].AsString);
+        var nested = workItem.Payload["siteAddress"].AsBsonDocument;
+        Assert.Equal("1 Recycling Way", nested["line1"].AsString);
+        Assert.Equal("AB1 2CD", nested["postcode"].AsString);
+
+        // Modelled keys that pre-existed are untouched.
+        Assert.Equal("Acme Ltd", workItem.Payload["organisationName"].AsString);
+        Assert.Equal("EX-001", workItem.Payload["registrationNumber"].AsString);
+
+        // The four approval fields are set/overwritten on the merged payload.
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        Assert.Equal("ACC-2025-A-12345678", payload.AccreditationId);
+        Assert.Equal(DateOnly.FromDateTime(s_fixedNow.UtcDateTime), payload.AccreditationStartDate);
+        Assert.Equal(2025, payload.AccreditationYear);
+        Assert.NotNull(payload.SlaClock);
+        Assert.Equal(s_fixedNow, payload.SlaClock!.StoppedAt);
+    }
+
+    [Fact]
+    public async Task ApproveAsync_overwrites_a_stale_modelled_approval_field_on_merge()
+    {
+        // RA-249: merge must OVERWRITE existing elements, so a stale
+        // accreditationStartDate/year on the stored payload is replaced by
+        // the freshly computed values rather than being preserved.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build("ACC-2025-A-12345678", currentYear: 2025);
+        var workItem = BuildWorkItem(payload: new BsonDocument
+        {
+            ["organisationName"] = "Acme Ltd",
+            ["applicationReference"] = "RA-000000999",
+            // Stale modelled values that must be overwritten by approval.
+            ["accreditationYear"] = 1999,
+            ["accreditationStartDate"] = "1999-01-01"
+        });
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("RA-000000999", workItem.Payload["applicationReference"].AsString);
+
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        Assert.Equal(2025, payload.AccreditationYear);
+        Assert.Equal(DateOnly.FromDateTime(s_fixedNow.UtcDateTime), payload.AccreditationStartDate);
+    }
+
+    [Fact]
     public async Task Queued_publishing_audit_runs_against_scoped_appender_with_accreditation_id()
     {
         var ct = TestContext.Current.CancellationToken;
