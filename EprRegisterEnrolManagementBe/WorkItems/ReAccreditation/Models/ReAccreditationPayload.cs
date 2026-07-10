@@ -32,7 +32,7 @@ internal sealed record ReAccreditationPayload
     /// </summary>
     public string? ApplicationReference { get; init; }
 
-    public List<string>? MaterialsHandled { get; init; }
+    public string? Material { get; init; }
     public int? PreviousAccreditationYear { get; init; }
     public int? ComplianceIssuesReported { get; init; }
 

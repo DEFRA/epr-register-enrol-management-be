@@ -14,7 +14,7 @@ public class ReAccreditationDecisionServiceTests
         {
             OrganisationName = "Acme Recycling Ltd",
             RegistrationNumber = "EX-12345",
-            MaterialsHandled = ["plastic", "paper"],
+            Material = "plastic",
             PreviousAccreditationYear = 2024,
             ComplianceIssuesReported = 1
         };
@@ -32,7 +32,7 @@ public class ReAccreditationDecisionServiceTests
         {
             OrganisationName = "Acme Recycling Ltd",
             RegistrationNumber = "EX-12345",
-            MaterialsHandled = ["plastic"],
+            Material = "plastic",
             PreviousAccreditationYear = 2024,
             ComplianceIssuesReported = ReAccreditationDecisionService.MaxToleratedComplianceIssues + 1
         };
@@ -50,7 +50,7 @@ public class ReAccreditationDecisionServiceTests
         {
             OrganisationName = "Acme Recycling Ltd",
             RegistrationNumber = "EX-12345"
-            // MaterialsHandled, PreviousAccreditationYear, ComplianceIssuesReported all null
+            // Material, PreviousAccreditationYear, ComplianceIssuesReported all null
         };
 
         var recommendation = _service.EvaluateRecommendation(payload);
@@ -59,13 +59,13 @@ public class ReAccreditationDecisionServiceTests
     }
 
     [Fact]
-    public void Recommends_more_info_needed_when_materials_list_empty()
+    public void Recommends_more_info_needed_when_material_is_blank()
     {
         var payload = new ReAccreditationPayload
         {
             OrganisationName = "Acme Recycling Ltd",
             RegistrationNumber = "EX-12345",
-            MaterialsHandled = [],
+            Material = "  ",
             PreviousAccreditationYear = 2024,
             ComplianceIssuesReported = 0
         };

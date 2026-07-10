@@ -22,8 +22,7 @@ internal sealed class ReAccreditationDecisionService : IReAccreditationDecisionS
 
         if (payload.PreviousAccreditationYear is null
             || payload.ComplianceIssuesReported is null
-            || payload.MaterialsHandled is null
-            || payload.MaterialsHandled.Count == 0)
+            || string.IsNullOrWhiteSpace(payload.Material))
         {
             return new ReAccreditationRecommendation(
                 ReAccreditationRecommendation.MoreInfoNeeded,
