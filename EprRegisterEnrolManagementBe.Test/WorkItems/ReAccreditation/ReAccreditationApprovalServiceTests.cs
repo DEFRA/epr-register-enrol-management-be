@@ -494,14 +494,14 @@ public class ReAccreditationApprovalServiceTests
     // ─────────────────────────── RA-133 ────────────────────────────────
 
     [Fact]
-    public async Task ApproveAsync_passes_first_handled_material_and_configured_year_to_generator()
+    public async Task ApproveAsync_passes_material_and_configured_year_to_generator()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build(currentYear: 2028);
         var workItem = BuildWorkItem(payload: new BsonDocument
         {
             ["organisationName"] = "Acme Ltd",
-            ["materialsHandled"] = new BsonArray { "plastic", "glass" }
+            ["material"] = "plastic"
         });
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
@@ -512,14 +512,13 @@ public class ReAccreditationApprovalServiceTests
     }
 
     [Fact]
-    public async Task ApproveAsync_passes_null_material_when_materialsHandled_is_missing_or_empty()
+    public async Task ApproveAsync_passes_null_material_when_material_is_missing()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
         var workItem = BuildWorkItem(payload: new BsonDocument
         {
-            ["organisationName"] = "Acme Ltd",
-            ["materialsHandled"] = new BsonArray()
+            ["organisationName"] = "Acme Ltd"
         });
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
@@ -530,14 +529,14 @@ public class ReAccreditationApprovalServiceTests
     }
 
     [Fact]
-    public async Task ApproveAsync_passes_null_material_when_first_entry_is_bson_null()
+    public async Task ApproveAsync_passes_null_material_when_material_is_bson_null()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
         var workItem = BuildWorkItem(payload: new BsonDocument
         {
             ["organisationName"] = "Acme Ltd",
-            ["materialsHandled"] = new BsonArray { BsonNull.Value, "plastic" }
+            ["material"] = BsonNull.Value
         });
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 

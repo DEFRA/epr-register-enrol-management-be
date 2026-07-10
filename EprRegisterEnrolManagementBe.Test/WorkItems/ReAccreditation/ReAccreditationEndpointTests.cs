@@ -15,6 +15,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -88,7 +89,7 @@ public class ReAccreditationEndpointTests
         {
             ["organisationName"] = "Acme Recycling Ltd",
             ["registrationNumber"] = "EX-12345",
-            ["materialsHandled"] = new BsonArray(["plastic", "paper"]),
+            ["material"] = "plastic",
             ["previousAccreditationYear"] = 2024,
             ["complianceIssuesReported"] = 1
         };
@@ -119,7 +120,7 @@ public class ReAccreditationEndpointTests
         Assert.NotNull(capturedPayload);
         Assert.Equal("Acme Recycling Ltd", capturedPayload!.OrganisationName);
         Assert.Equal("EX-12345", capturedPayload.RegistrationNumber);
-        Assert.Equal(new[] { "plastic", "paper" }, capturedPayload.MaterialsHandled);
+        Assert.Equal("plastic", capturedPayload.Material);
         Assert.Equal(2024, capturedPayload.PreviousAccreditationYear);
         Assert.Equal(1, capturedPayload.ComplianceIssuesReported);
     }
@@ -152,6 +153,106 @@ public class ReAccreditationEndpointTests
         var body = await response.Content.ReadFromJsonAsync<ReAccreditationRecommendationResponse>(cancellationToken);
         Assert.Equal(ReAccreditationRecommendation.MoreInfoNeeded, body!.Recommendation);
         factory.DecisionService.Received(1).EvaluateRecommendation(Arg.Any<ReAccreditationPayload>());
+    }
+
+    // -------------------- Operator submission contract --------------------
+    //
+    // Guards the shape the real operator backend sends. The literal request
+    // body below mirrors HttpCaseWorkingApiAdapter.BuildPayload in
+    // epr-register-enrol-backend field-for-field (including the single
+    // `material` string, not the legacy `materialsHandled` array) — if that
+    // adapter's payload shape drifts from what this module deserialises into
+    // ReAccreditationPayload, this test catches it here rather than silently
+    // dropping fields on the case-mgmt side. Keep the two in sync.
+    [Fact]
+    public async Task Submit_persists_every_field_from_a_real_operator_submission_payload()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var body = new
+        {
+            typeId = ReAccreditationType.Id,
+            source = "operator-fe",
+            payload = new
+            {
+                organisationName = "Acme Recycling Ltd",
+                registrationNumber = "EPR-100023",
+                material = "plastic",
+                accreditationYear = 2026,
+                previousAccreditationYear = 2025,
+                complianceIssuesReported = 0,
+                siteAddress = "123 High Street, London, SW1A 1AA",
+                siteAddressPostcode = "SW1A 1AA",
+                operatorApplicationId = "app-001",
+                operatorOrganisationId = "12345",
+                operatorRegistrationId = "reg-001",
+                operatorEmail = "jane@example.com",
+                submittedBy = new
+                {
+                    fullName = "Jane Smith",
+                    jobTitle = "Operations Manager",
+                    email = "jane@example.com"
+                },
+                prns = new
+                {
+                    plannedTonnageBand = "UpTo1000",
+                    authorisers = new[]
+                    {
+                        new { fullName = "Bob Jones", email = "bob@example.com" }
+                    }
+                },
+                businessPlan = new
+                {
+                    newInfrastructurePercent = 20,
+                    priceSupportPercent = 20,
+                    businessCollectionsPercent = 20,
+                    communicationsPercent = 20,
+                    newMarketsPercent = 10,
+                    newUsesPercent = 10,
+                    newInfrastructureDetail = "New sorting line",
+                    priceSupportDetail = "Subsidised collection",
+                    businessCollectionsDetail = "Kerbside expansion",
+                    communicationsDetail = "Customer newsletter",
+                    newMarketsDetail = "Export contracts",
+                    newUsesDetail = "Recycled packaging"
+                },
+                samplingPlan = new
+                {
+                    files = new[]
+                    {
+                        new
+                        {
+                            filename = "sampling-plan.pdf",
+                            uploadedAt = DateTime.UtcNow,
+                            scanStatus = "Clean"
+                        }
+                    }
+                }
+            }
+        };
+
+        var response = await client.PostAsJsonAsync("/work-items", body, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var persisted = await factory.Persistence.GetByIdAsync(created!.Id, cancellationToken);
+        Assert.NotNull(persisted);
+
+        // Raw BSON check — this is what the case-mgmt frontend's work-items
+        // list table and Application details page read directly.
+        Assert.Equal("plastic", persisted!.Payload["material"].AsString);
+
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(persisted.Payload);
+        Assert.Equal("Acme Recycling Ltd", payload.OrganisationName);
+        Assert.Equal("EPR-100023", payload.RegistrationNumber);
+        Assert.Equal("plastic", payload.Material);
+        Assert.Equal(2025, payload.PreviousAccreditationYear);
+        Assert.Equal(0, payload.ComplianceIssuesReported);
+        Assert.Equal("12345", payload.OperatorOrganisationId);
+        Assert.Equal("reg-001", payload.OperatorRegistrationId);
+        Assert.Equal("jane@example.com", payload.OperatorEmail);
     }
 
     // -------------------- RecordDecisionRationale (atomicity) --------------------
