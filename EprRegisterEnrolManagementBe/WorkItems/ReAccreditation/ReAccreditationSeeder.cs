@@ -354,7 +354,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         new BsonDocument
                         {
                             ["filename"] = "sampling-plan.pdf",
-                            ["uploadedAt"] = new DateTime(2026, 6, 1, 10, 0, 0, DateTimeKind.Utc),
+                            // A real operator submission sends this field as
+                            // plain JSON (System.Text.Json serialises DateTime
+                            // as an ISO-8601 string), which lands in Mongo as a
+                            // BSON string — not a BsonDateTime. Using a native
+                            // DateTime here would round-trip through the API as
+                            // `{"$date": "..."}`, which the "Uploaded at" GDS
+                            // date filter can't parse (it expects a string).
+                            ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
                             ["scanStatus"] = "Clean"
                         }
                     }
