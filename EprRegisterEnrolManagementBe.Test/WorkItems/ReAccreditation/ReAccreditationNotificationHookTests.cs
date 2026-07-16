@@ -62,12 +62,11 @@ public class ReAccreditationNotificationHookTests
         };
     }
 
-    private static WorkItemNote Note(string text, DateTime createdAt, string? taskId = null) =>
+    private static WorkItemNote Note(string text, DateTime createdAt) =>
         new()
         {
             Text = text,
             CreatedAt = createdAt,
-            TaskId = taskId,
         };
 
     private static ReAccreditationNotificationHook BuildSut(
@@ -652,45 +651,6 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_ignores_task_scoped_notes_for_decision_notes()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg"));
-
-        // The most recent note is task-scoped (TaskId set) and must be ignored;
-        // the older work-item-level note is the expected source.
-        var workItem = BuildWorkItem(
-            stateId: "approved",
-            notes:
-            [
-                Note("Work-item rationale", new DateTime(2025, 10, 1, 0, 0, 0, DateTimeKind.Utc)),
-                Note(
-                    "Task comment",
-                    new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc),
-                    taskId: "check-docs"
-                ),
-            ]
-        );
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
-
-        Assert.NotNull(captured);
-        Assert.Equal("Work-item rationale", captured!["decision_notes"]);
-    }
-
-    [Fact]
     public async Task OnActionAppliedAsync_sets_empty_decision_notes_when_notes_collection_is_null()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -708,43 +668,6 @@ public class ReAccreditationNotificationHookTests
             .Returns(NotifySendResult.Success("msg"));
 
         var workItem = BuildWorkItem(stateId: "approved", nullNotes: true);
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
-
-        Assert.NotNull(captured);
-        Assert.True(captured!.ContainsKey("decision_notes"));
-        Assert.Equal(string.Empty, captured["decision_notes"]);
-    }
-
-    [Fact]
-    public async Task OnActionAppliedAsync_sets_empty_decision_notes_when_no_work_item_level_notes()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg"));
-
-        var workItem = BuildWorkItem(
-            stateId: "approved",
-            notes:
-            [
-                Note(
-                    "Task comment",
-                    new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc),
-                    taskId: "check-docs"
-                ),
-            ]
-        );
         var sut = BuildSut(notifyClient, auditAppender);
 
         await sut.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
@@ -983,46 +906,6 @@ public class ReAccreditationNotificationHookTests
         Assert.Equal("Acme Ltd", captured["organisation_name"]);
         Assert.Equal("EX-001", captured["registration_number"]);
         Assert.Equal(ApplicationReference, captured["reference"]);
-    }
-
-    [Fact]
-    public async Task OnActionAppliedAsync_ignores_task_scoped_notes_for_withdrawal_notes()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg"));
-
-        // The most recent note is task-scoped (TaskId set) and must be ignored;
-        // only a task-scoped note exists, so there is no work-item-level note
-        // and withdrawal_notes falls back to empty.
-        var workItem = BuildWorkItem(
-            stateId: "withdrawn",
-            notes:
-            [
-                Note(
-                    "Task comment",
-                    new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc),
-                    taskId: "check-docs"
-                ),
-            ]
-        );
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(workItem, "withdraw", "submitted", s_user, ct);
-
-        Assert.NotNull(captured);
-        Assert.True(captured!.ContainsKey("withdrawal_notes"));
-        Assert.Equal(string.Empty, captured["withdrawal_notes"]);
     }
 
     [Fact]

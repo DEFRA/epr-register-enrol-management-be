@@ -6,8 +6,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <summary>
 /// A single entry in a work item's audit log (RA-97). The framework appends
 /// one of these for every successful state-changing engine call (task
-/// completion, action application, assignment, unassignment, note added) so
-/// modules inherit a complete audit trail without writing any audit code
+/// completion, action application, assignment, unassignment, note
+/// added) so modules inherit a complete audit trail without writing any audit code
 /// themselves.
 ///
 /// Author identity is snapshotted from the <see cref="System.Security.Claims.ClaimsPrincipal"/>
