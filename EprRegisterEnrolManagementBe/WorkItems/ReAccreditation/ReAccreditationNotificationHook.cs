@@ -163,13 +163,22 @@ internal sealed class ReAccreditationNotificationHook(
             _ => string.Empty
         };
 
+        // changed_by comes from the acting principal, not workItem.AssignedBy:
+        // AssignedBy holds a raw user id rather than a display name, and the
+        // engine has already cleared it to null by the time an unassign reaches
+        // us. Prefer the human-readable name claim, same precedence as the
+        // audit log's createdByName/createdBy.
+        var changedBy = user.FindFirstValue("user:name")
+            ?? user.FindFirstValue("user:id")
+            ?? string.Empty;
+
         var extra = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["assignment_event"] = assignmentEvent,
             ["officer_name"] = change == WorkItemAssignmentChange.Unassigned
                 ? string.Empty
                 : workItem.AssignedToName ?? string.Empty,
-            ["changed_by"] = workItem.AssignedBy ?? string.Empty
+            ["changed_by"] = changedBy
         };
 
         return SendRegulatorEmailAsync(

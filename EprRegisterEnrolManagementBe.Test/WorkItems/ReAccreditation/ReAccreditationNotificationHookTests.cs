@@ -1428,14 +1428,14 @@ public class ReAccreditationNotificationHookTests
             )
             .Returns(NotifySendResult.Success("assign-msg"));
 
-        // On unassign the engine has already cleared AssignedBy to null; the
-        // hook falls back to an empty changed_by. On assign/reassign it is set.
-        var assignedBy = change == WorkItemAssignmentChange.Unassigned ? null : "assigner-1";
+        // AssignedBy is deliberately left null even on assign/reassign: changed_by
+        // must come from the acting principal, not this field, so a null here
+        // cannot influence the assertion below.
         var workItem = BuildWorkItem(
             includeNation: true,
             nation: Nation.England,
             assignedToName: change == WorkItemAssignmentChange.Unassigned ? null : assignedToName,
-            assignedBy: assignedBy
+            assignedBy: null
         );
         var sut = BuildSut(
             notifyClient,
@@ -1463,10 +1463,9 @@ public class ReAccreditationNotificationHookTests
         Assert.Equal(workItem.Id.ToString(), captured["reference"]);
         Assert.Equal(expectedEvent, captured["assignment_event"]);
         Assert.Equal(expectedOfficerName, captured["officer_name"]);
-        Assert.Equal(
-            change == WorkItemAssignmentChange.Unassigned ? string.Empty : "assigner-1",
-            captured["changed_by"]
-        );
+        // s_user's user:name claim — the acting principal, present on every
+        // change including unassign (where AssignedBy has already been cleared).
+        Assert.Equal("Alice", captured["changed_by"]);
 
         await auditAppender
             .Received(1)
@@ -1481,6 +1480,97 @@ public class ReAccreditationNotificationHookTests
                 s_user,
                 ct
             );
+    }
+
+    [Fact]
+    public async Task OnAssignmentChangedAsync_falls_back_to_user_id_when_name_claim_absent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                "OfficerAssignment",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("assign-msg"));
+
+        // Principal carries an id but no display name — changed_by falls back to
+        // the id rather than going blank, mirroring the audit log's
+        // createdByName ?? createdBy precedence.
+        var idOnlyUser = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("user:id", "user-9")], "test")
+        );
+        var workItem = BuildWorkItem(
+            includeNation: true,
+            nation: Nation.England,
+            assignedToName: "Gus Officer"
+        );
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnAssignmentChangedAsync(
+            workItem,
+            WorkItemAssignmentChange.Assigned,
+            idOnlyUser,
+            ct
+        );
+
+        Assert.NotNull(captured);
+        Assert.Equal("user-9", captured!["changed_by"]);
+    }
+
+    [Fact]
+    public async Task OnAssignmentChangedAsync_sets_empty_changed_by_when_principal_has_no_claims()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                "OfficerAssignment",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("assign-msg"));
+
+        // Neither claim present — changed_by must still be an empty string, never
+        // null, so Notify cannot 400 on a referenced placeholder.
+        var anonymousUser = new ClaimsPrincipal(new ClaimsIdentity());
+        var workItem = BuildWorkItem(
+            includeNation: true,
+            nation: Nation.England,
+            assignedToName: "Hana Officer"
+        );
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnAssignmentChangedAsync(
+            workItem,
+            WorkItemAssignmentChange.Assigned,
+            anonymousUser,
+            ct
+        );
+
+        Assert.NotNull(captured);
+        Assert.Equal(string.Empty, captured!["changed_by"]);
     }
 
     [Fact]
