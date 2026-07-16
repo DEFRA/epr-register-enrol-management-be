@@ -8,26 +8,37 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// (RA-318). The backend owns reference generation so a client can never
 /// supply, spoof or collide a reference.
 ///
-/// Format (RA-318): <c>APP</c> + 2-digit accreditation year + 2-char
+/// Format (RA-318): <c>AP</c> + 2-digit accreditation year + 2-char
 /// agency code (derived from the site postcode) + the operator
 /// organisation id + the last 3 characters of the site postcode + the
 /// first 2 characters of the material, all upper-cased. The result is
 /// truncated to <see cref="MaxLength"/> characters because this value is
 /// also used as a BACS payment reference. Deterministic for a given
-/// payload — unlike the previous random-suffix format, the same
-/// submission always yields the same reference.
+/// payload and <paramref name="attempt"/> of 1 — unlike the previous
+/// random-suffix format, the same submission always yields the same
+/// reference on the first attempt. Payloads with no operator organisation
+/// id (e.g. work items created manually via the case management UI, which
+/// has no such field) can collide when the site postcode and material also
+/// match; <see cref="WorkItemService"/>'s collision-retry loop calls this
+/// again with an incremented <paramref name="attempt"/>, and attempts
+/// beyond the first replace the final character with a disambiguator so
+/// retries actually differ instead of repeating the same value forever.
 /// </summary>
 public interface IApplicationReferenceGenerator
 {
-    /// <summary>Generate a reference derived from the submission <paramref name="payload"/>.</summary>
-    string Generate(BsonDocument payload);
+    /// <summary>
+    /// Generate a reference derived from the submission <paramref name="payload"/>.
+    /// <paramref name="attempt"/> is the 1-based retry count from the caller's
+    /// collision-retry loop; pass 1 for the initial attempt.
+    /// </summary>
+    string Generate(BsonDocument payload, int attempt);
 }
 
 /// <inheritdoc />
 public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerator
 {
     /// <summary>Literal prefix every reference carries.</summary>
-    public const string Prefix = "APP";
+    public const string Prefix = "AP";
 
     /// <summary>Maximum reference length — this value doubles as a BACS payment reference.</summary>
     public const int MaxLength = 18;
@@ -79,7 +90,7 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
-    public string Generate(BsonDocument payload)
+    public string Generate(BsonDocument payload, int attempt = 1)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
@@ -93,8 +104,20 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         var reference =
             $"{Prefix}{year:D2}{agency}{organisationId}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
 
-        return reference.Length > MaxLength ? reference[..MaxLength] : reference;
+        if (attempt <= 1)
+        {
+            return reference.Length > MaxLength ? reference[..MaxLength] : reference;
+        }
+
+        // Collision on a prior attempt: keep the reference recognisably
+        // derived from the same payload, but swap the final character for a
+        // disambiguator unique to this attempt so the retry loop actually
+        // converges instead of regenerating the same value forever.
+        var truncated = reference.Length > MaxLength - 1 ? reference[..(MaxLength - 1)] : reference;
+        return truncated + DisambiguatorChar(attempt);
     }
+
+    private static char DisambiguatorChar(int attempt) => (char)('0' + (attempt % 10));
 
     private int ResolveYear(BsonDocument payload)
     {

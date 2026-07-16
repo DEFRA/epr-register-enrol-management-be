@@ -277,7 +277,7 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem? workItem = null;
         for (var attempt = 1; ; attempt++)
         {
-            var applicationReference = _referenceGenerator.Generate(payload);
+            var applicationReference = _referenceGenerator.Generate(payload, attempt);
             payload["applicationReference"] = applicationReference;
 
             workItem = new WorkItem

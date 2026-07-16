@@ -1801,7 +1801,7 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         Assert.Equal("alice-1", entry.Details["userId"]);
         // RA-219: generated reference, not the ignored "APP-123" client value.
         Assert.NotEqual("APP-123", entry.Details["applicationReference"]);
-        Assert.Matches(@"^APP\d{2}EA$", entry.Details["applicationReference"]);
+        Assert.Matches(@"^AP\d{2}EA$", entry.Details["applicationReference"]);
     }
 
     [Fact]
@@ -1830,7 +1830,7 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         Assert.True(entry.Details.ContainsKey("source"));
         Assert.Null(entry.Details["source"]);
         Assert.True(entry.Details.ContainsKey("applicationReference"));
-        Assert.Matches(@"^APP\d{2}EA$", entry.Details["applicationReference"]);
+        Assert.Matches(@"^AP\d{2}EA$", entry.Details["applicationReference"]);
         Assert.Equal("test-client", entry.Details["clientId"]);
         Assert.Equal("alice-1", entry.Details["userId"]);
     }
@@ -1853,7 +1853,7 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(result.WorkItem!.Id);
         Assert.True(fetched.Payload.Contains("applicationReference"));
-        Assert.Matches(@"^APP\d{2}EA$", fetched.Payload["applicationReference"].AsString);
+        Assert.Matches(@"^AP\d{2}EA$", fetched.Payload["applicationReference"].AsString);
     }
 
     [Fact]
@@ -1877,7 +1877,7 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var fetched = await GetAsync(result.WorkItem!.Id);
         var stored = fetched.Payload["applicationReference"].AsString;
         Assert.NotEqual("CLIENT-OWNED-REF", stored);
-        Assert.Matches(@"^APP\d{2}EA$", stored);
+        Assert.Matches(@"^AP\d{2}EA$", stored);
     }
 
     [Fact]
@@ -1971,7 +1971,7 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
     {
         public int CallCount { get; private set; }
 
-        public string Generate(BsonDocument payload)
+        public string Generate(BsonDocument payload, int attempt)
         {
             var value = values[Math.Min(CallCount, values.Length - 1)];
             CallCount++;

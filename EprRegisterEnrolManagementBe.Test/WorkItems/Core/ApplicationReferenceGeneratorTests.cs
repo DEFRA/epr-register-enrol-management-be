@@ -7,10 +7,11 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <summary>
 /// RA-318: unit coverage for the deterministic, payload-derived
 /// applicationReference generator. Format:
-/// APP + 2-digit year + 2-char agency + organisationId + last 3 chars of
+/// AP + 2-digit year + 2-char agency + organisationId + last 3 chars of
 /// postcode + first 2 chars of material, upper-cased, capped at
 /// <see cref="ApplicationReferenceGenerator.MaxLength"/> chars (this value
-/// doubles as a BACS payment reference).
+/// doubles as a BACS payment reference). Attempts beyond the first (the
+/// collision-retry path) replace the final character with a disambiguator.
 /// </summary>
 public sealed class ApplicationReferenceGeneratorTests
 {
@@ -41,7 +42,7 @@ public sealed class ApplicationReferenceGeneratorTests
 
         var reference = generator.Generate(payload);
 
-        Assert.Equal("APP26EA500021AAGL", reference);
+        Assert.Equal("AP26EA500021AAGL", reference);
     }
 
     [Theory]
@@ -57,7 +58,7 @@ public sealed class ApplicationReferenceGeneratorTests
 
         var reference = generator.Generate(payload);
 
-        Assert.Equal(expectedAgency, reference.Substring(5, 2));
+        Assert.Equal(expectedAgency, reference.Substring(4, 2));
     }
 
     [Fact]
@@ -73,7 +74,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var reference = generator.Generate(payload);
 
         Assert.Equal(reference.ToUpperInvariant(), reference);
-        Assert.Equal("APP26EA500021AAGL", reference);
+        Assert.Equal("AP26EA500021AAGL", reference);
     }
 
     [Fact]
@@ -85,7 +86,7 @@ public sealed class ApplicationReferenceGeneratorTests
 
         var reference = generator.Generate(payload);
 
-        Assert.StartsWith("APP31", reference);
+        Assert.StartsWith("AP31", reference);
     }
 
     [Fact]
@@ -100,7 +101,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var reference = generator.Generate(payload);
 
         Assert.Equal(ApplicationReferenceGenerator.MaxLength, reference.Length);
-        Assert.Equal("APP26EA6A2FCD74E16", reference);
+        Assert.Equal("AP26EA6A2FCD74E168", reference);
     }
 
     [Fact]
@@ -116,7 +117,7 @@ public sealed class ApplicationReferenceGeneratorTests
 
         var reference = generator.Generate(payload);
 
-        Assert.Equal("APP26EA", reference);
+        Assert.Equal("AP26EA", reference);
     }
 
     [Fact]
@@ -143,5 +144,63 @@ public sealed class ApplicationReferenceGeneratorTests
         var reference = generator.Generate(payload);
 
         Assert.True(reference.Length <= ApplicationReferenceGenerator.MaxLength);
+    }
+
+    [Fact]
+    public void Generate_with_attempt_greater_than_one_differs_from_the_first_attempt()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026);
+
+        var first = generator.Generate(payload, attempt: 1);
+        var second = generator.Generate(payload, attempt: 2);
+
+        Assert.NotEqual(first, second);
+        Assert.True(second.Length <= ApplicationReferenceGenerator.MaxLength);
+    }
+
+    [Fact]
+    public void Generate_disambiguates_differently_for_each_retry_attempt()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026);
+
+        var attempts = Enumerable
+            .Range(2, 4) // attempts 2..5, matching WorkItemService.MaxApplicationReferenceAttempts
+            .Select(attempt => generator.Generate(payload, attempt))
+            .ToList();
+
+        Assert.Equal(attempts.Count, attempts.Distinct().Count());
+    }
+
+    [Fact]
+    public void Generate_attempt_disambiguator_replaces_the_final_character_once_the_reference_is_already_at_MaxLength()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+
+        var first = generator.Generate(payload, attempt: 1);
+        var second = generator.Generate(payload, attempt: 2);
+
+        Assert.Equal(ApplicationReferenceGenerator.MaxLength, first.Length);
+        Assert.Equal(ApplicationReferenceGenerator.MaxLength, second.Length);
+        Assert.Equal(first[..^1], second[..^1]);
+        Assert.NotEqual(first[^1], second[^1]);
+    }
+
+    [Fact]
+    public void Generate_disambiguator_extends_a_short_reference_rather_than_replacing_a_character()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026);
+
+        var first = generator.Generate(payload, attempt: 1);
+        var second = generator.Generate(payload, attempt: 2);
+
+        Assert.Equal(first.Length + 1, second.Length);
+        Assert.StartsWith(first, second);
     }
 }
