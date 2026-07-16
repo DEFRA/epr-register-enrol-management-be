@@ -139,7 +139,10 @@ public sealed class WorkItem
     /// <summary>
     /// Append-only audit narrative attached to the work item by assessors
     /// (RA-96). Stored in insertion order; projected newest-first by the
-    /// engine. Framework-owned so every type behaves identically.
+    /// engine. Framework-owned so every type behaves identically. The
+    /// standalone "add a note" FE feature and task-scoped notes have been
+    /// removed; the withdraw and decision-rationale flows are the only
+    /// current callers of the underlying add-note API.
     /// </summary>
     public List<WorkItemNote> Notes { get; init; } = new();
 
