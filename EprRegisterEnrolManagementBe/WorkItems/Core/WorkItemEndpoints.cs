@@ -35,61 +35,67 @@ public static class WorkItemEndpoints
     // The caps are deliberately generous for the legitimate use cases
     // (a real submission payload is well under 1 MB; a note is well under
     // 100 KB; status / assign carry just a couple of small string fields).
-    public const long MaxSubmitBodyBytes = 1 * 1024 * 1024;       // 1 MB
-    public const long MaxNoteBodyBytes = 100 * 1024;              // 100 KB
-    public const long MaxAssignBodyBytes = 10 * 1024;             // 10 KB
-    public const long MaxTaskStatusBodyBytes = 10 * 1024;         // 10 KB
+    public const long MaxSubmitBodyBytes = 1 * 1024 * 1024; // 1 MB
+    public const long MaxNoteBodyBytes = 100 * 1024; // 100 KB
+    public const long MaxAssignBodyBytes = 10 * 1024; // 10 KB
+    public const long MaxTaskStatusBodyBytes = 10 * 1024; // 10 KB
 
     [ExcludeFromCodeCoverage]
-    public static IEndpointRouteBuilder MapWorkItemFrameworkEndpoints(this IEndpointRouteBuilder app)
+    public static IEndpointRouteBuilder MapWorkItemFrameworkEndpoints(
+        this IEndpointRouteBuilder app
+    )
     {
         var group = app.MapGroup("/work-items").WithTags("WorkItems");
 
-        group.MapPost(string.Empty, Submit)
+        group
+            .MapPost(string.Empty, Submit)
             .WithName("SubmitWorkItem")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxSubmitBodyBytes))
             .RequireAuthorization();
 
-        group.MapGet("/{id:guid}", GetById)
-            .WithName("GetWorkItemById")
-            .RequireAuthorization();
+        group.MapGet("/{id:guid}", GetById).WithName("GetWorkItemById").RequireAuthorization();
 
-        group.MapGet(string.Empty, GetAll)
-            .WithName("ListWorkItems")
-            .RequireAuthorization();
+        group.MapGet(string.Empty, GetAll).WithName("ListWorkItems").RequireAuthorization();
 
-        group.MapPost("/{id:guid}/tasks/{taskId}/complete", CompleteTask)
+        group
+            .MapPost("/{id:guid}/tasks/{taskId}/complete", CompleteTask)
             .WithName("CompleteWorkItemTask")
             .RequireAuthorization();
 
-        group.MapPut("/{id:guid}/tasks/{taskId}/status", SetTaskStatus)
+        group
+            .MapPut("/{id:guid}/tasks/{taskId}/status", SetTaskStatus)
             .WithName("SetWorkItemTaskStatus")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxTaskStatusBodyBytes))
             .RequireAuthorization();
 
-        group.MapPost("/{id:guid}/actions/{actionId}", ApplyAction)
+        group
+            .MapPost("/{id:guid}/actions/{actionId}", ApplyAction)
             .WithName("ApplyWorkItemAction")
             .RequireAuthorization();
 
-        group.MapPost("/{id:guid}/assign", Assign)
+        group
+            .MapPost("/{id:guid}/assign", Assign)
             .WithName("AssignWorkItem")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxAssignBodyBytes))
             .RequireAuthorization();
 
-        group.MapPost("/{id:guid}/unassign", Unassign)
+        group
+            .MapPost("/{id:guid}/unassign", Unassign)
             .WithName("UnassignWorkItem")
             .RequireAuthorization();
 
-        group.MapPost("/{id:guid}/notes", AddNote)
+        group
+            .MapPost("/{id:guid}/notes", AddNote)
             .WithName("AddWorkItemNote")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxNoteBodyBytes))
             .RequireAuthorization();
 
-        group.MapPost("/{id:guid}/tasks/{taskId}/notes", AddTaskNote)
+        group
+            .MapPost("/{id:guid}/tasks/{taskId}/notes", AddTaskNote)
             .WithName("AddWorkItemTaskNote")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxNoteBodyBytes))
@@ -104,63 +110,92 @@ public static class WorkItemEndpoints
         [FromServices] IWorkItemRegistry registry,
         [FromServices] IWorkItemService engine,
         [FromServices] IStructuredLogger<WorkItemEndpointsLogger> log,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var req = httpContext.Request;
         var bodyText = body.ValueKind != JsonValueKind.Undefined ? body.GetRawText() : "(empty)";
         // Truncate very large bodies in the log — the 1 MB cap still applies
         // at the framework level; this is just for readability.
         const int MaxLoggedBodyChars = 4096;
-        var loggedBody = bodyText.Length > MaxLoggedBodyChars
-            ? bodyText[..MaxLoggedBodyChars] + $"…(truncated, total {bodyText.Length} chars)"
-            : bodyText;
+        var loggedBody =
+            bodyText.Length > MaxLoggedBodyChars
+                ? bodyText[..MaxLoggedBodyChars] + $"…(truncated, total {bodyText.Length} chars)"
+                : bodyText;
 
-        log.Log(LogLevel.Information, "Work item submission received", new Dictionary<string, object?>
-        {
-            ["http.request.method"] = req.Method,
-            ["url.path"] = req.Path.Value,
-            ["http.request.body"] = loggedBody,
-            ["caller.client_id"] = req.Headers.TryGetValue("x-cdp-cognito-client-id", out var cid) ? cid.ToString() : "(absent)",
-            ["caller.user_id"] = req.Headers.TryGetValue("x-cdp-user-id", out var uid) ? uid.ToString() : "(absent)",
-            ["caller.user_name"] = req.Headers.TryGetValue("x-cdp-user-name", out var uname) ? uname.ToString() : "(absent)",
-            ["http.request.mime_type"] = req.ContentType ?? "(absent)",
-            ["http.request.body.bytes"] = req.ContentLength?.ToString() ?? "(absent)",
-        });
+        log.Log(
+            LogLevel.Information,
+            "Work item submission received",
+            new Dictionary<string, object?>
+            {
+                ["http.request.method"] = req.Method,
+                ["url.path"] = req.Path.Value,
+                ["http.request.body"] = loggedBody,
+                ["caller.client_id"] = req.Headers.TryGetValue(
+                    "x-cdp-cognito-client-id",
+                    out var cid
+                )
+                    ? cid.ToString()
+                    : "(absent)",
+                ["caller.user_id"] = req.Headers.TryGetValue("x-cdp-user-id", out var uid)
+                    ? uid.ToString()
+                    : "(absent)",
+                ["caller.user_name"] = req.Headers.TryGetValue("x-cdp-user-name", out var uname)
+                    ? uname.ToString()
+                    : "(absent)",
+                ["http.request.mime_type"] = req.ContentType ?? "(absent)",
+                ["http.request.body.bytes"] = req.ContentLength?.ToString() ?? "(absent)",
+            }
+        );
 
         if (body.ValueKind != JsonValueKind.Object)
         {
-            log.Log(LogLevel.Warning, "Work item submission rejected: body is not a JSON object", new Dictionary<string, object?>
-            {
-                ["error.message"] = $"ValueKind was {body.ValueKind}"
-            });
+            log.Log(
+                LogLevel.Warning,
+                "Work item submission rejected: body is not a JSON object",
+                new Dictionary<string, object?>
+                {
+                    ["error.message"] = $"ValueKind was {body.ValueKind}",
+                }
+            );
             return BadRequest("Invalid request", "Request body must be a JSON object.");
         }
 
-        if (!body.TryGetProperty("typeId", out var typeIdElement) ||
-            typeIdElement.ValueKind != JsonValueKind.String ||
-            string.IsNullOrWhiteSpace(typeIdElement.GetString()))
+        if (
+            !body.TryGetProperty("typeId", out var typeIdElement)
+            || typeIdElement.ValueKind != JsonValueKind.String
+            || string.IsNullOrWhiteSpace(typeIdElement.GetString())
+        )
         {
-            log.Log(LogLevel.Warning, "Work item submission rejected: missing or empty typeId", new Dictionary<string, object?>
-            {
-                ["http.request.body"] = loggedBody
-            });
-            return BadRequest("Invalid request", "'typeId' is required and must be a non-empty string.");
+            log.Log(
+                LogLevel.Warning,
+                "Work item submission rejected: missing or empty typeId",
+                new Dictionary<string, object?> { ["http.request.body"] = loggedBody }
+            );
+            return BadRequest(
+                "Invalid request",
+                "'typeId' is required and must be a non-empty string."
+            );
         }
 
         var typeId = typeIdElement.GetString()!;
         var type = registry.Find(typeId);
         if (type is null)
         {
-            log.Log(LogLevel.Warning, "Work item submission rejected: unknown typeId", new Dictionary<string, object?>
-            {
-                ["work_item.type_id"] = typeId
-            });
+            log.Log(
+                LogLevel.Warning,
+                "Work item submission rejected: unknown typeId",
+                new Dictionary<string, object?> { ["work_item.type_id"] = typeId }
+            );
             return BadRequest(
                 "Unknown work item type",
-                $"No work item type is registered with id '{typeId}'.");
+                $"No work item type is registered with id '{typeId}'."
+            );
         }
 
-        JsonElement? payload = body.TryGetProperty("payload", out var payloadElement) ? payloadElement : null;
+        JsonElement? payload = body.TryGetProperty("payload", out var payloadElement)
+            ? payloadElement
+            : null;
 
         MongoDB.Bson.BsonDocument payloadDocument;
         try
@@ -169,15 +204,21 @@ public static class WorkItemEndpoints
         }
         catch (InvalidWorkItemPayloadException ex)
         {
-            log.Log(LogLevel.Warning, "Work item submission rejected: invalid payload", new Dictionary<string, object?>
-            {
-                ["work_item.type_id"] = typeId,
-                ["error.message"] = ex.Message
-            }, ex);
+            log.Log(
+                LogLevel.Warning,
+                "Work item submission rejected: invalid payload",
+                new Dictionary<string, object?>
+                {
+                    ["work_item.type_id"] = typeId,
+                    ["error.message"] = ex.Message,
+                },
+                ex
+            );
             return BadRequest("Invalid work item payload", ex.Message);
         }
 
-        var submittedBy = httpContext.User.FindFirstValue("cognito:client_id")
+        var submittedBy =
+            httpContext.User.FindFirstValue("cognito:client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
         // RA-126: optional caller-supplied audit context. 'source' is a
@@ -194,15 +235,20 @@ public static class WorkItemEndpoints
         {
             if (sourceElement.ValueKind != JsonValueKind.String)
             {
-                log.Log(LogLevel.Warning, "Work item submission rejected: 'source' is not a string", new Dictionary<string, object?>
-                {
-                    ["work_item.type_id"] = typeId,
-                    ["error.message"] = $"'source' ValueKind was {sourceElement.ValueKind}"
-                });
+                log.Log(
+                    LogLevel.Warning,
+                    "Work item submission rejected: 'source' is not a string",
+                    new Dictionary<string, object?>
+                    {
+                        ["work_item.type_id"] = typeId,
+                        ["error.message"] = $"'source' ValueKind was {sourceElement.ValueKind}",
+                    }
+                );
                 return BadRequest("Invalid request body", "'source' must be a string.");
             }
-            (submissionMetadata ??= new Dictionary<string, string?>(StringComparer.Ordinal))
-                ["source"] = sourceElement.GetString();
+            (submissionMetadata ??= new Dictionary<string, string?>(StringComparer.Ordinal))[
+                "source"
+            ] = sourceElement.GetString();
         }
 
         // Routed through the engine so the framework owns audit-log
@@ -214,64 +260,88 @@ public static class WorkItemEndpoints
         try
         {
             result = await engine.SubmitAsync(
-                type, payloadDocument, submittedBy, httpContext.User, submissionMetadata, cancellationToken);
+                type,
+                payloadDocument,
+                submittedBy,
+                httpContext.User,
+                submissionMetadata,
+                cancellationToken
+            );
         }
         catch (Exception ex)
         {
-            log.Log(LogLevel.Error, "Work item submission threw an unhandled exception", new Dictionary<string, object?>
-            {
-                ["work_item.type_id"] = typeId,
-                ["caller.client_id"] = submittedBy ?? "(unknown)",
-                ["error.type"] = ex.GetType().FullName,
-                ["error.message"] = ex.Message
-            }, ex);
+            log.Log(
+                LogLevel.Error,
+                "Work item submission threw an unhandled exception",
+                new Dictionary<string, object?>
+                {
+                    ["work_item.type_id"] = typeId,
+                    ["caller.client_id"] = submittedBy ?? "(unknown)",
+                    ["error.type"] = ex.GetType().FullName,
+                    ["error.message"] = ex.Message,
+                },
+                ex
+            );
             throw;
         }
 
         if (!result.IsSuccess)
         {
-            log.Log(LogLevel.Warning, "Work item submission failed", new Dictionary<string, object?>
-            {
-                ["work_item.type_id"] = typeId,
-                ["caller.client_id"] = submittedBy ?? "(unknown)",
-                ["error.code"] = result.FailureCode.ToString(),
-                ["error.message"] = result.Message
-            });
+            log.Log(
+                LogLevel.Warning,
+                "Work item submission failed",
+                new Dictionary<string, object?>
+                {
+                    ["work_item.type_id"] = typeId,
+                    ["caller.client_id"] = submittedBy ?? "(unknown)",
+                    ["error.code"] = result.FailureCode.ToString(),
+                    ["error.message"] = result.Message,
+                }
+            );
             return result.FailureCode switch
             {
-                WorkItemActionFailureCode.MissingActorIdentity
-                    => TypedResults.Problem(
-                        title: "Authentication required",
-                        detail: result.Message,
-                        statusCode: StatusCodes.Status401Unauthorized),
+                WorkItemActionFailureCode.MissingActorIdentity => TypedResults.Problem(
+                    title: "Authentication required",
+                    detail: result.Message,
+                    statusCode: StatusCodes.Status401Unauthorized
+                ),
                 // RA-219: applicationReference exhaustion is transient and
                 // server-side, so surface a clean 503 (retryable) rather than
                 // letting the engine throw past this handler as a 500.
-                WorkItemActionFailureCode.ApplicationReferenceExhausted
-                    => TypedResults.Problem(
-                        title: "Submission temporarily unavailable",
-                        detail: result.Message,
-                        statusCode: StatusCodes.Status503ServiceUnavailable),
+                WorkItemActionFailureCode.ApplicationReferenceExhausted => TypedResults.Problem(
+                    title: "Submission temporarily unavailable",
+                    detail: result.Message,
+                    statusCode: StatusCodes.Status503ServiceUnavailable
+                ),
                 _ => TypedResults.Problem(
                     title: "Invalid request",
                     detail: result.Message,
-                    statusCode: StatusCodes.Status400BadRequest)
+                    statusCode: StatusCodes.Status400BadRequest
+                ),
             };
         }
 
         var workItem = result.WorkItem!;
-        log.Log(LogLevel.Information, "Work item submission succeeded", new Dictionary<string, object?>
-        {
-            ["work_item.id"] = workItem.Id.ToString(),
-            ["work_item.type_id"] = typeId,
-            ["caller.client_id"] = submittedBy ?? "(unknown)"
-        });
+        log.Log(
+            LogLevel.Information,
+            "Work item submission succeeded",
+            new Dictionary<string, object?>
+            {
+                ["work_item.id"] = workItem.Id.ToString(),
+                ["work_item.type_id"] = typeId,
+                ["caller.client_id"] = submittedBy ?? "(unknown)",
+            }
+        );
         var response = ToResponse(engine.Project(workItem));
         return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
     }
 
     private static ProblemHttpResult BadRequest(string title, string detail) =>
-        TypedResults.Problem(title: title, detail: detail, statusCode: StatusCodes.Status400BadRequest);
+        TypedResults.Problem(
+            title: title,
+            detail: detail,
+            statusCode: StatusCodes.Status400BadRequest
+        );
 
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound>> GetById(
         [FromRoute] Guid id,
@@ -279,7 +349,8 @@ public static class WorkItemEndpoints
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         [FromServices] TimeProvider timeProvider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
         if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
@@ -296,7 +367,8 @@ public static class WorkItemEndpoints
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         [FromServices] TimeProvider timeProvider,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var query = WorkItemQueryBinding.FromQueryString(httpContext.Request.Query);
 
@@ -305,7 +377,8 @@ public static class WorkItemEndpoints
             return TypedResults.Problem(
                 title: "Page out of range",
                 detail: $"'page' must be <= {WorkItemQuery.MaxPage}.",
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
         // Tenancy isolation: standard callers only ever see items they
@@ -313,7 +386,8 @@ public static class WorkItemEndpoints
         // bypass this filter and see everything.
         if (!httpContext.User.IsInRole(CaseWorkerRole))
         {
-            var callerClientId = httpContext.User.FindFirstValue("cognito:client_id")
+            var callerClientId =
+                httpContext.User.FindFirstValue("cognito:client_id")
                 ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
             if (string.IsNullOrEmpty(callerClientId))
             {
@@ -322,22 +396,27 @@ public static class WorkItemEndpoints
                 // ferrying a sentinel into the Mongo filter. Failing
                 // closed structurally means a future submitter id can
                 // never accidentally collide with the gate.
-                return TypedResults.Ok(new WorkItemListResponse(
-                    Array.Empty<WorkItemListItemResponse>(),
-                    TotalCount: 0,
-                    Page: query.NormalisedPage,
-                    PageSize: query.NormalisedPageSize));
+                return TypedResults.Ok(
+                    new WorkItemListResponse(
+                        Array.Empty<WorkItemListItemResponse>(),
+                        TotalCount: 0,
+                        Page: query.NormalisedPage,
+                        PageSize: query.NormalisedPageSize
+                    )
+                );
             }
             query = query with { SubmittedBy = callerClientId };
         }
 
         var page = await persistence.QueryAsync(query, cancellationToken);
 
-        var items = page.Items
-            .Select(w => ToListItemResponse(engine.Project(w), timeProvider))
+        var items = page
+            .Items.Select(w => ToListItemResponse(engine.Project(w), timeProvider))
             .ToList();
 
-        return TypedResults.Ok(new WorkItemListResponse(items, page.TotalCount, page.Page, page.PageSize));
+        return TypedResults.Ok(
+            new WorkItemListResponse(items, page.TotalCount, page.Page, page.PageSize)
+        );
     }
 
     /// <summary>
@@ -347,19 +426,30 @@ public static class WorkItemEndpoints
     /// </summary>
     public const string IdempotentReplayHeader = "X-Idempotent-Replay";
 
-    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> CompleteTask(
+    internal static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > CompleteTask(
         [FromRoute] Guid id,
         [FromRoute] string taskId,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        if (
+            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
+            is null
+        )
         {
             return TypedResults.NotFound();
         }
-        var result = await engine.CompleteTaskAsync(id, taskId, httpContext.User, cancellationToken);
+        var result = await engine.CompleteTaskAsync(
+            id,
+            taskId,
+            httpContext.User,
+            cancellationToken
+        );
         if (result.IsIdempotentReplay)
         {
             httpContext.Response.Headers[IdempotentReplayHeader] = "true";
@@ -367,16 +457,22 @@ public static class WorkItemEndpoints
         return ToHttpResult(result, engine);
     }
 
-    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> SetTaskStatus(
+    internal static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > SetTaskStatus(
         [FromRoute] Guid id,
         [FromRoute] string taskId,
         JsonElement body,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        if (
+            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
+            is null
+        )
         {
             return TypedResults.NotFound();
         }
@@ -384,46 +480,73 @@ public static class WorkItemEndpoints
         {
             return BadRequest(
                 "Invalid request",
-                "Request body must be a JSON object containing 'status'.");
+                "Request body must be a JSON object containing 'status'."
+            );
         }
-        if (!body.TryGetProperty("status", out var statusElement)
+        if (
+            !body.TryGetProperty("status", out var statusElement)
             || statusElement.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(statusElement.GetString()))
+            || string.IsNullOrWhiteSpace(statusElement.GetString())
+        )
         {
             return BadRequest(
                 "Invalid request",
-                "'status' is required and must be a non-empty string.");
+                "'status' is required and must be a non-empty string."
+            );
         }
 
         // Case-insensitive bind matches the JSON enum convention used
         // elsewhere on the wire and means a UI can send "InProgress" or
         // "in-progress"-style casing without breaking the API.
-        if (!Enum.TryParse<WorkItemTaskStatus>(statusElement.GetString(), ignoreCase: true, out var status)
-            || !Enum.IsDefined(status))
+        if (
+            !Enum.TryParse<WorkItemTaskStatus>(
+                statusElement.GetString(),
+                ignoreCase: true,
+                out var status
+            ) || !Enum.IsDefined(status)
+        )
         {
             return BadRequest(
                 "Invalid status",
-                $"'{statusElement.GetString()}' is not a recognised task status. " +
-                $"Expected one of: {string.Join(", ", Enum.GetNames<WorkItemTaskStatus>())}.");
+                $"'{statusElement.GetString()}' is not a recognised task status. "
+                    + $"Expected one of: {string.Join(", ", Enum.GetNames<WorkItemTaskStatus>())}."
+            );
         }
 
-        var result = await engine.SetTaskStatusAsync(id, taskId, status, httpContext.User, cancellationToken);
+        var result = await engine.SetTaskStatusAsync(
+            id,
+            taskId,
+            status,
+            httpContext.User,
+            cancellationToken
+        );
         return ToHttpResult(result, engine);
     }
 
-    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> ApplyAction(
+    internal static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > ApplyAction(
         [FromRoute] Guid id,
         [FromRoute] string actionId,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        if (
+            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
+            is null
+        )
         {
             return TypedResults.NotFound();
         }
-        var result = await engine.ApplyActionAsync(id, actionId, httpContext.User, cancellationToken);
+        var result = await engine.ApplyActionAsync(
+            id,
+            actionId,
+            httpContext.User,
+            cancellationToken
+        );
         return ToHttpResult(result, engine);
     }
 
@@ -433,33 +556,52 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        if (
+            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
+            is null
+        )
         {
             return TypedResults.NotFound();
         }
         if (body.ValueKind != JsonValueKind.Object)
         {
-            return BadRequest("Invalid request", "Request body must be a JSON object containing 'assigneeId'.");
+            return BadRequest(
+                "Invalid request",
+                "Request body must be a JSON object containing 'assigneeId'."
+            );
         }
 
-        if (!body.TryGetProperty("assigneeId", out var assigneeIdElement)
+        if (
+            !body.TryGetProperty("assigneeId", out var assigneeIdElement)
             || assigneeIdElement.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(assigneeIdElement.GetString()))
+            || string.IsNullOrWhiteSpace(assigneeIdElement.GetString())
+        )
         {
-            return BadRequest("Invalid request", "'assigneeId' is required and must be a non-empty string.");
+            return BadRequest(
+                "Invalid request",
+                "'assigneeId' is required and must be a non-empty string."
+            );
         }
 
         string? assigneeName = null;
-        if (body.TryGetProperty("assigneeName", out var assigneeNameElement)
-            && assigneeNameElement.ValueKind == JsonValueKind.String)
+        if (
+            body.TryGetProperty("assigneeName", out var assigneeNameElement)
+            && assigneeNameElement.ValueKind == JsonValueKind.String
+        )
         {
             assigneeName = assigneeNameElement.GetString();
         }
 
         var result = await engine.AssignAsync(
-            id, assigneeIdElement.GetString()!, assigneeName, httpContext.User, cancellationToken);
+            id,
+            assigneeIdElement.GetString()!,
+            assigneeName,
+            httpContext.User,
+            cancellationToken
+        );
         if (result.IsIdempotentReplay)
         {
             httpContext.Response.Headers[IdempotentReplayHeader] = "true";
@@ -472,9 +614,13 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        if (
+            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
+            is null
+        )
         {
             return TypedResults.NotFound();
         }
@@ -492,25 +638,42 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        if (
+            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
+            is null
+        )
         {
             return TypedResults.NotFound();
         }
         if (body.ValueKind != JsonValueKind.Object)
         {
-            return BadRequest("Invalid request", "Request body must be a JSON object containing 'text'.");
+            return BadRequest(
+                "Invalid request",
+                "Request body must be a JSON object containing 'text'."
+            );
         }
 
-        if (!body.TryGetProperty("text", out var textElement)
+        if (
+            !body.TryGetProperty("text", out var textElement)
             || textElement.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(textElement.GetString()))
+            || string.IsNullOrWhiteSpace(textElement.GetString())
+        )
         {
-            return BadRequest("Invalid request", "'text' is required and must be a non-empty string.");
+            return BadRequest(
+                "Invalid request",
+                "'text' is required and must be a non-empty string."
+            );
         }
 
-        var result = await engine.AddNoteAsync(id, textElement.GetString()!, httpContext.User, cancellationToken);
+        var result = await engine.AddNoteAsync(
+            id,
+            textElement.GetString()!,
+            httpContext.User,
+            cancellationToken
+        );
         return ToHttpResult(result, engine);
     }
 
@@ -522,32 +685,52 @@ public static class WorkItemEndpoints
     /// task against the work item's current-state task list and emit a
     /// <c>task-note-added</c> audit entry instead of <c>note-added</c>.
     /// </summary>
-    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> AddTaskNote(
+    internal static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > AddTaskNote(
         [FromRoute] Guid id,
         [FromRoute] string taskId,
         JsonElement body,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        if (await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken) is null)
+        if (
+            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
+            is null
+        )
         {
             return TypedResults.NotFound();
         }
         if (body.ValueKind != JsonValueKind.Object)
         {
-            return BadRequest("Invalid request", "Request body must be a JSON object containing 'text'.");
+            return BadRequest(
+                "Invalid request",
+                "Request body must be a JSON object containing 'text'."
+            );
         }
 
-        if (!body.TryGetProperty("text", out var textElement)
+        if (
+            !body.TryGetProperty("text", out var textElement)
             || textElement.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(textElement.GetString()))
+            || string.IsNullOrWhiteSpace(textElement.GetString())
+        )
         {
-            return BadRequest("Invalid request", "'text' is required and must be a non-empty string.");
+            return BadRequest(
+                "Invalid request",
+                "'text' is required and must be a non-empty string."
+            );
         }
 
-        var result = await engine.AddTaskNoteAsync(id, taskId, textElement.GetString()!, httpContext.User, cancellationToken);
+        var result = await engine.AddTaskNoteAsync(
+            id,
+            taskId,
+            textElement.GetString()!,
+            httpContext.User,
+            cancellationToken
+        );
         return ToHttpResult(result, engine);
     }
 
@@ -564,7 +747,8 @@ public static class WorkItemEndpoints
         Guid id,
         ClaimsPrincipal user,
         IWorkItemPersistence persistence,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
         if (workItem is null || !WorkItemTenancy.CanRead(user, workItem))
@@ -575,7 +759,10 @@ public static class WorkItemEndpoints
     }
 
     private static Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult> ToHttpResult(
-        WorkItemActionResult result, IWorkItemService engine, TimeProvider? timeProvider = null)
+        WorkItemActionResult result,
+        IWorkItemService engine,
+        TimeProvider? timeProvider = null
+    )
     {
         if (result.IsSuccess)
         {
@@ -586,38 +773,42 @@ public static class WorkItemEndpoints
         {
             WorkItemActionFailureCode.WorkItemNotFound => TypedResults.NotFound(),
             WorkItemActionFailureCode.TaskNotApplicable
-                or WorkItemActionFailureCode.UnknownAction
-                or WorkItemActionFailureCode.InvalidTransition
-                or WorkItemActionFailureCode.InvalidAssignment
-                or WorkItemActionFailureCode.InvalidNote
-                => TypedResults.Problem(
-                    title: "Invalid action",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status400BadRequest),
-            WorkItemActionFailureCode.NotAuthorized
-                => TypedResults.Problem(
-                    title: "Not authorised",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status403Forbidden),
-            WorkItemActionFailureCode.MissingActorIdentity
-                => TypedResults.Problem(
-                    title: "Authentication required",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status401Unauthorized),
+            or WorkItemActionFailureCode.UnknownAction
+            or WorkItemActionFailureCode.InvalidTransition
+            or WorkItemActionFailureCode.InvalidAssignment
+            or WorkItemActionFailureCode.InvalidNote => TypedResults.Problem(
+                title: "Invalid action",
+                detail: result.Message,
+                statusCode: StatusCodes.Status400BadRequest
+            ),
+            WorkItemActionFailureCode.NotAuthorized => TypedResults.Problem(
+                title: "Not authorised",
+                detail: result.Message,
+                statusCode: StatusCodes.Status403Forbidden
+            ),
+            WorkItemActionFailureCode.MissingActorIdentity => TypedResults.Problem(
+                title: "Authentication required",
+                detail: result.Message,
+                statusCode: StatusCodes.Status401Unauthorized
+            ),
             WorkItemActionFailureCode.IncompleteTasks
-                or WorkItemActionFailureCode.TerminalState
-                or WorkItemActionFailureCode.ConcurrencyConflict
-                => TypedResults.Problem(
-                    title: "Action not allowed",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status409Conflict),
-            _ => TypedResults.Problem(detail: result.Message, statusCode: StatusCodes.Status400BadRequest)
+            or WorkItemActionFailureCode.TerminalState
+            or WorkItemActionFailureCode.ConcurrencyConflict => TypedResults.Problem(
+                title: "Action not allowed",
+                detail: result.Message,
+                statusCode: StatusCodes.Status409Conflict
+            ),
+            _ => TypedResults.Problem(
+                detail: result.Message,
+                statusCode: StatusCodes.Status400BadRequest
+            ),
         };
     }
 
     internal static WorkItemResponse ToResponse(
         WorkItemEngineProjection projection,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         var w = projection.WorkItem;
         var now = timeProvider?.GetUtcNow().UtcDateTime;
@@ -639,9 +830,17 @@ public static class WorkItemEndpoints
             w.AssignedBy,
             // Notes are stored append-only but rendered newest-first so the
             // most relevant context is at the top of an assessor's screen.
-            w.Notes
-                .OrderByDescending(n => n.CreatedAt)
-                .Select(n => new WorkItemNoteResponse(n.Id, n.Text, n.CreatedAt, n.CreatedBy, n.CreatedByName) { TaskId = n.TaskId })
+            w.Notes.OrderByDescending(n => n.CreatedAt)
+                .Select(n => new WorkItemNoteResponse(
+                    n.Id,
+                    n.Text,
+                    n.CreatedAt,
+                    n.CreatedBy,
+                    n.CreatedByName
+                )
+                {
+                    TaskId = n.TaskId,
+                })
                 .ToList(),
             // Audit log (RA-97) is projected in chronological (oldest-first)
             // order so a UI renders a natural top-to-bottom timeline of
@@ -652,8 +851,7 @@ public static class WorkItemEndpoints
             // back-to-back) keep their append order on the wire instead
             // of relying on undefined behaviour from a tied OrderBy
             // (epr-s4y).
-            w.AuditLog
-                .Select((e, i) => (Entry: e, Index: i))
+            w.AuditLog.Select((e, i) => (Entry: e, Index: i))
                 .OrderBy(x => x.Entry.CreatedAt)
                 .ThenBy(x => x.Index)
                 .Select(x => new WorkItemAuditEntryResponse(
@@ -663,14 +861,21 @@ public static class WorkItemEndpoints
                     x.Entry.Details,
                     x.Entry.CreatedAt,
                     x.Entry.CreatedBy,
-                    x.Entry.CreatedByName))
+                    x.Entry.CreatedByName
+                ))
                 .ToList(),
             slaRemaining,
-            slaState);
+            slaState,
+            w.Payload.TryGetValue("applicationReference", out var reference) && reference.IsString
+                ? reference.AsString
+                : null
+        );
     }
 
     internal static (TimeSpan? Remaining, WorkItemSlaState? State) ComputeSla(
-        WorkItemSlaClock? clock, DateTime? now)
+        WorkItemSlaClock? clock,
+        DateTime? now
+    )
     {
         if (clock is null || now is null)
         {
@@ -691,7 +896,8 @@ public static class WorkItemEndpoints
     /// </summary>
     internal static WorkItemListItemResponse ToListItemResponse(
         WorkItemEngineProjection projection,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null
+    )
     {
         var w = projection.WorkItem;
         var now = timeProvider?.GetUtcNow().UtcDateTime;
@@ -712,6 +918,7 @@ public static class WorkItemEndpoints
             w.AssignedAt,
             w.AssignedBy,
             slaRemaining,
-            slaState);
+            slaState
+        );
     }
 }

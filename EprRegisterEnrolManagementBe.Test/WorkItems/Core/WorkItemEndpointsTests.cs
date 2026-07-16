@@ -126,7 +126,7 @@ public class WorkItemEndpointsTests
         // payload.applicationReference so the BFF can display it. The same
         // value must be what was persisted.
         var responseRef = body.Payload.GetProperty("applicationReference").GetString();
-        Assert.Matches(@"^RA-\d{9}$", responseRef);
+        Assert.Matches(@"^APP\d{2}EA$", responseRef);
         Assert.Equal(persisted.Payload["applicationReference"].AsString, responseRef);
     }
 
@@ -211,7 +211,7 @@ public class WorkItemEndpointsTests
         // RA-219: the server-generated reference, not the ignored client value.
         var auditedRef = entry.Details["applicationReference"];
         Assert.NotEqual("APP-123", auditedRef);
-        Assert.Matches(@"^RA-\d{9}$", auditedRef);
+        Assert.Matches(@"^APP\d{2}EA$", auditedRef);
     }
 
     [Fact]
@@ -237,7 +237,7 @@ public class WorkItemEndpointsTests
         // even with no submission metadata the birth entry carries a real
         // RA-######### value rather than null.
         Assert.True(entry.Details.ContainsKey("applicationReference"));
-        Assert.Matches(@"^RA-\d{9}$", entry.Details["applicationReference"]);
+        Assert.Matches(@"^APP\d{2}EA$", entry.Details["applicationReference"]);
         Assert.Equal("test-client", entry.Details["clientId"]);
         Assert.Equal("alice-1", entry.Details["userId"]);
     }
@@ -288,7 +288,7 @@ public class WorkItemEndpointsTests
         // empty — it carries exactly that one field.
         var field = Assert.Single(persisted!.Payload.Names);
         Assert.Equal("applicationReference", field);
-        Assert.Matches(@"^RA-\d{9}$", persisted.Payload["applicationReference"].AsString);
+        Assert.Matches(@"^APP\d{2}EA$", persisted.Payload["applicationReference"].AsString);
     }
 
     [Fact]

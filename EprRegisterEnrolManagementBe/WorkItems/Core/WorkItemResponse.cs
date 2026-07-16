@@ -30,7 +30,11 @@ public sealed record WorkItemResponse(
     IReadOnlyCollection<WorkItemNoteResponse>? Notes = null,
     IReadOnlyCollection<WorkItemAuditEntryResponse>? AuditLog = null,
     TimeSpan? SlaRemaining = null,
-    WorkItemSlaState? SlaState = null);
+    WorkItemSlaState? SlaState = null,
+    // RA-318: surfaced as a top-level field (mirroring payload.applicationReference)
+    // so callers don't need to parse the payload JSON to obtain it.
+    string? ApplicationReference = null
+);
 
 /// <summary>
 /// Wire shape for a single note attached to a work item (RA-96). Returned
@@ -42,7 +46,8 @@ public sealed record WorkItemNoteResponse(
     string Text,
     DateTime CreatedAt,
     string? CreatedBy,
-    string? CreatedByName)
+    string? CreatedByName
+)
 {
     /// <summary>
     /// Optional id of the task this note is scoped to (RA-129 / epr-cky).
@@ -66,4 +71,5 @@ public sealed record WorkItemAuditEntryResponse(
     IReadOnlyDictionary<string, string?> Details,
     DateTime CreatedAt,
     string? CreatedBy,
-    string? CreatedByName);
+    string? CreatedByName
+);
