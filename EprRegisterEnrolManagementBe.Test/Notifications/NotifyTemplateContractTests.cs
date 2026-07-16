@@ -211,7 +211,6 @@ public class NotifyTemplateContractTests
                 {
                     Text = "Decision rationale recorded by the assessor.",
                     CreatedAt = new DateTime(2025, 10, 9, 9, 30, 0, DateTimeKind.Utc),
-                    TaskId = null,
                 },
             ],
             SlaClock = needsSlaClock
