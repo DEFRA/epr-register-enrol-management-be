@@ -145,7 +145,7 @@ internal sealed class ReAccreditationApprovalService(
             var now = _timeProvider.GetUtcNow();
             var nowUtc = now.UtcDateTime;
             var accreditationYear = _accreditationConfig.CurrentYear;
-            var material = ResolveFirstMaterial(workItem.Payload);
+            var material = ResolveMaterial(workItem.Payload);
 
             string accreditationId;
             try
@@ -270,30 +270,23 @@ internal sealed class ReAccreditationApprovalService(
             SlaClock = new ReAccreditationSlaClock(stoppedAt)
         };
 
-        workItem.ReplacePayload(updated.ToBsonDocument());
+        // RA-249: merge the modelled updates back over the *existing* payload rather
+        // than replacing it wholesale. A full replace against this
+        // [BsonIgnoreExtraElements] model dropped every unmodelled payload key
+        // (applicationReference, source, siteAddress*, ...) on approval, which turned
+        // the application ref into the work-item Guid downstream.
+        // Note: Merge is a shallow top-level merge — an unmodelled key nested
+        // *inside* a modelled top-level object would still be lost (that object is
+        // round-tripped through the model before overwriting). All keys at risk today
+        // (applicationReference, source, siteAddress*) are top-level, so they survive.
+        var merged = (workItem.Payload ?? new BsonDocument()).DeepClone().AsBsonDocument;
+        merged.Merge(updated.ToBsonDocument(), overwriteExistingElements: true);
+        workItem.ReplacePayload(merged);
         return true;
     }
 
-    private static string? ResolveFirstMaterial(BsonDocument? payload)
-    {
-        if (payload is null)
-        {
-            return null;
-        }
-        if (payload.TryGetValue("materialsHandled", out var raw) &&
-            raw is BsonArray array && array.Count > 0)
-        {
-            var first = array[0];
-            if (!first.IsBsonNull)
-            {
-                return first.ToString();
-            }
-        }
-        // Fallback: the create form (RA-127) submits a single-value
-        // `material` field. Read it so the accreditation id gets the
-        // correct material initial instead of defaulting to "X".
-        return TryReadString(payload, "material");
-    }
+    private static string? ResolveMaterial(BsonDocument? payload) =>
+        TryReadString(payload, "material");
 
     private async Task EnqueuePublishingAuditAsync(
         WorkItem workItem,

@@ -52,7 +52,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Acme Recycling Ltd",
                 ["registrationNumber"] = "EPR-100023",
-                ["materialsHandled"] = new BsonArray { "plastic", "glass" },
+                ["operatorRegistrationId"] = "reg-001",
+                ["material"] = "plastic",
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "acme.recycling@example.com",
@@ -72,7 +73,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Northern Plastics Co-op",
                 ["registrationNumber"] = "EPR-100087",
-                ["materialsHandled"] = new BsonArray { "plastic" },
+                ["operatorRegistrationId"] = "reg-002",
+                ["material"] = "plastic",
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 1,
                 ["operatorEmail"] = "northern.plastics@example.com",
@@ -95,7 +97,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Riverside Glass Recovery",
                 ["registrationNumber"] = "EPR-099812",
-                ["materialsHandled"] = new BsonArray { "glass", "metal" },
+                ["operatorRegistrationId"] = "reg-003",
+                ["material"] = "glass",
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 2,
                 ["operatorEmail"] = "riverside.glass@example.com",
@@ -134,7 +137,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Coastal Materials Group",
                 ["registrationNumber"] = "EPR-098774",
-                ["materialsHandled"] = new BsonArray { "plastic", "paper", "card" },
+                ["operatorRegistrationId"] = "reg-004",
+                ["material"] = "plastic",
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "coastal.materials@example.com",
@@ -174,7 +178,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Heritage Paper Mills",
                 ["registrationNumber"] = "EPR-097215",
-                ["materialsHandled"] = new BsonArray { "paper", "card" },
+                ["operatorRegistrationId"] = "reg-005",
+                ["material"] = "paper",
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "heritage.paper@example.com",
@@ -217,7 +222,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Clyde Composites Ltd",
                 ["registrationNumber"] = "EPR-100134",
-                ["materialsHandled"] = new BsonArray { "plastic", "metal" },
+                ["operatorRegistrationId"] = "reg-006",
+                ["material"] = "plastic",
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "clyde.composites@example.com",
@@ -236,7 +242,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Swansea Textiles Recovery",
                 ["registrationNumber"] = "EPR-099441",
-                ["materialsHandled"] = new BsonArray { "glass" },
+                ["operatorRegistrationId"] = "reg-007",
+                ["material"] = "glass",
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 1,
                 ["operatorEmail"] = "swansea.textiles@example.com",
@@ -273,11 +280,92 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = "Belfast Fibres Co",
                 ["registrationNumber"] = "EPR-100198",
-                ["materialsHandled"] = new BsonArray { "paper", "card" },
+                ["operatorRegistrationId"] = "reg-008",
+                ["material"] = "paper",
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "belfast.fibres@example.com",
                 ["siteAddressPostcode"] = "BT7 1AA"
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // RA-254: carries every field a real operator submission can send —
+        // including submittedBy, prns, businessPlan and samplingPlan, which
+        // none of the items above populate. Used by the mgmt-tests e2e suite
+        // to verify the Application details page renders the full payload
+        // rather than just the subset the other seed items happen to cover.
+        yield return Build(
+            seedKey: "full-payload-verification",
+            postcode: "EC1A 1BB",
+            submittedDaysAgo: 4,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Full Payload Verification Ltd",
+                ["registrationNumber"] = "EPR-100999",
+                ["operatorApplicationId"] = "app-full-payload-001",
+                ["operatorOrganisationId"] = "org-full-payload-001",
+                ["operatorRegistrationId"] = "reg-full-payload-001",
+                ["material"] = "plastic",
+                ["accreditationYear"] = 2026,
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "full.payload@example.com",
+                ["siteAddress"] = "1 Full Payload Lane, London",
+                ["siteAddressPostcode"] = "EC1A 1BB",
+                ["submittedBy"] = new BsonDocument
+                {
+                    ["fullName"] = "Priya Sharma",
+                    ["jobTitle"] = "Compliance Manager",
+                    ["email"] = "priya.sharma@example.com"
+                },
+                ["prns"] = new BsonDocument
+                {
+                    ["plannedTonnageBand"] = "UpTo1000",
+                    ["authorisers"] = new BsonArray
+                    {
+                        new BsonDocument
+                        {
+                            ["fullName"] = "Tom Baker",
+                            ["email"] = "tom.baker@example.com"
+                        }
+                    }
+                },
+                ["businessPlan"] = new BsonDocument
+                {
+                    ["newInfrastructurePercent"] = 20,
+                    ["priceSupportPercent"] = 15,
+                    ["businessCollectionsPercent"] = 25,
+                    ["communicationsPercent"] = 10,
+                    ["newMarketsPercent"] = 20,
+                    ["newUsesPercent"] = 10,
+                    ["newInfrastructureDetail"] = "New sorting line investment",
+                    ["priceSupportDetail"] = "Subsidised collection scheme",
+                    ["businessCollectionsDetail"] = "Kerbside collection expansion",
+                    ["communicationsDetail"] = "Customer awareness campaign",
+                    ["newMarketsDetail"] = "New export contracts secured",
+                    ["newUsesDetail"] = "Recycled content packaging trial"
+                },
+                ["samplingPlan"] = new BsonDocument
+                {
+                    ["files"] = new BsonArray
+                    {
+                        new BsonDocument
+                        {
+                            ["filename"] = "sampling-plan.pdf",
+                            // A real operator submission sends this field as
+                            // plain JSON (System.Text.Json serialises DateTime
+                            // as an ISO-8601 string), which lands in Mongo as a
+                            // BSON string — not a BsonDateTime. Using a native
+                            // DateTime here would round-trip through the API as
+                            // `{"$date": "..."}`, which the "Uploaded at" GDS
+                            // date filter can't parse (it expects a string).
+                            ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
+                            ["scanStatus"] = "Clean"
+                        }
+                    }
+                }
             },
             submittedBy: "stub-portal-client",
             now: now);

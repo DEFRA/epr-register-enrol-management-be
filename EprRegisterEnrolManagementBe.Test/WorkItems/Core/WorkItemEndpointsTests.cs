@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -550,7 +551,8 @@ public class WorkItemEndpointsTests
                 new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
         };
 
-        var result = await WorkItemEndpoints.Submit(body, httpContext, registry, engine, cancellationToken);
+        var result = await WorkItemEndpoints.Submit(body, httpContext, registry, engine,
+            Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(), cancellationToken);
 
         var problem = Assert.IsType<ProblemHttpResult>(result.Result);
         Assert.Equal(

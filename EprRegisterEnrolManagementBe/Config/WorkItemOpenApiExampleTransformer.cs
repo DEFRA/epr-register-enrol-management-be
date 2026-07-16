@@ -25,7 +25,8 @@ internal sealed class WorkItemOpenApiExampleTransformer : IOpenApiDocumentTransf
                     "payload": {
                         "organisationName": "Acme Recycling Ltd",
                         "registrationNumber": "12345678",
-                        "materialsHandled": ["paper", "glass", "plastic"],
+                        "operatorRegistrationId": "reg-001",
+                        "material": "plastic",
                         "previousAccreditationYear": 2023,
                         "complianceIssuesReported": 0,
                         "operatorEmail": "operator@acmerecycling.example.com"

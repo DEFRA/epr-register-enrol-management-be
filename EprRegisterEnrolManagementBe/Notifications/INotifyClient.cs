@@ -18,12 +18,21 @@ public interface INotifyClient
     /// template key returns <see cref="NotifySendResult.Failure"/> with
     /// an error message — it is a misconfiguration, not an exception.
     /// </summary>
+    /// <param name="region">
+    /// RA-211: region/regulator identifier (e.g. a
+    /// <c>ReAccreditationPayload.Nation</c> value such as <c>England</c>)
+    /// used to resolve the Notify <c>reply_to_id</c> via
+    /// <see cref="NotifyConfig.GetReplyToId"/>. <c>null</c>/unrecognised
+    /// falls back to <see cref="NotifyConfig.DefaultReplyToId"/>.
+    /// </param>
     Task<NotifySendResult> SendEmailAsync(
         string templateKey,
         string toEmail,
         Dictionary<string, string> personalisation,
         string reference,
-        CancellationToken cancellationToken = default);
+        string? region = null,
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <summary>
@@ -32,11 +41,11 @@ public interface INotifyClient
 public sealed record NotifySendResult(
     bool IsSuccess,
     string? ProviderMessageId,
-    string? ErrorMessage)
+    string? ErrorMessage
+)
 {
     public static NotifySendResult Success(string? providerMessageId) =>
         new(true, providerMessageId, null);
 
-    public static NotifySendResult Failure(string errorMessage) =>
-        new(false, null, errorMessage);
+    public static NotifySendResult Failure(string errorMessage) => new(false, null, errorMessage);
 }

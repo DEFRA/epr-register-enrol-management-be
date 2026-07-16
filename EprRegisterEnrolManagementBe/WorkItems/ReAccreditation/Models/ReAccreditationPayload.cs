@@ -22,9 +22,33 @@ internal sealed record ReAccreditationPayload
 {
     public string? OrganisationName { get; init; }
     public string? RegistrationNumber { get; init; }
-    public List<string>? MaterialsHandled { get; init; }
+
+    /// <summary>
+    /// Human-facing application reference (RA-219, format RA-#########),
+    /// stamped onto the payload by the core WorkItemService at submission.
+    /// Surfaced as the ((reference)) GOV.UK Notify placeholder in lifecycle
+    /// emails (RA-248) so operators see the case reference rather than the
+    /// internal work-item Guid. Null only for legacy items predating RA-219.
+    /// </summary>
+    public string? ApplicationReference { get; init; }
+
+    public string? Material { get; init; }
     public int? PreviousAccreditationYear { get; init; }
     public int? ComplianceIssuesReported { get; init; }
+
+    /// <summary>
+    /// ReEx organisation identifier for the submitting operator. Used by the
+    /// prior-year endpoint to look up accreditation data from ReEx. Populated
+    /// by the operator backend at submission time; absent for work items created
+    /// through the case management form.
+    /// </summary>
+    public string? OperatorOrganisationId { get; init; }
+
+    /// <summary>
+    /// ReEx registration identifier for the submitting operator. Used together
+    /// with <see cref="OperatorOrganisationId"/> for prior-year lookups.
+    /// </summary>
+    public string? OperatorRegistrationId { get; init; }
 
     /// <summary>
     /// Operator email address used as the GOV.UK Notify recipient for

@@ -22,7 +22,8 @@ internal sealed class ReAccreditationPaymentService(
     INotifyClient notifyClient,
     IWorkItemAuditAppender auditAppender,
     TimeProvider timeProvider,
-    ILogger<ReAccreditationPaymentService> logger) : IReAccreditationPaymentService
+    ILogger<ReAccreditationPaymentService> logger
+) : IReAccreditationPaymentService
 {
     private const string AssessmentInProgressState = "assessment-in-progress";
     private const string DulyMadeState = "duly-made";
@@ -30,28 +31,38 @@ internal sealed class ReAccreditationPaymentService(
     public async Task<WorkItemActionResult> RecordPaymentAsync(
         Guid workItemId,
         PaymentCompletedRequest request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.WorkItemNotFound,
-                $"No work item exists with id '{workItemId}'.");
+                $"No work item exists with id '{workItemId}'."
+            );
         }
 
-        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.Equals(
+                workItem.TypeId,
+                ReAccreditationType.Id,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
-                $"Work item {workItemId} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.");
+                $"Work item {workItemId} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'."
+            );
         }
 
         if (!string.Equals(workItem.StateId, DulyMadeState, StringComparison.OrdinalIgnoreCase))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
-                $"Work item {workItemId} is in state '{workItem.StateId}'; payment-completed requires '{DulyMadeState}'.");
+                $"Work item {workItemId} is in state '{workItem.StateId}'; payment-completed requires '{DulyMadeState}'."
+            );
         }
 
         // paidAt must be UTC. Unspecified-kind values (no Z / +00:00 suffix in JSON)
@@ -60,7 +71,8 @@ internal sealed class ReAccreditationPaymentService(
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
-                "'paidAt' must be UTC (use the Z or +00:00 suffix).");
+                "'paidAt' must be UTC (use the Z or +00:00 suffix)."
+            );
         }
         var paidAt = request.PaidAt;
         var now = timeProvider.GetUtcNow().UtcDateTime;
@@ -68,7 +80,8 @@ internal sealed class ReAccreditationPaymentService(
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
-                "'paidAt' must not be in the future.");
+                "'paidAt' must not be in the future."
+            );
         }
 
         // Mutate in-memory before the single ReplaceAsync so any
@@ -85,29 +98,53 @@ internal sealed class ReAccreditationPaymentService(
         workItem.LastModifiedAt = now;
 
         // Four audit entries attributed to the paying operator user.
-        AppendPaymentAudit(workItem, "payment-completed", "Payment completed", request, paidAt, new()
-        {
-            ["amountPence"] = request.AmountPence.ToString(),
-            ["reference"] = request.Reference
-        });
-        AppendPaymentAudit(workItem, "sla-clock-started", "SLA clock started", request, paidAt, new()
-        {
-            ["startedAt"] = paidAt.ToString("O"),
-            ["targetDays"] = workItem.SlaClock!.TargetDuration.TotalDays.ToString()
-        });
+        AppendPaymentAudit(
+            workItem,
+            "payment-completed",
+            "Payment completed",
+            request,
+            paidAt,
+            new()
+            {
+                ["amountPence"] = request.AmountPence.ToString(),
+                ["reference"] = request.Reference,
+            }
+        );
+        AppendPaymentAudit(
+            workItem,
+            "sla-clock-started",
+            "SLA clock started",
+            request,
+            paidAt,
+            new()
+            {
+                ["startedAt"] = paidAt.ToString("O"),
+                ["targetDays"] = workItem.SlaClock!.TargetDuration.TotalDays.ToString(),
+            }
+        );
         if (previousAssigneeId is not null)
         {
-            AppendPaymentAudit(workItem, "unassigned", "Unassigned on payment", request, now, new()
-            {
-                ["previousAssigneeId"] = previousAssigneeId,
-                ["previousAssigneeName"] = previousAssigneeName
-            });
+            AppendPaymentAudit(
+                workItem,
+                "unassigned",
+                "Unassigned on payment",
+                request,
+                now,
+                new()
+                {
+                    ["previousAssigneeId"] = previousAssigneeId,
+                    ["previousAssigneeName"] = previousAssigneeName,
+                }
+            );
         }
-        AppendPaymentAudit(workItem, "state-changed", "State changed", request, now, new()
-        {
-            ["fromStateId"] = DulyMadeState,
-            ["toStateId"] = AssessmentInProgressState
-        });
+        AppendPaymentAudit(
+            workItem,
+            "state-changed",
+            "State changed",
+            request,
+            now,
+            new() { ["fromStateId"] = DulyMadeState, ["toStateId"] = AssessmentInProgressState }
+        );
 
         try
         {
@@ -117,13 +154,19 @@ internal sealed class ReAccreditationPaymentService(
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.ConcurrencyConflict,
-                $"Work item '{workItemId}' was modified concurrently. Reload and retry.");
+                $"Work item '{workItemId}' was modified concurrently. Reload and retry."
+            );
         }
 
         logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) payment completed by operator {PaidByUserId}; " +
-            "SLA clock started at {PaidAt}; transitioned to {State}",
-            workItem.Id, workItem.TypeId, request.PaidByUserId, paidAt, AssessmentInProgressState);
+            "Work item {WorkItemId} ({TypeId}) payment completed by operator {PaidByUserId}; "
+                + "SLA clock started at {PaidAt}; transitioned to {State}",
+            workItem.Id,
+            workItem.TypeId,
+            request.PaidByUserId,
+            paidAt,
+            AssessmentInProgressState
+        );
 
         await SendNotificationAsync(workItem, request, cancellationToken);
 
@@ -136,23 +179,27 @@ internal sealed class ReAccreditationPaymentService(
         string displayName,
         PaymentCompletedRequest request,
         DateTime createdAt,
-        Dictionary<string, string?> details)
+        Dictionary<string, string?> details
+    )
     {
-        workItem.AuditLog.Add(new WorkItemAuditEntry
-        {
-            Action = action,
-            ActionDisplayName = displayName,
-            CreatedAt = createdAt,
-            CreatedBy = request.PaidByUserId,
-            CreatedByName = request.PaidByEmail,
-            Details = details
-        });
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
+            {
+                Action = action,
+                ActionDisplayName = displayName,
+                CreatedAt = createdAt,
+                CreatedBy = request.PaidByUserId,
+                CreatedByName = request.PaidByEmail,
+                Details = details,
+            }
+        );
     }
 
     private async Task SendNotificationAsync(
         WorkItem workItem,
         PaymentCompletedRequest request,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         ReAccreditationPayload? payload = null;
         try
@@ -161,31 +208,46 @@ internal sealed class ReAccreditationPaymentService(
         }
         catch (Exception ex)
         {
-            logger.LogError(ex,
+            logger.LogError(
+                ex,
                 "Failed to deserialise payload for work item {WorkItemId}; AssessmentInProgress email not sent.",
-                workItem.Id);
+                workItem.Id
+            );
         }
+
+        // RA-248: surface the human-facing application reference (RA-#########)
+        // in the ((reference)) placeholder, falling back to the internal
+        // work-item Guid only for legacy/malformed items missing it.
+        var reference = string.IsNullOrWhiteSpace(payload?.ApplicationReference)
+            ? workItem.Id.ToString()
+            : payload.ApplicationReference;
 
         var personalisation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["organisation_name"] = payload?.OrganisationName ?? string.Empty,
             ["registration_number"] = payload?.RegistrationNumber ?? string.Empty,
-            ["reference"] = workItem.Id.ToString()
+            ["reference"] = reference,
         };
+
+        // RA-211: region drives the reply-to mailbox (NotifyConfig.GetReplyToId);
+        // a missing/unresolvable Nation falls back to NotifyConfig.DefaultReplyToId.
+        var region = payload?.Nation?.ToString();
 
         var result = await notifyClient.SendEmailAsync(
             "AssessmentInProgress",
             request.PaidByEmail,
             personalisation,
-            workItem.Id.ToString(),
-            cancellationToken);
+            reference,
+            region,
+            cancellationToken
+        );
 
         var details = new Dictionary<string, string?>
         {
             ["templateKey"] = "AssessmentInProgress",
             ["recipient"] = request.PaidByEmail,
-            ["reference"] = workItem.Id.ToString(),
-            ["providerMessageId"] = result.ProviderMessageId
+            ["reference"] = reference,
+            ["providerMessageId"] = result.ProviderMessageId,
         };
 
         if (!result.IsSuccess)
@@ -205,13 +267,15 @@ internal sealed class ReAccreditationPaymentService(
                 : "Assessment in progress email failed",
             details,
             user: new ClaimsPrincipal(),
-            cancellationToken);
+            cancellationToken
+        );
 
         if (!appended)
         {
             logger.LogWarning(
                 "Notification outcome audit entry could not be persisted for work item {WorkItemId}.",
-                workItem.Id);
+                workItem.Id
+            );
         }
     }
 }

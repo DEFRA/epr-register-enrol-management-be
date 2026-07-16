@@ -1,8 +1,11 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 
@@ -17,7 +20,8 @@ internal static class ReAccreditationEndpoints
 {
     private static readonly JsonSerializerOptions s_payloadJsonOptions = new()
     {
-        PropertyNameCaseInsensitive = true
+        PropertyNameCaseInsensitive = true,
+        Converters = { new JsonStringEnumConverter() }
     };
 
     // Request body cap (epr-e5h) for the manually-parsed
@@ -62,6 +66,12 @@ internal static class ReAccreditationEndpoints
         // generic action handler would skip those side effects.
         group.MapPost("/{id:guid}/approve", Approve)
             .WithName("ApproveReAccreditation")
+            .RequireAuthorization();
+
+        // Live prior-year accreditation data from ReEx, scoped to this
+        // work item type because no other module needs ReEx access.
+        group.MapGet("/{id:guid}/prior-year", GetPriorYear)
+            .WithName("GetReAccreditationPriorYear")
             .RequireAuthorization();
 
         return app;
@@ -227,6 +237,62 @@ internal static class ReAccreditationEndpoints
         }
 
         return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+    }
+
+    /// <summary>
+    /// Return live prior-year accreditation data from ReEx for the given
+    /// re-accreditation work item. Uses the ReEx organisation and registration
+    /// identifiers stored in the work item payload (populated by the operator
+    /// backend at submission time). Returns 404 when the identifiers are absent
+    /// (work item created via the case management form) or when ReEx returns no
+    /// matching accreditation for the prior year.
+    /// </summary>
+    private static async Task<Results<Ok<PriorYearAccreditationDto>, NotFound, ProblemHttpResult>> GetPriorYear(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
+        [FromServices] IReExAccreditationClient reExClient,
+        CancellationToken cancellationToken)
+    {
+        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
+        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
+            return TypedResults.NotFound();
+
+        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))
+            return TypedResults.Problem(
+                title: "Wrong work item type",
+                detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
+                statusCode: StatusCodes.Status400BadRequest);
+
+        ReAccreditationPayload? payload;
+        try
+        {
+            var payloadJson = WorkItemPayloadConverter.ToJson(workItem.Payload);
+            payload = payloadJson.Deserialize<ReAccreditationPayload>(s_payloadJsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            return TypedResults.Problem(
+                title: "Invalid re-accreditation payload",
+                detail: ex.Message,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        // PreviousAccreditationYear is set by new operator submissions (Year − 1).
+        // Older work items only carry AccreditationYear; derive the prior year from that.
+        var priorYearValue = payload?.PreviousAccreditationYear
+            ?? (payload?.AccreditationYear is int ay ? ay - 1 : (int?)null);
+
+        var priorYear = await reExClient.GetPriorYearAsync(
+            payload?.OperatorOrganisationId,
+            payload?.OperatorRegistrationId,
+            priorYearValue,
+            cancellationToken);
+
+        if (priorYear is null)
+            return TypedResults.NotFound();
+
+        return TypedResults.Ok(priorYear);
     }
 
     /// <summary>

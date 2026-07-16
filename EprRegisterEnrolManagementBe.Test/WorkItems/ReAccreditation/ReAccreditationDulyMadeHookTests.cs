@@ -11,22 +11,36 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 public class ReAccreditationDulyMadeHookTests
 {
-    private static readonly ClaimsPrincipal s_user = new(new ClaimsIdentity(
-    [
-        new Claim("user:id", "user-1"),
-        new Claim("user:name", "Alice")
-    ], "test"));
+    private static readonly ClaimsPrincipal s_user = new(
+        new ClaimsIdentity(
+            [new Claim("user:id", "user-1"), new Claim("user:name", "Alice")],
+            "test"
+        )
+    );
 
-    private static WorkItem BuildWorkItem(string stateId = "submitted", string? operatorEmail = "op@example.com", string typeId = ReAccreditationType.Id)
+    // RA-248: human-facing application reference stamped on the payload by the
+    // core WorkItemService; expected in the ((reference)) Notify placeholder.
+    private const string ApplicationReference = "RA-000123456";
+
+    private static WorkItem BuildWorkItem(
+        string stateId = "submitted",
+        string? operatorEmail = "op@example.com",
+        string typeId = ReAccreditationType.Id,
+        string? applicationReference = ApplicationReference
+    )
     {
         var payload = new BsonDocument
         {
             ["organisationName"] = "Acme Ltd",
-            ["registrationNumber"] = "EX-001"
+            ["registrationNumber"] = "EX-001",
         };
         if (operatorEmail is not null)
         {
             payload["operatorEmail"] = operatorEmail;
+        }
+        if (applicationReference is not null)
+        {
+            payload["applicationReference"] = applicationReference;
         }
 
         return new WorkItem
@@ -35,7 +49,7 @@ public class ReAccreditationDulyMadeHookTests
             StateId = stateId,
             Payload = payload,
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(new ReAccreditationType()),
-            TemplateVersion = "v5"
+            TemplateVersion = "v5",
         };
     }
 
@@ -43,12 +57,15 @@ public class ReAccreditationDulyMadeHookTests
         IWorkItemPersistence persistence,
         INotifyClient notifyClient,
         IWorkItemAuditAppender auditAppender,
-        TimeProvider? timeProvider = null) =>
-        new(persistence,
+        TimeProvider? timeProvider = null
+    ) =>
+        new(
+            persistence,
             notifyClient,
             auditAppender,
             timeProvider ?? TimeProvider.System,
-            NullLogger<ReAccreditationDulyMadeHook>.Instance);
+            NullLogger<ReAccreditationDulyMadeHook>.Instance
+        );
 
     [Fact]
     public async Task OnAllTasksCompletedAsync_transitions_submitted_to_duly_made_and_appends_audit_entry()
@@ -57,8 +74,14 @@ public class ReAccreditationDulyMadeHookTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
             .Returns(NotifySendResult.Success("msg-id"));
 
         var workItem = BuildWorkItem();
@@ -67,11 +90,14 @@ public class ReAccreditationDulyMadeHookTests
         await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
 
         Assert.Equal("duly-made", workItem.StateId);
-        Assert.Contains(workItem.AuditLog, e =>
-            e.Action == "action-applied" &&
-            e.Details["actionId"] == "duly-make" &&
-            e.Details["fromStateId"] == "submitted" &&
-            e.Details["toStateId"] == "duly-made");
+        Assert.Contains(
+            workItem.AuditLog,
+            e =>
+                e.Action == "action-applied"
+                && e.Details["actionId"] == "duly-make"
+                && e.Details["fromStateId"] == "submitted"
+                && e.Details["toStateId"] == "duly-made"
+        );
         await persistence.Received(1).ReplaceAsync(workItem, ct);
     }
 
@@ -82,8 +108,14 @@ public class ReAccreditationDulyMadeHookTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
             .Returns(NotifySendResult.Success("msg-id"));
 
         var workItem = BuildWorkItem();
@@ -91,12 +123,15 @@ public class ReAccreditationDulyMadeHookTests
 
         await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
 
-        await notifyClient.Received(1).SendEmailAsync(
-            "DulyMade",
-            "op@example.com",
-            Arg.Any<Dictionary<string, string>>(),
-            workItem.Id.ToString(),
-            ct);
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "DulyMade",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                cancellationToken: ct
+            );
     }
 
     [Fact]
@@ -106,8 +141,14 @@ public class ReAccreditationDulyMadeHookTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
             .Returns(NotifySendResult.Success("msg-id"));
 
         var workItem = BuildWorkItem();
@@ -115,14 +156,18 @@ public class ReAccreditationDulyMadeHookTests
 
         await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
 
-        await auditAppender.Received(1).AppendAsync(
-            workItem.Id,
-            "notification-sent",
-            Arg.Any<string>(),
-            Arg.Is<Dictionary<string, string?>>(d =>
-                d["templateKey"] == "DulyMade" && d["providerMessageId"] == "msg-id"),
-            s_user,
-            ct);
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-sent",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "DulyMade" && d["providerMessageId"] == "msg-id"
+                ),
+                s_user,
+                ct
+            );
     }
 
     [Fact]
@@ -132,8 +177,14 @@ public class ReAccreditationDulyMadeHookTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
             .Returns(NotifySendResult.Failure("timeout"));
 
         var workItem = BuildWorkItem();
@@ -141,14 +192,18 @@ public class ReAccreditationDulyMadeHookTests
 
         await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
 
-        await auditAppender.Received(1).AppendAsync(
-            workItem.Id,
-            "notification-failed",
-            Arg.Any<string>(),
-            Arg.Is<Dictionary<string, string?>>(d =>
-                d["templateKey"] == "DulyMade" && d["errorMessage"] == "timeout"),
-            s_user,
-            ct);
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-failed",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "DulyMade" && d["errorMessage"] == "timeout"
+                ),
+                s_user,
+                ct
+            );
     }
 
     [Fact]
@@ -164,11 +219,19 @@ public class ReAccreditationDulyMadeHookTests
 
         await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
 
-        await notifyClient.DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, ct);
-        await auditAppender.Received(1).AppendAsync(
-            workItem.Id, "notification-skipped", Arg.Any<string>(),
-            Arg.Any<Dictionary<string, string?>>(), s_user, ct);
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-skipped",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                s_user,
+                ct
+            );
     }
 
     [Fact]
@@ -212,17 +275,20 @@ public class ReAccreditationDulyMadeHookTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        persistence.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>())
+        persistence
+            .ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new InvalidOperationException("DB error")));
 
         var workItem = BuildWorkItem();
         var sut = BuildSut(persistence, notifyClient, auditAppender);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
-            () => sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct)
+        );
 
-        await notifyClient.DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, ct);
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
     }
 
     [Fact]
@@ -232,8 +298,14 @@ public class ReAccreditationDulyMadeHookTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
             .Returns(NotifySendResult.Success("msg-id"));
 
         var fakeTime = new FakeTimeProvider();
@@ -256,8 +328,14 @@ public class ReAccreditationDulyMadeHookTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
             .Returns(NotifySendResult.Success("msg-id"));
 
         var workItem = BuildWorkItem();
@@ -265,10 +343,13 @@ public class ReAccreditationDulyMadeHookTests
 
         await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
 
-        Assert.Contains(workItem.AuditLog, e =>
-            e.Action == "sla-clock-started" &&
-            e.Details.ContainsKey("startedAt") &&
-            e.Details.ContainsKey("targetDays"));
+        Assert.Contains(
+            workItem.AuditLog,
+            e =>
+                e.Action == "sla-clock-started"
+                && e.Details.ContainsKey("startedAt")
+                && e.Details.ContainsKey("targetDays")
+        );
     }
 
     [Fact]
@@ -279,9 +360,14 @@ public class ReAccreditationDulyMadeHookTests
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
         Dictionary<string, string>? captured = null;
-        notifyClient.SendEmailAsync(Arg.Any<string>(), Arg.Any<string>(),
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(), Arg.Any<CancellationToken>())
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
             .Returns(NotifySendResult.Success("id"));
 
         var workItem = BuildWorkItem();
@@ -292,6 +378,107 @@ public class ReAccreditationDulyMadeHookTests
         Assert.NotNull(captured);
         Assert.Equal("Acme Ltd", captured!["organisation_name"]);
         Assert.Equal("EX-001", captured["registration_number"]);
-        Assert.Equal(workItem.Id.ToString(), captured["reference"]);
+        Assert.Equal(ApplicationReference, captured["reference"]);
+    }
+
+    // ─────── RA-248: application reference drives the ((reference)) placeholder ───────
+
+    [Fact]
+    public async Task DulyMade_uses_application_reference_for_personalisation_send_and_audit()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        Dictionary<string, string?>? auditDetails = null;
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-id"));
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                "notification-sent",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string?>>(d => auditDetails = d),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+
+        var workItem = BuildWorkItem();
+        var sut = BuildSut(persistence, notifyClient, auditAppender);
+
+        await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal(ApplicationReference, captured!["reference"]);
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "DulyMade",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                cancellationToken: ct
+            );
+        Assert.NotNull(auditDetails);
+        Assert.Equal(ApplicationReference, auditDetails!["reference"]);
+    }
+
+    [Fact]
+    public async Task DulyMade_falls_back_to_work_item_id_when_application_reference_absent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        Dictionary<string, string?>? auditDetails = null;
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-id"));
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                "notification-sent",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string?>>(d => auditDetails = d),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+
+        // Legacy item predating RA-219: no applicationReference on the payload.
+        var workItem = BuildWorkItem(applicationReference: null);
+        var sut = BuildSut(persistence, notifyClient, auditAppender);
+
+        await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal(workItem.Id.ToString(), captured!["reference"]);
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "DulyMade",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                workItem.Id.ToString(),
+                cancellationToken: ct
+            );
+        Assert.NotNull(auditDetails);
+        Assert.Equal(workItem.Id.ToString(), auditDetails!["reference"]);
     }
 }

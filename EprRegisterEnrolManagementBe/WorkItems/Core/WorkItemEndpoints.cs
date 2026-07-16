@@ -1,10 +1,16 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Claims;
 using System.Text.Json;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
+
+// Marker type for IStructuredLogger category — WorkItemEndpoints is a
+// static class and therefore cannot itself be used as a type argument.
+internal sealed class WorkItemEndpointsLogger;
 
 /// <summary>
 /// Framework-level HTTP endpoints for ingesting and listing work items. The
@@ -97,10 +103,36 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemRegistry registry,
         [FromServices] IWorkItemService engine,
+        [FromServices] IStructuredLogger<WorkItemEndpointsLogger> log,
         CancellationToken cancellationToken)
     {
+        var req = httpContext.Request;
+        var bodyText = body.ValueKind != JsonValueKind.Undefined ? body.GetRawText() : "(empty)";
+        // Truncate very large bodies in the log — the 1 MB cap still applies
+        // at the framework level; this is just for readability.
+        const int MaxLoggedBodyChars = 4096;
+        var loggedBody = bodyText.Length > MaxLoggedBodyChars
+            ? bodyText[..MaxLoggedBodyChars] + $"…(truncated, total {bodyText.Length} chars)"
+            : bodyText;
+
+        log.Log(LogLevel.Information, "Work item submission received", new Dictionary<string, object?>
+        {
+            ["http.request.method"] = req.Method,
+            ["url.path"] = req.Path.Value,
+            ["http.request.body"] = loggedBody,
+            ["caller.client_id"] = req.Headers.TryGetValue("x-cdp-cognito-client-id", out var cid) ? cid.ToString() : "(absent)",
+            ["caller.user_id"] = req.Headers.TryGetValue("x-cdp-user-id", out var uid) ? uid.ToString() : "(absent)",
+            ["caller.user_name"] = req.Headers.TryGetValue("x-cdp-user-name", out var uname) ? uname.ToString() : "(absent)",
+            ["http.request.mime_type"] = req.ContentType ?? "(absent)",
+            ["http.request.body.bytes"] = req.ContentLength?.ToString() ?? "(absent)",
+        });
+
         if (body.ValueKind != JsonValueKind.Object)
         {
+            log.Log(LogLevel.Warning, "Work item submission rejected: body is not a JSON object", new Dictionary<string, object?>
+            {
+                ["error.message"] = $"ValueKind was {body.ValueKind}"
+            });
             return BadRequest("Invalid request", "Request body must be a JSON object.");
         }
 
@@ -108,6 +140,10 @@ public static class WorkItemEndpoints
             typeIdElement.ValueKind != JsonValueKind.String ||
             string.IsNullOrWhiteSpace(typeIdElement.GetString()))
         {
+            log.Log(LogLevel.Warning, "Work item submission rejected: missing or empty typeId", new Dictionary<string, object?>
+            {
+                ["http.request.body"] = loggedBody
+            });
             return BadRequest("Invalid request", "'typeId' is required and must be a non-empty string.");
         }
 
@@ -115,6 +151,10 @@ public static class WorkItemEndpoints
         var type = registry.Find(typeId);
         if (type is null)
         {
+            log.Log(LogLevel.Warning, "Work item submission rejected: unknown typeId", new Dictionary<string, object?>
+            {
+                ["work_item.type_id"] = typeId
+            });
             return BadRequest(
                 "Unknown work item type",
                 $"No work item type is registered with id '{typeId}'.");
@@ -129,6 +169,11 @@ public static class WorkItemEndpoints
         }
         catch (InvalidWorkItemPayloadException ex)
         {
+            log.Log(LogLevel.Warning, "Work item submission rejected: invalid payload", new Dictionary<string, object?>
+            {
+                ["work_item.type_id"] = typeId,
+                ["error.message"] = ex.Message
+            }, ex);
             return BadRequest("Invalid work item payload", ex.Message);
         }
 
@@ -149,6 +194,11 @@ public static class WorkItemEndpoints
         {
             if (sourceElement.ValueKind != JsonValueKind.String)
             {
+                log.Log(LogLevel.Warning, "Work item submission rejected: 'source' is not a string", new Dictionary<string, object?>
+                {
+                    ["work_item.type_id"] = typeId,
+                    ["error.message"] = $"'source' ValueKind was {sourceElement.ValueKind}"
+                });
                 return BadRequest("Invalid request body", "'source' must be a string.");
             }
             (submissionMetadata ??= new Dictionary<string, string?>(StringComparer.Ordinal))
@@ -160,10 +210,33 @@ public static class WorkItemEndpoints
         // other state-changing entry. The engine writes the document and
         // its first 'work-item-submitted' audit entry in a single
         // CreateAsync call.
-        var result = await engine.SubmitAsync(
-            type, payloadDocument, submittedBy, httpContext.User, submissionMetadata, cancellationToken);
+        WorkItemActionResult result;
+        try
+        {
+            result = await engine.SubmitAsync(
+                type, payloadDocument, submittedBy, httpContext.User, submissionMetadata, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            log.Log(LogLevel.Error, "Work item submission threw an unhandled exception", new Dictionary<string, object?>
+            {
+                ["work_item.type_id"] = typeId,
+                ["caller.client_id"] = submittedBy ?? "(unknown)",
+                ["error.type"] = ex.GetType().FullName,
+                ["error.message"] = ex.Message
+            }, ex);
+            throw;
+        }
+
         if (!result.IsSuccess)
         {
+            log.Log(LogLevel.Warning, "Work item submission failed", new Dictionary<string, object?>
+            {
+                ["work_item.type_id"] = typeId,
+                ["caller.client_id"] = submittedBy ?? "(unknown)",
+                ["error.code"] = result.FailureCode.ToString(),
+                ["error.message"] = result.Message
+            });
             return result.FailureCode switch
             {
                 WorkItemActionFailureCode.MissingActorIdentity
@@ -187,6 +260,12 @@ public static class WorkItemEndpoints
         }
 
         var workItem = result.WorkItem!;
+        log.Log(LogLevel.Information, "Work item submission succeeded", new Dictionary<string, object?>
+        {
+            ["work_item.id"] = workItem.Id.ToString(),
+            ["work_item.type_id"] = typeId,
+            ["caller.client_id"] = submittedBy ?? "(unknown)"
+        });
         var response = ToResponse(engine.Project(workItem));
         return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
     }
