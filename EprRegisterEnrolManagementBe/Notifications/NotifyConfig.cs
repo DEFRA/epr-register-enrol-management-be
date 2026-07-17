@@ -69,6 +69,17 @@ public sealed class NotifyConfig
     }
 
     /// <summary>
+    /// Map of UK nation name (e.g. <c>England</c>) to the regional
+    /// regulator's shared mailbox address. Populated for England with the
+    /// Environment Agency packaging-notifications inbox; Scotland, Wales and
+    /// Northern Ireland are empty placeholders until their addresses are
+    /// supplied (RA-244). An empty/missing entry resolves to <c>null</c> so
+    /// downstream callers skip the send and record a
+    /// <c>missing-regulator-mailbox</c> audit entry (RA-236).
+    /// </summary>
+    public Dictionary<string, string> RegulatorMailboxes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Per-attempt timeout (seconds) applied around each call into the
     /// GovukNotify SDK. Defaults to 15s — short enough that a hanging
     /// Notify endpoint surfaces as a logged failure inside the BFF's

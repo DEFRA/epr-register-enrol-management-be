@@ -735,6 +735,17 @@ public sealed class WorkItemService : IWorkItemService
             DescribeUser(user)
         );
 
+        // RA-237: assignment is a first-class envelope operation, so it must
+        // fan out to the post-action hooks explicitly (ApplyActionAsync's hook
+        // fan-out does not cover it). A brand-new assignment on a previously
+        // unassigned item is Assigned; changing the assignee of an
+        // already-assigned item is Reassigned. Fires only on this real-change
+        // path — the earlier IdempotentReplay return skips it.
+        var change = previousAssigneeId is null
+            ? WorkItemAssignmentChange.Assigned
+            : WorkItemAssignmentChange.Reassigned;
+        await InvokeAssignmentChangedHooksAsync(workItem, change, user, cancellationToken);
+
         return WorkItemActionResult.Success(workItem);
     }
 
@@ -809,6 +820,11 @@ public sealed class WorkItemService : IWorkItemService
             previousAssigneeId,
             DescribeUser(user)
         );
+
+        // RA-237: notify the post-action hooks of the real unassignment.
+        // The earlier IdempotentReplay return (already unassigned) skips this.
+        await InvokeAssignmentChangedHooksAsync(
+            workItem, WorkItemAssignmentChange.Unassigned, user, cancellationToken);
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -1528,6 +1544,34 @@ public sealed class WorkItemService : IWorkItemService
                     workItem.Id,
                     actionId
                 );
+            }
+        }
+    }
+
+    /// <summary>
+    /// RA-237: fan out to every registered <see cref="IWorkItemPostActionHook"/>
+    /// after a successful, non-idempotent assignment change. Mirrors the
+    /// swallow-and-log contract of the submit / action fan-outs so a
+    /// misbehaving hook (e.g. a Notify outage in the assignment-email hook)
+    /// cannot unwind the assignment that has already persisted.
+    /// </summary>
+    private async Task InvokeAssignmentChangedHooksAsync(
+        WorkItem workItem,
+        WorkItemAssignmentChange change,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        foreach (var hook in _postActionHooks)
+        {
+            try
+            {
+                await hook.OnAssignmentChangedAsync(workItem, change, user, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex,
+                    "Post-action assignment hook {HookType} failed for work item {WorkItemId} change {Change}",
+                    hook.GetType().FullName, workItem.Id, change);
             }
         }
     }

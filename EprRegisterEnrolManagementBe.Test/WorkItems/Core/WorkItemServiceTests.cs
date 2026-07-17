@@ -4,6 +4,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
+using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -40,6 +41,18 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             _persistence,
             NullLogger<WorkItemService>.Instance,
             _time
+        );
+
+    private WorkItemService BuildServiceWithHook(
+        IWorkItemType type,
+        IWorkItemPostActionHook hook
+    ) =>
+        new(
+            new WorkItemRegistry([type]),
+            _persistence,
+            NullLogger<WorkItemService>.Instance,
+            _time,
+            postActionHooks: [hook]
         );
 
     private static TestWorkItemType BuildType(
@@ -748,6 +761,167 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         Assert.Equal("actor-1", fetched.AssignedBy);
         Assert.Equal(TickedNow, fetched.LastModifiedAt);
         Assert.Equal(1, fetched.Version);
+    }
+
+    // ---- RA-237: assignment fans out to post-action hooks ----
+
+    [Fact]
+    public async Task Assign_of_unassigned_item_invokes_assignment_hook_with_Assigned()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync();
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildServiceWithHook(type, hook)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
+
+        Assert.True(result.IsSuccess);
+        await hook.Received(1)
+            .OnAssignmentChangedAsync(
+                Arg.Is<WorkItem>(w => w.Id == workItem.Id && w.AssignedToId == "alice-1"),
+                WorkItemAssignmentChange.Assigned,
+                actor,
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Assign_of_already_assigned_item_invokes_assignment_hook_with_Reassigned()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "bob-1";
+            w.AssignedToName = "Bob";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        await BuildServiceWithHook(type, hook)
+            .AssignAsync(
+                workItem.Id,
+                "carol-1",
+                "Carol",
+                actor,
+                TestContext.Current.CancellationToken
+            );
+
+        await hook.Received(1)
+            .OnAssignmentChangedAsync(
+                Arg.Any<WorkItem>(),
+                WorkItemAssignmentChange.Reassigned,
+                actor,
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Assign_idempotent_no_op_does_not_invoke_assignment_hook()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildServiceWithHook(type, hook)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
+
+        Assert.True(result.IsIdempotentReplay);
+        await hook.DidNotReceiveWithAnyArgs()
+            .OnAssignmentChangedAsync(default!, default, default!, default);
+    }
+
+    [Fact]
+    public async Task Unassign_invokes_assignment_hook_with_Unassigned()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        await BuildServiceWithHook(type, hook)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        await hook.Received(1)
+            .OnAssignmentChangedAsync(
+                Arg.Is<WorkItem>(w => w.AssignedToId == null),
+                WorkItemAssignmentChange.Unassigned,
+                actor,
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Unassign_idempotent_no_op_does_not_invoke_assignment_hook()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync(); // already unassigned
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildServiceWithHook(type, hook)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsIdempotentReplay);
+        await hook.DidNotReceiveWithAnyArgs()
+            .OnAssignmentChangedAsync(default!, default, default!, default);
+    }
+
+    [Fact]
+    public async Task Assign_still_succeeds_when_assignment_hook_throws()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync();
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+        hook.OnAssignmentChangedAsync(
+                Arg.Any<WorkItem>(),
+                Arg.Any<WorkItemAssignmentChange>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromException(new InvalidOperationException("notify down")));
+
+        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
+        var result = await BuildServiceWithHook(type, hook)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
+
+        // The hook's failure is swallowed; the assignment mutation persisted.
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("alice-1", fetched.AssignedToId);
     }
 
     [Fact]
