@@ -98,8 +98,8 @@ internal sealed class ArchiveBackgroundService(
                     continue;
 
                 // Derive the time the item entered its current terminal state
-                // from the audit log so that post-decision writes (notes,
-                // assignments, SLA stamps) that bump LastModifiedAt do not reset
+                // from the audit log so that post-decision writes
+                // (assignments, SLA stamps) that bump LastModifiedAt do not reset
                 // the 7-day clock. We match the LAST audit entry whose toStateId
                 // equals the item's current terminal state — approve (which
                 // bypasses the generic engine) and reject/withdraw (which go

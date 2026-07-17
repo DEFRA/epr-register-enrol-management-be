@@ -127,6 +127,7 @@ internal static class ReAccreditationEndpoints
         return TypedResults.Ok(new ReAccreditationRecommendationResponse(
             recommendation.Outcome, recommendation.Rationale));
     }
+
     /// <summary>
     /// Record the decision rationale for a re-accreditation work item.
     /// Persists the rationale as a note (so it is captured in the standard

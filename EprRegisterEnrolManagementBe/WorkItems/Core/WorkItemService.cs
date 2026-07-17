@@ -100,33 +100,13 @@ public interface IWorkItemService
     /// snapshotted from the supplied <see cref="ClaimsPrincipal"/> at the
     /// time of the call so the audit narrative survives later directory
     /// changes. Notes are append-only; this is the only mutation the
-    /// framework offers for them. Persisted with <c>TaskId = null</c> and
-    /// audited as <c>note-added</c>.
+    /// framework offers for them. Audited as <c>note-added</c>. The
+    /// withdraw and decision-rationale flows are the only current callers —
+    /// the standalone FE "add a note" feature and task-scoped notes have
+    /// been removed.
     /// </summary>
     Task<WorkItemActionResult> AddNoteAsync(
         Guid workItemId,
-        string text,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Append a free-text note scoped to a specific task on the work item's
-    /// current state (RA-129 / epr-cky). The id is validated against the
-    /// resolved template's task list — an unknown id returns
-    /// <see cref="WorkItemActionFailureCode.TaskNotApplicable"/> with no
-    /// mutation. On success the persisted <c>WorkItemNote.TaskId</c> is
-    /// populated and the audit entry is <c>task-note-added</c> with
-    /// details <c>{ taskId, taskDisplayName, noteId, excerpt }</c> where
-    /// <c>excerpt</c> is the first
-    /// <see cref="WorkItemService.TaskNoteAuditExcerptLength"/> characters
-    /// of the trimmed note body, clipped on a UTF-16 surrogate pair
-    /// boundary so the excerpt is never a lone surrogate. Note write +
-    /// audit entry are a single atomic
-    /// <see cref="IWorkItemPersistence.ReplaceAsync"/>.
-    /// </summary>
-    Task<WorkItemActionResult> AddTaskNoteAsync(
-        Guid workItemId,
-        string taskId,
         string text,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default);
@@ -715,14 +695,6 @@ public sealed class WorkItemService : IWorkItemService
     /// </summary>
     public const int MaxNoteLength = 4000;
 
-    /// <summary>
-    /// Length of the snapshot copied into a <c>task-note-added</c> audit
-    /// entry's <c>excerpt</c> detail (RA-129 / epr-cky). Audit entries are
-    /// scanned in list views; the full note body lives on
-    /// <c>WorkItem.Notes</c> for the rare case a reader needs the rest.
-    /// </summary>
-    public const int TaskNoteAuditExcerptLength = 100;
-
     public async Task<WorkItemActionResult> AddNoteAsync(
         Guid workItemId,
         string text,
@@ -751,50 +723,38 @@ public sealed class WorkItemService : IWorkItemService
                 $"No work item exists with id '{workItemId}'.");
         }
 
-        return await AppendNoteCoreAsync(workItem, trimmed!, task: null, user, cancellationToken);
-    }
-
-    public async Task<WorkItemActionResult> AddTaskNoteAsync(
-        Guid workItemId,
-        string taskId,
-        string text,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
-    {
-        if (RequireActorIdentity(user) is { } identityFailure)
+        var note = new WorkItemNote
         {
-            return identityFailure;
-        }
+            Text = trimmed!,
+            CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
+            CreatedBy = ResolveActorUserId(user)!,
+            CreatedByName = user?.FindFirstValue("user:name")
+        };
+        workItem.Notes.Add(note);
+        workItem.LastModifiedAt = note.CreatedAt;
 
-        if (ValidateNoteText(text, out var trimmed, out var noteFailure) is false)
+        AppendAudit(workItem, "note-added", "Note added", user, note.CreatedAt, new()
         {
-            return noteFailure!;
-        }
+            ["noteId"] = note.Id.ToString(),
+            // Snapshot the trimmed body so the audit log is self-describing —
+            // a reader does not need to cross-reference Notes by id to see
+            // what was written. Already capped by MaxNoteLength.
+            ["noteText"] = note.Text
+        });
 
-        // Task-scoped note (RA-129): the task id must be validated against
-        // the resolved template's tasks for the current state, mirroring
-        // CompleteTaskAsync's TaskNotApplicable contract for unknown ids.
-        // We therefore go through LoadAsync so a missing template surfaces
-        // as a structured failure instead of a NullReferenceException.
-        var (loaded, template, failure) = await LoadAsync(workItemId, cancellationToken);
-        if (failure is not null)
+        try
         {
-            return failure;
+            await _persistence.ReplaceAsync(workItem, cancellationToken);
         }
-
-        var workItem = loaded!;
-        var tasks = template!.GetTasksForState(workItem.StateId);
-        var task = tasks.FirstOrDefault(t => string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase));
-        if (task is null)
+        catch (WorkItemConcurrencyException)
         {
-            // Validation failure before any mutation: document is
-            // unchanged, no note appended, no audit entry written.
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'.");
+            return ConcurrencyConflict(workItem.Id);
         }
+        _logger.LogInformation(
+            "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
+            note.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
 
-        return await AppendNoteCoreAsync(workItem, trimmed!, task, user, cancellationToken);
+        return WorkItemActionResult.Success(workItem);
     }
 
     private static bool ValidateNoteText(string text, out string? trimmed, out WorkItemActionResult? failure)
@@ -823,92 +783,6 @@ public sealed class WorkItemService : IWorkItemService
         return true;
     }
 
-    /// <summary>
-    /// Take the first <see cref="TaskNoteAuditExcerptLength"/> UTF-16 code
-    /// units of <paramref name="trimmed"/>, but step back one position if
-    /// that would split a surrogate pair so the excerpt never contains a
-    /// lone surrogate (which would round-trip badly through JSON / Mongo).
-    /// </summary>
-    internal static string BuildAuditExcerpt(string trimmed)
-    {
-        if (trimmed.Length <= TaskNoteAuditExcerptLength)
-        {
-            return trimmed;
-        }
-
-        var end = TaskNoteAuditExcerptLength;
-        if (char.IsLowSurrogate(trimmed[end]))
-        {
-            end--;
-        }
-        return trimmed[..end];
-    }
-
-    private async Task<WorkItemActionResult> AppendNoteCoreAsync(
-        WorkItem workItem,
-        string trimmed,
-        WorkItemTask? task,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken)
-    {
-        var note = new WorkItemNote
-        {
-            Text = trimmed,
-            CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
-            CreatedBy = ResolveActorUserId(user)!,
-            CreatedByName = user?.FindFirstValue("user:name"),
-            // Use the resolved task's canonical id rather than echoing
-            // the caller's casing so on-disk values stay in lockstep
-            // with the template even when the BFF forwards a casing
-            // variant.
-            TaskId = task?.Id
-        };
-        workItem.Notes.Add(note);
-        workItem.LastModifiedAt = note.CreatedAt;
-
-        if (task is null)
-        {
-            AppendAudit(workItem, "note-added", "Note added", user, note.CreatedAt, new()
-            {
-                ["noteId"] = note.Id.ToString(),
-                // Snapshot the trimmed body so the audit log is self-describing —
-                // a reader does not need to cross-reference Notes by id to see
-                // what was written. Already capped by MaxNoteLength.
-                ["noteText"] = note.Text
-            });
-        }
-        else
-        {
-            AppendAudit(workItem, "task-note-added", "Task note added", user, note.CreatedAt, new()
-            {
-                ["taskId"] = task.Id,
-                ["taskDisplayName"] = task.DisplayName,
-                ["noteId"] = note.Id.ToString(),
-                // RA-129 spec: snapshot the first N chars of the trimmed
-                // body. Audit consumers scan entries in list views; the
-                // full body is still available via WorkItem.Notes for the
-                // rare case a reader wants the rest.
-                ["excerpt"] = BuildAuditExcerpt(trimmed)
-            });
-        }
-
-        try
-        {
-            await _persistence.ReplaceAsync(workItem, cancellationToken);
-        }
-        catch (WorkItemConcurrencyException)
-        {
-            return ConcurrencyConflict(workItem.Id);
-        }
-        _logger.LogInformation(
-            "Note {NoteId} added to work item {WorkItemId} ({TypeId}) {TaskScope} by {User}",
-            note.Id, workItem.Id, workItem.TypeId,
-            task is null ? "(work-item-level)" : $"for task {task.Id}",
-            DescribeUser(user));
-
-        return WorkItemActionResult.Success(workItem);
-    }
-
     public async Task<WorkItemActionResult> AddNoteAndCompleteTaskAsync(
         Guid workItemId,
         string taskId,
@@ -923,18 +797,9 @@ public sealed class WorkItemService : IWorkItemService
 
         // Validate the note up-front so the document is untouched on a bad
         // request (parity with AddNoteAsync's contract).
-        if (string.IsNullOrWhiteSpace(noteText))
+        if (ValidateNoteText(noteText, out var trimmed, out var noteFailure) is false)
         {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.InvalidNote,
-                "Note text is required.");
-        }
-        var trimmed = noteText.Trim();
-        if (trimmed.Length > MaxNoteLength)
-        {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.InvalidNote,
-                $"Note text must be {MaxNoteLength} characters or fewer.");
+            return noteFailure!;
         }
 
         var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
@@ -965,7 +830,7 @@ public sealed class WorkItemService : IWorkItemService
         // of the compound method.
         var note = new WorkItemNote
         {
-            Text = trimmed,
+            Text = trimmed!,
             CreatedAt = now,
             CreatedBy = ResolveActorUserId(user)!,
             CreatedByName = user?.FindFirstValue("user:name")

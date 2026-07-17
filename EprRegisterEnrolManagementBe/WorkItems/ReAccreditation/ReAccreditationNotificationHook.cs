@@ -513,17 +513,15 @@ internal sealed class ReAccreditationNotificationHook(
     }
 
     /// <summary>
-    /// Text of the most recent work-item-level note (one with no TaskId), or an
-    /// empty string when there is none. Notify 400s on a referenced placeholder
-    /// that is missing but accepts an empty value, so the lifecycle templates
-    /// that surface the latest case note (Withdrawn → <c>withdrawal_notes</c>,
-    /// Decision → <c>decision_notes</c>) always pass a present, possibly-empty
-    /// value. Task-scoped notes are deliberately ignored.
+    /// Text of the most recent note on the work item, or an empty string when
+    /// there is none. Notify 400s on a referenced placeholder that is missing
+    /// but accepts an empty value, so the lifecycle templates that surface
+    /// the latest case note (Withdrawn → <c>withdrawal_notes</c>, Decision →
+    /// <c>decision_notes</c>) always pass a present, possibly-empty value.
     /// </summary>
     private static string LatestWorkItemNoteText(WorkItem workItem) =>
         workItem
-            .Notes?.Where(note => note.TaskId is null)
-            .OrderByDescending(note => note.CreatedAt)
+            .Notes?.OrderByDescending(note => note.CreatedAt)
             .FirstOrDefault()
             ?.Text
         ?? string.Empty;
