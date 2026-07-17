@@ -15,9 +15,13 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public sealed class ApplicationReferenceGeneratorTests
 {
-    // Real submissions nest the postcode under payload.siteAddress.postcode
-    // (matching the client's Joi schema / ReAccreditationNationRoutingHook),
-    // not a flat siteAddressPostcode key — this fixture mirrors that shape.
+    // The case-management admin UI nests the postcode under
+    // payload.siteAddress.postcode (matching its Joi schema and
+    // ReAccreditationNationRoutingHook.ExtractPostcode) — this fixture
+    // mirrors that shape. The operator-facing backend BFF instead sends a
+    // flat siteAddressPostcode key alongside a string siteAddress
+    // (HttpCaseWorkingApiAdapter.BuildPayload); see MakeFlatPayload below
+    // for that shape.
     private static BsonDocument MakePayload(
         object? accreditationYear = null,
         string? operatorOrganisationId = "50002",
@@ -32,6 +36,29 @@ public sealed class ApplicationReferenceGeneratorTests
             doc["operatorOrganisationId"] = operatorOrganisationId;
         if (siteAddressPostcode is not null)
             doc["siteAddress"] = new BsonDocument { ["postcode"] = siteAddressPostcode };
+        if (material is not null)
+            doc["material"] = material;
+        return doc;
+    }
+
+    // Mirrors the operator-facing backend BFF's payload shape
+    // (HttpCaseWorkingApiAdapter.BuildPayload): siteAddress is a plain
+    // string and the postcode is a separate flat siteAddressPostcode key.
+    private static BsonDocument MakeFlatPayload(
+        object? accreditationYear = null,
+        string? operatorOrganisationId = "50002",
+        string? siteAddressPostcode = "SW1A 1AA",
+        string? material = "Glass"
+    )
+    {
+        var doc = new BsonDocument();
+        if (accreditationYear is not null)
+            doc["accreditationYear"] = BsonValue.Create(accreditationYear);
+        if (operatorOrganisationId is not null)
+            doc["operatorOrganisationId"] = operatorOrganisationId;
+        doc["siteAddress"] = "1 Example Street, Example Town";
+        if (siteAddressPostcode is not null)
+            doc["siteAddressPostcode"] = siteAddressPostcode;
         if (material is not null)
             doc["material"] = material;
         return doc;
@@ -205,5 +232,53 @@ public sealed class ApplicationReferenceGeneratorTests
 
         Assert.Equal(first.Length + 1, second.Length);
         Assert.StartsWith(first, second);
+    }
+
+    [Fact]
+    public void Generate_builds_expected_reference_for_the_backend_bff_flat_payload_shape()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(accreditationYear: 2026);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA500021AAGL", reference);
+    }
+
+    [Theory]
+    [InlineData("EH1 1AA", "SE")] // Scotland
+    [InlineData("CF10 1AA", "NR")] // Wales
+    [InlineData("BT1 1AA", "NI")] // Northern Ireland
+    [InlineData("SW1A 1AA", "EA")] // England
+    [InlineData(null, "EA")] // missing postcode fails open to England
+    public void Generate_derives_agency_code_from_the_flat_payload_shape(
+        string? postcode,
+        string expectedAgency
+    )
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(accreditationYear: 2026, siteAddressPostcode: postcode);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal(expectedAgency, reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void Generate_prefers_the_flat_postcode_key_when_both_shapes_are_present()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(accreditationYear: 2026, siteAddressPostcode: "M1 1AE");
+        payload["siteAddress"] = new BsonDocument
+        {
+            ["line1"] = "1 Example Street",
+            ["postcode"] = "BS1 1AA",
+        };
+        payload["siteAddressPostcode"] = "M1 1AE";
+
+        var reference = generator.Generate(payload);
+
+        // Last 3 chars of the flat "M1 1AE" ("1AE"), not the nested "BS1 1AA" ("1AA").
+        Assert.Equal("AP26EA500021AEGL", reference);
     }
 }

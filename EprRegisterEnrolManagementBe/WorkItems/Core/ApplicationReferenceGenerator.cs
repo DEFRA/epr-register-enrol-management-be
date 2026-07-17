@@ -196,11 +196,20 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
     private static string? GetString(BsonDocument payload, string key) =>
         payload.TryGetValue(key, out var value) && value.IsString ? value.AsString : null;
 
-    // Real submissions nest the postcode under payload.siteAddress.postcode
-    // (matching the client's Joi schema / ReAccreditationNationRoutingHook's
-    // ExtractPostcode) rather than a flat siteAddressPostcode key.
+    // Two real callers disagree on shape: the operator-facing backend BFF
+    // sends siteAddress as a plain string plus a separate flat
+    // siteAddressPostcode key (HttpCaseWorkingApiAdapter.BuildPayload), while
+    // the case-management admin UI nests it as siteAddress.postcode (matching
+    // its Joi schema and ReAccreditationNationRoutingHook.ExtractPostcode).
+    // Support both rather than picking one and silently losing the other.
     private static string? ExtractPostcode(BsonDocument payload)
     {
+        var flat = GetString(payload, "siteAddressPostcode");
+        if (flat is not null)
+        {
+            return flat;
+        }
+
         if (!payload.TryGetValue("siteAddress", out var siteAddress) || !siteAddress.IsBsonDocument)
         {
             return null;
