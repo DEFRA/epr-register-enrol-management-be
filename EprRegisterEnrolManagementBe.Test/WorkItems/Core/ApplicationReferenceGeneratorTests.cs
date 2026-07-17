@@ -15,6 +15,9 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public sealed class ApplicationReferenceGeneratorTests
 {
+    // Real submissions nest the postcode under payload.siteAddress.postcode
+    // (matching the client's Joi schema / ReAccreditationNationRoutingHook),
+    // not a flat siteAddressPostcode key — this fixture mirrors that shape.
     private static BsonDocument MakePayload(
         object? accreditationYear = null,
         string? operatorOrganisationId = "50002",
@@ -28,7 +31,7 @@ public sealed class ApplicationReferenceGeneratorTests
         if (operatorOrganisationId is not null)
             doc["operatorOrganisationId"] = operatorOrganisationId;
         if (siteAddressPostcode is not null)
-            doc["siteAddressPostcode"] = siteAddressPostcode;
+            doc["siteAddress"] = new BsonDocument { ["postcode"] = siteAddressPostcode };
         if (material is not null)
             doc["material"] = material;
         return doc;

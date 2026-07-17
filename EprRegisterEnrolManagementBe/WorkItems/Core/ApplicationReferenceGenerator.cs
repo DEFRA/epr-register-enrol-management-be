@@ -95,7 +95,7 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         ArgumentNullException.ThrowIfNull(payload);
 
         var year = ResolveYear(payload);
-        var postcode = GetString(payload, "siteAddressPostcode");
+        var postcode = ExtractPostcode(payload);
         var agency = ResolveAgencyCode(postcode);
         var organisationId = GetString(payload, "operatorOrganisationId") ?? string.Empty;
         var postcodeSuffix = PostcodeSuffix(postcode);
@@ -195,6 +195,20 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 
     private static string? GetString(BsonDocument payload, string key) =>
         payload.TryGetValue(key, out var value) && value.IsString ? value.AsString : null;
+
+    // Real submissions nest the postcode under payload.siteAddress.postcode
+    // (matching the client's Joi schema / ReAccreditationNationRoutingHook's
+    // ExtractPostcode) rather than a flat siteAddressPostcode key.
+    private static string? ExtractPostcode(BsonDocument payload)
+    {
+        if (!payload.TryGetValue("siteAddress", out var siteAddress) || !siteAddress.IsBsonDocument)
+        {
+            return null;
+        }
+
+        var doc = siteAddress.AsBsonDocument;
+        return doc.TryGetValue("postcode", out var value) && value.IsString ? value.AsString : null;
+    }
 }
 
 /// <summary>
