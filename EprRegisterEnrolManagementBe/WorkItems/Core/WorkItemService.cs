@@ -13,33 +13,35 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// that may be called before/after this engine.
 /// </summary>
 public interface IWorkItemService
-{/// <summary>
- /// Create a brand-new work item of <paramref name="type"/> and persist
- /// it. Captures a frozen template snapshot, stamps a server-side
- /// submission timestamp from the injected <see cref="TimeProvider"/>,
- /// and appends a single <c>work-item-submitted</c> entry to the new
- /// work item's audit log so the audit timeline starts at the
- /// document's birth event rather than the first task completion. The
- /// audit entry and the document body are written in the same
- /// <see cref="IWorkItemPersistence.CreateAsync"/> call. Mutations
- /// require a <c>user:id</c> claim — calls without one return
- /// <see cref="WorkItemActionFailureCode.MissingActorIdentity"/> and
- /// nothing is persisted.
- /// </summary>
+{
+    /// <summary>
+    /// Create a brand-new work item of <paramref name="type"/> and persist
+    /// it. Captures a frozen template snapshot, stamps a server-side
+    /// submission timestamp from the injected <see cref="TimeProvider"/>,
+    /// and appends a single <c>work-item-submitted</c> entry to the new
+    /// work item's audit log so the audit timeline starts at the
+    /// document's birth event rather than the first task completion. The
+    /// audit entry and the document body are written in the same
+    /// <see cref="IWorkItemPersistence.CreateAsync"/> call. Mutations
+    /// require a <c>user:id</c> claim — calls without one return
+    /// <see cref="WorkItemActionFailureCode.MissingActorIdentity"/> and
+    /// nothing is persisted.
+    /// </summary>
     Task<WorkItemActionResult> SubmitAsync(
         IWorkItemType type,
         BsonDocument payload,
         string? submittedBy,
         ClaimsPrincipal user,
         IReadOnlyDictionary<string, string?>? submissionMetadata = null,
-        CancellationToken cancellationToken = default);
-
+        CancellationToken cancellationToken = default
+    );
 
     Task<WorkItemActionResult> CompleteTaskAsync(
         Guid workItemId,
         string taskId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Set the lifecycle <see cref="WorkItemTaskStatus"/> of a single task
@@ -64,13 +66,15 @@ public interface IWorkItemService
         string taskId,
         WorkItemTaskStatus status,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     Task<WorkItemActionResult> ApplyActionAsync(
         Guid workItemId,
         string actionId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Assign (or re-assign) a work item to <paramref name="assigneeId"/>,
@@ -84,7 +88,8 @@ public interface IWorkItemService
         string assigneeId,
         string? assigneeName,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Clear the current assignment. Requires the caller to hold the
@@ -93,7 +98,8 @@ public interface IWorkItemService
     Task<WorkItemActionResult> UnassignAsync(
         Guid workItemId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Append a free-text work-item-level note (RA-96). Authoring identity is
@@ -109,7 +115,8 @@ public interface IWorkItemService
         Guid workItemId,
         string text,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Atomic compound mutation: append a note AND mark a task complete in a
@@ -133,13 +140,17 @@ public interface IWorkItemService
         string taskId,
         string noteText,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Compute the task progress and currently-available actions for a work
     /// item. Returns <c>null</c> when no work item exists with the supplied id.
     /// </summary>
-    Task<WorkItemEngineProjection?> ProjectAsync(Guid workItemId, CancellationToken cancellationToken = default);
+    Task<WorkItemEngineProjection?> ProjectAsync(
+        Guid workItemId,
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>Project an already-loaded work item. Pure; safe to call without I/O.</summary>
     WorkItemEngineProjection Project(WorkItem workItem);
@@ -150,7 +161,8 @@ public sealed record WorkItemEngineProjection(
     WorkItem WorkItem,
     string TemplateVersion,
     IReadOnlyCollection<WorkItemTaskProgress> Tasks,
-    IReadOnlyCollection<WorkItemTransition> AvailableActions);
+    IReadOnlyCollection<WorkItemTransition> AvailableActions
+);
 
 public sealed class WorkItemService : IWorkItemService
 {
@@ -185,7 +197,8 @@ public sealed class WorkItemService : IWorkItemService
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostTaskHook>? postTaskHooks = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
-        IApplicationReferenceGenerator? referenceGenerator = null)
+        IApplicationReferenceGenerator? referenceGenerator = null
+    )
     {
         this._registry = registry;
         this._persistence = persistence;
@@ -202,7 +215,8 @@ public sealed class WorkItemService : IWorkItemService
         string? submittedBy,
         ClaimsPrincipal user,
         IReadOnlyDictionary<string, string?>? submissionMetadata = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(type);
         ArgumentNullException.ThrowIfNull(payload);
@@ -220,10 +234,12 @@ public sealed class WorkItemService : IWorkItemService
         // log. RA-219: 'applicationReference' is NO LONGER caller-supplied —
         // any client-supplied value is ignored; the engine generates it
         // server-side below.
-        if (submissionMetadata != null
+        if (
+            submissionMetadata != null
             && submissionMetadata.TryGetValue("source", out var sourceVal)
             && sourceVal != null
-            && !payload.Contains("source"))
+            && !payload.Contains("source")
+        )
         {
             payload["source"] = sourceVal;
         }
@@ -240,7 +256,7 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem? workItem = null;
         for (var attempt = 1; ; attempt++)
         {
-            var applicationReference = _referenceGenerator.Generate();
+            var applicationReference = _referenceGenerator.Generate(payload, attempt);
             payload["applicationReference"] = applicationReference;
 
             workItem = new WorkItem
@@ -252,7 +268,7 @@ public sealed class WorkItemService : IWorkItemService
                 SubmittedBy = submittedBy,
                 TemplateSnapshot = snapshot,
                 TemplateVersion = snapshot.TemplateVersion,
-                Payload = payload
+                Payload = payload,
             };
 
             // Birth event: the audit timeline must start at submission rather
@@ -268,21 +284,36 @@ public sealed class WorkItemService : IWorkItemService
             // gateway; 'userId' is the end-user identity claim required for
             // any mutation. RA-219: 'applicationReference' is the
             // server-generated value.
-            AppendAudit(workItem, "work-item-submitted", "Work item submitted", user, now, new()
-            {
-                ["typeId"] = type.TypeId,
-                ["stateId"] = workItem.StateId,
-                ["templateVersion"] = snapshot.TemplateVersion,
-                ["source"] = submissionMetadata is not null
-                    && submissionMetadata.TryGetValue("source", out var src) ? src : null,
-                ["clientId"] = user.FindFirstValue("cognito:client_id"),
-                ["userId"] = ResolveActorUserId(user),
-                ["applicationReference"] = applicationReference
-            });
+            AppendAudit(
+                workItem,
+                "work-item-submitted",
+                "Work item submitted",
+                user,
+                now,
+                new()
+                {
+                    ["typeId"] = type.TypeId,
+                    ["stateId"] = workItem.StateId,
+                    ["templateVersion"] = snapshot.TemplateVersion,
+                    ["source"] =
+                        submissionMetadata is not null
+                        && submissionMetadata.TryGetValue("source", out var src)
+                            ? src
+                            : null,
+                    ["clientId"] = user.FindFirstValue("cognito:client_id"),
+                    ["userId"] = ResolveActorUserId(user),
+                    ["applicationReference"] = applicationReference,
+                }
+            );
 
             _logger.LogInformation(
                 "Persisting work item {WorkItemId} typeId={TypeId} applicationReference={ApplicationReference} submittedBy={SubmittedBy} (attempt {Attempt})",
-                workItem.Id, type.TypeId, applicationReference, submittedBy, attempt);
+                workItem.Id,
+                type.TypeId,
+                applicationReference,
+                submittedBy,
+                attempt
+            );
 
             try
             {
@@ -297,7 +328,8 @@ public sealed class WorkItemService : IWorkItemService
             // index; anything else propagates unchanged.
             catch (MongoWriteException ex)
                 when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey
-                    && IsApplicationReferenceDuplicate(ex))
+                    && IsApplicationReferenceDuplicate(ex)
+                )
             {
                 if (attempt >= MaxApplicationReferenceAttempts)
                 {
@@ -308,22 +340,31 @@ public sealed class WorkItemService : IWorkItemService
                     _logger.LogError(
                         ex,
                         "Failed to generate a unique applicationReference after {Attempts} attempts",
-                        MaxApplicationReferenceAttempts);
+                        MaxApplicationReferenceAttempts
+                    );
                     return WorkItemActionResult.Failure(
                         WorkItemActionFailureCode.ApplicationReferenceExhausted,
-                        $"Failed to generate a unique applicationReference after " +
-                        $"{MaxApplicationReferenceAttempts} attempts.");
+                        $"Failed to generate a unique applicationReference after "
+                            + $"{MaxApplicationReferenceAttempts} attempts."
+                    );
                 }
                 _logger.LogWarning(
                     "applicationReference {ApplicationReference} collided on attempt {Attempt}; regenerating",
-                    applicationReference, attempt);
+                    applicationReference,
+                    attempt
+                );
             }
             catch (Exception ex)
             {
                 _logger.LogError(
                     ex,
                     "MongoDB write failed for work item {WorkItemId} typeId={TypeId} applicationReference={ApplicationReference} submittedBy={SubmittedBy}: {ExceptionType}",
-                    workItem.Id, type.TypeId, applicationReference, submittedBy, ex.GetType().Name);
+                    workItem.Id,
+                    type.TypeId,
+                    applicationReference,
+                    submittedBy,
+                    ex.GetType().Name
+                );
                 throw;
             }
         }
@@ -334,7 +375,12 @@ public sealed class WorkItemService : IWorkItemService
 
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} applicationReference={ApplicationReference} by {User}",
-            workItem!.Id, workItem.TypeId, workItem.StateId, persistedReference, DescribeUser(user));
+            workItem!.Id,
+            workItem.TypeId,
+            workItem.StateId,
+            persistedReference,
+            DescribeUser(user)
+        );
 
         await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
 
@@ -354,13 +400,16 @@ public sealed class WorkItemService : IWorkItemService
 
     private static bool IsApplicationReferenceDuplicate(MongoWriteException ex) =>
         ex.WriteError?.Message?.Contains(
-            ApplicationReferenceField, StringComparison.OrdinalIgnoreCase) == true;
+            ApplicationReferenceField,
+            StringComparison.OrdinalIgnoreCase
+        ) == true;
 
     public async Task<WorkItemActionResult> CompleteTaskAsync(
         Guid workItemId,
         string taskId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (RequireActorIdentity(user) is { } identityFailure)
         {
@@ -374,12 +423,15 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         var tasks = template!.GetTasksForState(workItem!.StateId);
-        var task = tasks.FirstOrDefault(t => string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase));
+        var task = tasks.FirstOrDefault(t =>
+            string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
+        );
         if (task is null)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'.");
+                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
+            );
         }
 
         var bucket = GetCompletedBucket(workItem, workItem.StateId);
@@ -401,12 +453,19 @@ public sealed class WorkItemService : IWorkItemService
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.LastModifiedAt = now;
-        AppendAudit(workItem, "task-completed", "Task completed", user, now, new()
-        {
-            ["taskId"] = task.Id,
-            ["taskDisplayName"] = task.DisplayName,
-            ["stateId"] = completedStateId
-        });
+        AppendAudit(
+            workItem,
+            "task-completed",
+            "Task completed",
+            user,
+            now,
+            new()
+            {
+                ["taskId"] = task.Id,
+                ["taskDisplayName"] = task.DisplayName,
+                ["stateId"] = completedStateId,
+            }
+        );
         try
         {
             await _persistence.ReplaceAsync(workItem, cancellationToken);
@@ -417,11 +476,20 @@ public sealed class WorkItemService : IWorkItemService
         }
         _logger.LogInformation(
             "Task {TaskId} marked complete on work item {WorkItemId} ({TypeId}) by {User}",
-            task.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
+            task.Id,
+            workItem.Id,
+            workItem.TypeId,
+            DescribeUser(user)
+        );
 
         if (!HasIncompleteTasks(template!, workItem))
         {
-            await InvokeAllTasksCompletedHooksAsync(workItem, completedStateId, user, cancellationToken);
+            await InvokeAllTasksCompletedHooksAsync(
+                workItem,
+                completedStateId,
+                user,
+                cancellationToken
+            );
         }
 
         return WorkItemActionResult.Success(workItem);
@@ -431,7 +499,8 @@ public sealed class WorkItemService : IWorkItemService
         Guid workItemId,
         string actionId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (RequireActorIdentity(user) is { } identityFailure)
         {
@@ -444,58 +513,80 @@ public sealed class WorkItemService : IWorkItemService
             return failure;
         }
 
-        var transition = template!.Transitions.FirstOrDefault(
-            t => string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase));
+        var transition = template!.Transitions.FirstOrDefault(t =>
+            string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
+        );
         if (transition is null)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UnknownAction,
-                $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'.");
+                $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'."
+            );
         }
 
-        var currentState = template.States.FirstOrDefault(
-            s => string.Equals(s.Id, workItem!.StateId, StringComparison.OrdinalIgnoreCase));
+        var currentState = template.States.FirstOrDefault(s =>
+            string.Equals(s.Id, workItem!.StateId, StringComparison.OrdinalIgnoreCase)
+        );
         if (currentState?.IsTerminal == true)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,
-                $"Work item {workItemId} is in terminal state '{currentState.Id}'; no actions are allowed.");
+                $"Work item {workItemId} is in terminal state '{currentState.Id}'; no actions are allowed."
+            );
         }
 
-        if (!string.Equals(transition.FromStateId, workItem!.StateId, StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.Equals(
+                transition.FromStateId,
+                workItem!.StateId,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
-                $"Action '{actionId}' moves work items from '{transition.FromStateId}', " +
-                $"but {workItemId} is in '{workItem.StateId}'.");
+                $"Action '{actionId}' moves work items from '{transition.FromStateId}', "
+                    + $"but {workItemId} is in '{workItem.StateId}'."
+            );
         }
 
         if (transition.RequiresAllTasksComplete && HasIncompleteTasks(template, workItem))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.IncompleteTasks,
-                $"Action '{actionId}' requires every task for state '{workItem.StateId}' to be complete first.");
+                $"Action '{actionId}' requires every task for state '{workItem.StateId}' to be complete first."
+            );
         }
 
-        if (transition.RequiredRoles is { Count: > 0 } requiredRoles
-            && !requiredRoles.Any(r => user?.IsInRole(r) == true))
+        if (
+            transition.RequiredRoles is { Count: > 0 } requiredRoles
+            && !requiredRoles.Any(r => user?.IsInRole(r) == true)
+        )
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.NotAuthorized,
-                $"Action '{actionId}' requires one of the following roles: {string.Join(", ", requiredRoles)}.");
+                $"Action '{actionId}' requires one of the following roles: {string.Join(", ", requiredRoles)}."
+            );
         }
 
         var previousState = workItem.StateId;
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.StateId = transition.ToStateId;
         workItem.LastModifiedAt = now;
-        AppendAudit(workItem, "action-applied", "Action applied", user, now, new()
-        {
-            ["actionId"] = transition.ActionId,
-            ["actionDisplayName"] = transition.DisplayName,
-            ["fromStateId"] = previousState,
-            ["toStateId"] = workItem.StateId
-        });
+        AppendAudit(
+            workItem,
+            "action-applied",
+            "Action applied",
+            user,
+            now,
+            new()
+            {
+                ["actionId"] = transition.ActionId,
+                ["actionDisplayName"] = transition.DisplayName,
+                ["fromStateId"] = previousState,
+                ["toStateId"] = workItem.StateId,
+            }
+        );
         try
         {
             await _persistence.ReplaceAsync(workItem, cancellationToken);
@@ -506,9 +597,21 @@ public sealed class WorkItemService : IWorkItemService
         }
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
-            workItem.Id, workItem.TypeId, previousState, workItem.StateId, transition.ActionId, DescribeUser(user));
+            workItem.Id,
+            workItem.TypeId,
+            previousState,
+            workItem.StateId,
+            transition.ActionId,
+            DescribeUser(user)
+        );
 
-        await InvokeActionAppliedHooksAsync(workItem, transition.ActionId, previousState, user, cancellationToken);
+        await InvokeActionAppliedHooksAsync(
+            workItem,
+            transition.ActionId,
+            previousState,
+            user,
+            cancellationToken
+        );
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -518,7 +621,8 @@ public sealed class WorkItemService : IWorkItemService
         string assigneeId,
         string? assigneeName,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (RequireActorIdentity(user) is { } identityFailure)
         {
@@ -529,7 +633,8 @@ public sealed class WorkItemService : IWorkItemService
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidAssignment,
-                "Assignee id is required.");
+                "Assignee id is required."
+            );
         }
 
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
@@ -537,7 +642,8 @@ public sealed class WorkItemService : IWorkItemService
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.WorkItemNotFound,
-                $"No work item exists with id '{workItemId}'.");
+                $"No work item exists with id '{workItemId}'."
+            );
         }
 
         var trimmedAssigneeId = assigneeId.Trim();
@@ -550,25 +656,35 @@ public sealed class WorkItemService : IWorkItemService
         // reserved for users with the assign role.
         if (!hasAssignRole)
         {
-            var isSelfAssign = actorUserId is not null
+            var isSelfAssign =
+                actorUserId is not null
                 && string.Equals(actorUserId, trimmedAssigneeId, StringComparison.Ordinal);
             if (!isSelfAssign)
             {
                 return WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.NotAuthorized,
-                    "Only users with the 'assign' role can assign work items to other users.");
+                    "Only users with the 'assign' role can assign work items to other users."
+                );
             }
-            if (workItem.AssignedToId is not null
-                && !string.Equals(workItem.AssignedToId, trimmedAssigneeId, StringComparison.Ordinal))
+            if (
+                workItem.AssignedToId is not null
+                && !string.Equals(
+                    workItem.AssignedToId,
+                    trimmedAssigneeId,
+                    StringComparison.Ordinal
+                )
+            )
             {
                 return WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.NotAuthorized,
-                    "This work item is already assigned to another user; only users with the 'assign' role can re-assign it.");
+                    "This work item is already assigned to another user; only users with the 'assign' role can re-assign it."
+                );
             }
         }
 
         var snapshotName = string.IsNullOrWhiteSpace(assigneeName) ? null : assigneeName.Trim();
-        var alreadyAssignedToSameUser = string.Equals(workItem.AssignedToId, trimmedAssigneeId, StringComparison.Ordinal)
+        var alreadyAssignedToSameUser =
+            string.Equals(workItem.AssignedToId, trimmedAssigneeId, StringComparison.Ordinal)
             && string.Equals(workItem.AssignedToName, snapshotName, StringComparison.Ordinal);
 
         if (alreadyAssignedToSameUser)
@@ -588,13 +704,20 @@ public sealed class WorkItemService : IWorkItemService
         workItem.AssignedAt = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.AssignedBy = actorUserId!;
         workItem.LastModifiedAt = workItem.AssignedAt.Value;
-        AppendAudit(workItem, "assigned", "Assigned", user, workItem.AssignedAt.Value, new()
-        {
-            ["assigneeId"] = trimmedAssigneeId,
-            ["assigneeName"] = snapshotName,
-            ["previousAssigneeId"] = previousAssigneeId,
-            ["previousAssigneeName"] = previousAssigneeName
-        });
+        AppendAudit(
+            workItem,
+            "assigned",
+            "Assigned",
+            user,
+            workItem.AssignedAt.Value,
+            new()
+            {
+                ["assigneeId"] = trimmedAssigneeId,
+                ["assigneeName"] = snapshotName,
+                ["previousAssigneeId"] = previousAssigneeId,
+                ["previousAssigneeName"] = previousAssigneeName,
+            }
+        );
         try
         {
             await _persistence.ReplaceAsync(workItem, cancellationToken);
@@ -605,7 +728,12 @@ public sealed class WorkItemService : IWorkItemService
         }
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
-            workItem.Id, workItem.TypeId, previousAssigneeId ?? "(unassigned)", trimmedAssigneeId, DescribeUser(user));
+            workItem.Id,
+            workItem.TypeId,
+            previousAssigneeId ?? "(unassigned)",
+            trimmedAssigneeId,
+            DescribeUser(user)
+        );
 
         // RA-237: assignment is a first-class envelope operation, so it must
         // fan out to the post-action hooks explicitly (ApplyActionAsync's hook
@@ -624,7 +752,8 @@ public sealed class WorkItemService : IWorkItemService
     public async Task<WorkItemActionResult> UnassignAsync(
         Guid workItemId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (RequireActorIdentity(user) is { } identityFailure)
         {
@@ -636,14 +765,16 @@ public sealed class WorkItemService : IWorkItemService
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.WorkItemNotFound,
-                $"No work item exists with id '{workItemId}'.");
+                $"No work item exists with id '{workItemId}'."
+            );
         }
 
         if (user?.IsInRole(AssignRole) != true)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.NotAuthorized,
-                "Only users with the 'assign' role can unassign work items.");
+                "Only users with the 'assign' role can unassign work items."
+            );
         }
 
         if (workItem.AssignedToId is null)
@@ -662,11 +793,18 @@ public sealed class WorkItemService : IWorkItemService
         workItem.AssignedAt = null;
         workItem.AssignedBy = null;
         workItem.LastModifiedAt = now;
-        AppendAudit(workItem, "unassigned", "Unassigned", user, now, new()
-        {
-            ["previousAssigneeId"] = previousAssigneeId,
-            ["previousAssigneeName"] = previousAssigneeName
-        });
+        AppendAudit(
+            workItem,
+            "unassigned",
+            "Unassigned",
+            user,
+            now,
+            new()
+            {
+                ["previousAssigneeId"] = previousAssigneeId,
+                ["previousAssigneeName"] = previousAssigneeName,
+            }
+        );
         try
         {
             await _persistence.ReplaceAsync(workItem, cancellationToken);
@@ -677,7 +815,11 @@ public sealed class WorkItemService : IWorkItemService
         }
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) unassigned (was {PreviousAssignee}) by {User}",
-            workItem.Id, workItem.TypeId, previousAssigneeId, DescribeUser(user));
+            workItem.Id,
+            workItem.TypeId,
+            previousAssigneeId,
+            DescribeUser(user)
+        );
 
         // RA-237: notify the post-action hooks of the real unassignment.
         // The earlier IdempotentReplay return (already unassigned) skips this.
@@ -699,7 +841,8 @@ public sealed class WorkItemService : IWorkItemService
         Guid workItemId,
         string text,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (RequireActorIdentity(user) is { } identityFailure)
         {
@@ -720,7 +863,8 @@ public sealed class WorkItemService : IWorkItemService
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.WorkItemNotFound,
-                $"No work item exists with id '{workItemId}'.");
+                $"No work item exists with id '{workItemId}'."
+            );
         }
 
         var note = new WorkItemNote
@@ -728,19 +872,26 @@ public sealed class WorkItemService : IWorkItemService
             Text = trimmed!,
             CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
             CreatedBy = ResolveActorUserId(user)!,
-            CreatedByName = user?.FindFirstValue("user:name")
+            CreatedByName = user?.FindFirstValue("user:name"),
         };
         workItem.Notes.Add(note);
         workItem.LastModifiedAt = note.CreatedAt;
 
-        AppendAudit(workItem, "note-added", "Note added", user, note.CreatedAt, new()
-        {
-            ["noteId"] = note.Id.ToString(),
-            // Snapshot the trimmed body so the audit log is self-describing —
-            // a reader does not need to cross-reference Notes by id to see
-            // what was written. Already capped by MaxNoteLength.
-            ["noteText"] = note.Text
-        });
+        AppendAudit(
+            workItem,
+            "note-added",
+            "Note added",
+            user,
+            note.CreatedAt,
+            new()
+            {
+                ["noteId"] = note.Id.ToString(),
+                // Snapshot the trimmed body so the audit log is self-describing —
+                // a reader does not need to cross-reference Notes by id to see
+                // what was written. Already capped by MaxNoteLength.
+                ["noteText"] = note.Text,
+            }
+        );
 
         try
         {
@@ -752,19 +903,28 @@ public sealed class WorkItemService : IWorkItemService
         }
         _logger.LogInformation(
             "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
-            note.Id, workItem.Id, workItem.TypeId, DescribeUser(user));
+            note.Id,
+            workItem.Id,
+            workItem.TypeId,
+            DescribeUser(user)
+        );
 
         return WorkItemActionResult.Success(workItem);
     }
 
-    private static bool ValidateNoteText(string text, out string? trimmed, out WorkItemActionResult? failure)
+    private static bool ValidateNoteText(
+        string text,
+        out string? trimmed,
+        out WorkItemActionResult? failure
+    )
     {
         if (string.IsNullOrWhiteSpace(text))
         {
             trimmed = null;
             failure = WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidNote,
-                "Note text is required.");
+                "Note text is required."
+            );
             return false;
         }
 
@@ -774,7 +934,8 @@ public sealed class WorkItemService : IWorkItemService
             trimmed = null;
             failure = WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidNote,
-                $"Note text must be {MaxNoteLength} characters or fewer.");
+                $"Note text must be {MaxNoteLength} characters or fewer."
+            );
             return false;
         }
 
@@ -788,7 +949,8 @@ public sealed class WorkItemService : IWorkItemService
         string taskId,
         string noteText,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (RequireActorIdentity(user) is { } identityFailure)
         {
@@ -809,14 +971,17 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         var tasks = template!.GetTasksForState(workItem!.StateId);
-        var task = tasks.FirstOrDefault(t => string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase));
+        var task = tasks.FirstOrDefault(t =>
+            string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
+        );
         if (task is null)
         {
             // Validation failure before any mutation: the document is
             // unchanged, no note appended, no audit entries written.
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'.");
+                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
+            );
         }
 
         // Capture before hooks may change it after the write.
@@ -833,17 +998,24 @@ public sealed class WorkItemService : IWorkItemService
             Text = trimmed!,
             CreatedAt = now,
             CreatedBy = ResolveActorUserId(user)!,
-            CreatedByName = user?.FindFirstValue("user:name")
+            CreatedByName = user?.FindFirstValue("user:name"),
         };
         workItem.Notes.Add(note);
-        AppendAudit(workItem, "note-added", "Note added", user, now, new()
-        {
-            ["noteId"] = note.Id.ToString(),
-            // Snapshot the trimmed body so the audit log is self-describing —
-            // a reader does not need to cross-reference Notes by id to see
-            // what was written. Already capped by MaxNoteLength.
-            ["noteText"] = note.Text
-        });
+        AppendAudit(
+            workItem,
+            "note-added",
+            "Note added",
+            user,
+            now,
+            new()
+            {
+                ["noteId"] = note.Id.ToString(),
+                // Snapshot the trimmed body so the audit log is self-describing —
+                // a reader does not need to cross-reference Notes by id to see
+                // what was written. Already capped by MaxNoteLength.
+                ["noteText"] = note.Text,
+            }
+        );
 
         // Re-completing an already-complete task is a no-op for the
         // completion half (matches CompleteTaskAsync's idempotency
@@ -858,12 +1030,19 @@ public sealed class WorkItemService : IWorkItemService
             // truth stay in lockstep.
             SetTaskStatus(workItem, completedStateId, task.Id, WorkItemTaskStatus.Completed);
 
-            AppendAudit(workItem, "task-completed", "Task completed", user, now, new()
-            {
-                ["taskId"] = task.Id,
-                ["taskDisplayName"] = task.DisplayName,
-                ["stateId"] = completedStateId
-            });
+            AppendAudit(
+                workItem,
+                "task-completed",
+                "Task completed",
+                user,
+                now,
+                new()
+                {
+                    ["taskId"] = task.Id,
+                    ["taskDisplayName"] = task.DisplayName,
+                    ["stateId"] = completedStateId,
+                }
+            );
         }
 
         workItem.LastModifiedAt = now;
@@ -884,11 +1063,17 @@ public sealed class WorkItemService : IWorkItemService
             taskNewlyCompleted ? "marked complete" : "left as already-complete",
             workItem.Id,
             workItem.TypeId,
-            DescribeUser(user));
+            DescribeUser(user)
+        );
 
         if (taskNewlyCompleted && !HasIncompleteTasks(template, workItem))
         {
-            await InvokeAllTasksCompletedHooksAsync(workItem, completedStateId, user, cancellationToken);
+            await InvokeAllTasksCompletedHooksAsync(
+                workItem,
+                completedStateId,
+                user,
+                cancellationToken
+            );
         }
 
         return WorkItemActionResult.Success(workItem);
@@ -899,7 +1084,8 @@ public sealed class WorkItemService : IWorkItemService
         string taskId,
         WorkItemTaskStatus status,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (RequireActorIdentity(user) is { } identityFailure)
         {
@@ -913,12 +1099,15 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         var tasks = template!.GetTasksForState(workItem!.StateId);
-        var task = tasks.FirstOrDefault(t => string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase));
+        var task = tasks.FirstOrDefault(t =>
+            string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
+        );
         if (task is null)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'.");
+                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
+            );
         }
 
         var currentStatus = GetCurrentTaskStatus(workItem, workItem.StateId, task.Id);
@@ -939,14 +1128,21 @@ public sealed class WorkItemService : IWorkItemService
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.LastModifiedAt = now;
-        AppendAudit(workItem, "task-status-changed", "Task status changed", user, now, new()
-        {
-            ["taskId"] = task.Id,
-            ["taskDisplayName"] = task.DisplayName,
-            ["stateId"] = changedStateId,
-            ["fromStatus"] = currentStatus.ToString(),
-            ["toStatus"] = status.ToString()
-        });
+        AppendAudit(
+            workItem,
+            "task-status-changed",
+            "Task status changed",
+            user,
+            now,
+            new()
+            {
+                ["taskId"] = task.Id,
+                ["taskDisplayName"] = task.DisplayName,
+                ["stateId"] = changedStateId,
+                ["fromStatus"] = currentStatus.ToString(),
+                ["toStatus"] = status.ToString(),
+            }
+        );
 
         try
         {
@@ -959,17 +1155,31 @@ public sealed class WorkItemService : IWorkItemService
 
         _logger.LogInformation(
             "Task {TaskId} on work item {WorkItemId} ({TypeId}) moved from {FromStatus} to {ToStatus} by {User}",
-            task.Id, workItem.Id, workItem.TypeId, currentStatus, status, DescribeUser(user));
+            task.Id,
+            workItem.Id,
+            workItem.TypeId,
+            currentStatus,
+            status,
+            DescribeUser(user)
+        );
 
         if (status == WorkItemTaskStatus.Completed && !HasIncompleteTasks(template!, workItem))
         {
-            await InvokeAllTasksCompletedHooksAsync(workItem, changedStateId, user, cancellationToken);
+            await InvokeAllTasksCompletedHooksAsync(
+                workItem,
+                changedStateId,
+                user,
+                cancellationToken
+            );
         }
 
         return WorkItemActionResult.Success(workItem);
     }
 
-    public async Task<WorkItemEngineProjection?> ProjectAsync(Guid workItemId, CancellationToken cancellationToken = default)
+    public async Task<WorkItemEngineProjection?> ProjectAsync(
+        Guid workItemId,
+        CancellationToken cancellationToken = default
+    )
     {
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         return workItem is null ? null : Project(workItem);
@@ -989,7 +1199,8 @@ public sealed class WorkItemService : IWorkItemService
                 workItem,
                 ResolveTemplateVersion(workItem),
                 Array.Empty<WorkItemTaskProgress>(),
-                Array.Empty<WorkItemTransition>());
+                Array.Empty<WorkItemTransition>()
+            );
         }
 
         var completed = workItem.CompletedTaskIdsByState.TryGetValue(workItem.StateId, out var done)
@@ -1000,55 +1211,90 @@ public sealed class WorkItemService : IWorkItemService
         // when present; fall back to the legacy CompletedTaskIdsByState
         // bucket for documents written before the map existed (Completed
         // when in the bucket, NotStarted otherwise).
-        var statuses = workItem.TaskStatusesByState.TryGetValue(workItem.StateId, out var stateStatuses)
+        var statuses = workItem.TaskStatusesByState.TryGetValue(
+            workItem.StateId,
+            out var stateStatuses
+        )
             ? stateStatuses
             : null;
 
-        var taskProgress = template.GetTasksForState(workItem.StateId)
+        var taskProgress = template
+            .GetTasksForState(workItem.StateId)
             .Select(task =>
             {
-                var status = statuses is not null && statuses.TryGetValue(task.Id, out var explicitStatus)
-                    ? explicitStatus
-                    : (completed.Contains(task.Id) ? WorkItemTaskStatus.Completed : WorkItemTaskStatus.NotStarted);
+                var status =
+                    statuses is not null && statuses.TryGetValue(task.Id, out var explicitStatus)
+                        ? explicitStatus
+                        : (
+                            completed.Contains(task.Id)
+                                ? WorkItemTaskStatus.Completed
+                                : WorkItemTaskStatus.NotStarted
+                        );
                 return new WorkItemTaskProgress(
                     task.Id,
                     task.DisplayName,
                     IsComplete: status == WorkItemTaskStatus.Completed,
-                    Status: status);
+                    Status: status
+                );
             })
             .ToList();
 
-        var currentState = template.States.FirstOrDefault(
-            s => string.Equals(s.Id, workItem.StateId, StringComparison.OrdinalIgnoreCase));
+        var currentState = template.States.FirstOrDefault(s =>
+            string.Equals(s.Id, workItem.StateId, StringComparison.OrdinalIgnoreCase)
+        );
         var isTerminal = currentState?.IsTerminal == true;
 
         IReadOnlyCollection<WorkItemTransition> available = isTerminal
             ? Array.Empty<WorkItemTransition>()
-            : template.Transitions
-                .Where(t => string.Equals(t.FromStateId, workItem.StateId, StringComparison.OrdinalIgnoreCase))
+            : template
+                .Transitions.Where(t =>
+                    string.Equals(
+                        t.FromStateId,
+                        workItem.StateId,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
                 .Where(t => !t.RequiresAllTasksComplete || taskProgress.All(p => p.IsComplete))
                 .ToList();
 
-        return new WorkItemEngineProjection(workItem, template.TemplateVersion, taskProgress, available);
+        return new WorkItemEngineProjection(
+            workItem,
+            template.TemplateVersion,
+            taskProgress,
+            available
+        );
     }
 
-    private async Task<(WorkItem? WorkItem, IWorkItemTemplate? Template, WorkItemActionResult? Failure)> LoadAsync(
-        Guid workItemId, CancellationToken cancellationToken)
+    private async Task<(
+        WorkItem? WorkItem,
+        IWorkItemTemplate? Template,
+        WorkItemActionResult? Failure
+    )> LoadAsync(Guid workItemId, CancellationToken cancellationToken)
     {
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
         {
-            return (null, null, WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.WorkItemNotFound,
-                $"No work item exists with id '{workItemId}'."));
+            return (
+                null,
+                null,
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.WorkItemNotFound,
+                    $"No work item exists with id '{workItemId}'."
+                )
+            );
         }
 
         var template = ResolveTemplate(workItem);
         if (template is null)
         {
-            return (workItem, null, WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.UnknownAction,
-                $"Work item {workItemId} references unregistered type '{workItem.TypeId}' and has no stored template snapshot."));
+            return (
+                workItem,
+                null,
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.UnknownAction,
+                    $"Work item {workItemId} references unregistered type '{workItem.TypeId}' and has no stored template snapshot."
+                )
+            );
         }
 
         return (workItem, template, null);
@@ -1092,15 +1338,23 @@ public sealed class WorkItemService : IWorkItemService
     /// <see cref="WorkItem.CompletedTaskIdsByState"/> bucket for documents
     /// written before the map existed.
     /// </summary>
-    private static WorkItemTaskStatus GetCurrentTaskStatus(WorkItem workItem, string stateId, string taskId)
+    private static WorkItemTaskStatus GetCurrentTaskStatus(
+        WorkItem workItem,
+        string stateId,
+        string taskId
+    )
     {
-        if (workItem.TaskStatusesByState.TryGetValue(stateId, out var inner)
-            && inner.TryGetValue(taskId, out var explicitStatus))
+        if (
+            workItem.TaskStatusesByState.TryGetValue(stateId, out var inner)
+            && inner.TryGetValue(taskId, out var explicitStatus)
+        )
         {
             return explicitStatus;
         }
-        if (workItem.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket)
-            && bucket.Contains(taskId))
+        if (
+            workItem.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket)
+            && bucket.Contains(taskId)
+        )
         {
             return WorkItemTaskStatus.Completed;
         }
@@ -1114,7 +1368,12 @@ public sealed class WorkItemService : IWorkItemService
     /// epr-gl6. <see cref="WorkItemTaskStatus.Completed"/> adds the task to
     /// the legacy bucket; any other status removes it.
     /// </summary>
-    private static void SetTaskStatus(WorkItem workItem, string stateId, string taskId, WorkItemTaskStatus status)
+    private static void SetTaskStatus(
+        WorkItem workItem,
+        string stateId,
+        string taskId,
+        WorkItemTaskStatus status
+    )
     {
         if (!workItem.TaskStatusesByState.TryGetValue(stateId, out var inner))
         {
@@ -1148,7 +1407,8 @@ public sealed class WorkItemService : IWorkItemService
         // bucket would let a v2 module that writes only to the canonical
         // map silently transition past incomplete tasks.
         return required.Any(t =>
-            GetCurrentTaskStatus(workItem, workItem.StateId, t.Id) != WorkItemTaskStatus.Completed);
+            GetCurrentTaskStatus(workItem, workItem.StateId, t.Id) != WorkItemTaskStatus.Completed
+        );
     }
 
     /// <summary>
@@ -1164,23 +1424,27 @@ public sealed class WorkItemService : IWorkItemService
         string actionDisplayName,
         ClaimsPrincipal? user,
         DateTime createdAt,
-        Dictionary<string, string?> details)
+        Dictionary<string, string?> details
+    )
     {
-        workItem.AuditLog.Add(new WorkItemAuditEntry
-        {
-            Action = action,
-            ActionDisplayName = actionDisplayName,
-            Details = details,
-            CreatedAt = createdAt,
-            CreatedBy = ResolveActorUserId(user)!,
-            CreatedByName = user?.FindFirstValue("user:name")
-        });
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
+            {
+                Action = action,
+                ActionDisplayName = actionDisplayName,
+                Details = details,
+                CreatedAt = createdAt,
+                CreatedBy = ResolveActorUserId(user)!,
+                CreatedByName = user?.FindFirstValue("user:name"),
+            }
+        );
     }
 
     private static WorkItemActionResult ConcurrencyConflict(Guid workItemId) =>
         WorkItemActionResult.Failure(
             WorkItemActionFailureCode.ConcurrencyConflict,
-            $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
+            $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry."
+        );
 
     private static string DescribeUser(ClaimsPrincipal? user) =>
         user?.FindFirstValue("user:id")
@@ -1203,8 +1467,9 @@ public sealed class WorkItemService : IWorkItemService
         }
         return WorkItemActionResult.Failure(
             WorkItemActionFailureCode.MissingActorIdentity,
-            "Mutating this work item requires an authenticated end user; " +
-            "the request did not include a 'user:id' claim.");
+            "Mutating this work item requires an authenticated end user; "
+                + "the request did not include a 'user:id' claim."
+        );
     }
 
     /// <summary>
@@ -1229,7 +1494,8 @@ public sealed class WorkItemService : IWorkItemService
     private async Task InvokeSubmittedHooksAsync(
         WorkItem workItem,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var hook in _postActionHooks)
         {
@@ -1239,9 +1505,12 @@ public sealed class WorkItemService : IWorkItemService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
+                _logger.LogError(
+                    ex,
                     "Post-action submit hook {HookType} failed for work item {WorkItemId}",
-                    hook.GetType().FullName, workItem.Id);
+                    hook.GetType().FullName,
+                    workItem.Id
+                );
             }
         }
     }
@@ -1251,19 +1520,30 @@ public sealed class WorkItemService : IWorkItemService
         string actionId,
         string fromStateId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var hook in _postActionHooks)
         {
             try
             {
-                await hook.OnActionAppliedAsync(workItem, actionId, fromStateId, user, cancellationToken);
+                await hook.OnActionAppliedAsync(
+                    workItem,
+                    actionId,
+                    fromStateId,
+                    user,
+                    cancellationToken
+                );
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
+                _logger.LogError(
+                    ex,
                     "Post-action transition hook {HookType} failed for work item {WorkItemId} action {ActionId}",
-                    hook.GetType().FullName, workItem.Id, actionId);
+                    hook.GetType().FullName,
+                    workItem.Id,
+                    actionId
+                );
             }
         }
     }
@@ -1300,7 +1580,8 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem workItem,
         string stateId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var hook in _postTaskHooks)
         {
@@ -1310,9 +1591,13 @@ public sealed class WorkItemService : IWorkItemService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
+                _logger.LogError(
+                    ex,
                     "Post-task hook {HookType} failed for work item {WorkItemId} state {StateId}",
-                    hook.GetType().FullName, workItem.Id, stateId);
+                    hook.GetType().FullName,
+                    workItem.Id,
+                    stateId
+                );
                 throw;
             }
         }
