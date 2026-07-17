@@ -40,7 +40,7 @@ public class SwaggerUiEndpointTests
         // user ids embedded in the JS bundle, confirming the asset that
         // monkey-patches window.fetch with CDP trust headers is wired up.
         Assert.Contains("epr-stub-user-picker", body, StringComparison.Ordinal);
-        Assert.Contains("stub-assign-1", body, StringComparison.Ordinal);
+        Assert.Contains("stub-caseworker-1", body, StringComparison.Ordinal);
     }
 
     [Fact]

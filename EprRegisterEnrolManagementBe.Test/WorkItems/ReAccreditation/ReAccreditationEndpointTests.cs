@@ -415,7 +415,7 @@ public class ReAccreditationEndpointTests
             _fixture,
             clientId: CaseWorkerClientId,
             userId: "worker-1",
-            roles: [WorkItemEndpoints.CaseWorkerRole, ReAccreditationType.DecisionMakerRole]);
+            roles: [WorkItemEndpoints.CaseWorkerRole, "reaccreditation-decision-maker"]);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -470,7 +470,7 @@ public class ReAccreditationEndpointTests
             _fixture,
             clientId: CaseWorkerClientId,
             userId: "worker-1",
-            roles: [WorkItemEndpoints.CaseWorkerRole, ReAccreditationType.DecisionMakerRole]);
+            roles: [WorkItemEndpoints.CaseWorkerRole, "reaccreditation-decision-maker"]);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -486,55 +486,6 @@ public class ReAccreditationEndpointTests
         Assert.Equal(1, persisted!.Version);
     }
 
-    // -------------------- Segregation of duties (epr-jdv) --------------------
-
-    [Fact]
-    public async Task RecordDecisionRationale_returns_forbidden_for_non_decision_maker()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            roles: []); // Same tenant, but no DecisionMakerRole.
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        // No seed — we expect fail-closed before persistence is touched.
-        var response = await client.PostAsJsonAsync(
-            $"/work-items/re-accreditation/{id}/decision-rationale",
-            new DecisionRationaleRequest("Approved on the basis of full compliance history."),
-            cancellationToken);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Null(persisted);
-    }
-
-    [Fact]
-    public async Task RecordDecisionRationale_case_worker_without_decision_maker_role_is_forbidden()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        // Cross-tenant access (CaseWorkerRole) must not bypass segregation
-        // of duties — a case-worker who is not also a DecisionMaker is denied.
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            clientId: CaseWorkerClientId,
-            userId: "worker-1",
-            roles: [WorkItemEndpoints.CaseWorkerRole]);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, "other-tenant"), cancellationToken);
-
-        var response = await client.PostAsJsonAsync(
-            $"/work-items/re-accreditation/{id}/decision-rationale",
-            new DecisionRationaleRequest("Approved on the basis of full compliance history."),
-            cancellationToken);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal(0, persisted!.Version);
-        Assert.Empty(persisted.Notes);
-    }
 
     // -------------------- GetPriorYear endpoint --------------------
 
@@ -813,8 +764,11 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task Approve_returns_forbidden_when_caller_lacks_decision_maker_role()
+    public async Task Approve_succeeds_when_caller_holds_no_special_role()
     {
+        // RA-323: every caseworker holds the same role, so approving
+        // requires no role beyond being an authenticated caseworker in the
+        // same tenant.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture, roles: []);
         using var client = factory.CreateClient();
@@ -825,9 +779,9 @@ public class ReAccreditationEndpointTests
         var response = await client.PostAsync(
             $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("awaiting-decision", persisted!.StateId);
+        Assert.Equal("approved", persisted!.StateId);
     }
 
     [Fact]
@@ -906,7 +860,7 @@ public class ReAccreditationEndpointTests
             _clientId = clientId;
             _userId = userId;
             _userName = userName;
-            _roles = roles ?? new[] { ReAccreditationType.DecisionMakerRole };
+            _roles = roles ?? new[] { "reaccreditation-decision-maker" };
             _raceWorkItemId = raceWorkItemId;
         }
 

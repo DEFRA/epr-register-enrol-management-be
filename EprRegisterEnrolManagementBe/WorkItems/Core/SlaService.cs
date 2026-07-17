@@ -9,8 +9,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <summary>
 /// RA-131: framework service that handles SLA extension and manual
 /// override for any work item type. Lives in core because the rules
-/// (team-leader gate, max-extension cap, non-empty reason, audit
-/// composition, operator-notify-on-extend) are universal across modules.
+/// (max-extension cap, non-empty reason, audit composition,
+/// operator-notify-on-extend) are universal across modules. RA-323: any
+/// authenticated caseworker may extend or override — there is no
+/// team-leader gate any more.
 /// </summary>
 public interface ISlaService
 {
@@ -57,7 +59,6 @@ public interface ISlaService
 public enum SlaActionFailureCode
 {
     WorkItemNotFound,
-    /// <summary>Caller does not hold the team-leader role.</summary>
     NotAuthorized,
     /// <summary>Caller carries no <c>user:id</c> claim (BFF did not forward identity).</summary>
     MissingActorIdentity,
@@ -86,13 +87,6 @@ public sealed record SlaActionResult(
 
 public sealed class SlaService : ISlaService
 {
-    /// <summary>
-    /// Role that lets a user extend or override the SLA clock on any
-    /// work item. Standard users and case-workers cannot — exceptional
-    /// SLA changes are a team-leader decision per RA-131.
-    /// </summary>
-    public const string TeamLeaderRole = "team-leader";
-
     /// <summary>
     /// Action id used when fanning out post-action hooks after a
     /// successful extend. The existing per-module notification hooks
@@ -129,7 +123,6 @@ public sealed class SlaService : ISlaService
         CancellationToken cancellationToken = default)
     {
         if (RequireActorIdentity(user) is { } identityFailure) return identityFailure;
-        if (RequireTeamLeader(user) is { } roleFailure) return roleFailure;
         if (RequireReason(reason) is { } reasonFailure) return reasonFailure;
 
         var maxExtension = TimeSpan.FromDays(_config.CurrentValue.MaxExtensionDays);
@@ -210,7 +203,6 @@ public sealed class SlaService : ISlaService
         CancellationToken cancellationToken = default)
     {
         if (RequireActorIdentity(user) is { } identityFailure) return identityFailure;
-        if (RequireTeamLeader(user) is { } roleFailure) return roleFailure;
         if (RequireReason(reason) is { } reasonFailure) return reasonFailure;
 
         if (newTargetDuration <= TimeSpan.Zero)
@@ -371,13 +363,6 @@ public sealed class SlaService : ISlaService
                 "Mutating this work item requires an authenticated end user; " +
                 "the request did not include a 'user:id' claim.")
             : null;
-
-    private static SlaActionResult? RequireTeamLeader(ClaimsPrincipal? user) =>
-        user?.IsInRole(TeamLeaderRole) == true
-            ? null
-            : SlaActionResult.Failure(
-                SlaActionFailureCode.NotAuthorized,
-                $"Only users with the '{TeamLeaderRole}' role can extend or override an SLA clock.");
 
     private static SlaActionResult? RequireReason(string? reason) =>
         string.IsNullOrWhiteSpace(reason)

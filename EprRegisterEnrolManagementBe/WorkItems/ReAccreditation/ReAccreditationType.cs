@@ -45,19 +45,6 @@ internal sealed class ReAccreditationType : IWorkItemType
         IsTerminal: true
     );
 
-    /// <summary>
-    /// Role names that authorise approving or rejecting a re-accreditation.
-    /// Segregation of duties: an assessor who completes tasks should not be
-    /// the same user who records the final decision. Holding this role grants
-    /// permission to invoke the approve / reject transitions.
-    /// </summary>
-    public const string DecisionMakerRole = "reaccreditation-decision-maker";
-
-    private static readonly IReadOnlyCollection<string> s_decisionMakerRoles = new[]
-    {
-        DecisionMakerRole,
-    };
-
     private static readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>> s_tasksByState =
         new(StringComparer.OrdinalIgnoreCase)
         {
@@ -140,8 +127,7 @@ internal sealed class ReAccreditationType : IWorkItemType
             "reject",
             "Reject",
             s_awaitingDecision.Id,
-            s_rejected.Id,
-            RequiredRoles: s_decisionMakerRoles
+            s_rejected.Id
         ),
         // RA-211: a case worker can query an application from either active
         // review state when they need clarification before proceeding. Like

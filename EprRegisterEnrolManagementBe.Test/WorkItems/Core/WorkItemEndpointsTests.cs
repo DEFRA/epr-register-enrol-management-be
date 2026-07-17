@@ -755,8 +755,9 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
-    public async Task Assign_returns_403_when_standard_user_assigns_to_someone_else()
+    public async Task Assign_succeeds_when_standard_user_assigns_to_someone_else()
     {
+        // RA-323: every caseworker holds the same role.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory(userRoles: "standard", userId: "alice-1");
         using var client = factory.CreateClient();
@@ -773,7 +774,7 @@ public class WorkItemEndpointsTests
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/assign", new { assigneeId = "bob-1", assigneeName = "Bob" }, cancellationToken);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -822,8 +823,9 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
-    public async Task Unassign_returns_403_when_caller_lacks_assign_role()
+    public async Task Unassign_succeeds_for_caller_with_only_standard_role()
     {
+        // RA-323: every caseworker holds the same role.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory(userRoles: "standard", userId: "alice-1");
         using var client = factory.CreateClient();
@@ -840,7 +842,7 @@ public class WorkItemEndpointsTests
 
         var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
