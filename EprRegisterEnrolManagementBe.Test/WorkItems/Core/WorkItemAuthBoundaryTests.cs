@@ -20,7 +20,6 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// version is bumped when the request is denied.
 /// </summary>
 public class WorkItemAuthBoundaryTests
-    : IClassFixture<MongoIntegrationFixture>
 {
     private const string TypeId = "test-type";
     private const string TenantClientId = "test-client";

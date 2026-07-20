@@ -24,7 +24,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// verified via a small integration subset using
 /// <see cref="SlaEndpointsTestFactory"/>.
 /// </summary>
-public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
+public class SlaEndpointsTests
 {
     private const string TypeId = "test-type";
     private static readonly Guid WorkItemId = Guid.NewGuid();

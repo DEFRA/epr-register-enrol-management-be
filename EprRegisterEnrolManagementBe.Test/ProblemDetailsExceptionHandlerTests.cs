@@ -23,7 +23,6 @@ namespace EprRegisterEnrolManagementBe.Test;
 /// implementation mocked <see cref="IWorkItemPersistence"/>).
 /// </summary>
 public class ProblemDetailsExceptionHandlerTests
-    : IClassFixture<MongoIntegrationFixture>
 {
     private readonly MongoIntegrationFixture _fixture;
 

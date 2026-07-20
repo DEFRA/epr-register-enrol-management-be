@@ -23,7 +23,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// test server does not host through Kestrel and therefore does not
 /// honour <c>MaxRequestBodySize</c>.
 /// </summary>
-public class WorkItemRequestSizeLimitTests : IClassFixture<MongoIntegrationFixture>
+public class WorkItemRequestSizeLimitTests
 {
     private readonly MongoIntegrationFixture _fixture;
 

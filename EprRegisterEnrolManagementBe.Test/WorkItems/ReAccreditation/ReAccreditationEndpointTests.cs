@@ -28,7 +28,6 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// boundary the integration suite is supposed to hit.
 /// </summary>
 public class ReAccreditationEndpointTests
-    : IClassFixture<MongoIntegrationFixture>
 {
     private const string TenantClientId = "test-client";
     private const string CaseWorkerClientId = "case-worker-client";

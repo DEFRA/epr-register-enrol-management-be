@@ -22,7 +22,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <see cref="IWorkItemPersistence"/> wholesale.
 /// </summary>
 public class WorkItemServiceTimestampTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
+    : IAsyncDisposable
 {
     private const string TypeId = "test-type";
     private static readonly DateTimeOffset T = new(2026, 4, 27, 10, 0, 0, TimeSpan.Zero);

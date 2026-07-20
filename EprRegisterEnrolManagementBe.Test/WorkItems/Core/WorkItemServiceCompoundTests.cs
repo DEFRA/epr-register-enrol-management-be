@@ -19,8 +19,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// validated against the real driver. Concurrency conflicts are
 /// induced naturally via stale-load races rather than mocked.
 /// </summary>
-public class WorkItemServiceCompoundTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
+public class WorkItemServiceCompoundTests : IAsyncDisposable
 {
     private const string TypeId = "test-type";
     private static readonly DateTime InitialNow = new(2026, 4, 27, 10, 0, 0, DateTimeKind.Utc);

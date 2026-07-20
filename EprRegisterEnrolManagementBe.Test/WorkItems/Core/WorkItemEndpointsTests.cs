@@ -24,7 +24,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <see cref="WorkItemQuery"/> the endpoint built — the wrapper records
 /// calls but delegates to the real persistence so behaviour stays end-to-end.
 /// </summary>
-public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
+public class WorkItemEndpointsTests
 {
     private const string TypeId = "test-type";
     private readonly MongoIntegrationFixture _fixture;
