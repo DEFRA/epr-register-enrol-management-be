@@ -24,8 +24,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <see cref="WorkItemQuery"/> the endpoint built — the wrapper records
 /// calls but delegates to the real persistence so behaviour stays end-to-end.
 /// </summary>
-public class WorkItemEndpointsTests
-    : IClassFixture<MongoIntegrationFixture>
+public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
 {
     private const string TypeId = "test-type";
     private readonly MongoIntegrationFixture _fixture;
@@ -37,8 +36,8 @@ public class WorkItemEndpointsTests
         string? userRoles = null,
         string? userId = "test-user",
         string? userName = null,
-        Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null) =>
-        new(_fixture, includeAuthHeader, userRoles, userId, userName, tasksByState);
+        Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
+    ) => new(_fixture, includeAuthHeader, userRoles, userId, userName, tasksByState);
 
     [Fact]
     public async Task Post_returns_unauthorized_without_cognito_client_id()
@@ -47,7 +46,11 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory(includeAuthHeader: false);
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = TypeId },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -59,7 +62,11 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new { typeId = string.Empty }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = string.Empty },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
@@ -73,7 +80,11 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new { typeId = "unknown-type" }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = "unknown-type" },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
@@ -87,11 +98,11 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new
-        {
-            typeId = TypeId,
-            payload = new { applicantName = "Acme", tonnage = 42 }
-        }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = TypeId, payload = new { applicantName = "Acme", tonnage = 42 } },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
@@ -126,7 +137,7 @@ public class WorkItemEndpointsTests
         // payload.applicationReference so the BFF can display it. The same
         // value must be what was persisted.
         var responseRef = body.Payload.GetProperty("applicationReference").GetString();
-        Assert.Matches(@"^RA-\d{9}$", responseRef);
+        Assert.Matches(@"^AP\d{2}EA$", responseRef);
         Assert.Equal(persisted.Payload["applicationReference"].AsString, responseRef);
     }
 
@@ -141,7 +152,11 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory(userId: "alice-1", userName: "Alice Example");
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = TypeId },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
@@ -170,7 +185,11 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory(userId: null);
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = TypeId },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         Assert.Empty(await factory.AllItemsAsync(cancellationToken));
@@ -187,14 +206,18 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory(userId: "alice-1", userName: "Alice Example");
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new
-        {
-            typeId = TypeId,
-            source = "operator-fe",
-            // RA-219: a client-supplied applicationReference is IGNORED.
-            applicationReference = "APP-123",
-            payload = new { applicantName = "Acme" }
-        }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new
+            {
+                typeId = TypeId,
+                source = "operator-fe",
+                // RA-219: a client-supplied applicationReference is IGNORED.
+                applicationReference = "APP-123",
+                payload = new { applicantName = "Acme" },
+            },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
@@ -211,7 +234,7 @@ public class WorkItemEndpointsTests
         // RA-219: the server-generated reference, not the ignored client value.
         var auditedRef = entry.Details["applicationReference"];
         Assert.NotEqual("APP-123", auditedRef);
-        Assert.Matches(@"^RA-\d{9}$", auditedRef);
+        Assert.Matches(@"^AP\d{2}EA$", auditedRef);
     }
 
     [Fact]
@@ -225,7 +248,10 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
-            "/work-items", new { typeId = TypeId }, cancellationToken);
+            "/work-items",
+            new { typeId = TypeId },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
@@ -237,14 +263,17 @@ public class WorkItemEndpointsTests
         // even with no submission metadata the birth entry carries a real
         // RA-######### value rather than null.
         Assert.True(entry.Details.ContainsKey("applicationReference"));
-        Assert.Matches(@"^RA-\d{9}$", entry.Details["applicationReference"]);
+        Assert.Matches(@"^AP\d{2}EA$", entry.Details["applicationReference"]);
         Assert.Equal("test-client", entry.Details["clientId"]);
         Assert.Equal("alice-1", entry.Details["userId"]);
     }
 
     [Theory]
     [InlineData("source", "'source' must be a string.")]
-    public async Task Post_rejects_non_string_submission_metadata_field(string field, string expectedDetail)
+    public async Task Post_rejects_non_string_submission_metadata_field(
+        string field,
+        string expectedDetail
+    )
     {
         // RA-126: reject malformed metadata up front rather than
         // silently coercing / dropping it — that would leave the audit
@@ -258,8 +287,8 @@ public class WorkItemEndpointsTests
         // Hand-craft body to inject a non-string value (e.g. a number)
         // for the field under test.
         var json = $$"""
-        { "typeId": "{{TypeId}}", "{{field}}": 42 }
-        """;
+            { "typeId": "{{TypeId}}", "{{field}}": 42 }
+            """;
         var content = new StringContent(json, System.Text.Encoding.UTF8, "application/json");
         var response = await client.PostAsync("/work-items", content, cancellationToken);
 
@@ -277,7 +306,11 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new { typeId = TypeId }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = TypeId },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
@@ -288,7 +321,7 @@ public class WorkItemEndpointsTests
         // empty — it carries exactly that one field.
         var field = Assert.Single(persisted!.Payload.Names);
         Assert.Equal("applicationReference", field);
-        Assert.Matches(@"^RA-\d{9}$", persisted.Payload["applicationReference"].AsString);
+        Assert.Matches(@"^AP\d{2}EA$", persisted.Payload["applicationReference"].AsString);
     }
 
     [Fact]
@@ -298,11 +331,11 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
-        var response = await client.PostAsJsonAsync("/work-items", new
-        {
-            typeId = TypeId,
-            payload = new[] { 1, 2, 3 }
-        }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = TypeId, payload = new[] { 1, 2, 3 } },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
@@ -317,13 +350,16 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -352,13 +388,16 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "other-tenant",
+            },
+            cancellationToken
+        );
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -372,13 +411,16 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "other-tenant",
+            },
+            cancellationToken
+        );
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -393,22 +435,31 @@ public class WorkItemEndpointsTests
 
         // Seed two items: one belongs to the caller, one to another tenant.
         // The non-case-worker filter must only surface the caller's.
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "other-tenant",
+            },
+            cancellationToken
+        );
 
-        var body = await client.GetFromJsonAsync<WorkItemListResponse>("/work-items", cancellationToken);
+        var body = await client.GetFromJsonAsync<WorkItemListResponse>(
+            "/work-items",
+            cancellationToken
+        );
         Assert.NotNull(body);
         var item = Assert.Single(body!.Items);
         Assert.Equal("test-client", item.SubmittedBy);
@@ -428,22 +479,31 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
         using var client = factory.CreateClient();
 
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "other-tenant",
+            },
+            cancellationToken
+        );
 
-        var body = await client.GetFromJsonAsync<WorkItemListResponse>("/work-items", cancellationToken);
+        var body = await client.GetFromJsonAsync<WorkItemListResponse>(
+            "/work-items",
+            cancellationToken
+        );
         Assert.NotNull(body);
         Assert.Equal(2, body!.Items.Count);
 
@@ -468,10 +528,17 @@ public class WorkItemEndpointsTests
         var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
         {
             User = new System.Security.Claims.ClaimsPrincipal(
-                new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
         };
 
-        var result = await WorkItemEndpoints.GetAll(httpContext, persistence, engine, TimeProvider.System, cancellationToken);
+        var result = await WorkItemEndpoints.GetAll(
+            httpContext,
+            persistence,
+            engine,
+            TimeProvider.System,
+            cancellationToken
+        );
 
         var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
         Assert.NotNull(ok.Value);
@@ -499,21 +566,36 @@ public class WorkItemEndpointsTests
         var engine = Substitute.For<IWorkItemService>();
         persistence
             .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new WorkItemPage(
-                Items: new List<WorkItem>
-                {
-                    new() { TypeId = TypeId, StateId = "submitted", SubmittedBy = "__no_tenant__" }
-                },
-                TotalCount: 1,
-                Page: 1,
-                PageSize: WorkItemQuery.DefaultPageSize));
+            .Returns(
+                new WorkItemPage(
+                    Items: new List<WorkItem>
+                    {
+                        new()
+                        {
+                            TypeId = TypeId,
+                            StateId = "submitted",
+                            SubmittedBy = "__no_tenant__",
+                        },
+                    },
+                    TotalCount: 1,
+                    Page: 1,
+                    PageSize: WorkItemQuery.DefaultPageSize
+                )
+            );
         var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
         {
             User = new System.Security.Claims.ClaimsPrincipal(
-                new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
         };
 
-        var result = await WorkItemEndpoints.GetAll(httpContext, persistence, engine, TimeProvider.System, cancellationToken);
+        var result = await WorkItemEndpoints.GetAll(
+            httpContext,
+            persistence,
+            engine,
+            TimeProvider.System,
+            cancellationToken
+        );
 
         var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
         Assert.Empty(ok.Value!.Items);
@@ -539,24 +621,37 @@ public class WorkItemEndpointsTests
                 Arg.Any<string?>(),
                 Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
                 Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>())
-            .Returns(WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.ApplicationReferenceExhausted,
-                "Failed to generate a unique applicationReference after 5 attempts."));
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.ApplicationReferenceExhausted,
+                    "Failed to generate a unique applicationReference after 5 attempts."
+                )
+            );
 
         var body = JsonDocument.Parse($"{{\"typeId\":\"{TypeId}\"}}").RootElement;
         var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
         {
             User = new System.Security.Claims.ClaimsPrincipal(
-                new System.Security.Claims.ClaimsIdentity(authenticationType: "test"))
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
         };
 
-        var result = await WorkItemEndpoints.Submit(body, httpContext, registry, engine,
-            Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(), cancellationToken);
+        var result = await WorkItemEndpoints.Submit(
+            body,
+            httpContext,
+            registry,
+            engine,
+            Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(),
+            cancellationToken
+        );
 
         var problem = Assert.IsType<ProblemHttpResult>(result.Result);
         Assert.Equal(
-            Microsoft.AspNetCore.Http.StatusCodes.Status503ServiceUnavailable, problem.StatusCode);
+            Microsoft.AspNetCore.Http.StatusCodes.Status503ServiceUnavailable,
+            problem.StatusCode
+        );
         Assert.Contains("applicationReference", problem.ProblemDetails.Detail);
     }
 
@@ -568,7 +663,9 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync(
-            $"/work-items?page={WorkItemQuery.MaxPage + 1}", cancellationToken);
+            $"/work-items?page={WorkItemQuery.MaxPage + 1}",
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         // Persistence must never be hit for an out-of-range page — that's the
@@ -583,22 +680,31 @@ public class WorkItemEndpointsTests
         await using var factory = NewFactory();
         using var client = factory.CreateClient();
 
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
 
-        var body = await client.GetFromJsonAsync<WorkItemListResponse>("/work-items", cancellationToken);
+        var body = await client.GetFromJsonAsync<WorkItemListResponse>(
+            "/work-items",
+            cancellationToken
+        );
         Assert.NotNull(body);
         Assert.Equal(2, body!.Items.Count);
         Assert.Equal(2, body.TotalCount);
@@ -630,7 +736,12 @@ public class WorkItemEndpointsTests
             AssignedBy = "manager-1",
             Notes =
             {
-                new WorkItemNote { Text = "should not be on the wire", CreatedAt = assignedAt, CreatedBy = "alice-1" }
+                new WorkItemNote
+                {
+                    Text = "should not be on the wire",
+                    CreatedAt = assignedAt,
+                    CreatedBy = "alice-1",
+                },
             },
             AuditLog =
             {
@@ -639,9 +750,9 @@ public class WorkItemEndpointsTests
                     Action = "assigned",
                     ActionDisplayName = "Assigned",
                     CreatedAt = assignedAt,
-                    CreatedBy = "manager-1"
-                }
-            }
+                    CreatedBy = "manager-1",
+                },
+            },
         };
         await factory.SeedAsync(workItem, cancellationToken);
 
@@ -658,10 +769,12 @@ public class WorkItemEndpointsTests
         Assert.False(firstItem.ContainsKey("auditLog"), "list item must not include 'auditLog'");
 
         var body = System.Text.Json.JsonSerializer.Deserialize<WorkItemListResponse>(
-            rawJson, new System.Text.Json.JsonSerializerOptions
+            rawJson,
+            new System.Text.Json.JsonSerializerOptions
             {
-                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase
-            });
+                PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+            }
+        );
         Assert.NotNull(body);
         var item = Assert.Single(body!.Items);
         Assert.Equal("alice-1", item.AssignedToId);
@@ -680,7 +793,8 @@ public class WorkItemEndpointsTests
 
         var response = await client.GetAsync(
             "/work-items?typeId=re-accreditation&typeId=other-type&stateId=submitted&search=acme&assigneeId=alice-1&unassigned=true&page=2&pageSize=5",
-            cancellationToken);
+            cancellationToken
+        );
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var captured = factory.Recording.LastQuery;
@@ -703,18 +817,22 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/assign",
             new { assigneeId = "alice-1", assigneeName = "Alice Example" },
-            cancellationToken);
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
@@ -740,16 +858,22 @@ public class WorkItemEndpointsTests
         // matching SubmittedBy or the test sees 404 instead of the 400
         // it cares about. Caller's cognito client id is 'test-client'.
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
 
         var response = await client.PostAsJsonAsync(
-            $"/work-items/{id}/assign", new { }, cancellationToken);
+            $"/work-items/{id}/assign",
+            new { },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -763,16 +887,22 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
 
         var response = await client.PostAsJsonAsync(
-            $"/work-items/{id}/assign", new { assigneeId = "bob-1", assigneeName = "Bob" }, cancellationToken);
+            $"/work-items/{id}/assign",
+            new { assigneeId = "bob-1", assigneeName = "Bob" },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -787,7 +917,8 @@ public class WorkItemEndpointsTests
         var response = await client.PostAsJsonAsync(
             $"/work-items/{Guid.NewGuid()}/assign",
             new { assigneeId = "alice-1", assigneeName = "Alice" },
-            cancellationToken);
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -800,19 +931,26 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client",
-            AssignedToId = "alice-1",
-            AssignedToName = "Alice",
-            AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
-            AssignedBy = "earlier-actor"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+                AssignedToId = "alice-1",
+                AssignedToName = "Alice",
+                AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
+                AssignedBy = "earlier-actor",
+            },
+            cancellationToken
+        );
 
-        var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
+        var response = await client.PostAsync(
+            $"/work-items/{id}/unassign",
+            content: null,
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
@@ -831,16 +969,23 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client",
-            AssignedToId = "alice-1"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+                AssignedToId = "alice-1",
+            },
+            cancellationToken
+        );
 
-        var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
+        var response = await client.PostAsync(
+            $"/work-items/{id}/unassign",
+            content: null,
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -853,22 +998,26 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client",
-            AssignedToId = "alice-1",
-            AssignedToName = "Alice Example",
-            AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
-            AssignedBy = "earlier-actor"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+                AssignedToId = "alice-1",
+                AssignedToName = "Alice Example",
+                AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
+                AssignedBy = "earlier-actor",
+            },
+            cancellationToken
+        );
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/assign",
             new { assigneeId = "alice-1", assigneeName = "Alice Example" },
-            cancellationToken);
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.TryGetValues("X-Idempotent-Replay", out var values));
@@ -885,15 +1034,22 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
 
-        var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
+        var response = await client.PostAsync(
+            $"/work-items/{id}/unassign",
+            content: null,
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.True(response.Headers.TryGetValues("X-Idempotent-Replay", out var values));
@@ -910,18 +1066,22 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/{id}/notes",
             new { text = "Reviewed evidence; awaiting confirmation." },
-            cancellationToken);
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
@@ -955,27 +1115,42 @@ public class WorkItemEndpointsTests
         var id = Guid.NewGuid();
         var older = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc);
         var newer = new DateTime(2026, 4, 27, 11, 0, 0, DateTimeKind.Utc);
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client",
-            Notes =
+        await factory.SeedAsync(
+            new WorkItem
             {
-                new WorkItemNote { Text = "older", CreatedAt = older, CreatedBy = "earlier" },
-                new WorkItemNote { Text = "newer", CreatedAt = newer, CreatedBy = "earlier" }
-            }
-        }, cancellationToken);
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+                Notes =
+                {
+                    new WorkItemNote
+                    {
+                        Text = "older",
+                        CreatedAt = older,
+                        CreatedBy = "earlier",
+                    },
+                    new WorkItemNote
+                    {
+                        Text = "newer",
+                        CreatedAt = newer,
+                        CreatedBy = "earlier",
+                    },
+                },
+            },
+            cancellationToken
+        );
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
         Assert.NotNull(body?.Notes);
-        Assert.Collection(body!.Notes!,
+        Assert.Collection(
+            body!.Notes!,
             first => Assert.Equal("newer", first.Text),
-            second => Assert.Equal("older", second.Text));
+            second => Assert.Equal("older", second.Text)
+        );
     }
 
     [Fact]
@@ -986,18 +1161,25 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            // Match the factory's default cognito client id so the
-            // cross-tenant gate (epr-0t9) doesn't pre-empt the 400 we
-            // care about here.
-            SubmittedBy = "test-client"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                // Match the factory's default cognito client id so the
+                // cross-tenant gate (epr-0t9) doesn't pre-empt the 400 we
+                // care about here.
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
 
-        var response = await client.PostAsJsonAsync($"/work-items/{id}/notes", new { text = "   " }, cancellationToken);
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/notes",
+            new { text = "   " },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -1010,7 +1192,10 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
-            $"/work-items/{Guid.NewGuid()}/notes", new { text = "anything" }, cancellationToken);
+            $"/work-items/{Guid.NewGuid()}/notes",
+            new { text = "anything" },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -1023,7 +1208,10 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
-            $"/work-items/{Guid.NewGuid()}/notes", new { text = "anything" }, cancellationToken);
+            $"/work-items/{Guid.NewGuid()}/notes",
+            new { text = "anything" },
+            cancellationToken
+        );
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
@@ -1038,43 +1226,47 @@ public class WorkItemEndpointsTests
         var id = Guid.NewGuid();
         var older = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc);
         var newer = new DateTime(2026, 4, 27, 11, 0, 0, DateTimeKind.Utc);
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client",
-            AuditLog =
+        await factory.SeedAsync(
+            new WorkItem
             {
-                // Insert out of order on purpose so we know the oldest-first
-                // ordering on the wire is enforced by the projection rather
-                // than by storage order.
-                new WorkItemAuditEntry
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+                AuditLog =
                 {
-                    Action = "note-added",
-                    ActionDisplayName = "Note added",
-                    CreatedAt = newer,
-                    CreatedBy = "alice-1",
-                    CreatedByName = "Alice"
+                    // Insert out of order on purpose so we know the oldest-first
+                    // ordering on the wire is enforced by the projection rather
+                    // than by storage order.
+                    new WorkItemAuditEntry
+                    {
+                        Action = "note-added",
+                        ActionDisplayName = "Note added",
+                        CreatedAt = newer,
+                        CreatedBy = "alice-1",
+                        CreatedByName = "Alice",
+                    },
+                    new WorkItemAuditEntry
+                    {
+                        Action = "task-completed",
+                        ActionDisplayName = "Task completed",
+                        Details = new() { ["taskId"] = "check-eligibility" },
+                        CreatedAt = older,
+                        CreatedBy = "bob-1",
+                        CreatedByName = "Bob",
+                    },
                 },
-                new WorkItemAuditEntry
-                {
-                    Action = "task-completed",
-                    ActionDisplayName = "Task completed",
-                    Details = new() { ["taskId"] = "check-eligibility" },
-                    CreatedAt = older,
-                    CreatedBy = "bob-1",
-                    CreatedByName = "Bob"
-                }
-            }
-        }, cancellationToken);
+            },
+            cancellationToken
+        );
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
         Assert.NotNull(body?.AuditLog);
-        Assert.Collection(body!.AuditLog!,
+        Assert.Collection(
+            body!.AuditLog!,
             first =>
             {
                 Assert.Equal("task-completed", first.Action);
@@ -1086,7 +1278,8 @@ public class WorkItemEndpointsTests
             {
                 Assert.Equal("note-added", second.Action);
                 Assert.Equal(newer, second.CreatedAt);
-            });
+            }
+        );
     }
 
     [Fact]
@@ -1104,47 +1297,52 @@ public class WorkItemEndpointsTests
 
         var id = Guid.NewGuid();
         var t = new DateTime(2026, 4, 30, 9, 0, 0, DateTimeKind.Utc);
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client",
-            AuditLog =
+        await factory.SeedAsync(
+            new WorkItem
             {
-                new WorkItemAuditEntry
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+                AuditLog =
                 {
-                    Action = "note-added",
-                    ActionDisplayName = "Note added",
-                    Details = new() { ["sequence"] = "1" },
-                    CreatedAt = t
+                    new WorkItemAuditEntry
+                    {
+                        Action = "note-added",
+                        ActionDisplayName = "Note added",
+                        Details = new() { ["sequence"] = "1" },
+                        CreatedAt = t,
+                    },
+                    new WorkItemAuditEntry
+                    {
+                        Action = "task-completed",
+                        ActionDisplayName = "Task completed",
+                        Details = new() { ["sequence"] = "2" },
+                        CreatedAt = t,
+                    },
+                    new WorkItemAuditEntry
+                    {
+                        Action = "action-applied",
+                        ActionDisplayName = "Action applied",
+                        Details = new() { ["sequence"] = "3" },
+                        CreatedAt = t,
+                    },
                 },
-                new WorkItemAuditEntry
-                {
-                    Action = "task-completed",
-                    ActionDisplayName = "Task completed",
-                    Details = new() { ["sequence"] = "2" },
-                    CreatedAt = t
-                },
-                new WorkItemAuditEntry
-                {
-                    Action = "action-applied",
-                    ActionDisplayName = "Action applied",
-                    Details = new() { ["sequence"] = "3" },
-                    CreatedAt = t
-                }
-            }
-        }, cancellationToken);
+            },
+            cancellationToken
+        );
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
         Assert.NotNull(body?.AuditLog);
-        Assert.Collection(body!.AuditLog!,
+        Assert.Collection(
+            body!.AuditLog!,
             first => Assert.Equal("1", first.Details["sequence"]),
             second => Assert.Equal("2", second.Details["sequence"]),
-            third => Assert.Equal("3", third.Details["sequence"]));
+            third => Assert.Equal("3", third.Details["sequence"])
+        );
     }
 
     // ----------------------------------------------------------------
@@ -1155,20 +1353,43 @@ public class WorkItemEndpointsTests
     // Case-workers bypass the gate and reach the engine as before.
     // ----------------------------------------------------------------
 
-    public static IEnumerable<TheoryDataRow<string, string, object?>> CrossTenantMutationCases() => new TheoryDataRow<string, string, object?>[]
-    {
-        new("POST", "/work-items/{id}/tasks/some-task/complete", null) { TestDisplayName = "CompleteTask" },
-        new("PUT",  "/work-items/{id}/tasks/some-task/status", new { status = "Completed" }) { TestDisplayName = "SetTaskStatus" },
-        new("POST", "/work-items/{id}/actions/approve", null) { TestDisplayName = "ApplyAction" },
-        new("POST", "/work-items/{id}/assign", new { assigneeId = "alice-1", assigneeName = "Alice" }) { TestDisplayName = "Assign" },
-        new("POST", "/work-items/{id}/unassign", null) { TestDisplayName = "Unassign" },
-        new("POST", "/work-items/{id}/notes", new { text = "anything" }) { TestDisplayName = "AddNote" }
-    };
+    public static IEnumerable<TheoryDataRow<string, string, object?>> CrossTenantMutationCases() =>
+        new TheoryDataRow<string, string, object?>[]
+        {
+            new("POST", "/work-items/{id}/tasks/some-task/complete", null)
+            {
+                TestDisplayName = "CompleteTask",
+            },
+            new("PUT", "/work-items/{id}/tasks/some-task/status", new { status = "Completed" })
+            {
+                TestDisplayName = "SetTaskStatus",
+            },
+            new("POST", "/work-items/{id}/actions/approve", null)
+            {
+                TestDisplayName = "ApplyAction",
+            },
+            new(
+                "POST",
+                "/work-items/{id}/assign",
+                new { assigneeId = "alice-1", assigneeName = "Alice" }
+            )
+            {
+                TestDisplayName = "Assign",
+            },
+            new("POST", "/work-items/{id}/unassign", null) { TestDisplayName = "Unassign" },
+            new("POST", "/work-items/{id}/notes", new { text = "anything" })
+            {
+                TestDisplayName = "AddNote",
+            },
+        };
 
     [Theory]
     [MemberData(nameof(CrossTenantMutationCases))]
     public async Task Mutation_returns_404_for_cross_tenant_caller_and_does_not_invoke_engine(
-        string method, string pathTemplate, object? body)
+        string method,
+        string pathTemplate,
+        object? body
+    )
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         // Standard caller (no case-worker role); 'assign' role included so
@@ -1178,23 +1399,30 @@ public class WorkItemEndpointsTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            // Owned by someone else — caller's cognito client id is
-            // 'test-client', which must NOT match.
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                // Owned by someone else — caller's cognito client id is
+                // 'test-client', which must NOT match.
+                SubmittedBy = "other-tenant",
+            },
+            cancellationToken
+        );
 
         var path = pathTemplate.Replace("{id}", id.ToString());
         HttpResponseMessage response = method switch
         {
-            "POST" when body is null => await client.PostAsync(path, content: null, cancellationToken),
+            "POST" when body is null => await client.PostAsync(
+                path,
+                content: null,
+                cancellationToken
+            ),
             "POST" => await client.PostAsJsonAsync(path, body, cancellationToken),
             "PUT" => await client.PutAsJsonAsync(path, body!, cancellationToken),
-            _ => throw new InvalidOperationException($"Unsupported method '{method}'.")
+            _ => throw new InvalidOperationException($"Unsupported method '{method}'."),
         };
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
@@ -1208,30 +1436,41 @@ public class WorkItemEndpointsTests
     [Theory]
     [MemberData(nameof(CrossTenantMutationCases))]
     public async Task Mutation_allows_case_worker_to_target_other_tenants_item(
-        string method, string pathTemplate, object? body)
+        string method,
+        string pathTemplate,
+        object? body
+    )
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory(
             userRoles: $"{WorkItemEndpoints.CaseWorkerRole},assign",
-            userId: "worker-1");
+            userId: "worker-1"
+        );
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "other-tenant",
+            },
+            cancellationToken
+        );
 
         var path = pathTemplate.Replace("{id}", id.ToString());
         HttpResponseMessage response = method switch
         {
-            "POST" when body is null => await client.PostAsync(path, content: null, cancellationToken),
+            "POST" when body is null => await client.PostAsync(
+                path,
+                content: null,
+                cancellationToken
+            ),
             "POST" => await client.PostAsJsonAsync(path, body, cancellationToken),
             "PUT" => await client.PutAsJsonAsync(path, body!, cancellationToken),
-            _ => throw new InvalidOperationException($"Unsupported method '{method}'.")
+            _ => throw new InvalidOperationException($"Unsupported method '{method}'."),
         };
 
         // 404 means the tenancy gate fired (it must NOT for a case worker).
@@ -1251,7 +1490,9 @@ public class WorkItemEndpointsTests
     private sealed class TestApplicationFactory : WebApplicationFactory<Program>
     {
         private readonly MongoIntegrationFixture _fixture;
-        private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("endpoints");
+        private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName(
+            "endpoints"
+        );
         private readonly bool _includeAuthHeader;
         private readonly string? _userRoles;
         private readonly string? _userId;
@@ -1264,7 +1505,8 @@ public class WorkItemEndpointsTests
             string? userRoles,
             string? userId,
             string? userName,
-            Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null)
+            Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
+        )
         {
             _fixture = fixture;
             _includeAuthHeader = includeAuthHeader;
@@ -1285,7 +1527,9 @@ public class WorkItemEndpointsTests
         public async Task<List<WorkItem>> AllItemsAsync(CancellationToken cancellationToken)
         {
             var page = await Persistence.QueryAsync(
-                new WorkItemQuery(Page: 1, PageSize: 100), cancellationToken);
+                new WorkItemQuery(Page: 1, PageSize: 100),
+                cancellationToken
+            );
             return page.Items.ToList();
         }
 
@@ -1299,36 +1543,46 @@ public class WorkItemEndpointsTests
                 services.RemoveAll<IWorkItemPersistence>();
                 services.RemoveAll<EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory>();
                 var clientFactory = new TestMongoDbClientFactory(
-                    _fixture.ConnectionString, _databaseName);
-                services.AddSingleton<EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory>(clientFactory);
+                    _fixture.ConnectionString,
+                    _databaseName
+                );
+                services.AddSingleton<EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory>(
+                    clientFactory
+                );
                 // The real WorkItemPersistence is wrapped with a recording
                 // layer so query-capture tests can observe the
                 // WorkItemQuery the endpoint built. Behaviour is
                 // otherwise end-to-end against ephemeral Mongo.
-                services.AddSingleton<IWorkItemPersistence>(sp =>
-                    new RecordingPersistence(
-                        new WorkItemPersistence(
-                            clientFactory,
-                            sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>())));
-                services.AddSingleton<IWorkItemType>(new TestWorkItemType(TypeId, "Test type", tasksByState: _tasksByState));
+                services.AddSingleton<IWorkItemPersistence>(sp => new RecordingPersistence(
+                    new WorkItemPersistence(
+                        clientFactory,
+                        sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                    )
+                ));
+                services.AddSingleton<IWorkItemType>(
+                    new TestWorkItemType(TypeId, "Test type", tasksByState: _tasksByState)
+                );
 
                 // Background services call QueryAsync at startup which sets
                 // Recording.LastQuery and contaminates tests that assert the
                 // query was never issued. Remove all three offenders.
-                var slaBreachDescriptor = services.FirstOrDefault(
-                    d => d.ImplementationType == typeof(SlaBreachBackgroundService));
+                var slaBreachDescriptor = services.FirstOrDefault(d =>
+                    d.ImplementationType == typeof(SlaBreachBackgroundService)
+                );
                 if (slaBreachDescriptor is not null)
                 {
                     services.Remove(slaBreachDescriptor);
                 }
-                var archiveDescriptor = services.FirstOrDefault(
-                    d => d.ImplementationType == typeof(ArchiveBackgroundService));
+                var archiveDescriptor = services.FirstOrDefault(d =>
+                    d.ImplementationType == typeof(ArchiveBackgroundService)
+                );
                 if (archiveDescriptor is not null)
                 {
                     services.Remove(archiveDescriptor);
                 }
-                var migrationDescriptor = services.FirstOrDefault(
-                    d => d.ImplementationType == typeof(WorkItemMigrationHostedService));
+                var migrationDescriptor = services.FirstOrDefault(d =>
+                    d.ImplementationType == typeof(WorkItemMigrationHostedService)
+                );
                 if (migrationDescriptor is not null)
                 {
                     services.Remove(migrationDescriptor);
@@ -1363,7 +1617,8 @@ public class WorkItemEndpointsTests
             {
                 try
                 {
-                    var clientFactory = Services.GetRequiredService<EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory>();
+                    var clientFactory =
+                        Services.GetRequiredService<EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory>();
                     clientFactory.GetClient().DropDatabase(_databaseName);
                 }
                 catch
@@ -1390,19 +1645,28 @@ public class WorkItemEndpointsTests
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             Inner.CreateAsync(workItem, cancellationToken);
 
-        public Task<bool> CreateIfAbsentAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            Inner.CreateIfAbsentAsync(workItem, cancellationToken);
+        public Task<bool> CreateIfAbsentAsync(
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => Inner.CreateIfAbsentAsync(workItem, cancellationToken);
 
-        public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-            Inner.GetByIdAsync(id, cancellationToken);
+        public Task<WorkItem?> GetByIdAsync(
+            Guid id,
+            CancellationToken cancellationToken = default
+        ) => Inner.GetByIdAsync(id, cancellationToken);
 
-        public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default)
+        public Task<WorkItemPage> QueryAsync(
+            WorkItemQuery query,
+            CancellationToken cancellationToken = default
+        )
         {
             LastQuery = query;
             return Inner.QueryAsync(query, cancellationToken);
         }
 
-        public Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            Inner.ReplaceAsync(workItem, cancellationToken);
+        public Task ReplaceAsync(
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => Inner.ReplaceAsync(workItem, cancellationToken);
     }
 }
