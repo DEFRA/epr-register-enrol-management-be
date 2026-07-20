@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using MongoDB.Bson;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -315,6 +316,13 @@ public class WorkItemServiceCompoundTests
     /// </summary>
     private sealed class RacingPersistence(IWorkItemPersistence inner, Action onBeforeReplace) : IWorkItemPersistence
     {
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default) =>
+            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 

@@ -186,7 +186,7 @@ public class ReAccreditationQueryServiceTests
     // ------------------ RA-291 current-query payload stamp ------------------
 
     [Fact]
-    public async Task QueryAsync_stamps_the_current_query_onto_the_payload_before_transitioning()
+    public async Task QueryAsync_stamps_the_current_query_with_a_targeted_field_write()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted");
@@ -194,84 +194,64 @@ public class ReAccreditationQueryServiceTests
         await harness.Service.QueryAsync(
             harness.WorkItem.Id, s_sections, "Tonnage does not reconcile", harness.User, ct);
 
-        var currentQuery = harness.WorkItem.Payload!["currentQuery"].AsBsonDocument;
-        Assert.Equal("Tonnage does not reconcile", currentQuery["reason"].AsString);
-        Assert.Equal(
-            ["business-plan", "prn-tonnage"],
-            currentQuery["sections"].AsBsonArray.Select(v => v.AsString));
-        Assert.Equal("alice-1", currentQuery["raisedBy"].AsString);
-        Assert.Equal(s_now.UtcDateTime, currentQuery["raisedAt"].ToUniversalTime());
-
-        // The stamp must be persisted before the transition runs: the
-        // notification hook fires inside ApplyActionAsync and reads the
-        // reason from the payload.
-        Received.InOrder(() =>
-        {
-            harness.Persistence.ReplaceAsync(harness.WorkItem, ct);
-            harness.Engine.ApplyActionAsync(
-                harness.WorkItem.Id, "query-during-duly-making", harness.User, ct);
-        });
+        // A targeted $set on payload.currentQuery — NOT a full-payload
+        // replace, which would round-trip the payload through the typed model
+        // and materialise modelled-but-absent fields (accreditationId, ...) as
+        // explicit nulls, colliding with the unique+sparse index (RA-291).
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            ReAccreditationQueryService.CurrentQueryPayloadField,
+            Arg.Is<BsonValue>(v =>
+                v.AsBsonDocument["reason"].AsString == "Tonnage does not reconcile"
+                && v.AsBsonDocument["raisedBy"].AsString == "alice-1"),
+            ct);
+        await harness.Persistence.DidNotReceiveWithAnyArgs()
+            .ReplaceAsync(default!, default);
     }
 
     [Fact]
-    public async Task QueryAsync_stamping_the_query_preserves_unmodelled_payload_keys()
+    public async Task QueryAsync_stamps_the_sections_and_timestamp_on_the_current_query()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted");
-        harness.WorkItem.ReplacePayload(new BsonDocument
-        {
-            ["organisationName"] = "Acme Recycling Ltd",
-            // Not modelled on ReAccreditationPayload — must survive the write.
-            ["applicationReference"] = "RA-000000123",
-            ["siteAddressLine1"] = "1 Test Street",
-        });
+        BsonValue? stamped = null;
+        harness.Persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Do<BsonValue>(v => stamped = v),
+                Arg.Any<CancellationToken>())
+            .Returns(true);
 
         await harness.Service.QueryAsync(
             harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
 
-        Assert.Equal("RA-000000123", harness.WorkItem.Payload!["applicationReference"].AsString);
-        Assert.Equal("1 Test Street", harness.WorkItem.Payload["siteAddressLine1"].AsString);
-        Assert.Equal("Acme Recycling Ltd", harness.WorkItem.Payload["organisationName"].AsString);
-        Assert.Equal("Please clarify", harness.WorkItem.Payload["currentQuery"]["reason"].AsString);
+        var doc = stamped!.AsBsonDocument;
+        Assert.Equal(
+            ["business-plan", "prn-tonnage"],
+            doc["sections"].AsBsonArray.Select(v => v.AsString));
+        Assert.Equal(s_now.UtcDateTime, doc["raisedAt"].ToUniversalTime());
     }
 
     [Fact]
-    public async Task QueryAsync_aborts_when_the_payload_cannot_be_deserialised()
+    public async Task QueryAsync_stamps_the_query_before_transitioning()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted");
-        // accreditationYear is modelled as int? — a string here makes the
-        // BsonSerializer throw rather than silently coercing.
-        harness.WorkItem.ReplacePayload(new BsonDocument
+
+        await harness.Service.QueryAsync(
+            harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
+
+        // The notification hook fires inside ApplyActionAsync and reads the
+        // reason from the payload, so the stamp has to land first.
+        Received.InOrder(() =>
         {
-            ["accreditationYear"] = "not-a-year",
+            harness.Persistence.SetPayloadFieldAsync(
+                harness.WorkItem.Id,
+                ReAccreditationQueryService.CurrentQueryPayloadField,
+                Arg.Any<BsonValue>(),
+                ct);
+            harness.Engine.ApplyActionAsync(
+                harness.WorkItem.Id, "query-during-duly-making", harness.User, ct);
         });
-
-        var result = await harness.Service.QueryAsync(
-            harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
-        await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
-    }
-
-    [Fact]
-    public async Task QueryAsync_reports_a_concurrency_conflict_stamping_the_query()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness("submitted");
-        harness.Persistence
-            .When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
-            .Do(_ => throw new WorkItemConcurrencyException(harness.WorkItem.Id, expectedVersion: 1));
-
-        var result = await harness.Service.QueryAsync(
-            harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
-        await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
     }
 
     [Fact]
@@ -279,10 +259,13 @@ public class ReAccreditationQueryServiceTests
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted");
-        // Found on the first read (state resolution), gone by the stamp.
+        // Found on the state-resolution read, gone by the time the targeted
+        // write runs: no document matched.
         harness.Persistence
-            .GetByIdAsync(harness.WorkItem.Id, Arg.Any<CancellationToken>())
-            .Returns(harness.WorkItem, (WorkItem?)null);
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<BsonValue>(),
+                Arg.Any<CancellationToken>())
+            .Returns(false);
 
         var result = await harness.Service.QueryAsync(
             harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
@@ -399,12 +382,11 @@ public class ReAccreditationQueryServiceTests
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted");
-        // Reads: state resolution, current-query stamp, then the post-audit
-        // re-read — which finds nothing (archived/deleted by a concurrent
-        // writer).
+        // First read finds the item, the post-audit re-read does not (the
+        // document was archived/deleted by a concurrent writer).
         harness.Persistence
             .GetByIdAsync(harness.WorkItem.Id, Arg.Any<CancellationToken>())
-            .Returns(harness.WorkItem, harness.WorkItem, (WorkItem?)null);
+            .Returns(harness.WorkItem, (WorkItem?)null);
 
         var result = await harness.Service.QueryAsync(
             harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
@@ -457,6 +439,12 @@ public class ReAccreditationQueryServiceTests
                     Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<ClaimsPrincipal>(),
                     Arg.Any<CancellationToken>())
                 .Returns(WorkItemActionResult.Success(WorkItem));
+
+            Persistence
+                .SetPayloadFieldAsync(
+                    Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<BsonValue>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(true);
 
             AuditAppender = Substitute.For<IWorkItemAuditAppender>();
             AuditAppender

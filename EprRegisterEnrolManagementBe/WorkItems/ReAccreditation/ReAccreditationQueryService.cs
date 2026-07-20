@@ -2,7 +2,6 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using MongoDB.Bson;
-using MongoDB.Bson.Serialization;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -43,6 +42,12 @@ internal sealed class ReAccreditationQueryService(
     public const string AuditAction = "application-queried";
 
     public const string AuditActionDisplayName = "Application queried";
+
+    /// <summary>
+    /// Payload field the open query is stored under. Matches the camelCase
+    /// name the BSON convention gives <see cref="ReAccreditationPayload.CurrentQuery"/>.
+    /// </summary>
+    public const string CurrentQueryPayloadField = "currentQuery";
 
     /// <summary>
     /// Which query transition applies in which state. Kept next to the
@@ -199,6 +204,16 @@ internal sealed class ReAccreditationQueryService(
     /// <summary>
     /// Write <see cref="CurrentQuery"/> onto the work item payload. Returns
     /// <c>null</c> on success, or the failure the caller should surface.
+    ///
+    /// Uses a targeted single-field write rather than load → mutate → replace.
+    /// A full-payload replace round-trips the document through
+    /// <see cref="ReAccreditationPayload"/>, which materialises modelled-but-
+    /// absent fields as explicit nulls — and an explicit
+    /// <c>payload.accreditationId: null</c> enters the unique + SPARSE index
+    /// on that field, so the second query anywhere in the collection died with
+    /// a duplicate-key error (RA-291). Setting only
+    /// <c>payload.currentQuery</c> keeps every other field untouched by
+    /// construction, for this field and any modelled field added later.
     /// </summary>
     private async Task<WorkItemActionResult?> StampCurrentQueryAsync(
         Guid workItemId,
@@ -207,60 +222,27 @@ internal sealed class ReAccreditationQueryService(
         string actorId,
         CancellationToken cancellationToken)
     {
-        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
-        if (workItem is null)
+        var currentQuery = new CurrentQuery
+        {
+            Reason = reason,
+            Sections = sections,
+            RaisedAt = _timeProvider.GetUtcNow().UtcDateTime,
+            RaisedBy = actorId,
+        };
+
+        // ToBsonDocument honours the registered camelCase convention, so the
+        // stored shape matches what ReAccreditationPayload deserialises.
+        var matched = await persistence.SetPayloadFieldAsync(
+            workItemId,
+            CurrentQueryPayloadField,
+            currentQuery.ToBsonDocument(),
+            cancellationToken);
+
+        if (!matched)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.WorkItemNotFound,
                 $"No work item exists with id '{workItemId}'.");
-        }
-
-        ReAccreditationPayload payload;
-        try
-        {
-            // WorkItem.Payload is non-nullable (defaults to an empty
-            // document), so no null guard is needed here.
-            payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
-        }
-        catch (Exception ex) when (ex is BsonSerializationException or FormatException or InvalidCastException)
-        {
-            logger.LogError(ex,
-                "Query of work item {WorkItemId} aborted: existing payload could not be " +
-                "deserialised, so the query reason cannot be recorded.",
-                workItemId);
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.InvalidTransition,
-                $"Work item '{workItemId}' payload is corrupt and cannot be read. " +
-                "Inspect the server logs for details; a manual data repair may be required.");
-        }
-
-        var updated = payload with
-        {
-            CurrentQuery = new CurrentQuery
-            {
-                Reason = reason,
-                Sections = sections,
-                RaisedAt = _timeProvider.GetUtcNow().UtcDateTime,
-                RaisedBy = actorId,
-            }
-        };
-
-        // RA-249 merge pattern: merge the modelled update over the EXISTING
-        // payload rather than replacing it, so unmodelled top-level keys
-        // (applicationReference, source, siteAddress*, ...) survive the write.
-        var merged = workItem.Payload.DeepClone().AsBsonDocument;
-        merged.Merge(updated.ToBsonDocument(), overwriteExistingElements: true);
-        workItem.ReplacePayload(merged);
-
-        try
-        {
-            await persistence.ReplaceAsync(workItem, cancellationToken);
-        }
-        catch (WorkItemConcurrencyException)
-        {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.ConcurrencyConflict,
-                $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
         }
 
         return null;

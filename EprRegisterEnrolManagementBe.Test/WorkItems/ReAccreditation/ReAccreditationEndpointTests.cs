@@ -831,6 +831,78 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
+    public async Task Querying_two_different_applications_in_the_same_database_both_succeed()
+    {
+        // RA-291 regression. The stamp used to rewrite the whole payload,
+        // round-tripping it through ReAccreditationPayload and materialising
+        // `accreditationId: null` as an explicit field. payload.accreditationId
+        // carries a unique + SPARSE index, and sparse excludes only documents
+        // where the field is ABSENT — so the first query entered the index with
+        // a null key and the second collided, 500ing with a duplicate-key
+        // error. Worse, the assign had already landed, leaving the application
+        // assigned but not queried.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(first, "submitted", TenantClientId), cancellationToken);
+        await factory.SeedAsync(BuildInState(second, "duly-made", TenantClientId), cancellationToken);
+
+        var firstResponse = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{first}/query", QueryBody(), cancellationToken);
+        var secondResponse = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{second}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+
+        foreach (var id in new[] { first, second })
+        {
+            var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+            Assert.Equal("queried", persisted!.StateId);
+            Assert.Equal(DefaultQueryReason, persisted.Payload["currentQuery"]["reason"].AsString);
+        }
+    }
+
+    [Fact]
+    public async Task Query_does_not_materialise_payload_fields_that_were_absent()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildInState(id, "submitted", TenantClientId);
+        item.ReplacePayload(new BsonDocument
+        {
+            ["organisationName"] = "Acme Recycling Ltd",
+            // Unmodelled key — must survive untouched.
+            ["applicationReference"] = "RA-000000123",
+        });
+        await factory.SeedAsync(item, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        var payload = persisted!.Payload;
+
+        // The targeted $set adds currentQuery and nothing else: fields that
+        // were absent before must still be absent, not explicit nulls.
+        Assert.True(payload.Contains("currentQuery"));
+        Assert.False(payload.Contains("accreditationId"));
+        Assert.False(payload.Contains("accreditationStartDate"));
+        Assert.False(payload.Contains("accreditationYear"));
+        Assert.False(payload.Contains("slaClock"));
+        // ... and unmodelled keys survive by construction, not by a merge.
+        Assert.Equal("RA-000000123", payload["applicationReference"].AsString);
+        Assert.Equal("Acme Recycling Ltd", payload["organisationName"].AsString);
+    }
+
+    [Fact]
     public async Task Query_is_forbidden_when_the_item_is_held_by_another_user_and_the_caller_cannot_assign()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -1217,6 +1289,13 @@ public class ReAccreditationEndpointTests
     private sealed class RacingPersistence(IWorkItemPersistence inner, Guid raceId, Func<Task> onBeforeReplace)
         : IWorkItemPersistence
     {
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default) =>
+            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
@@ -1273,8 +1352,29 @@ public class ReAccreditationEndpointTests
 
         public IWorkItemPersistence Persistence => Services.GetRequiredService<IWorkItemPersistence>();
 
-        public Task SeedAsync(WorkItem item, CancellationToken cancellationToken) =>
-            Persistence.CreateAsync(item, cancellationToken);
+        public Task SeedAsync(WorkItem item, CancellationToken cancellationToken)
+        {
+            EnsureProductionIndexes();
+            return Persistence.CreateAsync(item, cancellationToken);
+        }
+
+        /// <summary>
+        /// RA-291: force construction of every <c>MongoService</c> that owns
+        /// indexes on the shared <c>workItems</c> collection, so integration
+        /// tests run against the SAME index set production has.
+        ///
+        /// <see cref="IAccreditationIdLookup"/> is a lazily-constructed
+        /// singleton, and indexes are created in the <c>MongoService</c>
+        /// constructor — so unless something resolves it, its unique + sparse
+        /// index on <c>payload.accreditationId</c> never exists in the test
+        /// database. That is exactly why the duplicate-key bug in the
+        /// current-query stamp reached the real stack with 968 tests green.
+        /// </summary>
+        private void EnsureProductionIndexes()
+        {
+            _ = Persistence;
+            _ = Services.GetRequiredService<IAccreditationIdLookup>();
+        }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {

@@ -1,4 +1,5 @@
 using System.Net;
+using MongoDB.Bson;
 using System.Net.Http.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -80,6 +81,13 @@ public class ProblemDetailsExceptionHandlerTests
     /// </summary>
     private sealed class ThrowingOnQueryPersistence(IWorkItemPersistence inner) : IWorkItemPersistence
     {
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default) =>
+            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 

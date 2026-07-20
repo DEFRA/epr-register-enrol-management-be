@@ -389,4 +389,74 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             new WorkItemQuery(), TestContext.Current.CancellationToken);
         Assert.Equal(1, page.TotalCount);
     }
+    // ---------------------- RA-291 SetPayloadFieldAsync ----------------------
+
+    [Fact]
+    public async Task SetPayloadFieldAsync_sets_only_the_named_field_and_leaves_the_rest_intact()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = s_seedNow.UtcDateTime;
+        var workItem = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            SubmittedBy = "client-1",
+        };
+        workItem.ReplacePayload(new BsonDocument
+        {
+            ["organisationName"] = "Acme Recycling Ltd",
+            ["applicationReference"] = "RA-000000123",
+        });
+        await _persistence.CreateAsync(workItem, ct);
+        var versionBefore = workItem.Version;
+
+        var matched = await _persistence.SetPayloadFieldAsync(
+            workItem.Id, "currentQuery", new BsonDocument { ["reason"] = "why" }, ct);
+
+        Assert.True(matched);
+        var fetched = await _persistence.GetByIdAsync(workItem.Id, ct);
+        Assert.Equal("why", fetched!.Payload["currentQuery"]["reason"].AsString);
+        // Existing keys untouched, absent keys still absent — the guarantee
+        // the whole method exists for (RA-291).
+        Assert.Equal("Acme Recycling Ltd", fetched.Payload["organisationName"].AsString);
+        Assert.Equal("RA-000000123", fetched.Payload["applicationReference"].AsString);
+        Assert.False(fetched.Payload.Contains("accreditationId"));
+        // Deliberately outside the optimistic-concurrency protocol.
+        Assert.Equal(versionBefore, fetched.Version);
+    }
+
+    [Fact]
+    public async Task SetPayloadFieldAsync_returns_false_when_no_work_item_matches()
+    {
+        var matched = await _persistence.SetPayloadFieldAsync(
+            Guid.NewGuid(), "currentQuery", BsonNull.Value, TestContext.Current.CancellationToken);
+
+        Assert.False(matched);
+    }
+
+    [Theory]
+    // Dotted paths would reach into a nested document ...
+    [InlineData("a.b")]
+    // ... and a $-prefixed name would be read as an update operator, letting a
+    // caller rewrite a different part of the envelope entirely.
+    [InlineData("$set")]
+    public async Task SetPayloadFieldAsync_rejects_field_names_that_escape_the_payload(
+        string fieldName)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _persistence.SetPayloadFieldAsync(
+                Guid.NewGuid(), fieldName, BsonNull.Value, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SetPayloadFieldAsync_rejects_a_blank_field_name(string fieldName)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _persistence.SetPayloadFieldAsync(
+                Guid.NewGuid(), fieldName, BsonNull.Value, TestContext.Current.CancellationToken));
+    }
 }

@@ -6,6 +6,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -342,6 +343,16 @@ public class ReAccreditationLifecycleTests
             persistence,
             NullLogger<WorkItemService>.Instance
         );
+        // The query stamps the open query with a targeted payload write
+        // before transitioning; the substitute must report a match.
+        persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<BsonValue>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
         var queryService = new ReAccreditationQueryService(
             persistence,
             engine,
