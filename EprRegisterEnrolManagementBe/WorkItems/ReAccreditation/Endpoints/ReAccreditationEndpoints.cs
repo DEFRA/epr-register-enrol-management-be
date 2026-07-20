@@ -36,6 +36,13 @@ internal static class ReAccreditationEndpoints
     // overhead, but small enough to make abuse pointless.
     public const long MaxRationaleBodyBytes = 16 * 1024;
 
+    // RA-291: same rationale as MaxRationaleBodyBytes for the query
+    // endpoint, which also calls .DisableValidation() and therefore must
+    // carry its own explicit size guard. A legitimate body is six short
+    // section ids plus a reason capped at 200 words, so 16 KiB is generous
+    // while still making a multi-MB body pointless.
+    public const long MaxQueryBodyBytes = 16 * 1024;
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
     {
@@ -66,6 +73,16 @@ internal static class ReAccreditationEndpoints
         // generic action handler would skip those side effects.
         group.MapPost("/{id:guid}/approve", Approve)
             .WithName("ApproveReAccreditation")
+            .RequireAuthorization();
+
+        // RA-291: bespoke query endpoint. The caller never names an action —
+        // the service derives the right query-during-* transition from the
+        // work item's current state — and the query sections + reason are
+        // recorded on the audit log, which the generic action route cannot do.
+        group.MapPost("/{id:guid}/query", QueryApplication)
+            .WithName("QueryReAccreditation")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxQueryBodyBytes))
             .RequireAuthorization();
 
         // Live prior-year accreditation data from ReEx, scoped to this
@@ -333,6 +350,72 @@ internal static class ReAccreditationEndpoints
 
         return TypedResults.Problem(
             title: "Could not approve re-accreditation",
+            detail: result.Message,
+            statusCode: status);
+    }
+
+    /// <summary>
+    /// RA-291: raise a query against a re-accreditation application. The
+    /// body names the sections the case worker needs clarification on and
+    /// the reason; the <c>query-during-*</c> transition is derived
+    /// server-side from the work item's current state, so the caller cannot
+    /// choose one that does not apply.
+    ///
+    /// Validation failures are 400. A state with no query transition —
+    /// including an application that is already <c>queried</c> — is 409,
+    /// not a 500.
+    /// </summary>
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> QueryApplication(
+        [FromRoute] Guid id,
+        QueryApplicationRequest request,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationQueryService queryService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        if (ReAccreditationQueryValidator.Validate(request) is { } validationError)
+        {
+            return TypedResults.Problem(
+                title: "Invalid query",
+                detail: validationError,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var result = await queryService.QueryAsync(
+            id, request.Sections!, request.Reason!.Trim(), httpContext.User, cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var status = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
+            // RA-291: querying self-assigns the application. A caller without
+            // the 'assign' role cannot take an item another user already
+            // holds, so the assign half fails NotAuthorized and the query is
+            // refused before any state change.
+            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
+            // The application is not in a state that can be queried (already
+            // queried, terminal) or was raced by another writer: a conflict
+            // with the current resource state, not a malformed request. The
+            // service resolves the query action from the state itself, so the
+            // engine's TerminalState / IncompleteTasks codes are unreachable
+            // from here — a state with no query transition is rejected as an
+            // InvalidTransition before the engine is called.
+            WorkItemActionFailureCode.InvalidTransition
+                or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest
+        };
+
+        return TypedResults.Problem(
+            title: "Could not query re-accreditation",
             detail: result.Message,
             statusCode: status);
     }

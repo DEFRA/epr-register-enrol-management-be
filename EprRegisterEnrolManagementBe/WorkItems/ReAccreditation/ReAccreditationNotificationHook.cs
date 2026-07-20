@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 
@@ -58,9 +60,19 @@ internal sealed class ReAccreditationNotificationHook(
     IWorkItemAuditAppender auditAppender,
     IRegulatorMailboxResolver regulatorMailboxResolver,
     IWorkItemPersistence persistence,
-    ILogger<ReAccreditationNotificationHook> logger
+    ILogger<ReAccreditationNotificationHook> logger,
+    IOptions<OperatorServiceConfig>? operatorServiceOptions = null
 ) : IWorkItemPostActionHook
 {
+    /// <summary>
+    /// RA-291 (AC06): base URL of the public operator service, included in
+    /// the Queried email. Optional so an unconfigured environment degrades to
+    /// an empty link rather than failing the query; see
+    /// <see cref="OperatorServiceConfig"/>.
+    /// </summary>
+    private readonly string _operatorServiceLink =
+        operatorServiceOptions?.Value.BaseUrl?.Trim() ?? string.Empty;
+
     private static readonly Dictionary<
         string,
         (string TemplateKey, string Description)
@@ -69,6 +81,8 @@ internal sealed class ReAccreditationNotificationHook(
         ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
         ["sla-extend"] = ("SlaExtended", "SLA extended"),
         ["approve"] = ("Decision", "Decision recorded: approved"),
+        ["query-during-duly-making"] = ("Queried", "Application queried"),
+        ["query-during-duly-made"] = ("Queried", "Application queried"),
         ["query-during-assessment"] = ("Queried", "Application queried"),
         ["query-during-decision"] = ("Queried", "Application queried"),
         ["withdraw"] = ("Withdrawn", "Application withdrawn"),
@@ -249,6 +263,7 @@ internal sealed class ReAccreditationNotificationHook(
             workItem,
             templateKey,
             reference,
+            _operatorServiceLink,
             actionId
         );
 
@@ -531,6 +546,7 @@ internal sealed class ReAccreditationNotificationHook(
         WorkItem workItem,
         string templateKey,
         string reference,
+        string operatorServiceLink,
         string? actionId = null
     )
     {
@@ -564,6 +580,19 @@ internal sealed class ReAccreditationNotificationHook(
                     CultureInfo.GetCultureInfo("en-GB")
                 );
             }
+        }
+
+        if (string.Equals(templateKey, "Queried", StringComparison.OrdinalIgnoreCase))
+        {
+            // RA-291 (AC06): the Queried template body references an
+            // ((operator_service_link)) placeholder so the operator can get
+            // back to their application. The key is ALWAYS supplied — Notify
+            // 400s a send whose template references a placeholder the caller
+            // omitted, so an unconfigured OperatorService:BaseUrl degrades to
+            // an empty string rather than breaking the query flow. Deliberately
+            // a single service-level link: RA-291 scopes per-section deep
+            // links out.
+            personalisation["operator_service_link"] = operatorServiceLink;
         }
 
         if (string.Equals(templateKey, "Withdrawn", StringComparison.OrdinalIgnoreCase))

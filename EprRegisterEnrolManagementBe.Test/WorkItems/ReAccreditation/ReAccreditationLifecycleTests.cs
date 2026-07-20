@@ -307,6 +307,105 @@ public class ReAccreditationLifecycleTests
         Assert.Equal(terminalStateId, workItem.StateId);
     }
 
+    /// <summary>
+    /// RA-291: a query raised against the real engine (not a substituted
+    /// one) moves the item to <c>queried</c> from every pre-decision state
+    /// without any task having to be completed first, and a second query
+    /// against the now-queried item is refused.
+    /// </summary>
+    [Theory]
+    [InlineData("submitted", "query-during-duly-making")]
+    [InlineData("duly-made", "query-during-duly-made")]
+    [InlineData("assessment-in-progress", "query-during-assessment")]
+    [InlineData("awaiting-decision", "query-during-decision")]
+    public async Task Query_moves_the_item_to_queried_from_any_pre_decision_state(
+        string stateId,
+        string expectedActionId
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var type = new ReAccreditationType();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+        var engine = new WorkItemService(
+            new WorkItemRegistry([type]),
+            persistence,
+            NullLogger<WorkItemService>.Instance
+        );
+        var queryService = new ReAccreditationQueryService(
+            persistence,
+            engine,
+            auditAppender,
+            NullLogger<ReAccreditationQueryService>.Instance
+        );
+
+        const string tenantClientId = "test-client";
+        var workItem = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = stateId,
+            SubmittedBy = tenantClientId,
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+        persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var user = new ClaimsPrincipal(
+            new ClaimsIdentity(
+                [
+                    new Claim("user:id", "alice-1"),
+                    new Claim("cognito:client_id", tenantClientId),
+                ],
+                "test"
+            )
+        );
+
+        string[] sections = ["business-plan"];
+        var result = await queryService.QueryAsync(
+            workItem.Id,
+            sections,
+            "Please confirm the tonnage figures.",
+            user,
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("queried", workItem.StateId);
+        // No task had to be completed first: the query transitions all
+        // declare RequiresAllTasksComplete: false.
+        Assert.Contains(
+            workItem.AuditLog,
+            e =>
+                e.Action == "action-applied"
+                && e.Details.GetValueOrDefault("actionId") == expectedActionId
+        );
+
+        // An application awaiting a response cannot be queried again — the
+        // state machine has no transition out of 'queried', and the service
+        // reports it as an invalid transition (409) rather than blowing up.
+        var second = await queryService.QueryAsync(
+            workItem.Id,
+            sections,
+            "Please confirm the tonnage figures.",
+            user,
+            ct
+        );
+
+        Assert.False(second.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, second.FailureCode);
+        Assert.Equal("queried", workItem.StateId);
+    }
+
     private static async Task CompleteAll(
         IWorkItemService engine,
         Guid id,

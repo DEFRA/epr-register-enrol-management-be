@@ -1,9 +1,11 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using NSubstitute;
 
@@ -89,7 +91,8 @@ public class ReAccreditationNotificationHookTests
         INotifyClient notifyClient,
         IWorkItemAuditAppender auditAppender,
         IRegulatorMailboxResolver? regulatorMailboxResolver = null,
-        WorkItem? persistedWorkItem = null
+        WorkItem? persistedWorkItem = null,
+        string? operatorServiceBaseUrl = null
     )
     {
         // Default resolver returns null so the RA-240 regulator send that
@@ -107,12 +110,20 @@ public class ReAccreditationNotificationHookTests
             .GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns(persistedWorkItem);
 
+        // RA-291: null models an environment with no OperatorService section
+        // bound at all — distinct from a bound-but-empty BaseUrl, and both
+        // must degrade to an empty operator_service_link rather than throwing.
+        var operatorServiceOptions = operatorServiceBaseUrl is null
+            ? null
+            : Options.Create(new OperatorServiceConfig { BaseUrl = operatorServiceBaseUrl });
+
         return new(
             notifyClient,
             auditAppender,
             resolver,
             persistence,
-            NullLogger<ReAccreditationNotificationHook>.Instance
+            NullLogger<ReAccreditationNotificationHook>.Instance,
+            operatorServiceOptions
         );
     }
 
@@ -266,6 +277,8 @@ public class ReAccreditationNotificationHookTests
     [Theory]
     [InlineData("payment-received", "AssessmentInProgress")]
     [InlineData("sla-extend", "SlaExtended")]
+    [InlineData("query-during-duly-making", "Queried")]
+    [InlineData("query-during-duly-made", "Queried")]
     [InlineData("query-during-assessment", "Queried")]
     [InlineData("query-during-decision", "Queried")]
     public async Task OnActionAppliedAsync_sends_correct_template_for_action(
@@ -385,9 +398,108 @@ public class ReAccreditationNotificationHookTests
             );
     }
 
+    // ─── RA-291 (AC06): operator-service link in the Queried email ───
+
+    [Theory]
+    // Configured: the link is passed through verbatim (trimmed).
+    [InlineData("https://operator.example.gov.uk", "https://operator.example.gov.uk")]
+    [InlineData("  https://operator.example.gov.uk  ", "https://operator.example.gov.uk")]
+    // Unset / blank / section absent entirely: the key is still supplied with
+    // an empty value. Notify 400s a send whose template references a
+    // placeholder the caller omitted, so a config gap must not break querying.
+    [InlineData("", "")]
+    [InlineData("   ", "")]
+    [InlineData(null, "")]
+    public async Task OnActionAppliedAsync_always_supplies_operator_service_link_for_queried(
+        string? configuredBaseUrl,
+        string expectedLink
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-queried"));
+
+        var workItem = BuildWorkItem(stateId: "queried");
+        var sut = BuildSut(notifyClient, auditAppender, operatorServiceBaseUrl: configuredBaseUrl);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-duly-making",
+            fromStateId: "submitted",
+            s_user,
+            ct
+        );
+
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Queried",
+                "op@example.com",
+                Arg.Is<Dictionary<string, string>>(p =>
+                    p.ContainsKey("operator_service_link")
+                    && p["operator_service_link"] == expectedLink
+                ),
+                ApplicationReference,
+                cancellationToken: ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_does_not_add_operator_service_link_to_other_templates()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-1"));
+
+        var workItem = BuildWorkItem(stateId: "assessment-in-progress");
+        var sut = BuildSut(
+            notifyClient, auditAppender, operatorServiceBaseUrl: "https://operator.example.gov.uk");
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "payment-received",
+            fromStateId: "duly-made",
+            s_user,
+            ct
+        );
+
+        // Notify rejects surplus personalisation keys as well as missing
+        // ones, so the link must not leak onto templates that do not
+        // reference it.
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "AssessmentInProgress",
+                "op@example.com",
+                Arg.Is<Dictionary<string, string>>(p => !p.ContainsKey("operator_service_link")),
+                ApplicationReference,
+                cancellationToken: ct
+            );
+    }
+
     // ─────── RA-211: queried transition sends the Queried template ───────
 
     [Theory]
+    [InlineData("query-during-duly-making")]
+    [InlineData("query-during-duly-made")]
     [InlineData("query-during-assessment")]
     [InlineData("query-during-decision")]
     public async Task OnActionAppliedAsync_records_notification_sent_audit_entry_for_queried(

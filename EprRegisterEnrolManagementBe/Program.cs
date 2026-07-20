@@ -163,6 +163,10 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // generated AccreditationId year segment and AccreditationStartDate).
     services.AddOptions<AccreditationConfig>()
         .Bind(builder.Configuration.GetSection("Accreditation"));
+    // RA-291 (AC06): public operator-service base URL, surfaced in the
+    // Queried Notify email. Override with OperatorService__BaseUrl.
+    services.AddOptions<OperatorServiceConfig>()
+        .Bind(builder.Configuration.GetSection("OperatorService"));
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>();
     services.AddHostedService<SlaBreachBackgroundService>();
