@@ -81,11 +81,17 @@ internal static class NotifyTemplateContract
             // the hook always supplies it (empty string when
             // OperatorService:BaseUrl is unset) precisely so Notify never 400s
             // the send on a missing placeholder.
+            // RA-291: query_reason carries the case worker's reason through to
+            // the operator — the query page promises it will. Like
+            // operator_service_link it is always supplied (empty string if a
+            // queried transition is somehow applied without a recorded query),
+            // so Notify never 400s on a missing placeholder.
             ["Queried"] = Set(
                 "organisation_name",
                 "registration_number",
                 "reference",
-                "operator_service_link"
+                "operator_service_link",
+                "query_reason"
             ),
 
             // RA-240: regulator-facing submission notification to the regional

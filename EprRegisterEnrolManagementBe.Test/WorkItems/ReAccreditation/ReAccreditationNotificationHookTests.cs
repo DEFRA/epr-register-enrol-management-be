@@ -453,6 +453,159 @@ public class ReAccreditationNotificationHookTests
             );
     }
 
+    // ─── RA-291: the query reason reaches the operator's email ───
+
+    [Fact]
+    public async Task OnActionAppliedAsync_sends_the_current_query_reason_for_queried()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-queried"));
+
+        var workItem = BuildWorkItem(stateId: "queried");
+        workItem.Payload!["currentQuery"] = new BsonDocument
+        {
+            ["reason"] = "The tonnage figures do not reconcile.",
+            ["sections"] = new BsonArray { "prn-tonnage", "business-plan" },
+        };
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-duly-making",
+            fromStateId: "submitted",
+            s_user,
+            ct
+        );
+
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Queried",
+                "op@example.com",
+                Arg.Is<Dictionary<string, string>>(p =>
+                    p["query_reason"] == "The tonnage figures do not reconcile."
+                    // Sections are recorded on the work item and the audit log,
+                    // but deliberately not sent as personalisation: every key
+                    // must exist in the live template or Notify 400s the send.
+                    && !p.ContainsKey("query_sections")
+                ),
+                ApplicationReference,
+                cancellationToken: ct
+            );
+    }
+
+    [Theory]
+    // No current query at all (a queried transition applied outside
+    // ReAccreditationQueryService, or a legacy item) ...
+    [InlineData(null)]
+    // ... or one with a blank reason. Both degrade to an empty value: omitting
+    // the key would make Notify 400 the send, and throwing would fail a
+    // notification that must never unwind the query.
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task OnActionAppliedAsync_sends_an_empty_query_reason_when_none_is_recorded(
+        string? recordedReason
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-queried"));
+
+        var workItem = BuildWorkItem(stateId: "queried");
+        if (recordedReason is not null)
+        {
+            workItem.Payload!["currentQuery"] = new BsonDocument
+            {
+                ["reason"] = recordedReason,
+            };
+        }
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-duly-making",
+            fromStateId: "submitted",
+            s_user,
+            ct
+        );
+
+        // The send still happens — the query itself is already committed.
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Queried",
+                "op@example.com",
+                Arg.Is<Dictionary<string, string>>(p =>
+                    p.ContainsKey("query_reason") && p["query_reason"] == ""
+                ),
+                ApplicationReference,
+                cancellationToken: ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_does_not_add_query_reason_to_other_templates()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-1"));
+
+        var workItem = BuildWorkItem(stateId: "withdrawn");
+        workItem.Payload!["currentQuery"] = new BsonDocument
+        {
+            ["reason"] = "An earlier query, since answered.",
+        };
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "withdraw",
+            fromStateId: "submitted",
+            s_user,
+            ct
+        );
+
+        // A stale current query must not leak into unrelated templates —
+        // Notify rejects surplus keys.
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Withdrawn",
+                "op@example.com",
+                Arg.Is<Dictionary<string, string>>(p => !p.ContainsKey("query_reason")),
+                ApplicationReference,
+                cancellationToken: ct
+            );
+    }
+
     [Fact]
     public async Task OnActionAppliedAsync_does_not_add_operator_service_link_to_other_templates()
     {

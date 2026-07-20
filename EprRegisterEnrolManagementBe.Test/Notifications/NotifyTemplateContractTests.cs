@@ -214,6 +214,15 @@ public class NotifyTemplateContractTests
             ["organisationName"] = "Acme Recycling Ltd",
             ["registrationNumber"] = "EX-2024-001",
             ["operatorEmail"] = "operator@example.com",
+            // RA-291: the Queried template requires a non-empty query_reason,
+            // read from the current query the query service stamps on the
+            // payload. Supply one so the queried contract rows exercise the
+            // non-empty path, mirroring the Decision/decision_notes note above.
+            ["currentQuery"] = new BsonDocument
+            {
+                ["reason"] = "Please confirm the tonnage figures.",
+                ["sections"] = new BsonArray { "prn-tonnage" },
+            },
         };
 
         return new WorkItem

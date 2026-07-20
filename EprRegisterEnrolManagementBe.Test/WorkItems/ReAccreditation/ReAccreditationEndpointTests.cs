@@ -774,6 +774,16 @@ public class ReAccreditationEndpointTests
         Assert.Equal(DefaultUserId, queryEntry.CreatedBy);
         Assert.Equal(DefaultUserName, queryEntry.CreatedByName);
 
+        // RA-291: the open query is stamped on the payload so the Queried
+        // email can carry the reason. It must be exactly the reason recorded
+        // on the audit entry — same record, one source of truth.
+        var currentQuery = persisted.Payload!["currentQuery"].AsBsonDocument;
+        Assert.Equal(DefaultQueryReason, currentQuery["reason"].AsString);
+        Assert.Equal(
+            ["business-plan", "prn-tonnage"],
+            currentQuery["sections"].AsBsonArray.Select(v => v.AsString));
+        Assert.Equal(DefaultUserId, currentQuery["raisedBy"].AsString);
+
         // RA-291: the query page promises "the application will also be
         // assigned to you", so the query self-assigns.
         Assert.Equal(DefaultUserId, persisted.AssignedToId);

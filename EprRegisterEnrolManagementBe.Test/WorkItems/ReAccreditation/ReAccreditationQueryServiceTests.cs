@@ -2,6 +2,8 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -17,6 +19,8 @@ public class ReAccreditationQueryServiceTests
     private const string TenantClientId = "test-client";
 
     private static readonly string[] s_sections = ["business-plan", "prn-tonnage"];
+
+    private static readonly DateTimeOffset s_now = new(2026, 7, 20, 9, 30, 0, TimeSpan.Zero);
 
     // -------------------------- action resolution --------------------------
 
@@ -179,6 +183,116 @@ public class ReAccreditationQueryServiceTests
             .AssignAsync(default, default!, default, default!, default);
     }
 
+    // ------------------ RA-291 current-query payload stamp ------------------
+
+    [Fact]
+    public async Task QueryAsync_stamps_the_current_query_onto_the_payload_before_transitioning()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("submitted");
+
+        await harness.Service.QueryAsync(
+            harness.WorkItem.Id, s_sections, "Tonnage does not reconcile", harness.User, ct);
+
+        var currentQuery = harness.WorkItem.Payload!["currentQuery"].AsBsonDocument;
+        Assert.Equal("Tonnage does not reconcile", currentQuery["reason"].AsString);
+        Assert.Equal(
+            ["business-plan", "prn-tonnage"],
+            currentQuery["sections"].AsBsonArray.Select(v => v.AsString));
+        Assert.Equal("alice-1", currentQuery["raisedBy"].AsString);
+        Assert.Equal(s_now.UtcDateTime, currentQuery["raisedAt"].ToUniversalTime());
+
+        // The stamp must be persisted before the transition runs: the
+        // notification hook fires inside ApplyActionAsync and reads the
+        // reason from the payload.
+        Received.InOrder(() =>
+        {
+            harness.Persistence.ReplaceAsync(harness.WorkItem, ct);
+            harness.Engine.ApplyActionAsync(
+                harness.WorkItem.Id, "query-during-duly-making", harness.User, ct);
+        });
+    }
+
+    [Fact]
+    public async Task QueryAsync_stamping_the_query_preserves_unmodelled_payload_keys()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("submitted");
+        harness.WorkItem.ReplacePayload(new BsonDocument
+        {
+            ["organisationName"] = "Acme Recycling Ltd",
+            // Not modelled on ReAccreditationPayload — must survive the write.
+            ["applicationReference"] = "RA-000000123",
+            ["siteAddressLine1"] = "1 Test Street",
+        });
+
+        await harness.Service.QueryAsync(
+            harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
+
+        Assert.Equal("RA-000000123", harness.WorkItem.Payload!["applicationReference"].AsString);
+        Assert.Equal("1 Test Street", harness.WorkItem.Payload["siteAddressLine1"].AsString);
+        Assert.Equal("Acme Recycling Ltd", harness.WorkItem.Payload["organisationName"].AsString);
+        Assert.Equal("Please clarify", harness.WorkItem.Payload["currentQuery"]["reason"].AsString);
+    }
+
+    [Fact]
+    public async Task QueryAsync_aborts_when_the_payload_cannot_be_deserialised()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("submitted");
+        // accreditationYear is modelled as int? — a string here makes the
+        // BsonSerializer throw rather than silently coercing.
+        harness.WorkItem.ReplacePayload(new BsonDocument
+        {
+            ["accreditationYear"] = "not-a-year",
+        });
+
+        var result = await harness.Service.QueryAsync(
+            harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        await harness.Engine.DidNotReceiveWithAnyArgs()
+            .ApplyActionAsync(default, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task QueryAsync_reports_a_concurrency_conflict_stamping_the_query()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("submitted");
+        harness.Persistence
+            .When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
+            .Do(_ => throw new WorkItemConcurrencyException(harness.WorkItem.Id, expectedVersion: 1));
+
+        var result = await harness.Service.QueryAsync(
+            harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
+        await harness.Engine.DidNotReceiveWithAnyArgs()
+            .ApplyActionAsync(default, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task QueryAsync_reports_not_found_when_the_item_vanishes_before_the_stamp()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("submitted");
+        // Found on the first read (state resolution), gone by the stamp.
+        harness.Persistence
+            .GetByIdAsync(harness.WorkItem.Id, Arg.Any<CancellationToken>())
+            .Returns(harness.WorkItem, (WorkItem?)null);
+
+        var result = await harness.Service.QueryAsync(
+            harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+        await harness.Engine.DidNotReceiveWithAnyArgs()
+            .ApplyActionAsync(default, default!, default!, default);
+    }
+
     [Fact]
     public async Task QueryAsync_records_the_sections_and_reason_on_the_audit_log()
     {
@@ -285,11 +399,12 @@ public class ReAccreditationQueryServiceTests
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted");
-        // First read finds the item, the post-audit re-read does not (the
-        // document was archived/deleted by a concurrent writer).
+        // Reads: state resolution, current-query stamp, then the post-audit
+        // re-read — which finds nothing (archived/deleted by a concurrent
+        // writer).
         harness.Persistence
             .GetByIdAsync(harness.WorkItem.Id, Arg.Any<CancellationToken>())
-            .Returns(harness.WorkItem, (WorkItem?)null);
+            .Returns(harness.WorkItem, harness.WorkItem, (WorkItem?)null);
 
         var result = await harness.Service.QueryAsync(
             harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
@@ -363,7 +478,8 @@ public class ReAccreditationQueryServiceTests
                 Persistence,
                 Engine,
                 AuditAppender,
-                NullLogger<ReAccreditationQueryService>.Instance);
+                NullLogger<ReAccreditationQueryService>.Instance,
+                new FakeTimeProvider(s_now));
         }
 
         public WorkItem WorkItem { get; }

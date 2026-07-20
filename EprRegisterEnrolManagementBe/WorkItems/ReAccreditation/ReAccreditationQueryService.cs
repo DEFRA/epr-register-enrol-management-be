@@ -1,5 +1,8 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -12,9 +15,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// resolution and the post-action hooks (including the Notify "Queried"
 /// email) all behave exactly as they do for any other transition. The only
 /// bespoke part is (a) resolving which <c>query-during-*</c> action applies
-/// to the item's current state, and (b) appending the RA-291 query detail —
-/// selected sections and free-text reason — to the audit log so AC05 is
-/// satisfied and the application history renders what was asked for.
+/// to the item's current state, (b) self-assigning the application to the
+/// querying case worker, (c) stamping the open
+/// <see cref="Models.CurrentQuery"/> onto the payload so the notification hook
+/// can put the reason in the operator's email, and (d) appending the RA-291
+/// query detail — selected sections and free-text reason — to the audit log so
+/// AC05 is satisfied and the application history renders what was asked for.
+///
+/// Write order is assign → stamp query → transition → audit. The stamp must
+/// precede the transition because the notification hook runs inside
+/// <see cref="IWorkItemService.ApplyActionAsync"/>; the audit entry follows it
+/// so a failed transition leaves no query recorded against the application.
 ///
 /// The SLA clock is intentionally untouched: querying an application pauses
 /// nobody's stopwatch.
@@ -23,8 +34,11 @@ internal sealed class ReAccreditationQueryService(
     IWorkItemPersistence persistence,
     IWorkItemService engine,
     IWorkItemAuditAppender auditAppender,
-    ILogger<ReAccreditationQueryService> logger) : IReAccreditationQueryService
+    ILogger<ReAccreditationQueryService> logger,
+    TimeProvider? timeProvider = null) : IReAccreditationQueryService
 {
+    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+
     /// <summary>Audit action id for the RA-291 query-detail entry.</summary>
     public const string AuditAction = "application-queried";
 
@@ -125,6 +139,21 @@ internal sealed class ReAccreditationQueryService(
             return assignResult;
         }
 
+        // RA-291: stamp the open query onto the payload BEFORE the transition.
+        // ReAccreditationNotificationHook runs as a post-action hook *inside*
+        // ApplyActionAsync, so this is the only point at which the reason can
+        // be made visible to the email it has to appear in. Writing it as
+        // payload state (rather than threading it through the engine) keeps the
+        // module concept out of the framework envelope and means the hook reads
+        // the very same record the audit entry below is built from — so the
+        // reason in the email is by construction the reason on the application.
+        var stampFailure = await StampCurrentQueryAsync(
+            workItemId, sections, reason, actorId, cancellationToken);
+        if (stampFailure is not null)
+        {
+            return stampFailure;
+        }
+
         var result = await engine.ApplyActionAsync(workItemId, actionId, user, cancellationToken);
         if (!result.IsSuccess)
         {
@@ -165,5 +194,75 @@ internal sealed class ReAccreditationQueryService(
         // out-of-band appender wrote against its own copy of the document.
         var refreshed = await persistence.GetByIdAsync(workItemId, cancellationToken);
         return refreshed is null ? result : WorkItemActionResult.Success(refreshed);
+    }
+
+    /// <summary>
+    /// Write <see cref="CurrentQuery"/> onto the work item payload. Returns
+    /// <c>null</c> on success, or the failure the caller should surface.
+    /// </summary>
+    private async Task<WorkItemActionResult?> StampCurrentQueryAsync(
+        Guid workItemId,
+        IReadOnlyList<string> sections,
+        string reason,
+        string actorId,
+        CancellationToken cancellationToken)
+    {
+        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        if (workItem is null)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.WorkItemNotFound,
+                $"No work item exists with id '{workItemId}'.");
+        }
+
+        ReAccreditationPayload payload;
+        try
+        {
+            // WorkItem.Payload is non-nullable (defaults to an empty
+            // document), so no null guard is needed here.
+            payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        }
+        catch (Exception ex) when (ex is BsonSerializationException or FormatException or InvalidCastException)
+        {
+            logger.LogError(ex,
+                "Query of work item {WorkItemId} aborted: existing payload could not be " +
+                "deserialised, so the query reason cannot be recorded.",
+                workItemId);
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidTransition,
+                $"Work item '{workItemId}' payload is corrupt and cannot be read. " +
+                "Inspect the server logs for details; a manual data repair may be required.");
+        }
+
+        var updated = payload with
+        {
+            CurrentQuery = new CurrentQuery
+            {
+                Reason = reason,
+                Sections = sections,
+                RaisedAt = _timeProvider.GetUtcNow().UtcDateTime,
+                RaisedBy = actorId,
+            }
+        };
+
+        // RA-249 merge pattern: merge the modelled update over the EXISTING
+        // payload rather than replacing it, so unmodelled top-level keys
+        // (applicationReference, source, siteAddress*, ...) survive the write.
+        var merged = workItem.Payload.DeepClone().AsBsonDocument;
+        merged.Merge(updated.ToBsonDocument(), overwriteExistingElements: true);
+        workItem.ReplacePayload(merged);
+
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.ConcurrencyConflict,
+                $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
+        }
+
+        return null;
     }
 }

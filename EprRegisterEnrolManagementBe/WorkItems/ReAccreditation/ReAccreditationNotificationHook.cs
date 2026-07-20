@@ -263,7 +263,6 @@ internal sealed class ReAccreditationNotificationHook(
             workItem,
             templateKey,
             reference,
-            _operatorServiceLink,
             actionId
         );
 
@@ -541,12 +540,11 @@ internal sealed class ReAccreditationNotificationHook(
             ?.Text
         ?? string.Empty;
 
-    private static Dictionary<string, string> BuildPersonalisation(
+    private Dictionary<string, string> BuildPersonalisation(
         ReAccreditationPayload payload,
         WorkItem workItem,
         string templateKey,
         string reference,
-        string operatorServiceLink,
         string? actionId = null
     )
     {
@@ -592,7 +590,37 @@ internal sealed class ReAccreditationNotificationHook(
             // an empty string rather than breaking the query flow. Deliberately
             // a single service-level link: RA-291 scopes per-section deep
             // links out.
-            personalisation["operator_service_link"] = operatorServiceLink;
+            personalisation["operator_service_link"] = _operatorServiceLink;
+
+            // RA-291: the query page tells the regulator the reason "will be
+            // included in the email to the operator", so the Queried template
+            // body references ((query_reason)). The value is read from the
+            // CurrentQuery that ReAccreditationQueryService stamps onto the
+            // payload immediately before applying the transition — the same
+            // record its audit entry is built from, so the emailed reason is
+            // by construction the reason recorded against the application.
+            //
+            // Falls back to an empty string when no current query is present.
+            // The query endpoint validates the reason as mandatory and
+            // non-whitespace, so that only happens if a queried transition is
+            // applied by some other path (e.g. the generic
+            // /work-items/{id}/actions/{actionId} route, or a legacy item).
+            // An empty value is preferable to both alternatives: omitting the
+            // key would make Notify 400 the send, and throwing would fail a
+            // notification that must never unwind the query.
+            var reason = payload.CurrentQuery?.Reason;
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                logger.LogWarning(
+                    "Queried notification for work item {WorkItemId} has no current query "
+                        + "reason on its payload; sending the email with an empty "
+                        + "((query_reason)). This indicates the queried transition was "
+                        + "applied outside ReAccreditationQueryService.",
+                    workItem.Id
+                );
+                reason = string.Empty;
+            }
+            personalisation["query_reason"] = reason;
         }
 
         if (string.Equals(templateKey, "Withdrawn", StringComparison.OrdinalIgnoreCase))
