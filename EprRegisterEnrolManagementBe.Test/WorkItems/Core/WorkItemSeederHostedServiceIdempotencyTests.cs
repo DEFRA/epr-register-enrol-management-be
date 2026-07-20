@@ -17,7 +17,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// (the actual race-arbiter) is in play, not faked away.
 /// </summary>
 public sealed class WorkItemSeederHostedServiceIdempotencyTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
+    : IAsyncDisposable
 {
     private readonly MongoIntegrationFixture _fixture;
     private readonly string _databaseName;
