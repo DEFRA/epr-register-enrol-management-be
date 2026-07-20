@@ -1,12 +1,24 @@
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using Microsoft.AspNetCore.HeaderPropagation;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolManagementBe.Test;
 
-public class HeaderPropagationAllowListTests
+/// <summary>
+/// Uses <see cref="EphemeralMongoTestFactory"/> so the host boots against
+/// the class fixture's ephemeral mongod instead of the default,
+/// unreachable-in-tests connection string — that otherwise left
+/// WorkItemPersistence's startup index reconciliation to eat a ~90s Mongo
+/// server-selection timeout per test, even though this test never touches
+/// Mongo.
+/// </summary>
+public class HeaderPropagationAllowListTests : IClassFixture<MongoIntegrationFixture>
 {
+    private readonly MongoIntegrationFixture _fixture;
+
+    public HeaderPropagationAllowListTests(MongoIntegrationFixture fixture) => _fixture = fixture;
+
     /// <summary>
     /// Headers that MUST never be on the propagation allow-list. If any of
     /// these slip through, an outbound HTTP call could replay caller
@@ -37,7 +49,7 @@ public class HeaderPropagationAllowListTests
         // its IHostedService graph. Use 'await using' so the kestrel
         // pipeline / hosted services are torn down on their async
         // path.
-        await using var factory = new WebApplicationFactory<Program>();
+        await using var factory = new EphemeralMongoTestFactory(_fixture, "header-prop");
         var options = factory.Services
             .GetRequiredService<IOptions<HeaderPropagationOptions>>().Value;
 
