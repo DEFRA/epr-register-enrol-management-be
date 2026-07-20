@@ -147,19 +147,23 @@ public class ReAccreditationQueryServiceTests
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted");
+        // RA-323 removed the assign-role tier, so AssignAsync can no longer
+        // fail with NotAuthorized. A concurrency conflict is a failure it CAN
+        // still return — the point of the test is that ANY assign failure
+        // aborts the query before the transition, so the ordering safety holds.
         harness.Engine
             .AssignAsync(
                 Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
                 Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
             .Returns(WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.NotAuthorized,
-                "This work item is already assigned to another user; only users with the 'assign' role can re-assign it."));
+                WorkItemActionFailureCode.ConcurrencyConflict,
+                "This work item was modified concurrently. Reload the work item and retry."));
 
         var result = await harness.Service.QueryAsync(
             harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
 
         Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
+        Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
         Assert.Equal("submitted", harness.WorkItem.StateId);
         await harness.Engine.DidNotReceiveWithAnyArgs()
             .ApplyActionAsync(default, default!, default!, default);

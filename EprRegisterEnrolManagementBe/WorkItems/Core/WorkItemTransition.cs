@@ -16,16 +16,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// must be marked complete before the action is allowed. Set to <c>false</c>
 /// for transitions that should always be available (e.g. "withdraw").
 /// </param>
-/// <param name="RequiredRoles">
-/// Optional set of role names; if non-empty the calling user must hold at
-/// least one of them or the engine returns <c>NotAuthorized</c> (HTTP 403).
-/// Used to enforce segregation of duties on sensitive transitions such as
-/// approve / reject.
-/// </param>
 public sealed record WorkItemTransition(
     string ActionId,
     string DisplayName,
     string FromStateId,
     string ToStateId,
-    bool RequiresAllTasksComplete = true,
-    IReadOnlyCollection<string>? RequiredRoles = null);
+    bool RequiresAllTasksComplete = true);

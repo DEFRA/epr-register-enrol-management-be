@@ -79,7 +79,7 @@ public class ReAccreditationLifecycleTests
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
                     new Claim("cognito:client_id", tenantClientId),
-                    new Claim(ClaimTypes.Role, ReAccreditationType.DecisionMakerRole),
+                    new Claim(ClaimTypes.Role, "reaccreditation-decision-maker"),
                 ],
                 "test"
             )

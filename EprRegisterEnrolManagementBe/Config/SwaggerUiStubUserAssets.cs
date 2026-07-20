@@ -43,9 +43,9 @@ internal static class SwaggerUiStubUserAssets
 
           const STORAGE_KEY = 'eprSwaggerStubUser';
           const STUB_USERS = [
-            { id: 'stub-standard-1',        name: 'Stub Standard User',  roles: 'standard' },
-            { id: 'stub-assign-1',          name: 'Stub Assign User',    roles: 'standard,assign' },
-            { id: 'stub-decision-maker-1',  name: 'Stub Decision Maker', roles: 'standard,decision-maker' }
+            { id: 'stub-caseworker-1', name: 'Stub Caseworker One',   roles: 'standard' },
+            { id: 'stub-caseworker-2', name: 'Stub Caseworker Two',   roles: 'standard' },
+            { id: 'stub-caseworker-3', name: 'Stub Caseworker Three', roles: 'standard' }
           ];
 
           function read() {

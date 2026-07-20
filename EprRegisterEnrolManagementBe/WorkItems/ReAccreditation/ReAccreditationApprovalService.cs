@@ -18,8 +18,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// service:
 /// <list type="bullet">
 ///   <item>Validates the work item exists, is a re-accreditation, is
-///   readable by the caller, is in <c>assessment-in-progress</c>, and that
-///   the caller holds the decision-maker role.</item>
+///   readable by the caller, and is in <c>assessment-in-progress</c>.
+///   RA-323: any authenticated caseworker may approve — there is no
+///   separate decision-maker role.</item>
 ///   <item>Stamps a fresh accreditation id, today's date as the
 ///   <c>AccreditationStartDate</c>, and a non-null
 ///   <see cref="SlaClock.StoppedAt"/> on the payload.</item>
@@ -133,13 +134,6 @@ internal sealed class ReAccreditationApprovalService(
                     WorkItemActionFailureCode.InvalidTransition,
                     $"Action '{ActionId}' moves work items from '{FromStateId}', " +
                     $"but {workItemId} is in '{workItem.StateId}'.");
-            }
-
-            if (!user.IsInRole(ReAccreditationType.DecisionMakerRole))
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.NotAuthorized,
-                    $"Action '{ActionId}' requires the '{ReAccreditationType.DecisionMakerRole}' role.");
             }
 
             var now = _timeProvider.GetUtcNow();

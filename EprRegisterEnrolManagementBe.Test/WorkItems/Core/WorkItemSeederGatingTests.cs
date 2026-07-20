@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -25,9 +26,12 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// persistence. (Surfaced by epr-mf7 — CI was slow enough to overlap
 /// these factories where local timing did not.)
 /// </summary>
-public class WorkItemSeederGatingTests
+public class WorkItemSeederGatingTests : IClassFixture<MongoIntegrationFixture>
 {
     private const string SeedFlagConfigKey = "WorkItems:SeedOnStartup";
+    private readonly MongoIntegrationFixture _fixture;
+
+    public WorkItemSeederGatingTests(MongoIntegrationFixture fixture) => _fixture = fixture;
 
     [Fact]
     public void Seeder_is_not_registered_in_Production_even_when_flag_true()
@@ -64,16 +68,9 @@ public class WorkItemSeederGatingTests
         Assert.DoesNotContain(hostedServices, s => s is WorkItemSeederMisconfigurationWarningHostedService);
     }
 
-    private static GatingFactory CreateFactory(string environment, bool seedOnStartup) =>
-        new(environment, seedOnStartup);
-
-    private sealed class GatingFactory(string environment, bool seedOnStartup)
-        : WebApplicationFactory<Program>
-    {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+    private EphemeralMongoTestFactory CreateFactory(string environment, bool seedOnStartup) =>
+        new(_fixture, "seeder-gating", environment, new Dictionary<string, string?>
         {
-            builder.UseEnvironment(environment);
-            builder.UseSetting(SeedFlagConfigKey, seedOnStartup ? "true" : "false");
-        }
-    }
+            [SeedFlagConfigKey] = seedOnStartup ? "true" : "false",
+        });
 }

@@ -77,11 +77,13 @@ public class WorkItemAuthBoundaryTests
         Assert.Empty(persisted.AuditLog);
     }
 
-    // ---------------- (2) Assign / Unassign role rules ----------------
+    // ---------------- (2) Assign / Unassign — RA-323: any caseworker ----------------
 
     [Fact]
-    public async Task Assign_returns_403_when_standard_user_targets_another_user()
+    public async Task Assign_succeeds_when_standard_user_targets_another_user()
     {
+        // RA-323: every caseworker holds the same role, so a standard user
+        // can assign a work item to anyone, not just claim it for themselves.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
         using var client = factory.CreateClient();
@@ -94,50 +96,18 @@ public class WorkItemAuthBoundaryTests
             new { assigneeId = "bob-2", assigneeName = "Bob" },
             cancellationToken);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Null(persisted!.AssignedToId);
-        Assert.Equal(0, persisted.Version);
-        Assert.Empty(persisted.AuditLog);
-    }
-
-    [Fact]
-    public async Task Assign_returns_403_when_standard_user_self_assigns_already_assigned_item()
-    {
-        // The 'assign' role gate: a standard user can claim an unassigned
-        // item but cannot wrest one off another user — only an 'assign'
-        // role-holder can re-assign.
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        var seeded = NewSubmittedItem(id);
-        seeded.AssignedToId = "bob-2";
-        seeded.AssignedToName = "Bob";
-        await factory.SeedAsync(seeded, cancellationToken);
-
-        var response = await client.PostAsJsonAsync(
-            $"/work-items/{id}/assign",
-            new { assigneeId = "alice-1", assigneeName = "Alice" },
-            cancellationToken);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("bob-2", persisted!.AssignedToId);
-        Assert.Equal(0, persisted.Version);
-        Assert.Empty(persisted.AuditLog);
+        Assert.Equal(1, persisted.Version);
+        Assert.Single(persisted.AuditLog);
     }
 
     [Fact]
-    public async Task Assign_role_holder_can_reassign_already_assigned_item()
+    public async Task Assign_succeeds_when_standard_user_reassigns_already_assigned_item()
     {
-        // Positive control for the boundary above — the same operation
-        // must succeed when the caller does hold the 'assign' role,
-        // otherwise the 403 above is meaningless.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(
-            _fixture, userId: "manager-1", roles: WorkItemService.AssignRole);
+        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -159,7 +129,7 @@ public class WorkItemAuthBoundaryTests
     }
 
     [Fact]
-    public async Task Unassign_returns_403_for_standard_user_without_assign_role()
+    public async Task Unassign_succeeds_for_standard_user()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
@@ -173,11 +143,11 @@ public class WorkItemAuthBoundaryTests
 
         var response = await client.PostAsync($"/work-items/{id}/unassign", content: null, cancellationToken);
 
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("alice-1", persisted!.AssignedToId);
-        Assert.Equal(0, persisted.Version);
-        Assert.Empty(persisted.AuditLog);
+        Assert.Null(persisted!.AssignedToId);
+        Assert.Equal(1, persisted.Version);
+        Assert.Single(persisted.AuditLog);
     }
 
     // ---------------- Cross-tenant GET / LIST denial ----------------
