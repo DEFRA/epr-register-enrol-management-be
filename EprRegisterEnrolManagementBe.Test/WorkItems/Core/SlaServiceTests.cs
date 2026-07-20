@@ -44,14 +44,7 @@ public class SlaServiceTests
             new Claim("cognito:client_id", "test-client"),
             new Claim("user:id", userId),
             new Claim("user:name", "Test Leader"),
-            new Claim(ClaimTypes.Role, SlaService.TeamLeaderRole)
-        ], "test"));
-
-    private static ClaimsPrincipal RegularUser() =>
-        new(new ClaimsIdentity(
-        [
-            new Claim("cognito:client_id", "test-client"),
-            new Claim("user:id", "user-1")
+            new Claim(ClaimTypes.Role, "standard")
         ], "test"));
 
     private static ClaimsPrincipal NoIdentityUser() =>
@@ -226,17 +219,6 @@ public class SlaServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(SlaActionFailureCode.MissingActorIdentity, result.FailureCode);
-    }
-
-    [Fact]
-    public async Task ExtendAsync_returns_not_authorized_when_user_lacks_team_leader_role()
-    {
-        var result = await BuildService().ExtendAsync(
-            Guid.NewGuid(), TimeSpan.FromDays(7), "reason",
-            RegularUser(), TestContext.Current.CancellationToken);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(SlaActionFailureCode.NotAuthorized, result.FailureCode);
     }
 
     [Fact]
@@ -464,16 +446,6 @@ public class SlaServiceTests
             NoIdentityUser(), TestContext.Current.CancellationToken);
 
         Assert.Equal(SlaActionFailureCode.MissingActorIdentity, result.FailureCode);
-    }
-
-    [Fact]
-    public async Task OverrideAsync_returns_not_authorized_when_user_lacks_team_leader_role()
-    {
-        var result = await BuildService().OverrideAsync(
-            Guid.NewGuid(), TimeSpan.FromDays(84), null, "reason",
-            RegularUser(), TestContext.Current.CancellationToken);
-
-        Assert.Equal(SlaActionFailureCode.NotAuthorized, result.FailureCode);
     }
 
     [Fact]

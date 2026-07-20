@@ -35,22 +35,14 @@ public class ReAccreditationApprovalServiceTests
             new Claim("user:id", DecisionMakerId),
             new Claim("user:name", "Alice Example"),
             new Claim("cognito:client_id", clientId ?? OwnerClientId),
-            new Claim(ClaimTypes.Role, ReAccreditationType.DecisionMakerRole)
+            new Claim(ClaimTypes.Role, "reaccreditation-decision-maker")
         ], "test"));
 
     private static ClaimsPrincipal AnonymousUser() =>
         new(new ClaimsIdentity(
         [
             new Claim("cognito:client_id", OwnerClientId),
-            new Claim(ClaimTypes.Role, ReAccreditationType.DecisionMakerRole)
-        ], "test"));
-
-    private static ClaimsPrincipal AssessorOnly() =>
-        new(new ClaimsIdentity(
-        [
-            new Claim("user:id", DecisionMakerId),
-            new Claim("user:name", "Alice Example"),
-            new Claim("cognito:client_id", OwnerClientId)
+            new Claim(ClaimTypes.Role, "reaccreditation-decision-maker")
         ], "test"));
 
     private static WorkItem BuildWorkItem(
@@ -372,19 +364,6 @@ public class ReAccreditationApprovalServiceTests
         var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
-    }
-
-    [Fact]
-    public async Task Returns_NotAuthorized_when_user_lacks_decision_maker_role()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var sut = Build();
-        var workItem = BuildWorkItem();
-        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
-
-        var result = await sut.Service.ApproveAsync(workItem.Id, AssessorOnly(), ct);
-
-        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
     }
 
     [Fact]

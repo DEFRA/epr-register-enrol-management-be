@@ -507,68 +507,6 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
     }
 
     [Fact]
-    public async Task ApplyAction_returns_NotAuthorized_when_caller_lacks_required_role()
-    {
-        var type = BuildType(
-            transitions:
-            [
-                new WorkItemTransition(
-                    "approve",
-                    "Approve",
-                    "submitted",
-                    "approved",
-                    RequiredRoles: new[] { "decision-maker" }
-                ),
-            ]
-        );
-        var workItem = await SeedAsync();
-
-        var result = await BuildService(type)
-            .ApplyActionAsync(
-                workItem.Id,
-                "approve",
-                UserWithRoles("alice-1"),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal("submitted", fetched.StateId);
-        Assert.Equal(0, fetched.Version);
-    }
-
-    [Fact]
-    public async Task ApplyAction_succeeds_when_caller_holds_one_of_required_roles()
-    {
-        var type = BuildType(
-            transitions:
-            [
-                new WorkItemTransition(
-                    "approve",
-                    "Approve",
-                    "submitted",
-                    "approved",
-                    RequiredRoles: new[] { "decision-maker", "admin" }
-                ),
-            ]
-        );
-        var workItem = await SeedAsync();
-
-        var result = await BuildService(type)
-            .ApplyActionAsync(
-                workItem.Id,
-                "approve",
-                UserWithRoles("bob-1", "admin"),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.True(result.IsSuccess);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal("approved", fetched.StateId);
-    }
-
-    [Fact]
     public async Task CompleteTask_returns_ConcurrencyConflict_when_persistence_throws()
     {
         // Real concurrency conflict via on-disk version race rather than
@@ -743,15 +681,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var type = BuildType();
         var workItem = await SeedAsync();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildService(type)
-            .AssignAsync(
-                workItem.Id,
-                "alice-1",
-                "Alice Example",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice Example", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -772,15 +704,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var workItem = await SeedAsync();
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildServiceWithHook(type, hook)
-            .AssignAsync(
-                workItem.Id,
-                "alice-1",
-                "Alice",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildServiceWithHook(type, hook).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         await hook.Received(1)
@@ -805,15 +731,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         });
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        await BuildServiceWithHook(type, hook)
-            .AssignAsync(
-                workItem.Id,
-                "carol-1",
-                "Carol",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        await BuildServiceWithHook(type, hook).AssignAsync(
+            workItem.Id, "carol-1", "Carol", actor, TestContext.Current.CancellationToken);
 
         await hook.Received(1)
             .OnAssignmentChangedAsync(
@@ -837,15 +757,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         });
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildServiceWithHook(type, hook)
-            .AssignAsync(
-                workItem.Id,
-                "alice-1",
-                "Alice",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildServiceWithHook(type, hook).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsIdempotentReplay);
         await hook.DidNotReceiveWithAnyArgs()
@@ -865,9 +779,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         });
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        await BuildServiceWithHook(type, hook)
-            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        var actor = UserWithRoles("actor-1", "assign");
+        await BuildServiceWithHook(type, hook).UnassignAsync(
+            workItem.Id, actor, TestContext.Current.CancellationToken);
 
         await hook.Received(1)
             .OnAssignmentChangedAsync(
@@ -885,9 +799,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var workItem = await SeedAsync(); // already unassigned
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildServiceWithHook(type, hook)
-            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildServiceWithHook(type, hook).UnassignAsync(
+            workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsIdempotentReplay);
         await hook.DidNotReceiveWithAnyArgs()
@@ -908,15 +822,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             )
             .Returns(Task.FromException(new InvalidOperationException("notify down")));
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildServiceWithHook(type, hook)
-            .AssignAsync(
-                workItem.Id,
-                "alice-1",
-                "Alice",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildServiceWithHook(type, hook).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
         // The hook's failure is swallowed; the assignment mutation persisted.
         Assert.True(result.IsSuccess);
@@ -936,15 +844,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             w.AssignedBy = "old-actor";
         });
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildService(type)
-            .AssignAsync(
-                workItem.Id,
-                "carol-1",
-                "Carol",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "carol-1", "Carol", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -965,15 +867,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             w.AssignedBy = "old-actor";
         });
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildService(type)
-            .AssignAsync(
-                workItem.Id,
-                "alice-1",
-                "Alice",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         Assert.True(
@@ -993,9 +889,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var type = BuildType();
         var workItem = await SeedAsync();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildService(type)
-            .AssignAsync(workItem.Id, "   ", null, actor, TestContext.Current.CancellationToken);
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "   ", null, actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidAssignment, result.FailureCode);
@@ -1005,15 +901,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
     public async Task Assign_returns_not_found_when_work_item_missing()
     {
         var type = BuildType();
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildService(type)
-            .AssignAsync(
-                Guid.NewGuid(),
-                "alice-1",
-                "Alice",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).AssignAsync(
+            Guid.NewGuid(), "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
@@ -1041,62 +931,10 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
     }
 
     [Fact]
-    public async Task Assign_actor_with_no_role_is_forbidden( /* epr-6e5 */
-    )
+    public async Task Assign_standard_user_can_assign_to_someone_else(/* RA-323 */)
     {
-        // The "assign" / "standard" cases are covered above; pin the
-        // third branch — an actor with no recognised role at all —
-        // explicitly. The current contract (per AGENTS.md and
-        // WorkItemService.AssignAsync) is "anyone without the assign
-        // role is treated as a standard user", which means a no-role
-        // actor can self-assign an unassigned item but cannot do
-        // anything else. This test pins the cannot-do-anything-else
-        // half of that contract.
-        var type = BuildType();
-        var workItem = await SeedAsync(configure: w =>
-        {
-            w.AssignedToId = "bob-1";
-            w.AssignedToName = "Bob";
-        });
-
-        // Deliberately pass no roles. The work item is already
-        // assigned to bob-1; alice-1 has no permission to take it.
-        var actor = UserWithRoles("alice-1");
-        var result = await BuildService(type)
-            .AssignAsync(
-                workItem.Id,
-                "alice-1",
-                "Alice",
-                actor,
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal("bob-1", fetched.AssignedToId);
-        Assert.Equal(0, fetched.Version);
-    }
-
-    [Fact]
-    public async Task Assign_standard_user_cannot_assign_to_someone_else()
-    {
-        var type = BuildType();
-        var workItem = await SeedAsync();
-
-        var actor = UserWithRoles("alice-1", "standard");
-        var result = await BuildService(type)
-            .AssignAsync(workItem.Id, "bob-1", "Bob", actor, TestContext.Current.CancellationToken);
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal(0, fetched.Version);
-    }
-
-    [Fact]
-    public async Task Assign_standard_user_cannot_take_item_already_assigned_to_another_user()
-    {
+        // RA-323: every caseworker holds the same role, so a caller without
+        // any special role can still assign/re-assign to anyone.
         var type = BuildType();
         var workItem = await SeedAsync(configure: w =>
         {
@@ -1105,19 +943,12 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         });
 
         var actor = UserWithRoles("alice-1", "standard");
-        var result = await BuildService(type)
-            .AssignAsync(
-                workItem.Id,
-                "alice-1",
-                "Alice",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "carol-1", "Carol", actor, TestContext.Current.CancellationToken);
 
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
+        Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
-        Assert.Equal("bob-1", fetched.AssignedToId);
+        Assert.Equal("carol-1", fetched.AssignedToId);
     }
 
     [Fact]
@@ -1132,9 +963,8 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             w.AssignedBy = "actor-1";
         });
 
-        var actor = UserWithRoles("actor-2", WorkItemService.AssignRole);
-        var result = await BuildService(type)
-            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        var actor = UserWithRoles("actor-2", "assign");
+        var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -1152,9 +982,8 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var type = BuildType();
         var workItem = await SeedAsync();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        var result = await BuildService(type)
-            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         Assert.True(
@@ -1167,7 +996,7 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
     }
 
     [Fact]
-    public async Task Unassign_rejected_for_standard_user()
+    public async Task Unassign_succeeds_for_standard_user(/* RA-323 */)
     {
         var type = BuildType();
         var workItem = await SeedAsync(configure: w =>
@@ -1179,11 +1008,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var result = await BuildService(type)
             .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.NotAuthorized, result.FailureCode);
+        Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
-        Assert.Equal("alice-1", fetched.AssignedToId);
-        Assert.Equal(0, fetched.Version);
+        Assert.Null(fetched.AssignedToId);
     }
 
     [Fact]
@@ -1466,15 +1293,9 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             w.AssignedToName = "Bob Example";
         });
 
-        var actor = UserWithRoles("alice-1", WorkItemService.AssignRole);
-        await BuildService(type)
-            .AssignAsync(
-                workItem.Id,
-                "carol-1",
-                "Carol Example",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("alice-1", "assign");
+        await BuildService(type).AssignAsync(
+            workItem.Id, "carol-1", "Carol Example", actor, TestContext.Current.CancellationToken);
 
         var fetched = await GetAsync(workItem.Id);
         var entry = Assert.Single(fetched.AuditLog);
@@ -1497,29 +1318,23 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             w.AssignedToName = "Alice";
         });
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        await BuildService(type)
-            .AssignAsync(
-                workItem.Id,
-                "alice-1",
-                "Alice",
-                actor,
-                TestContext.Current.CancellationToken
-            );
+        var actor = UserWithRoles("actor-1", "assign");
+        await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
 
         var fetched = await GetAsync(workItem.Id);
         Assert.Empty(fetched.AuditLog);
     }
 
     [Fact]
-    public async Task Audit_Assign_authorization_failure_does_not_append_an_entry()
+    public async Task Audit_Assign_validation_failure_does_not_append_an_entry()
     {
         var type = BuildType();
         var workItem = await SeedAsync();
 
         var actor = UserWithRoles("alice-1", "standard");
-        var result = await BuildService(type)
-            .AssignAsync(workItem.Id, "bob-1", "Bob", actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "   ", "Bob", actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -1536,9 +1351,8 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             w.AssignedToName = "Alice";
         });
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        await BuildService(type)
-            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        var actor = UserWithRoles("actor-1", "assign");
+        await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         var fetched = await GetAsync(workItem.Id);
         var entry = Assert.Single(fetched.AuditLog);
@@ -1555,9 +1369,8 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var type = BuildType();
         var workItem = await SeedAsync();
 
-        var actor = UserWithRoles("actor-1", WorkItemService.AssignRole);
-        await BuildService(type)
-            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        var actor = UserWithRoles("actor-1", "assign");
+        await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         var fetched = await GetAsync(workItem.Id);
         Assert.Empty(fetched.AuditLog);

@@ -61,7 +61,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
         [
             new Claim("cognito:client_id", "test-client"),
             new Claim("user:id", "tl-user"),
-            new Claim(ClaimTypes.Role, SlaService.TeamLeaderRole)
+            new Claim(ClaimTypes.Role, "standard")
         ], "test"));
         return ctx;
     }
@@ -70,7 +70,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
         JsonDocument.Parse(JsonSerializer.Serialize(value)).RootElement;
 
     private SlaEndpointsTestFactory NewFactory(
-        string? userRoles = SlaService.TeamLeaderRole,
+        string? userRoles = "standard",
         string? userId = "tl-user") =>
         new(_fixture, userRoles, userId);
 
@@ -384,23 +384,6 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     [Fact]
-    public async Task Extend_route_returns_403_for_non_team_leader()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        // No role header → regular user
-        await using var factory = new SlaEndpointsTestFactory(_fixture, userRoles: null, userId: "user-1");
-        using var client = factory.CreateClient();
-        var id = Guid.NewGuid();
-
-        var response = await client.PostAsJsonAsync(
-            $"/work-items/{id}/sla/extend",
-            new { additionalDuration = "P14D", reason = "reason" },
-            cancellationToken);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-    }
-
-    [Fact]
     public async Task Extend_route_returns_404_for_unknown_work_item()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -468,22 +451,6 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     // ── Route wiring (integration) — override ────────────────────────────────
-
-    [Fact]
-    public async Task Override_route_returns_403_for_non_team_leader()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new SlaEndpointsTestFactory(_fixture, userRoles: null, userId: "user-1");
-        using var client = factory.CreateClient();
-        var id = Guid.NewGuid();
-
-        var response = await client.PostAsJsonAsync(
-            $"/work-items/{id}/sla/override",
-            new { newTargetDuration = "P60D", reason = "reason" },
-            cancellationToken);
-
-        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-    }
 
     [Fact]
     public async Task Override_route_returns_ok_for_team_leader()

@@ -154,9 +154,9 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     services.AddWorkItemFramework();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
     // RA-131: SLA extend / override is a cross-cutting framework concern
-    // (universal rules: team-leader gate, max-extension cap, audit shape,
-    // operator notify on extend via post-action hooks) so it lives next
-    // to the framework, not in a module.
+    // (universal rules: max-extension cap, audit shape, operator notify on
+    // extend via post-action hooks) so it lives next to the framework, not
+    // in a module.
     services.AddOptions<SlaConfig>()
         .Bind(builder.Configuration.GetSection("WorkItems:Sla"));
     // RA-133: accreditation issuance config (current year drives the

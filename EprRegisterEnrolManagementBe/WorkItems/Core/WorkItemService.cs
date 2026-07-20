@@ -79,9 +79,9 @@ public interface IWorkItemService
     /// <summary>
     /// Assign (or re-assign) a work item to <paramref name="assigneeId"/>,
     /// snapshotting <paramref name="assigneeName"/> alongside the id so list
-    /// views do not need a separate user lookup. Authorization rules:
-    /// the caller must either hold the <c>assign</c> role, or be assigning
-    /// the item to themselves while it is currently unassigned.
+    /// views do not need a separate user lookup. RA-323: every caseworker
+    /// may assign to anyone, including re-assigning an already-assigned
+    /// item — there is no separate permission tier.
     /// </summary>
     Task<WorkItemActionResult> AssignAsync(
         Guid workItemId,
@@ -92,8 +92,8 @@ public interface IWorkItemService
     );
 
     /// <summary>
-    /// Clear the current assignment. Requires the caller to hold the
-    /// <c>assign</c> role.
+    /// Clear the current assignment. Any authenticated caseworker may
+    /// unassign (RA-323).
     /// </summary>
     Task<WorkItemActionResult> UnassignAsync(
         Guid workItemId,
@@ -166,13 +166,6 @@ public sealed record WorkItemEngineProjection(
 
 public sealed class WorkItemService : IWorkItemService
 {
-    /// <summary>
-    /// Role that grants the holder the ability to assign / re-assign /
-    /// unassign any work item to anyone. Standard users without this role
-    /// can only self-assign unassigned items.
-    /// </summary>
-    public const string AssignRole = "assign";
-
     /// <summary>
     /// Maximum number of <c>applicationReference</c> candidates the engine
     /// tries before giving up on a submission. The suffix keyspace is 10^9,
@@ -558,17 +551,6 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        if (
-            transition.RequiredRoles is { Count: > 0 } requiredRoles
-            && !requiredRoles.Any(r => user?.IsInRole(r) == true)
-        )
-        {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.NotAuthorized,
-                $"Action '{actionId}' requires one of the following roles: {string.Join(", ", requiredRoles)}."
-            );
-        }
-
         var previousState = workItem.StateId;
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.StateId = transition.ToStateId;
@@ -648,39 +630,10 @@ public sealed class WorkItemService : IWorkItemService
 
         var trimmedAssigneeId = assigneeId.Trim();
         var actorUserId = ResolveActorUserId(user);
-        var hasAssignRole = user?.IsInRole(AssignRole) == true;
 
-        // Standard users without the assign role can only "claim" an
-        // unassigned item, and only for themselves. Anything else (assigning
-        // to someone else, taking an item already owned by another user) is
-        // reserved for users with the assign role.
-        if (!hasAssignRole)
-        {
-            var isSelfAssign =
-                actorUserId is not null
-                && string.Equals(actorUserId, trimmedAssigneeId, StringComparison.Ordinal);
-            if (!isSelfAssign)
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.NotAuthorized,
-                    "Only users with the 'assign' role can assign work items to other users."
-                );
-            }
-            if (
-                workItem.AssignedToId is not null
-                && !string.Equals(
-                    workItem.AssignedToId,
-                    trimmedAssigneeId,
-                    StringComparison.Ordinal
-                )
-            )
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.NotAuthorized,
-                    "This work item is already assigned to another user; only users with the 'assign' role can re-assign it."
-                );
-            }
-        }
+        // RA-323: every caseworker may assign to anyone, including
+        // re-assigning an already-assigned item — there is no permission
+        // tier to check here any more.
 
         var snapshotName = string.IsNullOrWhiteSpace(assigneeName) ? null : assigneeName.Trim();
         var alreadyAssignedToSameUser =
@@ -766,14 +719,6 @@ public sealed class WorkItemService : IWorkItemService
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.WorkItemNotFound,
                 $"No work item exists with id '{workItemId}'."
-            );
-        }
-
-        if (user?.IsInRole(AssignRole) != true)
-        {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.NotAuthorized,
-                "Only users with the 'assign' role can unassign work items."
             );
         }
 
