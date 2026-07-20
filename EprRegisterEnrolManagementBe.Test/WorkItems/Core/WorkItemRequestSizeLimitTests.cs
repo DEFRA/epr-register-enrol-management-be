@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -22,8 +23,12 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// test server does not host through Kestrel and therefore does not
 /// honour <c>MaxRequestBodySize</c>.
 /// </summary>
-public class WorkItemRequestSizeLimitTests
+public class WorkItemRequestSizeLimitTests : IClassFixture<MongoIntegrationFixture>
 {
+    private readonly MongoIntegrationFixture _fixture;
+
+    public WorkItemRequestSizeLimitTests(MongoIntegrationFixture fixture) => _fixture = fixture;
+
     public static IEnumerable<TheoryDataRow<string, long>> EndpointSizeCases() => new TheoryDataRow<string, long>[]
     {
         new("SubmitWorkItem",                          WorkItemEndpoints.MaxSubmitBodyBytes)             { TestDisplayName = "Submit"                },
@@ -37,7 +42,7 @@ public class WorkItemRequestSizeLimitTests
     [MemberData(nameof(EndpointSizeCases))]
     public void Endpoint_metadata_carries_request_size_limit(string endpointName, long expectedBytes)
     {
-        using var factory = new WebApplicationFactory<Program>();
+        using var factory = new EphemeralMongoTestFactory(_fixture, "size-limit");
         // Resolve EndpointDataSource to inspect the registered endpoints
         // without making a live HTTP call. Failing here means the
         // .WithMetadata(new RequestSizeLimitAttribute(...)) call has been
@@ -67,7 +72,7 @@ public class WorkItemRequestSizeLimitTests
     [Fact]
     public void Every_endpoint_that_disables_validation_has_a_request_size_limit()
     {
-        using var factory = new WebApplicationFactory<Program>();
+        using var factory = new EphemeralMongoTestFactory(_fixture, "size-limit");
         using var scope = factory.Services.CreateScope();
         var sources = scope.ServiceProvider.GetRequiredService<IEnumerable<EndpointDataSource>>();
 

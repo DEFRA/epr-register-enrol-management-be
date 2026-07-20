@@ -1,6 +1,5 @@
 using EprRegisterEnrolManagementBe.Notifications;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EprRegisterEnrolManagementBe.Test.Notifications;
@@ -25,12 +24,16 @@ internal static class NotifyTestConstants
 /// races with other WebApplicationFactory spin-ups — same reasoning as
 /// WorkItemSeederGatingTests.
 /// </summary>
-public class NotifyApiKeyRegistrationTests
+public class NotifyApiKeyRegistrationTests : IClassFixture<MongoIntegrationFixture>
 {
+    private readonly MongoIntegrationFixture _fixture;
+
+    public NotifyApiKeyRegistrationTests(MongoIntegrationFixture fixture) => _fixture = fixture;
+
     [Fact]
     public void GovukNotifyClient_is_registered_when_NOTIFY_API_KEY_is_set()
     {
-        using var factory = new NotifyTestFactory(apiKey: NotifyTestConstants.FakeApiKey);
+        using var factory = NewFactory(NotifyTestConstants.FakeApiKey);
 
         var client = factory.Services.GetRequiredService<INotifyClient>();
 
@@ -40,7 +43,7 @@ public class NotifyApiKeyRegistrationTests
     [Fact]
     public void NoOpNotifyClient_is_registered_when_NOTIFY_API_KEY_is_absent()
     {
-        using var factory = new NotifyTestFactory(apiKey: null);
+        using var factory = NewFactory(apiKey: null);
 
         var client = factory.Services.GetRequiredService<INotifyClient>();
 
@@ -50,22 +53,20 @@ public class NotifyApiKeyRegistrationTests
     [Fact]
     public void NoOpNotifyClient_is_registered_when_NOTIFY_API_KEY_is_empty()
     {
-        using var factory = new NotifyTestFactory(apiKey: "");
+        using var factory = NewFactory(apiKey: "");
 
         var client = factory.Services.GetRequiredService<INotifyClient>();
 
         Assert.IsType<NoOpNotifyClient>(client);
     }
 
-    private sealed class NotifyTestFactory(string? apiKey) : WebApplicationFactory<Program>
-    {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+    // Always set NOTIFY_API_KEY explicitly so an ambient value in the test
+    // runner's environment cannot influence the no-key test cases.
+    private EphemeralMongoTestFactory NewFactory(string? apiKey) =>
+        new(_fixture, "notify-key", settings: new Dictionary<string, string?>
         {
-            // Always set explicitly so an ambient NOTIFY_API_KEY env var in the
-            // test runner's environment cannot influence the no-key test cases.
-            builder.UseSetting("NOTIFY_API_KEY", apiKey ?? string.Empty);
-        }
-    }
+            ["NOTIFY_API_KEY"] = apiKey ?? string.Empty,
+        });
 }
 
 /// <summary>
@@ -83,8 +84,12 @@ public sealed class EnvVarMutationCollection
 /// Program.cs and drives the same INotifyClient registration decision.
 /// </summary>
 [Collection(EnvVarMutationCollection.Name)]
-public class NotifyApiKeyEnvVarRegistrationTests
+public class NotifyApiKeyEnvVarRegistrationTests : IClassFixture<MongoIntegrationFixture>
 {
+    private readonly MongoIntegrationFixture _fixture;
+
+    public NotifyApiKeyEnvVarRegistrationTests(MongoIntegrationFixture fixture) => _fixture = fixture;
+
     [Fact]
     public void GovukNotifyClient_is_registered_when_NOTIFY_API_KEY_env_var_is_set()
     {
@@ -93,7 +98,7 @@ public class NotifyApiKeyEnvVarRegistrationTests
         {
             Environment.SetEnvironmentVariable("NOTIFY_API_KEY", NotifyTestConstants.FakeApiKey);
 
-            using var factory = new WebApplicationFactory<Program>();
+            using var factory = new EphemeralMongoTestFactory(_fixture, "notify-key-env");
             Assert.IsType<GovukNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
         }
         finally
@@ -110,7 +115,7 @@ public class NotifyApiKeyEnvVarRegistrationTests
         {
             Environment.SetEnvironmentVariable("NOTIFY_API_KEY", null);
 
-            using var factory = new WebApplicationFactory<Program>();
+            using var factory = new EphemeralMongoTestFactory(_fixture, "notify-key-env");
             Assert.IsType<NoOpNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
         }
         finally
