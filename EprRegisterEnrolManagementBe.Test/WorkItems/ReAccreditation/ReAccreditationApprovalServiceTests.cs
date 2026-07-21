@@ -309,8 +309,10 @@ public class ReAccreditationApprovalServiceTests
     }
 
     [Fact]
-    public async Task Returns_WorkItemNotFound_when_caller_cannot_read_work_item()
+    public async Task Succeeds_for_work_item_not_submitted_by_caller()
     {
+        // RBAC (who may act on whose items) lives in the frontend now; the
+        // service applies the action regardless of who submitted the item.
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
         var workItem = BuildWorkItem(submittedBy: OtherTenantClientId);
@@ -318,7 +320,7 @@ public class ReAccreditationApprovalServiceTests
 
         var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
-        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+        Assert.True(result.IsSuccess);
     }
 
     [Fact]

@@ -150,10 +150,14 @@ public class WorkItemAuthBoundaryTests
         Assert.Single(persisted.AuditLog);
     }
 
-    // ---------------- Cross-tenant GET / LIST denial ----------------
+    // ---------------- GET / LIST: RBAC lives in the frontend ----------------
+    // The backend no longer gates read access on ownership — any
+    // shared-secret-authenticated caller can read any item. Scoping (e.g.
+    // "show me only my items") is an explicit ?submittedBy= filter the
+    // frontend opts into, not something the backend infers or enforces.
 
     [Fact]
-    public async Task Get_by_id_returns_404_for_cross_tenant_caller()
+    public async Task Get_by_id_returns_ok_for_item_submitted_by_another_caller()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
@@ -165,13 +169,11 @@ public class WorkItemAuthBoundaryTests
 
         var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
 
-        // Cross-tenant items must never leak via 200 or even via a
-        // distinguishable 403 — return 404 to hide existence.
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
-    public async Task List_hides_cross_tenant_items_from_standard_caller()
+    public async Task List_returns_items_from_all_submitters_by_default()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
@@ -182,12 +184,13 @@ public class WorkItemAuthBoundaryTests
         await factory.SeedAsync(mine, cancellationToken);
         await factory.SeedAsync(theirs, cancellationToken);
 
+        // Scoped to this test's own type so it isn't polluted by the
+        // stub seed data the app seeds on startup in this environment.
         var page = await client.GetFromJsonAsync<WorkItemListResponse>(
-            "/work-items", cancellationToken);
+            $"/work-items?typeId={TypeId}", cancellationToken);
 
         Assert.NotNull(page);
-        Assert.Single(page!.Items);
-        Assert.Equal(mine.Id, page.Items[0].Id);
+        Assert.Equal(2, page!.Items.Count);
     }
 
     // ---------------------------- Helpers ----------------------------

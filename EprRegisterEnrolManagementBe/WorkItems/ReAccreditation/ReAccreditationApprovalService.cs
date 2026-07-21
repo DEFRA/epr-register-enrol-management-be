@@ -77,9 +77,7 @@ internal sealed class ReAccreditationApprovalService(
         {
             var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
 
-            // Cross-tenant gate (epr-946 contract): hide existence from
-            // callers that cannot read the document.
-            if (workItem is null || !WorkItemTenancy.CanRead(user, workItem))
+            if (workItem is null)
             {
                 return WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.WorkItemNotFound,

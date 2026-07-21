@@ -31,7 +31,6 @@ public class ReAccreditationEndpointTests
     : IClassFixture<MongoIntegrationFixture>
 {
     private const string TenantClientId = "test-client";
-    private const string CaseWorkerClientId = "case-worker-client";
     private const string DefaultUserId = "alice-1";
     private const string DefaultUserName = "Alice Example";
 
@@ -381,41 +380,16 @@ public class ReAccreditationEndpointTests
         Assert.Empty(persisted.Notes);
     }
 
-    // -------------------- Cross-tenant gating (epr-946) --------------------
+    // -------------------- Ownership no longer gates access --------------------
+    // RBAC (who may act on whose items) now lives entirely in the frontend;
+    // the backend applies whatever the (shared-secret authenticated) caller
+    // asks for regardless of who submitted the item.
 
     [Fact]
-    public async Task Recommendation_returns_not_found_for_cross_tenant_caller()
+    public async Task Recommendation_returns_ok_for_item_not_submitted_by_caller()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = ReAccreditationType.Id,
-            StateId = "submitted",
-            // Owned by another tenant — caller is 'test-client'.
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
-
-        var response = await client.GetAsync(
-            $"/work-items/re-accreditation/{id}/recommendation", cancellationToken);
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        factory.DecisionService.DidNotReceiveWithAnyArgs().EvaluateRecommendation(default!);
-    }
-
-    [Fact]
-    public async Task Recommendation_allows_case_worker_to_see_other_tenants_item()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            clientId: CaseWorkerClientId,
-            userId: "worker-1",
-            roles: [WorkItemEndpoints.CaseWorkerRole, "reaccreditation-decision-maker"]);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -439,38 +413,10 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task RecordDecisionRationale_returns_not_found_for_cross_tenant_caller()
+    public async Task RecordDecisionRationale_succeeds_for_item_not_submitted_by_caller()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, "other-tenant"), cancellationToken);
-
-        var response = await client.PostAsJsonAsync(
-            $"/work-items/re-accreditation/{id}/decision-rationale",
-            new DecisionRationaleRequest("Approved on the basis of full compliance history."),
-            cancellationToken);
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-
-        // Hand-crafted POST against another tenant's item must not append
-        // the note or complete the rationale task.
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal(0, persisted!.Version);
-        Assert.Empty(persisted.Notes);
-    }
-
-    [Fact]
-    public async Task RecordDecisionRationale_allows_case_worker_against_other_tenants_item()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            clientId: CaseWorkerClientId,
-            userId: "worker-1",
-            roles: [WorkItemEndpoints.CaseWorkerRole, "reaccreditation-decision-maker"]);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -644,30 +590,6 @@ public class ReAccreditationEndpointTests
         Assert.Equal(2023, capturedYear);
     }
 
-    [Fact]
-    public async Task PriorYear_returns_not_found_for_cross_tenant_caller()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = ReAccreditationType.Id,
-            StateId = "submitted",
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
-
-        var response = await client.GetAsync(
-            $"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        await factory.ReExClient.DidNotReceiveWithAnyArgs()
-            .GetPriorYearAsync(default, default, default, default);
-    }
-
     // ------------------------------ Helpers ------------------------------
 
     private static WorkItem BuildAwaitingDecision(Guid id, string submittedBy)
@@ -746,7 +668,7 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task Approve_returns_not_found_for_cross_tenant_caller()
+    public async Task Approve_succeeds_for_item_not_submitted_by_caller()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
@@ -758,9 +680,9 @@ public class ReAccreditationEndpointTests
         var response = await client.PostAsync(
             $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("awaiting-decision", persisted!.StateId);
+        Assert.Equal("approved", persisted!.StateId);
     }
 
     [Fact]

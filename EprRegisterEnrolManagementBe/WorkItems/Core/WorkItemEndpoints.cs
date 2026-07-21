@@ -20,14 +20,6 @@ internal sealed class WorkItemEndpointsLogger;
 /// </summary>
 public static class WorkItemEndpoints
 {
-    /// <summary>
-    /// Role that lets a user read every work item regardless of submitter.
-    /// Standard callers (organisations / BFFs acting on their behalf) only
-    /// see items they themselves submitted; case workers / assessors with
-    /// this role see all of them.
-    /// </summary>
-    public const string CaseWorkerRole = "case-worker";
-
     // Request body size caps (epr-rvz). The work item endpoints all parse
     // their JSON body manually after .DisableValidation(), so without an
     // explicit cap an attacker can POST arbitrarily large payloads and
@@ -346,10 +338,8 @@ public static class WorkItemEndpoints
     )
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
+        if (workItem is null)
         {
-            // Always return NotFound for cross-tenant access to avoid
-            // leaking the existence of items the caller cannot see.
             return TypedResults.NotFound();
         }
         return TypedResults.Ok(ToResponse(engine.Project(workItem), timeProvider));
@@ -372,33 +362,6 @@ public static class WorkItemEndpoints
                 detail: $"'page' must be <= {WorkItemQuery.MaxPage}.",
                 statusCode: StatusCodes.Status400BadRequest
             );
-        }
-
-        // Tenancy isolation: standard callers only ever see items they
-        // themselves submitted. Case workers (with the case-worker role)
-        // bypass this filter and see everything.
-        if (!httpContext.User.IsInRole(CaseWorkerRole))
-        {
-            var callerClientId =
-                httpContext.User.FindFirstValue("cognito:client_id")
-                ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (string.IsNullOrEmpty(callerClientId))
-            {
-                // No identifiable submitter → no items can belong to the
-                // caller, so short-circuit with an empty page rather than
-                // ferrying a sentinel into the Mongo filter. Failing
-                // closed structurally means a future submitter id can
-                // never accidentally collide with the gate.
-                return TypedResults.Ok(
-                    new WorkItemListResponse(
-                        Array.Empty<WorkItemListItemResponse>(),
-                        TotalCount: 0,
-                        Page: query.NormalisedPage,
-                        PageSize: query.NormalisedPageSize
-                    )
-                );
-            }
-            query = query with { SubmittedBy = callerClientId };
         }
 
         var page = await persistence.QueryAsync(query, cancellationToken);
@@ -425,18 +388,10 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         [FromRoute] string taskId,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         var result = await engine.CompleteTaskAsync(
             id,
             taskId,
@@ -457,18 +412,10 @@ public static class WorkItemEndpoints
         [FromRoute] string taskId,
         JsonElement body,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
@@ -522,18 +469,10 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         [FromRoute] string actionId,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         var result = await engine.ApplyActionAsync(
             id,
             actionId,
@@ -547,18 +486,10 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         JsonElement body,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
@@ -605,18 +536,10 @@ public static class WorkItemEndpoints
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Unassign(
         [FromRoute] Guid id,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         var result = await engine.UnassignAsync(id, httpContext.User, cancellationToken);
         if (result.IsIdempotentReplay)
         {
@@ -629,18 +552,10 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         JsonElement body,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
@@ -668,30 +583,6 @@ public static class WorkItemEndpoints
             cancellationToken
         );
         return ToHttpResult(result, engine);
-    }
-
-    /// <summary>
-    /// Tenancy gate for mutation handlers (epr-0t9). Loads the work item
-    /// and verifies the caller may see it via
-    /// <see cref="WorkItemTenancy.CanRead"/>; returns the loaded item on
-    /// success or <c>null</c> when the caller has no access (in which case
-    /// the handler should respond with NotFound to avoid leaking the
-    /// existence of cross-tenant items). Without this gate the engine
-    /// would happily mutate any item whose id the caller can guess.
-    /// </summary>
-    private static async Task<WorkItem?> EnsureTenantAccessAsync(
-        Guid id,
-        ClaimsPrincipal user,
-        IWorkItemPersistence persistence,
-        CancellationToken cancellationToken
-    )
-    {
-        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        if (workItem is null || !WorkItemTenancy.CanRead(user, workItem))
-        {
-            return null;
-        }
-        return workItem;
     }
 
     private static Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult> ToHttpResult(
