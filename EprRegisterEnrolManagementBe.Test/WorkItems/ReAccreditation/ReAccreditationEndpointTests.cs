@@ -686,27 +686,6 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task Approve_succeeds_when_caller_holds_no_special_role()
-    {
-        // RA-323: every caseworker holds the same role, so approving
-        // requires no role beyond being an authenticated caseworker in the
-        // same tenant.
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture, roles: []);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("approved", persisted!.StateId);
-    }
-
-    [Fact]
     public async Task Approve_returns_bad_request_when_not_in_awaiting_decision()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -761,7 +740,6 @@ public class ReAccreditationEndpointTests
         private readonly string _clientId;
         private readonly string? _userId;
         private readonly string _userName;
-        private readonly string[] _roles;
         private readonly Guid? _raceWorkItemId;
 
         public IReAccreditationDecisionService DecisionService { get; } =
@@ -775,14 +753,12 @@ public class ReAccreditationEndpointTests
             string clientId = TenantClientId,
             string? userId = DefaultUserId,
             string userName = DefaultUserName,
-            string[]? roles = null,
             Guid? raceWorkItemId = null)
         {
             _fixture = fixture;
             _clientId = clientId;
             _userId = userId;
             _userName = userName;
-            _roles = roles ?? new[] { "reaccreditation-decision-maker" };
             _raceWorkItemId = raceWorkItemId;
         }
 
@@ -835,10 +811,6 @@ public class ReAccreditationEndpointTests
             {
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);
                 client.DefaultRequestHeaders.Add("x-cdp-user-name", _userName);
-            }
-            if (_roles.Length > 0)
-            {
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", string.Join(",", _roles));
             }
         }
 

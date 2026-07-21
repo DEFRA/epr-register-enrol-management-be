@@ -208,16 +208,13 @@ public class WorkItemAuthBoundaryTests
         private readonly MongoIntegrationFixture _fixture;
         private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("authbnd");
         private readonly string? _userId;
-        private readonly string? _roles;
 
         public BoundaryFactory(
             MongoIntegrationFixture fixture,
-            string? userId,
-            string? roles = null)
+            string? userId)
         {
             _fixture = fixture;
             _userId = userId;
-            _roles = roles;
         }
 
         public IWorkItemPersistence Persistence => Services.GetRequiredService<IWorkItemPersistence>();
@@ -250,10 +247,6 @@ public class WorkItemAuthBoundaryTests
                 // otherwise normalise away) for the
                 // ResolveActorUserId-returns-null path.
                 client.DefaultRequestHeaders.TryAddWithoutValidation("x-cdp-user-id", _userId);
-            }
-            if (_roles is not null)
-            {
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", _roles);
             }
         }
 

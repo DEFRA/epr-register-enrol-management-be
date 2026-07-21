@@ -33,11 +33,10 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
 
     private TestApplicationFactory NewFactory(
         bool includeAuthHeader = true,
-        string? userRoles = null,
         string? userId = "test-user",
         string? userName = null,
         Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
-    ) => new(_fixture, includeAuthHeader, userRoles, userId, userName, tasksByState);
+    ) => new(_fixture, includeAuthHeader, userId, userName, tasksByState);
 
     [Fact]
     public async Task Post_returns_unauthorized_without_cognito_client_id()
@@ -701,7 +700,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Assign_persists_assignee_snapshot_and_returns_updated_response()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -738,7 +737,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Assign_returns_400_when_assigneeId_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         // The cross-tenant gate (epr-0t9) loads the work item before
@@ -771,7 +770,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     {
         // RA-323: every caseworker holds the same role.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard", userId: "alice-1");
+        await using var factory = NewFactory(userId: "alice-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -799,7 +798,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Assign_returns_404_when_work_item_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
@@ -815,7 +814,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Unassign_clears_assignment_when_actor_has_assign_role()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -853,7 +852,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     {
         // RA-323: every caseworker holds the same role.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard", userId: "alice-1");
+        await using var factory = NewFactory(userId: "alice-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -882,7 +881,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Assign_to_same_user_sets_idempotent_replay_header_and_does_not_persist()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -918,7 +917,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Unassign_already_unassigned_sets_idempotent_replay_header_and_does_not_persist()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -1283,7 +1282,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         // mutation is asked for on any item any authenticated caller
         // targets, regardless of who submitted it.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -1332,7 +1331,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             "endpoints"
         );
         private readonly bool _includeAuthHeader;
-        private readonly string? _userRoles;
         private readonly string? _userId;
         private readonly string? _userName;
         private readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>>? _tasksByState;
@@ -1340,7 +1338,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         public TestApplicationFactory(
             MongoIntegrationFixture fixture,
             bool includeAuthHeader,
-            string? userRoles,
             string? userId,
             string? userName,
             Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
@@ -1348,7 +1345,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         {
             _fixture = fixture;
             _includeAuthHeader = includeAuthHeader;
-            _userRoles = userRoles;
             _userId = userId;
             _userName = userName;
             _tasksByState = tasksByState;
@@ -1442,10 +1438,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             if (_userName is not null)
             {
                 client.DefaultRequestHeaders.Add("x-cdp-user-name", _userName);
-            }
-            if (_userRoles is not null)
-            {
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", _userRoles);
             }
         }
 
