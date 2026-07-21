@@ -164,9 +164,12 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     services.AddOptions<AccreditationConfig>()
         .Bind(builder.Configuration.GetSection("Accreditation"));
     // RA-291 (AC06): public operator-service base URL, surfaced in the
-    // Queried Notify email. Override with OperatorService__BaseUrl.
+    // Queried Notify email. Read from the flat OPERATOR_SERVICE_BASE_URL
+    // environment variable, matching NOTIFY_API_KEY's convention.
     services.AddOptions<OperatorServiceConfig>()
-        .Bind(builder.Configuration.GetSection("OperatorService"));
+        .Configure<IConfiguration>((options, configuration) =>
+            options.BaseUrl =
+                configuration.GetValue<string>("OPERATOR_SERVICE_BASE_URL") ?? string.Empty);
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>();
     services.AddHostedService<SlaBreachBackgroundService>();

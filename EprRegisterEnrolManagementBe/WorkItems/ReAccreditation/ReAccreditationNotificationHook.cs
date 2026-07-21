@@ -586,7 +586,7 @@ internal sealed class ReAccreditationNotificationHook(
             // ((operator_service_link)) placeholder so the operator can get
             // back to their application. The key is ALWAYS supplied — Notify
             // 400s a send whose template references a placeholder the caller
-            // omitted, so an unconfigured OperatorService:BaseUrl degrades to
+            // omitted, so an unset OPERATOR_SERVICE_BASE_URL degrades to
             // an empty string rather than breaking the query flow. Deliberately
             // a single service-level link: RA-291 scopes per-section deep
             // links out.

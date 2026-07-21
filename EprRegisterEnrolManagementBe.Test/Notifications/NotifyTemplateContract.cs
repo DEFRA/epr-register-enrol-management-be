@@ -79,8 +79,8 @@ internal static class NotifyTemplateContract
             // transitions (RA-291 added duly-making/duly-made).
             // RA-291 (AC06): operator_service_link is REQUIRED, not optional —
             // the hook always supplies it (empty string when
-            // OperatorService:BaseUrl is unset) precisely so Notify never 400s
-            // the send on a missing placeholder.
+            // OPERATOR_SERVICE_BASE_URL is unset) precisely so Notify never
+            // 400s the send on a missing placeholder.
             // RA-291: query_reason carries the case worker's reason through to
             // the operator — the query page promises it will. Like
             // operator_service_link it is always supplied (empty string if a

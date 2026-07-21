@@ -2,8 +2,8 @@ namespace EprRegisterEnrolManagementBe.Config;
 
 /// <summary>
 /// RA-291 (AC06): configuration for the public-facing operator service.
-/// Bound from the <c>OperatorService</c> configuration section; override in
-/// a deployed environment with <c>OperatorService__BaseUrl</c>.
+/// Populated from the <c>OPERATOR_SERVICE_BASE_URL</c> environment variable,
+/// following the same flat convention as <c>NOTIFY_API_KEY</c>.
 ///
 /// The base URL is threaded into the <c>Queried</c> Notify template's
 /// <c>operator_service_link</c> personalisation so a queried operator can

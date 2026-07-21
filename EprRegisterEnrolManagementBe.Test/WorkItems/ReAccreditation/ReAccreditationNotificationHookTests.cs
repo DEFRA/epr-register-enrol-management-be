@@ -110,8 +110,8 @@ public class ReAccreditationNotificationHookTests
             .GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns(persistedWorkItem);
 
-        // RA-291: null models an environment with no OperatorService section
-        // bound at all — distinct from a bound-but-empty BaseUrl, and both
+        // RA-291: null models an environment with no operator-service options
+        // registered at all — distinct from a set-but-empty BaseUrl, and both
         // must degrade to an empty operator_service_link rather than throwing.
         var operatorServiceOptions = operatorServiceBaseUrl is null
             ? null
