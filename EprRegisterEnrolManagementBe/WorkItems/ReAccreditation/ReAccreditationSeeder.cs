@@ -353,7 +353,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     {
                         new BsonDocument
                         {
+                            ["fileId"] = "sampling-plan-001",
                             ["filename"] = "sampling-plan.pdf",
+                            ["contentType"] = "application/pdf",
                             // A real operator submission sends this field as
                             // plain JSON (System.Text.Json serialises DateTime
                             // as an ISO-8601 string), which lands in Mongo as a
@@ -362,7 +364,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // `{"$date": "..."}`, which the "Uploaded at" GDS
                             // date filter can't parse (it expects a string).
                             ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
-                            ["scanStatus"] = "Clean"
+                            ["scanStatus"] = "Clean",
+                            // Matches the fixture object seeded into floci's
+                            // S3 bucket by the mgmt-tests compose stack
+                            // (docker/scripts/localstack/10-setup-buckets.sh),
+                            // so the download link this seed item exercises
+                            // resolves to a real object end-to-end.
+                            ["s3Key"] = "sampling-plans/full-payload-verification/sampling-plan.pdf",
+                            ["s3Bucket"] = "epr-register-enrol-sampling-plans"
                         }
                     }
                 }
