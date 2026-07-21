@@ -459,4 +459,14 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             _persistence.SetPayloadFieldAsync(
                 Guid.NewGuid(), fieldName, BsonNull.Value, TestContext.Current.CancellationToken));
     }
+
+    // A C# null is rejected outright so it can't be written as an explicit
+    // BSON null by accident; a deliberate null must be BsonNull.Value.
+    [Fact]
+    public async Task SetPayloadFieldAsync_rejects_a_null_value()
+    {
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            _persistence.SetPayloadFieldAsync(
+                Guid.NewGuid(), "currentQuery", null!, TestContext.Current.CancellationToken));
+    }
 }

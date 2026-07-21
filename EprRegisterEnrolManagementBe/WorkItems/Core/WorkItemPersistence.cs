@@ -335,6 +335,9 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fieldName);
+        // A C# null would be written as an explicit BSON null; callers must
+        // pass BsonNull.Value deliberately if that is what they mean.
+        ArgumentNullException.ThrowIfNull(value);
 
         // Guard the dotted-path injection: a caller passing "a.b" or a "$"
         // operator would target a nested document or rewrite a different part

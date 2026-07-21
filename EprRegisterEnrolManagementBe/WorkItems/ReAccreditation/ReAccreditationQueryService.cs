@@ -25,6 +25,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// precede the transition because the notification hook runs inside
 /// <see cref="IWorkItemService.ApplyActionAsync"/>; the audit entry follows it
 /// so a failed transition leaves no query recorded against the application.
+/// A successful assign is intentionally NOT compensated if a later step
+/// fails: an assigned-but-un-queried item is the recoverable half-state
+/// (a retry idempotently re-assigns and proceeds), whereas rolling back the
+/// assign would need a further write that could itself fail.
 ///
 /// The SLA clock is intentionally untouched: querying an application pauses
 /// nobody's stopwatch.
@@ -123,8 +127,8 @@ internal sealed class ReAccreditationQueryService(
         // OfficerAssignment notification fire exactly as they do for a manual
         // assign. Re-assigning to the same user is an idempotent replay in the
         // engine (success, no audit entry, no duplicate email); an item held
-        // by someone else is re-assigned to the querying regulator, which the
-        // engine permits only for callers holding the `assign` role.
+        // by someone else is re-assigned to the querying regulator. RA-323:
+        // every caseworker may assign to anyone, so this is not role-gated.
         var actorId = user.FindFirstValue("user:id");
         if (string.IsNullOrWhiteSpace(actorId))
         {
