@@ -374,6 +374,39 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["s3Bucket"] = "epr-register-enrol-sampling-plans"
                         }
                     }
+                },
+                // Matches the fixture object seeded into floci's S3 bucket by the
+                // mgmt-tests compose stack (docker/scripts/localstack/10-setup-buckets.sh),
+                // so the BES-evidence download link this seed item exercises resolves
+                // to a real object end-to-end — mirrors the samplingPlan fixture above.
+                ["overseasSites"] = new BsonDocument
+                {
+                    ["sites"] = new BsonArray
+                    {
+                        new BsonDocument
+                        {
+                            ["siteId"] = 1,
+                            ["siteName"] = "Full Payload Verification Overseas Site",
+                            ["siteAddress"] = "1 Overseas Lane, Rotterdam",
+                            ["country"] = "Netherlands",
+                            ["besEvidence"] = new BsonDocument
+                            {
+                                ["files"] = new BsonArray
+                                {
+                                    new BsonDocument
+                                    {
+                                        ["fileId"] = "bes-evidence-001",
+                                        ["filename"] = "bes-evidence.pdf",
+                                        ["contentType"] = "application/pdf",
+                                        ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
+                                        ["scanStatus"] = "Clean",
+                                        ["s3Key"] = "bes-evidence/full-payload-verification/bes-evidence.pdf",
+                                        ["s3Bucket"] = "epr-register-enrol-bes-evidence"
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             },
             submittedBy: "stub-portal-client",
