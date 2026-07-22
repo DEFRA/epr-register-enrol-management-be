@@ -78,7 +78,11 @@ internal sealed class ReAccreditationType : IWorkItemType
     // v5: removed duly-make action — the submitted→duly-made transition is now
     // triggered automatically by ReAccreditationDulyMadeHook when all
     // submitted-state tasks are completed.
-    public string TemplateVersion => "v5";
+    // v6 (RA-291): added query-during-duly-making (submitted → queried) and
+    // query-during-duly-made (duly-made → queried). Items snapshotted at v5
+    // keep the v5 action set, so only work items submitted from this version
+    // onwards can be queried before assessment starts.
+    public string TemplateVersion => "v6";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -129,11 +133,27 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_awaitingDecision.Id,
             s_rejected.Id
         ),
-        // RA-211: a case worker can query an application from either active
-        // review state when they need clarification before proceeding. Like
-        // sla-extend/withdraw, this bypasses the "all tasks complete" gate —
-        // a query can be raised at any point during review, not just once
-        // every task box is ticked.
+        // RA-211 / RA-291: a case worker can query an application from any
+        // pre-decision state when they need clarification before proceeding.
+        // Like sla-extend/withdraw, this bypasses the "all tasks complete"
+        // gate — a query can be raised at any point during review, not just
+        // once every task box is ticked. There is deliberately no transition
+        // out of 'queried' back to 'queried': an application awaiting a
+        // response cannot be queried again.
+        new WorkItemTransition(
+            "query-during-duly-making",
+            "Query",
+            s_submitted.Id,
+            s_queried.Id,
+            RequiresAllTasksComplete: false
+        ),
+        new WorkItemTransition(
+            "query-during-duly-made",
+            "Query",
+            s_dulyMade.Id,
+            s_queried.Id,
+            RequiresAllTasksComplete: false
+        ),
         new WorkItemTransition(
             "query-during-assessment",
             "Query",

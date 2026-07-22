@@ -52,6 +52,41 @@ public interface IWorkItemPersistence
     /// mutate any field on the supplied <see cref="WorkItem"/> before saving.
     /// </summary>
     Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Set a single named field inside <see cref="WorkItem.Payload"/>, leaving
+    /// every other field of the document byte-for-byte untouched. Returns
+    /// <c>true</c> when a document was matched, <c>false</c> when no work item
+    /// with that id exists.
+    ///
+    /// <para>
+    /// Prefer this over load → mutate → <see cref="ReplaceAsync"/> whenever a
+    /// module needs to stamp one payload field. A full replace round-trips the
+    /// payload through the module's typed model, which MATERIALISES modelled-
+    /// but-absent fields as explicit nulls. That is not cosmetic: the
+    /// <c>payload.accreditationId</c> index is unique + <em>sparse</em>, and a
+    /// sparse index excludes only documents where the field is ABSENT — so
+    /// writing an explicit null pulls the document into the index and the
+    /// second such write anywhere in the collection fails with a duplicate-key
+    /// error (RA-291). A targeted <c>$set</c> cannot resurrect that class of
+    /// bug for any modelled-but-absent field, now or in future.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately does NOT participate in the <see cref="WorkItem.Version"/>
+    /// optimistic-concurrency protocol and does not touch
+    /// <see cref="WorkItem.LastModifiedAt"/>: it is a single-field write that
+    /// cannot clobber a concurrent writer's changes to any other field, so
+    /// taking part in the version dance would only manufacture spurious
+    /// conflicts. Callers that need the version bumped should follow up with
+    /// a normal engine operation.
+    /// </para>
+    /// </summary>
+    Task<bool> SetPayloadFieldAsync(
+        Guid workItemId,
+        string fieldName,
+        BsonValue value,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersistence
@@ -291,6 +326,38 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         Logger.LogInformation(
             "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState} (version {Version})",
             workItem.Id, workItem.TypeId, workItem.StateId, workItem.Version);
+    }
+
+    public async Task<bool> SetPayloadFieldAsync(
+        Guid workItemId,
+        string fieldName,
+        BsonValue value,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldName);
+        // A C# null would be written as an explicit BSON null; callers must
+        // pass BsonNull.Value deliberately if that is what they mean.
+        ArgumentNullException.ThrowIfNull(value);
+
+        // Guard the dotted-path injection: a caller passing "a.b" or a "$"
+        // operator would target a nested document or rewrite a different part
+        // of the envelope entirely. This method's contract is one field
+        // directly under `payload`.
+        if (fieldName.Contains('.', StringComparison.Ordinal)
+            || fieldName.StartsWith('$'))
+        {
+            throw new ArgumentException(
+                "Payload field name must be a single field directly under 'payload' " +
+                "(no dotted paths, no update operators).",
+                nameof(fieldName));
+        }
+
+        var result = await Collection.UpdateOneAsync(
+            Builders<WorkItem>.Filter.Eq(w => w.Id, workItemId),
+            Builders<WorkItem>.Update.Set($"payload.{fieldName}", value),
+            cancellationToken: cancellationToken);
+
+        return result.MatchedCount > 0;
     }
 
     [ExcludeFromCodeCoverage]

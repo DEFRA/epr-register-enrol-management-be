@@ -592,6 +592,418 @@ public class ReAccreditationEndpointTests
 
     // ------------------------------ Helpers ------------------------------
 
+    // ------------------------------ RA-291 Query ------------------------------
+
+    private static readonly string[] s_querySections = ["business-plan", "prn-tonnage"];
+
+    private const string DefaultQueryReason =
+        "The tonnage figures do not reconcile with the sampling plan.";
+
+    private static QueryApplicationRequest QueryBody(string? reason = DefaultQueryReason) =>
+        new(s_querySections, reason);
+
+    private static QueryApplicationRequest QueryBody(string[]? sections, string? reason) =>
+        new(sections, reason);
+
+    [Theory]
+    [InlineData("submitted", "query-during-duly-making")]
+    [InlineData("duly-made", "query-during-duly-made")]
+    [InlineData("assessment-in-progress", "query-during-assessment")]
+    [InlineData("awaiting-decision", "query-during-decision")]
+    public async Task Query_moves_the_application_to_queried_and_records_the_query_detail(
+        string stateId,
+        string expectedActionId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, stateId, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        Assert.Equal("queried", persisted!.StateId);
+
+        // The framework engine recorded the transition ...
+        Assert.Contains(persisted.AuditLog, a => a.Action == "action-applied"
+            && a.Details.GetValueOrDefault("actionId") == expectedActionId
+            && a.Details.GetValueOrDefault("fromStateId") == stateId
+            && a.Details.GetValueOrDefault("toStateId") == "queried");
+
+        // ... and the module recorded what was actually asked for (AC05).
+        var queryEntry = Assert.Single(persisted.AuditLog,
+            a => a.Action == ReAccreditationQueryService.AuditAction);
+        Assert.Equal(expectedActionId, queryEntry.Details.GetValueOrDefault("actionId"));
+        Assert.Equal("business-plan,prn-tonnage", queryEntry.Details.GetValueOrDefault("sections"));
+        Assert.Equal(
+            "The tonnage figures do not reconcile with the sampling plan.",
+            queryEntry.Details.GetValueOrDefault("reason"));
+        Assert.Equal(DefaultUserId, queryEntry.CreatedBy);
+        Assert.Equal(DefaultUserName, queryEntry.CreatedByName);
+
+        // RA-291: the open query is stamped on the payload so the Queried
+        // email can carry the reason. It must be exactly the reason recorded
+        // on the audit entry — same record, one source of truth.
+        var currentQuery = persisted.Payload!["currentQuery"].AsBsonDocument;
+        Assert.Equal(DefaultQueryReason, currentQuery["reason"].AsString);
+        Assert.Equal(
+            ["business-plan", "prn-tonnage"],
+            currentQuery["sections"].AsBsonArray.Select(v => v.AsString));
+        Assert.Equal(DefaultUserId, currentQuery["raisedBy"].AsString);
+
+        // RA-291: the query page promises "the application will also be
+        // assigned to you", so the query self-assigns.
+        Assert.Equal(DefaultUserId, persisted.AssignedToId);
+        Assert.Equal(DefaultUserName, persisted.AssignedToName);
+        Assert.Contains(persisted.AuditLog, a => a.Action == "assigned");
+
+        // The response body must already carry the query-detail entry, not
+        // just the transition the engine wrote against its own copy.
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(body);
+        Assert.Equal("queried", body!.StateId);
+        Assert.NotNull(body.AuditLog);
+        Assert.Contains(body.AuditLog!,
+            a => a.Action == ReAccreditationQueryService.AuditAction);
+    }
+
+    [Theory]
+    // An application awaiting a response cannot be queried again ...
+    [InlineData("queried")]
+    // ... nor can one whose outcome is already recorded.
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    public async Task Query_returns_conflict_when_the_state_has_no_query_transition(string stateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, stateId, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.NotNull(problem);
+        Assert.Contains(stateId, problem!.Detail);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(stateId, persisted!.StateId);
+        Assert.DoesNotContain(persisted.AuditLog,
+            a => a.Action == ReAccreditationQueryService.AuditAction);
+    }
+
+    [Fact]
+    public async Task Querying_two_different_applications_in_the_same_database_both_succeed()
+    {
+        // RA-291 regression. The stamp used to rewrite the whole payload,
+        // round-tripping it through ReAccreditationPayload and materialising
+        // `accreditationId: null` as an explicit field. payload.accreditationId
+        // carries a unique + SPARSE index, and sparse excludes only documents
+        // where the field is ABSENT — so the first query entered the index with
+        // a null key and the second collided, 500ing with a duplicate-key
+        // error. Worse, the assign had already landed, leaving the application
+        // assigned but not queried.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(first, "submitted", TenantClientId), cancellationToken);
+        await factory.SeedAsync(BuildInState(second, "duly-made", TenantClientId), cancellationToken);
+
+        var firstResponse = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{first}/query", QueryBody(), cancellationToken);
+        var secondResponse = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{second}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+
+        foreach (var id in new[] { first, second })
+        {
+            var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+            Assert.Equal("queried", persisted!.StateId);
+            Assert.Equal(DefaultQueryReason, persisted.Payload["currentQuery"]["reason"].AsString);
+        }
+    }
+
+    [Fact]
+    public async Task Query_does_not_materialise_payload_fields_that_were_absent()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildInState(id, "submitted", TenantClientId);
+        item.ReplacePayload(new BsonDocument
+        {
+            ["organisationName"] = "Acme Recycling Ltd",
+            // Unmodelled key — must survive untouched.
+            ["applicationReference"] = "RA-000000123",
+        });
+        await factory.SeedAsync(item, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        var payload = persisted!.Payload;
+
+        // The targeted $set adds currentQuery and nothing else: fields that
+        // were absent before must still be absent, not explicit nulls.
+        Assert.True(payload.Contains("currentQuery"));
+        Assert.False(payload.Contains("accreditationId"));
+        Assert.False(payload.Contains("accreditationStartDate"));
+        Assert.False(payload.Contains("accreditationYear"));
+        Assert.False(payload.Contains("slaClock"));
+        // ... and unmodelled keys survive by construction, not by a merge.
+        Assert.Equal("RA-000000123", payload["applicationReference"].AsString);
+        Assert.Equal("Acme Recycling Ltd", payload["organisationName"].AsString);
+    }
+
+    [Fact]
+    public async Task Query_reassigns_an_item_held_by_another_user_to_the_caller()
+    {
+        // RA-323 removed the assign-role tier: every caseworker may reassign
+        // an item held by someone else. So querying an application assigned to
+        // another user now succeeds, moves it to queried, and reassigns it to
+        // the querying caseworker (which is what the query page promises).
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildInState(id, "submitted", TenantClientId);
+        item.AssignedToId = "bob-2";
+        item.AssignedToName = "Bob Example";
+        await factory.SeedAsync(item, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+        Assert.Equal(DefaultUserId, persisted.AssignedToId);
+        Assert.Equal(DefaultUserName, persisted.AssignedToName);
+        Assert.Contains(persisted.AuditLog,
+            a => a.Action == ReAccreditationQueryService.AuditAction);
+    }
+
+    [Fact]
+    public async Task Query_of_an_item_already_assigned_to_the_caller_writes_no_duplicate_assignment_audit()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildInState(id, "submitted", TenantClientId);
+        item.AssignedToId = DefaultUserId;
+        item.AssignedToName = DefaultUserName;
+        await factory.SeedAsync(item, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+        Assert.Equal(DefaultUserId, persisted.AssignedToId);
+        // Re-assigning to the same user is an idempotent no-op in the engine:
+        // the query still succeeds, but no 'assigned' entry is written.
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "assigned");
+        Assert.Contains(persisted.AuditLog,
+            a => a.Action == ReAccreditationQueryService.AuditAction);
+    }
+
+    [Fact]
+    public async Task Query_returns_conflict_when_another_writer_wins_the_race()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        // Bump the on-disk version between the engine's load and replace so
+        // the real optimistic-concurrency path fires.
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+        Assert.DoesNotContain(persisted.AuditLog,
+            a => a.Action == ReAccreditationQueryService.AuditAction);
+    }
+
+    [Fact]
+    public async Task Query_returns_not_found_when_the_work_item_is_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Query_returns_not_found_for_another_tenants_work_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, roles: []);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildInState(id, "submitted", "a-different-tenant"), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Query_returns_bad_request_for_a_work_item_of_another_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = id,
+            TypeId = "some-other-type",
+            StateId = "submitted",
+            SubmittedBy = TenantClientId
+        }, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Query_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    [Theory]
+    // sections omitted entirely / empty
+    [InlineData(null, "why", "Select which areas you want to query")]
+    [InlineData(new string[0], "why", "Select which areas you want to query")]
+    // unknown section id, alone and alongside a valid one
+    [InlineData(new[] { "not-a-section" }, "why", "Select a valid section to query")]
+    [InlineData(new[] { "business-plan", "not-a-section" }, "why", "Select a valid section to query")]
+    // reason missing / whitespace-only
+    [InlineData(new[] { "business-plan" }, null, "Enter a reason for the query")]
+    [InlineData(new[] { "business-plan" }, "   ", "Enter a reason for the query")]
+    public async Task Query_rejects_an_invalid_body_before_touching_the_work_item(
+        string[]? sections,
+        string? reason,
+        string expectedDetail)
+    {
+        var body = QueryBody(sections, reason);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", body, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal(expectedDetail, problem!.Detail);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    [Theory]
+    // The 200-word cap is a shared contract with the frontend: 200 passes,
+    // 201 does not.
+    [InlineData(200, HttpStatusCode.OK)]
+    [InlineData(201, HttpStatusCode.BadRequest)]
+    public async Task Query_enforces_the_two_hundred_word_reason_cap(
+        int wordCount,
+        HttpStatusCode expected)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query",
+            QueryBody(reason: string.Join(' ', Enumerable.Repeat("word", wordCount))),
+            cancellationToken);
+
+        Assert.Equal(expected, response.StatusCode);
+        if (expected == HttpStatusCode.BadRequest)
+        {
+            var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+            Assert.Equal(ReAccreditationQueryValidator.ReasonTooLongMessage, problem!.Detail);
+        }
+    }
+
+    private static WorkItem BuildInState(Guid id, string stateId, string submittedBy)
+    {
+        var type = new ReAccreditationType();
+        return new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = stateId,
+            SubmittedBy = submittedBy,
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion
+        };
+    }
+
     private static WorkItem BuildAwaitingDecision(Guid id, string submittedBy)
     {
         var type = new ReAccreditationType();
@@ -711,6 +1123,13 @@ public class ReAccreditationEndpointTests
     private sealed class RacingPersistence(IWorkItemPersistence inner, Guid raceId, Func<Task> onBeforeReplace)
         : IWorkItemPersistence
     {
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default) =>
+            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
@@ -764,8 +1183,29 @@ public class ReAccreditationEndpointTests
 
         public IWorkItemPersistence Persistence => Services.GetRequiredService<IWorkItemPersistence>();
 
-        public Task SeedAsync(WorkItem item, CancellationToken cancellationToken) =>
-            Persistence.CreateAsync(item, cancellationToken);
+        public Task SeedAsync(WorkItem item, CancellationToken cancellationToken)
+        {
+            EnsureProductionIndexes();
+            return Persistence.CreateAsync(item, cancellationToken);
+        }
+
+        /// <summary>
+        /// RA-291: force construction of every <c>MongoService</c> that owns
+        /// indexes on the shared <c>workItems</c> collection, so integration
+        /// tests run against the SAME index set production has.
+        ///
+        /// <see cref="IAccreditationIdLookup"/> is a lazily-constructed
+        /// singleton, and indexes are created in the <c>MongoService</c>
+        /// constructor — so unless something resolves it, its unique + sparse
+        /// index on <c>payload.accreditationId</c> never exists in the test
+        /// database. That is exactly why the duplicate-key bug in the
+        /// current-query stamp reached the real stack with 968 tests green.
+        /// </summary>
+        private void EnsureProductionIndexes()
+        {
+            _ = Persistence;
+            _ = Services.GetRequiredService<IAccreditationIdLookup>();
+        }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {

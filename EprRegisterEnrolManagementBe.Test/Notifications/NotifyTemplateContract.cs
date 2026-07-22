@@ -72,12 +72,27 @@ internal static class NotifyTemplateContract
                 "decision_notes"
             ),
 
-            // RA-211: queried notification. Base envelope identity only — the
-            // template body itself (not personalisation) is responsible for
-            // stating that the query detail follows separately from the
-            // regulator. Sent by ReAccreditationNotificationHook on the
-            // query-during-assessment / query-during-decision transitions.
-            ["Queried"] = Set("organisation_name", "registration_number", "reference"),
+            // RA-211: queried notification. The template body itself (not
+            // personalisation) is responsible for stating that the query
+            // detail follows separately from the regulator. Sent by
+            // ReAccreditationNotificationHook on the query-during-*
+            // transitions (RA-291 added duly-making/duly-made).
+            // RA-291 (AC06): operator_service_link is REQUIRED, not optional —
+            // the hook always supplies it (empty string when
+            // OPERATOR_SERVICE_BASE_URL is unset) precisely so Notify never
+            // 400s the send on a missing placeholder.
+            // RA-291: query_reason carries the case worker's reason through to
+            // the operator — the query page promises it will. Like
+            // operator_service_link it is always supplied (empty string if a
+            // queried transition is somehow applied without a recorded query),
+            // so Notify never 400s on a missing placeholder.
+            ["Queried"] = Set(
+                "organisation_name",
+                "registration_number",
+                "reference",
+                "operator_service_link",
+                "query_reason"
+            ),
 
             // RA-240: regulator-facing submission notification to the regional
             // shared mailbox. Base envelope identity only.

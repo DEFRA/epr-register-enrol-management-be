@@ -1,9 +1,11 @@
 using System.Globalization;
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 
@@ -58,9 +60,19 @@ internal sealed class ReAccreditationNotificationHook(
     IWorkItemAuditAppender auditAppender,
     IRegulatorMailboxResolver regulatorMailboxResolver,
     IWorkItemPersistence persistence,
-    ILogger<ReAccreditationNotificationHook> logger
+    ILogger<ReAccreditationNotificationHook> logger,
+    IOptions<OperatorServiceConfig>? operatorServiceOptions = null
 ) : IWorkItemPostActionHook
 {
+    /// <summary>
+    /// RA-291 (AC06): base URL of the public operator service, included in
+    /// the Queried email. Optional so an unconfigured environment degrades to
+    /// an empty link rather than failing the query; see
+    /// <see cref="OperatorServiceConfig"/>.
+    /// </summary>
+    private readonly string _operatorServiceLink =
+        operatorServiceOptions?.Value.BaseUrl?.Trim() ?? string.Empty;
+
     private static readonly Dictionary<
         string,
         (string TemplateKey, string Description)
@@ -69,6 +81,8 @@ internal sealed class ReAccreditationNotificationHook(
         ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
         ["sla-extend"] = ("SlaExtended", "SLA extended"),
         ["approve"] = ("Decision", "Decision recorded: approved"),
+        ["query-during-duly-making"] = ("Queried", "Application queried"),
+        ["query-during-duly-made"] = ("Queried", "Application queried"),
         ["query-during-assessment"] = ("Queried", "Application queried"),
         ["query-during-decision"] = ("Queried", "Application queried"),
         ["withdraw"] = ("Withdrawn", "Application withdrawn"),
@@ -526,7 +540,7 @@ internal sealed class ReAccreditationNotificationHook(
             ?.Text
         ?? string.Empty;
 
-    private static Dictionary<string, string> BuildPersonalisation(
+    private Dictionary<string, string> BuildPersonalisation(
         ReAccreditationPayload payload,
         WorkItem workItem,
         string templateKey,
@@ -564,6 +578,49 @@ internal sealed class ReAccreditationNotificationHook(
                     CultureInfo.GetCultureInfo("en-GB")
                 );
             }
+        }
+
+        if (string.Equals(templateKey, "Queried", StringComparison.OrdinalIgnoreCase))
+        {
+            // RA-291 (AC06): the Queried template body references an
+            // ((operator_service_link)) placeholder so the operator can get
+            // back to their application. The key is ALWAYS supplied — Notify
+            // 400s a send whose template references a placeholder the caller
+            // omitted, so an unset OPERATOR_SERVICE_BASE_URL degrades to
+            // an empty string rather than breaking the query flow. Deliberately
+            // a single service-level link: RA-291 scopes per-section deep
+            // links out.
+            personalisation["operator_service_link"] = _operatorServiceLink;
+
+            // RA-291: the query page tells the regulator the reason "will be
+            // included in the email to the operator", so the Queried template
+            // body references ((query_reason)). The value is read from the
+            // CurrentQuery that ReAccreditationQueryService stamps onto the
+            // payload immediately before applying the transition — the same
+            // record its audit entry is built from, so the emailed reason is
+            // by construction the reason recorded against the application.
+            //
+            // Falls back to an empty string when no current query is present.
+            // The query endpoint validates the reason as mandatory and
+            // non-whitespace, so that only happens if a queried transition is
+            // applied by some other path (e.g. the generic
+            // /work-items/{id}/actions/{actionId} route, or a legacy item).
+            // An empty value is preferable to both alternatives: omitting the
+            // key would make Notify 400 the send, and throwing would fail a
+            // notification that must never unwind the query.
+            var reason = payload.CurrentQuery?.Reason;
+            if (string.IsNullOrWhiteSpace(reason))
+            {
+                logger.LogWarning(
+                    "Queried notification for work item {WorkItemId} has no current query "
+                        + "reason on its payload; sending the email with an empty "
+                        + "((query_reason)). This indicates the queried transition was "
+                        + "applied outside ReAccreditationQueryService.",
+                    workItem.Id
+                );
+                reason = string.Empty;
+            }
+            personalisation["query_reason"] = reason;
         }
 
         if (string.Equals(templateKey, "Withdrawn", StringComparison.OrdinalIgnoreCase))

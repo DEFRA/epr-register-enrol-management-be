@@ -37,6 +37,9 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IAccreditationIdLookup, AccreditationIdLookup>();
         services.AddSingleton<IAccreditationIdGenerator, AccreditationIdGenerator>();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
+        // RA-291: bespoke query workflow (state-derived query-during-* action
+        // + query-detail audit entry).
+        services.AddSingleton<IReAccreditationQueryService, ReAccreditationQueryService>();
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)
