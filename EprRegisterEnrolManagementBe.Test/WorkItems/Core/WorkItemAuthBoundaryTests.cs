@@ -150,57 +150,19 @@ public class WorkItemAuthBoundaryTests
         Assert.Single(persisted.AuditLog);
     }
 
-    // ---------------- GET / LIST: RBAC lives in the frontend ----------------
-    // The backend no longer gates read access on ownership — any
-    // shared-secret-authenticated caller can read any item. Scoping (e.g.
-    // "show me only my items") is an explicit ?submittedBy= filter the
-    // frontend opts into, not something the backend infers or enforces.
-
-    [Fact]
-    public async Task Get_by_id_returns_ok_for_item_submitted_by_another_caller()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        var seeded = NewSubmittedItem(id, submittedBy: "other-tenant");
-        await factory.SeedAsync(seeded, cancellationToken);
-
-        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task List_returns_items_from_all_submitters_by_default()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
-        using var client = factory.CreateClient();
-
-        var mine = NewSubmittedItem(Guid.NewGuid());
-        var theirs = NewSubmittedItem(Guid.NewGuid(), submittedBy: "other-tenant");
-        await factory.SeedAsync(mine, cancellationToken);
-        await factory.SeedAsync(theirs, cancellationToken);
-
-        // Scoped to this test's own type so it isn't polluted by the
-        // stub seed data the app seeds on startup in this environment.
-        var page = await client.GetFromJsonAsync<WorkItemListResponse>(
-            $"/work-items?typeId={TypeId}", cancellationToken);
-
-        Assert.NotNull(page);
-        Assert.Equal(2, page!.Items.Count);
-    }
+    // Coverage for "RBAC lives in the frontend now" (no ownership gate on
+    // GetById/list) lives in WorkItemEndpointsTests — this class stays
+    // scoped to the two boundaries above that still exist: missing actor
+    // identity, and the RA-323 assign/unassign permission model.
 
     // ---------------------------- Helpers ----------------------------
 
-    private static WorkItem NewSubmittedItem(Guid id, string submittedBy = TenantClientId) => new()
+    private static WorkItem NewSubmittedItem(Guid id) => new()
     {
         Id = id,
         TypeId = TypeId,
         StateId = "submitted",
-        SubmittedBy = submittedBy
+        SubmittedBy = TenantClientId
     };
 
     private sealed class BoundaryFactory : WebApplicationFactory<Program>

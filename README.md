@@ -45,11 +45,11 @@ Swagger UI explorer is available at <http://localhost:8085/swagger>.
 
 The explorer ships with a dev-only **"Authenticate as:"** dropdown in the
 topbar that mirrors the BFF's stub login fixtures
-(`stub-standard-1`, `stub-assign-1`, `stub-decision-maker-1`). Pick a
-user and every "Try it out" call will be sent with the four CDP trust
-headers (`x-cdp-cognito-client-id`, `x-cdp-user-id`, `x-cdp-user-name`,
-`x-cdp-user-roles`) for that user. The selection persists in the
-browser's `localStorage`. Picking "— anonymous —" clears it.
+(`stub-caseworker-1`, `stub-caseworker-2`, `stub-caseworker-3`). Pick a
+user and every "Try it out" call will be sent with the three CDP trust
+headers (`x-cdp-cognito-client-id`, `x-cdp-user-id`, `x-cdp-user-name`)
+for that user. The selection persists in the browser's `localStorage`.
+Picking "— anonymous —" clears it.
 
 > The cURL preview Swagger UI shows in the response panel is generated
 > *before* the request is sent and does **not** include the headers

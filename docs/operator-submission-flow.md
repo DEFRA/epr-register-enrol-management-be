@@ -89,12 +89,12 @@ x-cdp-user-id:            {submitter email}
 x-cdp-user-name:          {submitter full name}
 
 # only when CaseWorking__SharedSecret is configured
-x-cdp-auth-signature:     HMAC-SHA256(secret, v2-canonical-string)
+x-cdp-auth-signature:     HMAC-SHA256(secret, v3-canonical-string)
 x-cdp-auth-timestamp:     2025-07-08T10:00:00Z
 x-cdp-auth-nonce:         {16-byte random, base64}
 ```
 
-The v2 canonical string is `v2\nclientId\nuserId\nuserName\nuserRoles\ntimestamp\nnonce`.
+The v3 canonical string is `v3\nclientId\nuserId\nuserName\ntimestamp\nnonce`.
 This is identical to the formula in this repo's `CognitoClientIdAuthenticationHandler.ComputeSignature`.
 Any change to this contract is a breaking change and requires a coordinated deploy.
 

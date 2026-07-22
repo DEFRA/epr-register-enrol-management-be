@@ -740,10 +740,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
-        // The cross-tenant gate (epr-0t9) loads the work item before
-        // any body validation runs, so the gate must be satisfied with a
-        // matching SubmittedBy or the test sees 404 instead of the 400
-        // it cares about. Caller's cognito client id is 'test-client'.
         var id = Guid.NewGuid();
         await factory.SeedAsync(
             new WorkItem
@@ -1054,9 +1050,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
                 Id = id,
                 TypeId = TypeId,
                 StateId = "submitted",
-                // Match the factory's default cognito client id so the
-                // cross-tenant gate (epr-0t9) doesn't pre-empt the 400 we
-                // care about here.
                 SubmittedBy = "test-client",
             },
             cancellationToken
@@ -1233,11 +1226,9 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     // ----------------------------------------------------------------
-    // epr-0t9: cross-tenant IDOR protection on every mutation endpoint.
-    // The mutation handlers must mirror the GetById tenancy gate and
-    // return 404 when a standard caller targets an item submitted by a
-    // different tenant — without ever bumping the document version.
-    // Case-workers bypass the gate and reach the engine as before.
+    // ADR-0005: mutation endpoints no longer gate on who submitted the
+    // item — every mutation handler must reach the engine regardless of
+    // submitter, since authorization is the frontend's responsibility now.
     // ----------------------------------------------------------------
 
     public static IEnumerable<TheoryDataRow<string, string, object?>> MutationCases() =>
