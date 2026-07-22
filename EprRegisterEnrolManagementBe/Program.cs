@@ -1,6 +1,7 @@
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Health;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils;
 using EprRegisterEnrolManagementBe.Utils.Background;
@@ -118,6 +119,7 @@ static void ConfigureServices(WebApplicationBuilder builder)
     ConfigureCors(services, configuration);
     ConfigureNotifications(services, configuration);
     ConfigureReEx(services, configuration);
+    ConfigureOperatorBackendPush(services, configuration);
 
     services.AddOptions<LivenessHealthCheckOptions>()
         .Bind(configuration.GetSection("Liveness"))
@@ -258,6 +260,12 @@ static void ConfigureHttpClients(IServiceCollection services)
 {
     services.AddTransient<ProxyHttpMessageHandler>();
 
+    // RA-311/MBE-1: plain, unproxied client for direct CDP-service-to-CDP-service
+    // calls (the operator backend push adapter). No ProxyHttpMessageHandler —
+    // mirrors the operator backend's own "DefaultClient" registration, which
+    // it uses for its own calls into this service.
+    services.AddHttpClient("DefaultClient").AddHeaderPropagation();
+
     // services.AddHttpClientWithTracing<IExampleClient, ExampleClient>();
     // services.AddHttpClientWithProxy<IExternalClient, ExternalClient>();
 }
@@ -309,6 +317,30 @@ static void ConfigureReEx(IServiceCollection services, IConfiguration configurat
     services.AddTransient<ReExBasicAuthHandler>();
     services.AddHttpClientWithProxy<IReExAccreditationClient, HttpReExAccreditationClient>()
         .AddHttpMessageHandler<ReExBasicAuthHandler>();
+}
+
+/// <summary>
+/// RA-311/MBE-1: outbound push-to-operator-backend wiring. When
+/// <c>OperatorBackendApi:Url</c> is unset the no-op adapter is registered so
+/// the service still boots (and the query flow still succeeds — the push is
+/// fire-and-forget) in any environment ahead of the OBE-2 push contract
+/// being agreed. Mirrors <see cref="ConfigureReEx"/>'s stub/real selection.
+/// </summary>
+[ExcludeFromCodeCoverage]
+static void ConfigureOperatorBackendPush(IServiceCollection services, IConfiguration configuration)
+{
+    services.AddOptions<OperatorBackendApiConfig>()
+        .Bind(configuration.GetSection("OperatorBackendApi"));
+
+    var url = configuration.GetSection("OperatorBackendApi").GetValue<string>("Url");
+
+    if (string.IsNullOrWhiteSpace(url))
+    {
+        services.AddSingleton<IOperatorBackendPushAdapter, NullOperatorBackendPushAdapter>();
+        return;
+    }
+
+    services.AddSingleton<IOperatorBackendPushAdapter, HttpOperatorBackendPushAdapter>();
 }
 
 /// <summary>

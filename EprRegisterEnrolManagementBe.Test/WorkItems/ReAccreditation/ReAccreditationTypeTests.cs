@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v6", _type.TemplateVersion);
+        Assert.Equal("v7", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -48,6 +48,11 @@ public class ReAccreditationTypeTests
     [InlineData("query-during-duly-made", "duly-made", "queried", false)]
     [InlineData("query-during-assessment", "assessment-in-progress", "queried", false)]
     [InlineData("query-during-decision", "awaiting-decision", "queried", false)]
+    // RA-311/MBE-1: the inverse of the four query-during-* transitions above.
+    [InlineData("resume-during-duly-making", "queried", "submitted", false)]
+    [InlineData("resume-during-duly-made", "queried", "duly-made", false)]
+    [InlineData("resume-during-assessment", "queried", "assessment-in-progress", false)]
+    [InlineData("resume-during-decision", "queried", "awaiting-decision", false)]
     [InlineData("withdraw", "submitted", "withdrawn", false)]
     [InlineData("withdraw-during-duly-made", "duly-made", "withdrawn", false)]
     [InlineData("withdraw-during-assessment", "assessment-in-progress", "withdrawn", false)]

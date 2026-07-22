@@ -43,6 +43,12 @@ internal static class ReAccreditationEndpoints
     // while still making a multi-MB body pointless.
     public const long MaxQueryBodyBytes = 16 * 1024;
 
+    // RA-311/MBE-1: same rationale as MaxQueryBodyBytes, sized larger
+    // because a legitimate resume-from-query body additionally carries
+    // opaque current-section JSON for up to six sections plus a file
+    // reference list, not just section ids and a short reason.
+    public const long MaxResumeBodyBytes = 64 * 1024;
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
     {
@@ -83,6 +89,18 @@ internal static class ReAccreditationEndpoints
             .WithName("QueryReAccreditation")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxQueryBodyBytes))
+            .RequireAuthorization();
+
+        // RA-311/MBE-1: called by the operator backend once an operator has
+        // resubmitted a queried application. Like /query, the caller never
+        // names an action — the correct resume-during-* transition is
+        // resolved server-side from the work item's own query audit
+        // history — and the resubmitted section values / file references
+        // are recorded on the audit log.
+        group.MapPost("/{id:guid}/resume-from-query", ResumeFromQuery)
+            .WithName("ResumeReAccreditationFromQuery")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxResumeBodyBytes))
             .RequireAuthorization();
 
         // Live prior-year accreditation data from ReEx, scoped to this
@@ -398,6 +416,62 @@ internal static class ReAccreditationEndpoints
 
         return TypedResults.Problem(
             title: "Could not query re-accreditation",
+            detail: result.Message,
+            statusCode: status);
+    }
+
+    /// <summary>
+    /// RA-311/MBE-1: resume a queried re-accreditation application once the
+    /// operator backend confirms a resubmission. The body carries the
+    /// responder's contact details, the sections addressed, their current
+    /// (opaque) values, and file references; the correct
+    /// <c>resume-during-*</c> transition is derived server-side from the
+    /// work item's own query audit history.
+    ///
+    /// Validation failures are 400. A state that cannot be resumed from
+    /// (never queried, or a decided/withdrawn outcome) is 409, not a 500. A
+    /// work item that has already left <c>queried</c> into a valid resume
+    /// target succeeds as an idempotent replay, so a duplicate resubmit call
+    /// does not fail the caller's retry.
+    /// </summary>
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> ResumeFromQuery(
+        [FromRoute] Guid id,
+        ResumeFromQueryRequest request,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationResumeService resumeService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        if (ReAccreditationResumeValidator.Validate(request) is { } validationError)
+        {
+            return TypedResults.Problem(
+                title: "Invalid resume-from-query request",
+                detail: validationError,
+                statusCode: StatusCodes.Status400BadRequest);
+        }
+
+        var result = await resumeService.ResumeFromQueryAsync(id, request, httpContext.User, cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var status = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
+            WorkItemActionFailureCode.InvalidTransition
+                or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest
+        };
+
+        return TypedResults.Problem(
+            title: "Could not resume re-accreditation from query",
             detail: result.Message,
             statusCode: status);
     }
