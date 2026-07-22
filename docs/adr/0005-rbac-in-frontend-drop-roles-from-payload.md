@@ -119,6 +119,50 @@ Concretely:
   the removed checks in the first place (see Context), so its behaviour is
   unaffected beyond the mandatory `v3` payload bump.
 
+## Follow-up: per-caller shared secrets
+
+An independent security review of this change (2026-07-22) surfaced a point
+worth recording rather than acting on immediately.
+
+Today `AUTH_SHARED_SECRET` is a single secret shared by both callers of this
+backend (`management-fe` and `epr-register-enrol-backend`), and `clientId`
+in the signed payload is self-asserted by the caller rather than bound to
+the secret. Two consequences:
+
+- Under the **old** (`v2`) model this meant any secret-holder could already
+  forge the `case-worker` role bypass simply by adding it to the payload
+  before signing — the role check never actually bounded a party that held
+  the secret. This is why the Context section above is confident the old
+  RBAC provided no real protection: it didn't even protect against the
+  callers it was nominally guarding against, only against parties with no
+  secret at all (who are stopped by authentication regardless of this
+  decision).
+- Under the **new** (`v3`, post-RBAC-removal) model, the practical effect is
+  the same shape of exposure just without the pretence of a role gate: any
+  holder of the one shared secret has full read/write over every work item.
+  The secret is shared with `epr-register-enrol-backend`, a public
+  applicant-facing service with materially more attack surface than the
+  case-management BFF. There is currently no way to authorize or even
+  distinguish "this request came from the caseworker portal" from "this
+  request came from the public portal backend" — both present the same
+  kind of signed payload, with `clientId` as an unverified label rather
+  than a cryptographic identity.
+
+Recommendation: move to **per-caller shared secrets** (keyed by expected
+`clientId`, verified during signature check) so `clientId` becomes a
+cryptographically bound identity rather than a self-asserted label. This
+would not reintroduce RBAC — it is orthogonal to authorization — but it
+would let a compromise of one caller (e.g. the higher-exposure public
+portal) be revoked/rotated independently, and would let the backend log
+and alert on a caller asserting a `clientId` it doesn't hold the matching
+secret for, which is not distinguishable from a normal auth failure today.
+
+This is not a blocker for this change — the exposure is not new (see the
+first bullet above) — but should be tracked as a follow-up rather than
+silently accepted. A ticket should be raised against the shared HMAC
+authentication scheme (`CognitoClientIdAuthenticationHandler` and its
+config in `Program.cs`/`compose/aws.env`) to scope the work.
+
 ## Verification
 
 - `EprRegisterEnrolManagementBe.Test/Auth/CognitoClientIdAuthenticationTests.cs`
