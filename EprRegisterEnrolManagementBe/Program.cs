@@ -194,7 +194,6 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
             options.MaxClientIdLength = config.GetValue("Auth:MaxClientIdLength", options.MaxClientIdLength);
             options.MaxUserIdLength = config.GetValue("Auth:MaxUserIdLength", options.MaxUserIdLength);
             options.MaxUserNameLength = config.GetValue("Auth:MaxUserNameLength", options.MaxUserNameLength);
-            options.MaxUserRolesLength = config.GetValue("Auth:MaxUserRolesLength", options.MaxUserRolesLength);
             options.MaxSignatureLength = config.GetValue("Auth:MaxSignatureLength", options.MaxSignatureLength);
             options.MaxTimestampLength = config.GetValue("Auth:MaxTimestampLength", options.MaxTimestampLength);
             options.MaxNonceLength = config.GetValue("Auth:MaxNonceLength", options.MaxNonceLength);
@@ -226,7 +225,7 @@ static void ConfigureHeaderPropagation(IServiceCollection services, IConfigurati
         //     burned in THIS API's replay cache. Forwarding any of them
         //     downstream would either leak the integrity proof to another
         //     service or replay the nonce out of band.
-        //   * x-cdp-user-id, x-cdp-user-name, x-cdp-user-roles,
+        //   * x-cdp-user-id, x-cdp-user-name,
         //     x-cdp-cognito-client-id — identity headers from the BFF are
         //     for THIS service to consume; downstream services that need
         //     them must mint their own.
@@ -387,7 +386,7 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
                 //     originate from a browser. The HMAC check remains
                 //     the primary defence; excluding them here ensures a
                 //     browser preflight cannot even smuggle them.
-                //   * x-cdp-user-id, x-cdp-user-name, x-cdp-user-roles,
+                //   * x-cdp-user-id, x-cdp-user-name,
                 //     x-cdp-cognito-client-id — identity headers are
                 //     BFF-injected and must not be browser-supplied.
                 //

@@ -23,7 +23,9 @@ namespace EprRegisterEnrolManagementBe.Auth;
 /// single-use nonce. The signature proves the caller knows the shared
 /// secret; the timestamp bounds the replay window; the nonce ensures a
 /// captured signed request cannot be replayed even within that window.
-/// See ADR-0003 for the v2 canonical payload contract.
+/// See ADR-0003 for the timestamp/nonce contract and ADR-0005 for the v3
+/// payload (role membership dropped — authorization is entirely the BFF's
+/// concern now).
 ///
 /// When the shared secret is NOT configured the handler fails CLOSED in
 /// any non-Development environment (the integrity contract is broken). In
@@ -77,7 +79,6 @@ public class CognitoClientIdAuthenticationHandler(
 
         string? userId = null;
         string? userName = null;
-        string? rolesHeader = null;
 
         if (Request.Headers.TryGetValue(Options.UserIdHeaderName, out var userIdValues))
         {
@@ -98,16 +99,6 @@ public class CognitoClientIdAuthenticationHandler(
                     $"{Options.UserNameHeaderName} exceeds {Options.MaxUserNameLength} chars"));
             }
             if (!string.IsNullOrWhiteSpace(v)) userName = v;
-        }
-        if (Request.Headers.TryGetValue(Options.UserRolesHeaderName, out var rolesValues))
-        {
-            var v = rolesValues.ToString();
-            if (v.Length > Options.MaxUserRolesLength)
-            {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"{Options.UserRolesHeaderName} exceeds {Options.MaxUserRolesLength} chars"));
-            }
-            if (!string.IsNullOrWhiteSpace(v)) rolesHeader = v;
         }
 
         // Integrity check: when a shared secret is configured the BFF must
@@ -176,7 +167,7 @@ public class CognitoClientIdAuthenticationHandler(
                     $"{Options.NonceHeaderName} exceeds {Options.MaxNonceLength} chars"));
             }
 
-            // --- Signature: matches expected HMAC over v2 canonical string. ---
+            // --- Signature: matches expected HMAC over v3 canonical string. ---
             if (!Request.Headers.TryGetValue(Options.SignatureHeaderName, out var signatureValues))
             {
                 return Task.FromResult(AuthenticateResult.Fail(
@@ -194,7 +185,7 @@ public class CognitoClientIdAuthenticationHandler(
             }
 
             var expectedSignature = ComputeSignature(
-                Options.SharedSecret!, clientId, userId, userName, rolesHeader,
+                Options.SharedSecret!, clientId, userId, userName,
                 timestampHeader, nonce);
 
             if (!FixedTimeEquals(providedSignature, expectedSignature))
@@ -243,21 +234,13 @@ public class CognitoClientIdAuthenticationHandler(
             new("cognito:client_id", clientId)
         };
 
-        // The BFF (frontend) forwards the acting user's identity and role
-        // membership in optional headers. They are not authenticators in
-        // their own right — CDP has already validated the upstream JWT and
-        // placed the trusted client id in the primary header — but they let
-        // backend endpoints make role-based decisions and produce more
-        // useful audit log lines without a separate user lookup.
+        // The BFF (frontend) forwards the acting user's identity in optional
+        // headers. They are not authenticators in their own right — CDP has
+        // already validated the upstream JWT and placed the trusted client
+        // id in the primary header — but they let backend endpoints produce
+        // more useful audit log lines without a separate user lookup.
         if (userId is not null) claims.Add(new Claim("user:id", userId));
         if (userName is not null) claims.Add(new Claim("user:name", userName));
-        if (rolesHeader is not null)
-        {
-            foreach (var role in rolesHeader.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            {
-                claims.Add(new Claim(ClaimTypes.Role, role));
-            }
-        }
 
         var identity = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
@@ -322,26 +305,25 @@ public class CognitoClientIdAuthenticationHandler(
     }
 
     /// <summary>
-    /// Canonical signing payload (v2). Order and field separators are part
+    /// Canonical signing payload (v3). Order and field separators are part
     /// of the contract with the BFF: any change here is a breaking change
     /// and requires a coordinated deploy. The timestamp and nonce are
-    /// non-optional — see ADR-0003.
+    /// non-optional — see ADR-0003. Role membership is not part of the
+    /// payload — see ADR-0005.
     /// </summary>
     internal static string ComputeSignature(
         string sharedSecret,
         string clientId,
         string? userId,
         string? userName,
-        string? userRoles,
         string timestamp,
         string nonce)
     {
         var payload = string.Join('\n',
-            "v2",
+            "v3",
             clientId,
             userId ?? string.Empty,
             userName ?? string.Empty,
-            userRoles ?? string.Empty,
             timestamp,
             nonce);
         var keyBytes = Encoding.UTF8.GetBytes(sharedSecret);

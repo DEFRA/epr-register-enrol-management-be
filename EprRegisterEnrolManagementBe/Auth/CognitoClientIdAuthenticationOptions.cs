@@ -15,9 +15,6 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// <summary>Optional header carrying the end user's display name.</summary>
     public string UserNameHeaderName { get; set; } = CognitoClientIdDefaults.DefaultUserNameHeaderName;
 
-    /// <summary>Optional header carrying the end user's roles as a comma-separated string.</summary>
-    public string UserRolesHeaderName { get; set; } = CognitoClientIdDefaults.DefaultUserRolesHeaderName;
-
     /// <summary>
     /// Name of the request header carrying the BFF-computed HMAC signature
     /// over the trust headers. Used to prove the headers originated from a
@@ -28,13 +25,13 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
 
     /// <summary>
     /// Header carrying the BFF's ISO-8601 UTC instant for the request. Part
-    /// of the v2 canonical signing payload — bounds replay windows.
+    /// of the v3 canonical signing payload — bounds replay windows.
     /// </summary>
     public string TimestampHeaderName { get; set; } = CognitoClientIdDefaults.DefaultTimestampHeaderName;
 
     /// <summary>
     /// Header carrying a per-request opaque nonce minted by the BFF (e.g.
-    /// base64url of 16 random bytes). Part of the v2 canonical signing
+    /// base64url of 16 random bytes). Part of the v3 canonical signing
     /// payload — single-use within the replay cache TTL.
     /// </summary>
     public string NonceHeaderName { get; set; } = CognitoClientIdDefaults.DefaultNonceHeaderName;
@@ -86,12 +83,6 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// <c>WorkItemNote.CreatedByName</c>.
     /// </summary>
     public int MaxUserNameLength { get; set; } = 256;
-
-    /// <summary>
-    /// Maximum permitted length of the comma-separated user roles header
-    /// (whole string, not per role).
-    /// </summary>
-    public int MaxUserRolesLength { get; set; } = 1024;
 
     /// <summary>
     /// Maximum permitted length of the HMAC signature header. Base64 of
