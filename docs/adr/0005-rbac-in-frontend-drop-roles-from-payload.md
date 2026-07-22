@@ -5,8 +5,16 @@
 
 ## Context
 
-The original design (ADR-0001) had the backend perform some of its own
-authorization: `CognitoClientIdAuthenticationHandler` turned the optional
+The architecture group (Tim Squires) has set direction that backend
+services should not implement RBAC themselves — authorization belongs in
+the frontend only, with backends trusting an authenticated, signed
+request from the BFF. This ADR brings the case management backend in line
+with that direction.
+
+Independently of that direction, the specific checks being removed here
+were already close to dead code in this service. The original design
+(ADR-0001) had the backend perform some of its own authorization:
+`CognitoClientIdAuthenticationHandler` turned the optional
 `x-cdp-user-roles` header into `ClaimTypes.Role` claims, and the framework
 used a single `case-worker` role to decide two things:
 
