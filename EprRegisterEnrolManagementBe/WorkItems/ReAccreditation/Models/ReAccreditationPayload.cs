@@ -101,4 +101,13 @@ internal sealed record ReAccreditationPayload
     /// clock is stopped on approval.
     /// </summary>
     public SlaClock? SlaClock { get; init; }
+
+    /// <summary>
+    /// RA-291: the query currently open against this application, stamped by
+    /// <c>ReAccreditationQueryService</c> just before the query transition so
+    /// the notification hook can include the reason in the operator's email.
+    /// See <see cref="Models.CurrentQuery"/> for why this is payload state and
+    /// why readers must gate on the <c>queried</c> state.
+    /// </summary>
+    public CurrentQuery? CurrentQuery { get; init; }
 }

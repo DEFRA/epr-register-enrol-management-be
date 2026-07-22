@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v5", _type.TemplateVersion);
+        Assert.Equal("v6", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -43,6 +43,9 @@ public class ReAccreditationTypeTests
     // RA-132: approve is NOT a generic-engine transition; it is handled
     // exclusively by ReAccreditationApprovalService.
     [InlineData("reject", "awaiting-decision", "rejected", true)]
+    // RA-291: query is available from every pre-decision state.
+    [InlineData("query-during-duly-making", "submitted", "queried", false)]
+    [InlineData("query-during-duly-made", "duly-made", "queried", false)]
     [InlineData("query-during-assessment", "assessment-in-progress", "queried", false)]
     [InlineData("query-during-decision", "awaiting-decision", "queried", false)]
     [InlineData("withdraw", "submitted", "withdrawn", false)]

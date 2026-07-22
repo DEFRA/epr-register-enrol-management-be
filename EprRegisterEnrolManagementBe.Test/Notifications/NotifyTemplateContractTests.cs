@@ -1,9 +1,11 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using NSubstitute;
@@ -81,12 +83,21 @@ public class NotifyTemplateContractTests
         var regulatorMailboxResolver = Substitute.For<IRegulatorMailboxResolver>();
         regulatorMailboxResolver.Resolve(Arg.Any<Nation?>()).Returns((string?)null);
         var persistence = Substitute.For<IWorkItemPersistence>();
+        // RA-291: a configured operator-service URL, because this contract
+        // asserts required placeholders are non-empty — i.e. it describes a
+        // correctly-configured environment. The unset/blank degradation to an
+        // empty operator_service_link is covered by
+        // ReAccreditationNotificationHookTests.
         var sut = new ReAccreditationNotificationHook(
             notifyClient,
             auditAppender,
             regulatorMailboxResolver,
             persistence,
-            NullLogger<ReAccreditationNotificationHook>.Instance
+            NullLogger<ReAccreditationNotificationHook>.Instance,
+            Options.Create(new OperatorServiceConfig
+            {
+                BaseUrl = "https://operator.example.gov.uk"
+            })
         );
 
         if (actionId is null)
@@ -203,6 +214,15 @@ public class NotifyTemplateContractTests
             ["organisationName"] = "Acme Recycling Ltd",
             ["registrationNumber"] = "EX-2024-001",
             ["operatorEmail"] = "operator@example.com",
+            // RA-291: the Queried template requires a non-empty query_reason,
+            // read from the current query the query service stamps on the
+            // payload. Supply one so the queried contract rows exercise the
+            // non-empty path, mirroring the Decision/decision_notes note above.
+            ["currentQuery"] = new BsonDocument
+            {
+                ["reason"] = "Please confirm the tonnage figures.",
+                ["sections"] = new BsonArray { "prn-tonnage" },
+            },
         };
 
         return new WorkItem

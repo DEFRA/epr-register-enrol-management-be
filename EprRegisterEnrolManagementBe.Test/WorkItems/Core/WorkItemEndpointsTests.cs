@@ -1,4 +1,5 @@
 using System.Net;
+using MongoDB.Bson;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
@@ -1641,6 +1642,13 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     {
         public IWorkItemPersistence Inner { get; } = inner;
         public WorkItemQuery? LastQuery { get; private set; }
+
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default) =>
+            Inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
 
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             Inner.CreateAsync(workItem, cancellationToken);
