@@ -870,10 +870,12 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task Query_returns_not_found_for_another_tenants_work_item()
+    public async Task Query_succeeds_for_a_work_item_not_submitted_by_the_caller()
     {
+        // RBAC lives in the frontend now (ADR-0005) — the backend performs
+        // the query regardless of who submitted the item.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture, roles: []);
+        await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -883,7 +885,7 @@ public class ReAccreditationEndpointTests
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]

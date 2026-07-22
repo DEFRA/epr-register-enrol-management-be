@@ -315,16 +315,17 @@ public class ReAccreditationQueryServiceTests
     }
 
     [Fact]
-    public async Task QueryAsync_returns_not_found_when_the_caller_cannot_read_the_work_item()
+    public async Task QueryAsync_succeeds_for_a_work_item_not_submitted_by_the_caller()
     {
+        // RBAC lives in the frontend now (ADR-0005) — the service performs
+        // the query regardless of who submitted the item.
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted", submittedBy: "another-tenant");
 
         var result = await harness.Service.QueryAsync(
             harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
 
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+        Assert.True(result.IsSuccess);
     }
 
     [Fact]
