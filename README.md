@@ -1,3 +1,5 @@
+<!-- ci-verify: throwaway change to exercise the mgmt-tests e2e buildx cache path, not for merge -->
+
 # EPR Register Case Management Backend (PoC)
 
 A proof-of-concept .NET 10 backend API for the EPR Register case management
