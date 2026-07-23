@@ -31,7 +31,6 @@ public class ReAccreditationEndpointTests
     : IClassFixture<MongoIntegrationFixture>
 {
     private const string TenantClientId = "test-client";
-    private const string CaseWorkerClientId = "case-worker-client";
     private const string DefaultUserId = "alice-1";
     private const string DefaultUserName = "Alice Example";
 
@@ -381,41 +380,16 @@ public class ReAccreditationEndpointTests
         Assert.Empty(persisted.Notes);
     }
 
-    // -------------------- Cross-tenant gating (epr-946) --------------------
+    // -------------------- Ownership no longer gates access --------------------
+    // RBAC (who may act on whose items) now lives entirely in the frontend;
+    // the backend applies whatever the (shared-secret authenticated) caller
+    // asks for regardless of who submitted the item.
 
     [Fact]
-    public async Task Recommendation_returns_not_found_for_cross_tenant_caller()
+    public async Task Recommendation_returns_ok_for_item_not_submitted_by_caller()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = ReAccreditationType.Id,
-            StateId = "submitted",
-            // Owned by another tenant — caller is 'test-client'.
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
-
-        var response = await client.GetAsync(
-            $"/work-items/re-accreditation/{id}/recommendation", cancellationToken);
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        factory.DecisionService.DidNotReceiveWithAnyArgs().EvaluateRecommendation(default!);
-    }
-
-    [Fact]
-    public async Task Recommendation_allows_case_worker_to_see_other_tenants_item()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            clientId: CaseWorkerClientId,
-            userId: "worker-1",
-            roles: [WorkItemEndpoints.CaseWorkerRole, "reaccreditation-decision-maker"]);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -439,38 +413,10 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task RecordDecisionRationale_returns_not_found_for_cross_tenant_caller()
+    public async Task RecordDecisionRationale_succeeds_for_item_not_submitted_by_caller()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, "other-tenant"), cancellationToken);
-
-        var response = await client.PostAsJsonAsync(
-            $"/work-items/re-accreditation/{id}/decision-rationale",
-            new DecisionRationaleRequest("Approved on the basis of full compliance history."),
-            cancellationToken);
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-
-        // Hand-crafted POST against another tenant's item must not append
-        // the note or complete the rationale task.
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal(0, persisted!.Version);
-        Assert.Empty(persisted.Notes);
-    }
-
-    [Fact]
-    public async Task RecordDecisionRationale_allows_case_worker_against_other_tenants_item()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            clientId: CaseWorkerClientId,
-            userId: "worker-1",
-            roles: [WorkItemEndpoints.CaseWorkerRole, "reaccreditation-decision-maker"]);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -642,30 +588,6 @@ public class ReAccreditationEndpointTests
         Assert.Equal("org-77", capturedOrgId);
         Assert.Equal("reg-88", capturedRegId);
         Assert.Equal(2023, capturedYear);
-    }
-
-    [Fact]
-    public async Task PriorYear_returns_not_found_for_cross_tenant_caller()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = id,
-            TypeId = ReAccreditationType.Id,
-            StateId = "submitted",
-            SubmittedBy = "other-tenant"
-        }, cancellationToken);
-
-        var response = await client.GetAsync(
-            $"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        await factory.ReExClient.DidNotReceiveWithAnyArgs()
-            .GetPriorYearAsync(default, default, default, default);
     }
 
     // ------------------------------ Helpers ------------------------------
@@ -948,10 +870,12 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task Query_returns_not_found_for_another_tenants_work_item()
+    public async Task Query_succeeds_for_a_work_item_not_submitted_by_the_caller()
     {
+        // RBAC lives in the frontend now (ADR-0005) — the backend performs
+        // the query regardless of who submitted the item.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture, roles: []);
+        await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -961,7 +885,7 @@ public class ReAccreditationEndpointTests
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/query", QueryBody(), cancellationToken);
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
     [Fact]
@@ -1158,7 +1082,7 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
-    public async Task Approve_returns_not_found_for_cross_tenant_caller()
+    public async Task Approve_succeeds_for_item_not_submitted_by_caller()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
@@ -1166,27 +1090,6 @@ public class ReAccreditationEndpointTests
 
         var id = Guid.NewGuid();
         await factory.SeedAsync(BuildAwaitingDecision(id, "other-tenant"), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("awaiting-decision", persisted!.StateId);
-    }
-
-    [Fact]
-    public async Task Approve_succeeds_when_caller_holds_no_special_role()
-    {
-        // RA-323: every caseworker holds the same role, so approving
-        // requires no role beyond being an authenticated caseworker in the
-        // same tenant.
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture, roles: []);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
 
         var response = await client.PostAsync(
             $"/work-items/re-accreditation/{id}/approve", content: null, cancellationToken);
@@ -1258,7 +1161,6 @@ public class ReAccreditationEndpointTests
         private readonly string _clientId;
         private readonly string? _userId;
         private readonly string _userName;
-        private readonly string[] _roles;
         private readonly Guid? _raceWorkItemId;
 
         public IReAccreditationDecisionService DecisionService { get; } =
@@ -1272,14 +1174,12 @@ public class ReAccreditationEndpointTests
             string clientId = TenantClientId,
             string? userId = DefaultUserId,
             string userName = DefaultUserName,
-            string[]? roles = null,
             Guid? raceWorkItemId = null)
         {
             _fixture = fixture;
             _clientId = clientId;
             _userId = userId;
             _userName = userName;
-            _roles = roles ?? new[] { "reaccreditation-decision-maker" };
             _raceWorkItemId = raceWorkItemId;
         }
 
@@ -1353,10 +1253,6 @@ public class ReAccreditationEndpointTests
             {
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);
                 client.DefaultRequestHeaders.Add("x-cdp-user-name", _userName);
-            }
-            if (_roles.Length > 0)
-            {
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", string.Join(",", _roles));
             }
         }
 

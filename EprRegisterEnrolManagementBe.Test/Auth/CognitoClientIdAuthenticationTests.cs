@@ -117,7 +117,7 @@ public class CognitoClientIdAuthenticationTests
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var nonce = "nonce-valid";
         var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, null, timestamp, nonce);
+            Secret, ClientId, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
@@ -136,7 +136,7 @@ public class CognitoClientIdAuthenticationTests
         await using var factory = new BareFactory(sharedSecret: Secret);
 
         var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, null,
+            Secret, ClientId, null, null,
             factory.FakeTime.GetUtcNow().ToString("O"), "nonce-no-ts");
 
         using var client = factory.CreateClient();
@@ -159,7 +159,7 @@ public class CognitoClientIdAuthenticationTests
         var staleTimestamp = factory.FakeTime.GetUtcNow().AddMinutes(-6).ToString("O");
         var nonce = "nonce-stale";
         var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, null, staleTimestamp, nonce);
+            Secret, ClientId, null, null, staleTimestamp, nonce);
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
@@ -181,7 +181,7 @@ public class CognitoClientIdAuthenticationTests
         var futureTimestamp = factory.FakeTime.GetUtcNow().AddMinutes(6).ToString("O");
         var nonce = "nonce-future";
         var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, null, futureTimestamp, nonce);
+            Secret, ClientId, null, null, futureTimestamp, nonce);
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
@@ -201,7 +201,7 @@ public class CognitoClientIdAuthenticationTests
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, null, timestamp, "would-have-been-nonce");
+            Secret, ClientId, null, null, timestamp, "would-have-been-nonce");
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
@@ -225,7 +225,7 @@ public class CognitoClientIdAuthenticationTests
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var nonce = "nonce-replay";
         var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, null, timestamp, nonce);
+            Secret, ClientId, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
@@ -284,7 +284,6 @@ public class CognitoClientIdAuthenticationTests
     [InlineData("x-cdp-cognito-client-id", 256)]
     [InlineData("x-cdp-user-id", 128)]
     [InlineData("x-cdp-user-name", 256)]
-    [InlineData("x-cdp-user-roles", 1024)]
     public async Task Identity_header_exceeding_cap_is_401_with_descriptive_reason(
         string header, int cap)
     {
@@ -323,7 +322,7 @@ public class CognitoClientIdAuthenticationTests
         var goodTimestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var goodNonce = $"nonce-{header}";
         var goodSignature = CognitoClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, null, goodTimestamp, goodNonce);
+            Secret, ClientId, null, null, goodTimestamp, goodNonce);
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);
@@ -373,7 +372,6 @@ public class CognitoClientIdAuthenticationTests
     [InlineData("x-cdp-cognito-client-id", 256)]
     [InlineData("x-cdp-user-id", 128)]
     [InlineData("x-cdp-user-name", 256)]
-    [InlineData("x-cdp-user-roles", 1024)]
     public async Task Identity_header_at_exactly_cap_is_accepted(string header, int cap)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -411,7 +409,7 @@ public class CognitoClientIdAuthenticationTests
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var nonce = new string('n', 128);
         var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, null, timestamp, nonce);
+            Secret, ClientId, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", ClientId);

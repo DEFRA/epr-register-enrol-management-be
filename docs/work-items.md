@@ -162,32 +162,29 @@ with `typeId`) to pick the correct detail template for the work item.
 
 ## Assignment (RA-95)
 
-Work items can be assigned to a user. Two roles drive what a caller can do:
-
-- `assign` — can assign or re-assign any work item to any user, and can
-  unassign.
-- `standard` — can only **self-assign** an unassigned work item to itself.
-  Cannot re-assign other people's work, cannot take an item that is already
-  owned, cannot unassign.
-
-Both rules are enforced by `WorkItemService.AssignAsync` /
-`UnassignAsync`. The frontend BFF exposes both UI affordances and the role
-gates, but the backend is the source of truth: a hand-crafted POST from a
-standard user that targets someone else's id returns `403`.
+Work items can be assigned to a user. RA-323 unified caseworker
+permissions — every authenticated caseworker can assign or re-assign any
+work item to any user, and can unassign; there is no role tier that
+restricts assignment to self-assign-only any more. This is enforced (or
+rather, not restricted) by `WorkItemService.AssignAsync` / `UnassignAsync`,
+which no longer check role membership at all — see ADR-0005: authorization
+(including any future assignment-permission tiering) is the frontend BFF's
+responsibility, not this backend's.
 
 ### Identity from the BFF
 
 The Cognito auth handler (`CognitoClientIdAuthenticationHandler`)
-optionally reads three headers forwarded by the BFF and turns them into
+optionally reads two headers forwarded by the BFF and turns them into
 `ClaimsPrincipal` claims:
 
 | Header | Claim |
 | --- | --- |
 | `x-cdp-user-id` | `user:id` (used by `ResolveActorUserId`) |
 | `x-cdp-user-name` | `user:name` |
-| `x-cdp-user-roles` | one `ClaimTypes.Role` per comma-separated value |
 
-`User.IsInRole("assign")` therefore works as expected on every endpoint.
+These are used for audit attribution only (`WorkItem.AuditLog.CreatedBy` /
+`CreatedByName` and similar). Role membership is not part of the trust
+contract — see ADR-0005.
 
 ### Storage
 

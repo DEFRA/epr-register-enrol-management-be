@@ -5,9 +5,8 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
 /// <summary>
 /// Regression coverage for <see cref="WorkItemQueryBinding.FromQueryString"/>.
-/// The headline case (epr-ygz) is the tenancy guard: <c>submittedBy</c>
-/// must never be bound from the query string, because the endpoint
-/// derives it from the authenticated caller's claims.
+/// <c>submittedBy</c> is an ordinary caller-supplied filter — scoping
+/// decisions are made by the frontend, not enforced by this binder.
 /// </summary>
 public class WorkItemQueryBindingTests
 {
@@ -27,16 +26,16 @@ public class WorkItemQueryBindingTests
     [InlineData("SubmittedBy")]
     [InlineData("SUBMITTEDBY")]
     [InlineData("submittedby")]
-    public void SubmittedByQueryParameterIsIgnoredRegardlessOfCase(string key)
+    public void SubmittedByQueryParameterIsBoundRegardlessOfCase(string key)
     {
         var query = WorkItemQueryBinding.FromQueryString(Q((key, "other-tenant-id")));
 
-        Assert.Null(query.SubmittedBy);
-        Assert.Null(query.NormalisedSubmittedBy);
+        Assert.Equal("other-tenant-id", query.SubmittedBy);
+        Assert.Equal("other-tenant-id", query.NormalisedSubmittedBy);
     }
 
     [Fact]
-    public void SubmittedByIsIgnoredEvenWhenCombinedWithOtherParameters()
+    public void SubmittedByIsBoundAlongsideOtherParameters()
     {
         var query = WorkItemQueryBinding.FromQueryString(Q(
             ("submittedBy", "other-tenant-id"),
@@ -44,7 +43,7 @@ public class WorkItemQueryBindingTests
             ("page", "2"),
             ("pageSize", "10")));
 
-        Assert.Null(query.SubmittedBy);
+        Assert.Equal("other-tenant-id", query.SubmittedBy);
         Assert.Equal(2, query.Page);
         Assert.Equal(10, query.PageSize);
         Assert.NotNull(query.TypeIds);

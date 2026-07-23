@@ -35,7 +35,6 @@ public class HeaderPropagationAllowListTests : IClassFixture<MongoIntegrationFix
         "x-api-key",
         "x-cdp-user-id",
         "x-cdp-user-name",
-        "x-cdp-user-roles",
         "x-cdp-cognito-client-id",
     };
 

@@ -150,54 +150,19 @@ public class WorkItemAuthBoundaryTests
         Assert.Single(persisted.AuditLog);
     }
 
-    // ---------------- Cross-tenant GET / LIST denial ----------------
-
-    [Fact]
-    public async Task Get_by_id_returns_404_for_cross_tenant_caller()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        var seeded = NewSubmittedItem(id, submittedBy: "other-tenant");
-        await factory.SeedAsync(seeded, cancellationToken);
-
-        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
-
-        // Cross-tenant items must never leak via 200 or even via a
-        // distinguishable 403 — return 404 to hide existence.
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task List_hides_cross_tenant_items_from_standard_caller()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
-        using var client = factory.CreateClient();
-
-        var mine = NewSubmittedItem(Guid.NewGuid());
-        var theirs = NewSubmittedItem(Guid.NewGuid(), submittedBy: "other-tenant");
-        await factory.SeedAsync(mine, cancellationToken);
-        await factory.SeedAsync(theirs, cancellationToken);
-
-        var page = await client.GetFromJsonAsync<WorkItemListResponse>(
-            "/work-items", cancellationToken);
-
-        Assert.NotNull(page);
-        Assert.Single(page!.Items);
-        Assert.Equal(mine.Id, page.Items[0].Id);
-    }
+    // Coverage for "RBAC lives in the frontend now" (no ownership gate on
+    // GetById/list) lives in WorkItemEndpointsTests — this class stays
+    // scoped to the two boundaries above that still exist: missing actor
+    // identity, and the RA-323 assign/unassign permission model.
 
     // ---------------------------- Helpers ----------------------------
 
-    private static WorkItem NewSubmittedItem(Guid id, string submittedBy = TenantClientId) => new()
+    private static WorkItem NewSubmittedItem(Guid id) => new()
     {
         Id = id,
         TypeId = TypeId,
         StateId = "submitted",
-        SubmittedBy = submittedBy
+        SubmittedBy = TenantClientId
     };
 
     private sealed class BoundaryFactory : WebApplicationFactory<Program>
@@ -205,16 +170,13 @@ public class WorkItemAuthBoundaryTests
         private readonly MongoIntegrationFixture _fixture;
         private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("authbnd");
         private readonly string? _userId;
-        private readonly string? _roles;
 
         public BoundaryFactory(
             MongoIntegrationFixture fixture,
-            string? userId,
-            string? roles = null)
+            string? userId)
         {
             _fixture = fixture;
             _userId = userId;
-            _roles = roles;
         }
 
         public IWorkItemPersistence Persistence => Services.GetRequiredService<IWorkItemPersistence>();
@@ -247,10 +209,6 @@ public class WorkItemAuthBoundaryTests
                 // otherwise normalise away) for the
                 // ResolveActorUserId-returns-null path.
                 client.DefaultRequestHeaders.TryAddWithoutValidation("x-cdp-user-id", _userId);
-            }
-            if (_roles is not null)
-            {
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", _roles);
             }
         }
 

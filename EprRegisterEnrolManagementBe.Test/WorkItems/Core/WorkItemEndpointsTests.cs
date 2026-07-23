@@ -34,11 +34,10 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
 
     private TestApplicationFactory NewFactory(
         bool includeAuthHeader = true,
-        string? userRoles = null,
         string? userId = "test-user",
         string? userName = null,
         Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
-    ) => new(_fixture, includeAuthHeader, userRoles, userId, userName, tasksByState);
+    ) => new(_fixture, includeAuthHeader, userId, userName, tasksByState);
 
     [Fact]
     public async Task Post_returns_unauthorized_without_cognito_client_id()
@@ -382,33 +381,13 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     [Fact]
-    public async Task Get_by_id_returns_not_found_for_cross_tenant_access()
+    public async Task Get_by_id_returns_ok_for_item_not_submitted_by_caller()
     {
+        // RBAC (who may look at whose items) now lives entirely in the
+        // frontend/BFF; the backend trusts any authenticated (shared-secret
+        // signed) caller and does not check ownership.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory();
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            new WorkItem
-            {
-                Id = id,
-                TypeId = TypeId,
-                StateId = "submitted",
-                SubmittedBy = "other-tenant",
-            },
-            cancellationToken
-        );
-
-        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Get_by_id_allows_case_worker_to_read_any_tenants_item()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -428,56 +407,10 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     [Fact]
-    public async Task Get_list_filters_by_caller_client_id_when_not_case_worker()
+    public async Task Get_list_returns_all_items_by_default()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory();
-        using var client = factory.CreateClient();
-
-        // Seed two items: one belongs to the caller, one to another tenant.
-        // The non-case-worker filter must only surface the caller's.
-        await factory.SeedAsync(
-            new WorkItem
-            {
-                Id = Guid.NewGuid(),
-                TypeId = TypeId,
-                StateId = "submitted",
-                SubmittedBy = "test-client",
-            },
-            cancellationToken
-        );
-        await factory.SeedAsync(
-            new WorkItem
-            {
-                Id = Guid.NewGuid(),
-                TypeId = TypeId,
-                StateId = "submitted",
-                SubmittedBy = "other-tenant",
-            },
-            cancellationToken
-        );
-
-        var body = await client.GetFromJsonAsync<WorkItemListResponse>(
-            "/work-items",
-            cancellationToken
-        );
-        Assert.NotNull(body);
-        var item = Assert.Single(body!.Items);
-        Assert.Equal("test-client", item.SubmittedBy);
-
-        // Defence in depth: the captured query carried the SubmittedBy
-        // filter, so the gate is enforced upstream of Mongo not as a
-        // post-filter (the latter would be a much more dangerous design).
-        var lastQuery = factory.Recording.LastQuery;
-        Assert.NotNull(lastQuery);
-        Assert.Equal("test-client", lastQuery!.SubmittedBy);
-    }
-
-    [Fact]
-    public async Task Get_list_does_not_filter_when_case_worker()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: WorkItemEndpoints.CaseWorkerRole);
         using var client = factory.CreateClient();
 
         await factory.SeedAsync(
@@ -514,94 +447,48 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     [Fact]
-    public async Task Get_list_returns_empty_page_without_querying_persistence_when_caller_has_no_client_id()
+    public async Task Get_list_filters_by_submittedBy_query_param_when_supplied()
     {
-        // epr-z0k: standard callers with no identifiable submitter id
-        // (no cognito:client_id claim AND no NameIdentifier) must
-        // structurally see nothing. Previously the endpoint funnelled
-        // them through Mongo with a magic SubmittedBy = '__no_tenant__'
-        // sentinel; now it short-circuits with an empty page so the
-        // gate cannot fail open if a future submitter id ever happened
-        // to match the literal sentinel.
+        // Scoping ("give me only my items") is now something the frontend
+        // asks for explicitly, not something the backend infers from a
+        // role claim. The backend still applies whatever scope is asked
+        // for — this is a query filter, not an authorization gate.
         var cancellationToken = TestContext.Current.CancellationToken;
-        var persistence = Substitute.For<IWorkItemPersistence>();
-        var engine = Substitute.For<IWorkItemService>();
-        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
-        {
-            User = new System.Security.Claims.ClaimsPrincipal(
-                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
-            ),
-        };
+        await using var factory = NewFactory();
+        using var client = factory.CreateClient();
 
-        var result = await WorkItemEndpoints.GetAll(
-            httpContext,
-            persistence,
-            engine,
-            TimeProvider.System,
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "other-tenant",
+            },
             cancellationToken
         );
 
-        var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
-        Assert.NotNull(ok.Value);
-        Assert.Empty(ok.Value!.Items);
-        Assert.Equal(0, ok.Value.TotalCount);
-        Assert.Equal(1, ok.Value.Page);
-        Assert.Equal(WorkItemQuery.DefaultPageSize, ok.Value.PageSize);
-        // The structural property under test is "persistence is never
-        // consulted" — verifying it requires a stub that records calls,
-        // not a real database. Kept as a substitute deliberately.
-        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, cancellationToken);
-    }
-
-    [Fact]
-    public async Task Get_list_does_not_expose_items_submitted_by_literal_sentinel_to_no_tenant_caller()
-    {
-        // epr-z0k regression guard: even if some upstream submitter
-        // somehow ended up with the historical '__no_tenant__' literal
-        // as their cognito:client_id, a caller with no client_id of
-        // their own must NOT inherit visibility of those items.
-        // Structurally enforced by the short-circuit: persistence is
-        // never asked.
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var persistence = Substitute.For<IWorkItemPersistence>();
-        var engine = Substitute.For<IWorkItemService>();
-        persistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
-            .Returns(
-                new WorkItemPage(
-                    Items: new List<WorkItem>
-                    {
-                        new()
-                        {
-                            TypeId = TypeId,
-                            StateId = "submitted",
-                            SubmittedBy = "__no_tenant__",
-                        },
-                    },
-                    TotalCount: 1,
-                    Page: 1,
-                    PageSize: WorkItemQuery.DefaultPageSize
-                )
-            );
-        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
-        {
-            User = new System.Security.Claims.ClaimsPrincipal(
-                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
-            ),
-        };
-
-        var result = await WorkItemEndpoints.GetAll(
-            httpContext,
-            persistence,
-            engine,
-            TimeProvider.System,
+        var body = await client.GetFromJsonAsync<WorkItemListResponse>(
+            "/work-items?submittedBy=test-client",
             cancellationToken
         );
+        Assert.NotNull(body);
+        var item = Assert.Single(body!.Items);
+        Assert.Equal("test-client", item.SubmittedBy);
 
-        var ok = Assert.IsType<Ok<WorkItemListResponse>>(result.Result);
-        Assert.Empty(ok.Value!.Items);
-        Assert.Equal(0, ok.Value.TotalCount);
-        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, cancellationToken);
+        var lastQuery = factory.Recording.LastQuery;
+        Assert.NotNull(lastQuery);
+        Assert.Equal("test-client", lastQuery!.SubmittedBy);
     }
 
     [Fact]
@@ -814,7 +701,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Assign_persists_assignee_snapshot_and_returns_updated_response()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -851,13 +738,9 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Assign_returns_400_when_assigneeId_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
-        // The cross-tenant gate (epr-0t9) loads the work item before
-        // any body validation runs, so the gate must be satisfied with a
-        // matching SubmittedBy or the test sees 404 instead of the 400
-        // it cares about. Caller's cognito client id is 'test-client'.
         var id = Guid.NewGuid();
         await factory.SeedAsync(
             new WorkItem
@@ -884,7 +767,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     {
         // RA-323: every caseworker holds the same role.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard", userId: "alice-1");
+        await using var factory = NewFactory(userId: "alice-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -912,7 +795,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Assign_returns_404_when_work_item_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
@@ -928,7 +811,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Unassign_clears_assignment_when_actor_has_assign_role()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -966,7 +849,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     {
         // RA-323: every caseworker holds the same role.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard", userId: "alice-1");
+        await using var factory = NewFactory(userId: "alice-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -995,7 +878,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Assign_to_same_user_sets_idempotent_replay_header_and_does_not_persist()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -1031,7 +914,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public async Task Unassign_already_unassigned_sets_idempotent_replay_header_and_does_not_persist()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(userRoles: "standard,assign", userId: "actor-1");
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -1168,9 +1051,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
                 Id = id,
                 TypeId = TypeId,
                 StateId = "submitted",
-                // Match the factory's default cognito client id so the
-                // cross-tenant gate (epr-0t9) doesn't pre-empt the 400 we
-                // care about here.
                 SubmittedBy = "test-client",
             },
             cancellationToken
@@ -1347,14 +1227,12 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     // ----------------------------------------------------------------
-    // epr-0t9: cross-tenant IDOR protection on every mutation endpoint.
-    // The mutation handlers must mirror the GetById tenancy gate and
-    // return 404 when a standard caller targets an item submitted by a
-    // different tenant — without ever bumping the document version.
-    // Case-workers bypass the gate and reach the engine as before.
+    // ADR-0005: mutation endpoints no longer gate on who submitted the
+    // item — every mutation handler must reach the engine regardless of
+    // submitter, since authorization is the frontend's responsibility now.
     // ----------------------------------------------------------------
 
-    public static IEnumerable<TheoryDataRow<string, string, object?>> CrossTenantMutationCases() =>
+    public static IEnumerable<TheoryDataRow<string, string, object?>> MutationCases() =>
         new TheoryDataRow<string, string, object?>[]
         {
             new("POST", "/work-items/{id}/tasks/some-task/complete", null)
@@ -1385,68 +1263,18 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         };
 
     [Theory]
-    [MemberData(nameof(CrossTenantMutationCases))]
-    public async Task Mutation_returns_404_for_cross_tenant_caller_and_does_not_invoke_engine(
+    [MemberData(nameof(MutationCases))]
+    public async Task Mutation_operates_on_item_regardless_of_submitter(
         string method,
         string pathTemplate,
         object? body
     )
     {
+        // RBAC lives in the frontend now: the backend performs whatever
+        // mutation is asked for on any item any authenticated caller
+        // targets, regardless of who submitted it.
         var cancellationToken = TestContext.Current.CancellationToken;
-        // Standard caller (no case-worker role); 'assign' role included so
-        // the Assign / Unassign 403 path can't pre-empt the 404 we're
-        // testing for.
-        await using var factory = NewFactory(userRoles: "assign", userId: "actor-1");
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            new WorkItem
-            {
-                Id = id,
-                TypeId = TypeId,
-                StateId = "submitted",
-                // Owned by someone else — caller's cognito client id is
-                // 'test-client', which must NOT match.
-                SubmittedBy = "other-tenant",
-            },
-            cancellationToken
-        );
-
-        var path = pathTemplate.Replace("{id}", id.ToString());
-        HttpResponseMessage response = method switch
-        {
-            "POST" when body is null => await client.PostAsync(
-                path,
-                content: null,
-                cancellationToken
-            ),
-            "POST" => await client.PostAsJsonAsync(path, body, cancellationToken),
-            "PUT" => await client.PutAsJsonAsync(path, body!, cancellationToken),
-            _ => throw new InvalidOperationException($"Unsupported method '{method}'."),
-        };
-
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        // The engine's writer would bump Version; if the gate held, the
-        // document on disk is untouched.
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.NotNull(persisted);
-        Assert.Equal(0, persisted!.Version);
-    }
-
-    [Theory]
-    [MemberData(nameof(CrossTenantMutationCases))]
-    public async Task Mutation_allows_case_worker_to_target_other_tenants_item(
-        string method,
-        string pathTemplate,
-        object? body
-    )
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory(
-            userRoles: $"{WorkItemEndpoints.CaseWorkerRole},assign",
-            userId: "worker-1"
-        );
+        await using var factory = NewFactory(userId: "actor-1");
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -1474,9 +1302,9 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             _ => throw new InvalidOperationException($"Unsupported method '{method}'."),
         };
 
-        // 404 means the tenancy gate fired (it must NOT for a case worker).
-        // Anything else (200, 400, 409) means we got past the gate to the
-        // engine — that's the contract for this test.
+        // Anything but 404 means the request reached the engine — that's
+        // the contract for this test (individual engine-level outcomes,
+        // e.g. invalid transitions, are covered by other tests).
         Assert.NotEqual(HttpStatusCode.NotFound, response.StatusCode);
     }
 
@@ -1495,7 +1323,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             "endpoints"
         );
         private readonly bool _includeAuthHeader;
-        private readonly string? _userRoles;
         private readonly string? _userId;
         private readonly string? _userName;
         private readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>>? _tasksByState;
@@ -1503,7 +1330,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         public TestApplicationFactory(
             MongoIntegrationFixture fixture,
             bool includeAuthHeader,
-            string? userRoles,
             string? userId,
             string? userName,
             Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
@@ -1511,7 +1337,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         {
             _fixture = fixture;
             _includeAuthHeader = includeAuthHeader;
-            _userRoles = userRoles;
             _userId = userId;
             _userName = userName;
             _tasksByState = tasksByState;
@@ -1605,10 +1430,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             if (_userName is not null)
             {
                 client.DefaultRequestHeaders.Add("x-cdp-user-name", _userName);
-            }
-            if (_userRoles is not null)
-            {
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", _userRoles);
             }
         }
 

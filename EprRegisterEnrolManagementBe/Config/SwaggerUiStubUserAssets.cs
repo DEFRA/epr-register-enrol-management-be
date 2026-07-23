@@ -23,7 +23,7 @@ internal static class SwaggerUiStubUserAssets
     /// 1. Add a stub-user picker to the Swagger UI topbar; selection is
     ///    persisted in <c>localStorage</c>.
     /// 2. Monkey-patch <c>window.fetch</c> so every same-origin Try it out
-    ///    call carries the four CDP trust headers that
+    ///    call carries the three CDP trust headers that
     ///    <c>CognitoClientIdAuthenticationHandler</c> consumes in
     ///    header-trust (no-shared-secret) mode. Patching <c>fetch</c>
     ///    directly rather than going through Swashbuckle's
@@ -43,9 +43,9 @@ internal static class SwaggerUiStubUserAssets
 
           const STORAGE_KEY = 'eprSwaggerStubUser';
           const STUB_USERS = [
-            { id: 'stub-caseworker-1', name: 'Stub Caseworker One',   roles: 'standard' },
-            { id: 'stub-caseworker-2', name: 'Stub Caseworker Two',   roles: 'standard' },
-            { id: 'stub-caseworker-3', name: 'Stub Caseworker Three', roles: 'standard' }
+            { id: 'stub-caseworker-1', name: 'Stub Caseworker One' },
+            { id: 'stub-caseworker-2', name: 'Stub Caseworker Two' },
+            { id: 'stub-caseworker-3', name: 'Stub Caseworker Three' }
           ];
 
           function read() {
@@ -87,7 +87,6 @@ internal static class SwaggerUiStubUserAssets
             headers.set('x-cdp-cognito-client-id', 'local-swagger-ui');
             headers.set('x-cdp-user-id', user.id);
             headers.set('x-cdp-user-name', user.name);
-            headers.set('x-cdp-user-roles', user.roles);
             init.headers = headers;
             return originalFetch(input, init);
           };
@@ -117,7 +116,7 @@ internal static class SwaggerUiStubUserAssets
             STUB_USERS.forEach(function (u) {
               const opt = document.createElement('option');
               opt.value = u.id;
-              opt.textContent = u.name + '  [' + u.roles + ']';
+              opt.textContent = u.name;
               select.appendChild(opt);
             });
 

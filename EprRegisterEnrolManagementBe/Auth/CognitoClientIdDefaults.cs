@@ -28,15 +28,6 @@ public static class CognitoClientIdDefaults
     public const string DefaultUserNameHeaderName = "x-cdp-user-name";
 
     /// <summary>
-    /// Optional header carrying the end user's role list as a comma-separated
-    /// string (e.g. <c>standard,assign</c>). Each role is added as a
-    /// <see cref="System.Security.Claims.ClaimTypes.Role"/> claim so endpoints
-    /// can use the standard <c>User.IsInRole()</c> /
-    /// <c>RequireAuthorization(...)</c> patterns.
-    /// </summary>
-    public const string DefaultUserRolesHeaderName = "x-cdp-user-roles";
-
-    /// <summary>
     /// Header carrying a base64 HMAC-SHA256 signature, computed by the BFF
     /// over the canonical concatenation of the trust headers, using a
     /// shared secret. Lets the backend verify the trust headers actually

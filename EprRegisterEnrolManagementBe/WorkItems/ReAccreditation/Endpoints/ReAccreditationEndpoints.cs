@@ -109,11 +109,7 @@ internal static class ReAccreditationEndpoints
         CancellationToken cancellationToken)
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        // Cross-tenant gate (epr-946): mirror the framework's GetById
-        // contract — callers without case-worker access who target a work
-        // item submitted by a different tenant must see 404 (not 200, not
-        // "wrong type") so existence is not leaked.
-        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
+        if (workItem is null)
         {
             return TypedResults.NotFound();
         }
@@ -183,10 +179,7 @@ internal static class ReAccreditationEndpoints
         }
 
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        // Cross-tenant gate (epr-946): without this check any
-        // authenticated caller could record decision-rationale notes
-        // (and complete the rationale task) on any work item by id.
-        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
+        if (workItem is null)
         {
             return TypedResults.NotFound();
         }
@@ -262,7 +255,7 @@ internal static class ReAccreditationEndpoints
         CancellationToken cancellationToken)
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
+        if (workItem is null)
             return TypedResults.NotFound();
 
         if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))

@@ -51,26 +51,27 @@ signature, are rejected with `401`.
 | `x-cdp-auth-nonce`        | Per-request opaque random token minted by the BFF (e.g. base64url of 16 random bytes). Single-use — a replayed nonce is rejected for 10 minutes. |
 | `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below) keyed with `AUTH_SHARED_SECRET`.         |
 
-### Canonical payload (v2)
+### Canonical payload (v3)
 
 Join the following fields with a newline (`\n`), in this order, then compute
 `HMAC-SHA256(key=sharedSecret, message=payload)` and base64-encode the result:
 
 ```
-v2
+v3
 {x-cdp-cognito-client-id}
 {x-cdp-user-id or ""}
 {x-cdp-user-name or ""}
-{x-cdp-user-roles or ""}
 {x-cdp-auth-timestamp}
 {x-cdp-auth-nonce}
 ```
 
 Empty-string placeholders must be included for absent optional fields — the
-field count and separator positions are fixed. See
+field count and separator positions are fixed. Role membership is not part
+of the payload — authorization is entirely the BFF's concern (see
+`docs/adr/0005-rbac-in-frontend-drop-roles-from-payload.md`). See
 `CognitoClientIdAuthenticationHandler.ComputeSignature` for the authoritative
 implementation and `docs/adr/0003-hmac-canonical-v2-timestamp-nonce.md` for
-the rationale.
+the timestamp/nonce rationale.
 
 ## AWS resources to provision
 
