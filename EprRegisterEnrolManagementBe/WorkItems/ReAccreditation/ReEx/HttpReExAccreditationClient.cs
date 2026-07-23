@@ -15,6 +15,21 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
         AllowOutOfOrderMetadataProperties = true,
     };
 
+    // ReEx returns tonnage band as a raw snake_case code (e.g. "up_to_500").
+    // Mirrors epr-register-enrol-backend's HttpReExApiAdapter.TonnageBandMap so
+    // prior-year data lines up with the same canonical values the current
+    // year's PRNs section already uses (application-details.controller.js's
+    // TONNAGE_BAND_LABELS keys off "UpTo500" etc) — without this mapping the
+    // raw ReEx code renders unformatted on the Application details page.
+    private static readonly Dictionary<string, string> s_tonnageBandMap =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["up_to_500"] = "UpTo500",
+            ["up_to_1000"] = "UpTo1000",
+            ["up_to_10000"] = "UpTo10000",
+            ["over_10000"] = "Over10000",
+        };
+
     private static readonly Dictionary<string, Action<PriorYearBusinessPlanDto, int>> s_businessPlanMap =
         new(StringComparer.Ordinal)
         {
@@ -111,6 +126,8 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
 
         var prn = accreditation.PrnIssuance;
 
+        var tonnageBand = MapTonnageBand(prn?.TonnageBand);
+
         var authorisers = prn?.Signatories
             .Select(s => new PriorYearAuthoriserDto
             {
@@ -124,10 +141,25 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
         return new PriorYearAccreditationDto
         {
             Year = year.Value,
-            TonnageBand = prn?.TonnageBand,
+            TonnageBand = tonnageBand,
             Authorisers = authorisers,
             BusinessPlan = businessPlan
         };
+    }
+
+    private string? MapTonnageBand(string? rawTonnageBand)
+    {
+        if (rawTonnageBand is null)
+            return null;
+
+        if (s_tonnageBandMap.TryGetValue(rawTonnageBand, out var mapped))
+            return mapped;
+
+        _log.Log(
+            LogLevel.Warning,
+            "Unrecognised ReEx TonnageBand value",
+            new Dictionary<string, object?> { ["reex.tonnage_band"] = rawTonnageBand });
+        return rawTonnageBand;
     }
 
     private PriorYearBusinessPlanDto MapBusinessPlan(List<ReExIncomeBusinessPlanItemDto> items)
