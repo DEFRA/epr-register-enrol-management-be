@@ -125,6 +125,29 @@ public class ReAccreditationQueryPushHookTests
     }
 
     [Fact]
+    public async Task OnActionAppliedAsync_records_a_skipped_audit_entry_when_the_push_is_disabled()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (hook, adapter, auditAppender) = BuildSut();
+        adapter
+            .PushQueryRaisedAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
+        var workItem = BuildWorkItem();
+
+        await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
+
+        // MBE-F5: skipped (deliberately disabled) must never look like a
+        // failure — a distinct audit outcome, not query-push-failed.
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id, "query-push-skipped", Arg.Any<string>(),
+            Arg.Any<Dictionary<string, string?>>(), s_user, ct);
+        await auditAppender.DidNotReceive().AppendAsync(
+            workItem.Id, "query-push-failed", Arg.Any<string>(),
+            Arg.Any<Dictionary<string, string?>>(), s_user, ct);
+    }
+
+    [Fact]
     public async Task OnActionAppliedAsync_records_a_failed_audit_entry_when_the_push_fails()
     {
         var ct = TestContext.Current.CancellationToken;

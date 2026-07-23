@@ -26,10 +26,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///
 /// Never throws — a push failure must not unwind the already-persisted
 /// query transition (the <see cref="IWorkItemPostActionHook"/> contract).
-/// Records the outcome as a <c>query-push-sent</c> / <c>query-push-failed</c>
-/// audit entry, mirroring <see cref="ReAccreditationNotificationHook"/>'s
-/// own <c>notification-sent</c>/<c>notification-failed</c> pattern. A failed
-/// audit append is logged, not retried.
+/// Records the outcome as a <c>query-push-sent</c> / <c>query-push-skipped</c>
+/// / <c>query-push-failed</c> audit entry, mirroring
+/// <see cref="ReAccreditationNotificationHook"/>'s own
+/// <c>notification-sent</c>/<c>notification-failed</c> pattern.
+/// <c>query-push-skipped</c> (the push is deliberately disabled,
+/// <c>OperatorBackendApi:Enabled=false</c>) is kept distinct from
+/// <c>query-push-failed</c> (an attempted push that errored) — MBE-F5. A
+/// failed audit append is logged, not retried.
 /// </summary>
 internal sealed class ReAccreditationQueryPushHook(
     IOperatorBackendPushAdapter pushAdapter,
@@ -82,6 +86,22 @@ internal sealed class ReAccreditationQueryPushHook(
                 {
                     logger.LogWarning(
                         "query-push-sent audit entry could not be persisted for work item {WorkItemId}.", workItem.Id);
+                }
+            }
+            else if (result.IsSkipped)
+            {
+                // Deliberately disabled (OperatorBackendApi:Enabled=false) —
+                // not an error, so logged at Debug and audited under a
+                // distinct outcome that must never alert (MBE-F5).
+                details["reason"] = result.ErrorMessage;
+                logger.LogDebug(
+                    "Query push skipped for work item {WorkItemId}: {Reason}", workItem.Id, result.ErrorMessage);
+                var appended = await auditAppender.AppendAsync(
+                    workItem.Id, "query-push-skipped", "Query push to operator backend skipped", details, user, cancellationToken);
+                if (!appended)
+                {
+                    logger.LogWarning(
+                        "query-push-skipped audit entry could not be persisted for work item {WorkItemId}.", workItem.Id);
                 }
             }
             else

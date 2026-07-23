@@ -14,6 +14,7 @@ using EprRegisterEnrolManagementBe.Utils.Mongo;
 using System.Diagnostics.CodeAnalysis;
 using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using MongoDB.Driver.Authentication.AWS;
 using Notify.Client;
@@ -320,23 +321,34 @@ static void ConfigureReEx(IServiceCollection services, IConfiguration configurat
 }
 
 /// <summary>
-/// RA-311/MBE-1: outbound push-to-operator-backend wiring. When
-/// <c>OperatorBackendApi:Url</c> is unset the no-op adapter is registered so
-/// the service still boots (and the query flow still succeeds — the push is
-/// fire-and-forget) in any environment ahead of the OBE-2 push contract
-/// being agreed. Mirrors <see cref="ConfigureReEx"/>'s stub/real selection.
+/// RA-311/MBE-1: outbound push-to-operator-backend wiring. Adapter selection
+/// is keyed off the explicit <c>OperatorBackendApi:Enabled</c> switch
+/// (defaulting to <c>false</c>), not off whether <c>Url</c> happens to be
+/// set — so a deploy of this code is behaviour-neutral until the flag is
+/// turned on per environment, and the same flag doubles as the rollback
+/// lever (MBE-F5). When disabled, the no-op adapter is registered (the
+/// query flow still succeeds — the push is fire-and-forget) and a startup
+/// warning is logged once via
+/// <see cref="OperatorBackendPushDisabledWarningHostedService"/>. When
+/// enabled, <see cref="OperatorBackendApiConfigValidator"/> fails startup if
+/// <c>Url</c>/<c>ClientId</c>/<c>SharedSecret</c> are incomplete, rather than
+/// letting every push fail silently at runtime. Mirrors
+/// <see cref="ConfigureReEx"/>'s stub/real selection.
 /// </summary>
 [ExcludeFromCodeCoverage]
 static void ConfigureOperatorBackendPush(IServiceCollection services, IConfiguration configuration)
 {
     services.AddOptions<OperatorBackendApiConfig>()
-        .Bind(configuration.GetSection("OperatorBackendApi"));
+        .Bind(configuration.GetSection("OperatorBackendApi"))
+        .ValidateOnStart();
+    services.AddSingleton<IValidateOptions<OperatorBackendApiConfig>, OperatorBackendApiConfigValidator>();
 
-    var url = configuration.GetSection("OperatorBackendApi").GetValue<string>("Url");
+    var enabled = configuration.GetSection("OperatorBackendApi").GetValue("Enabled", false);
 
-    if (string.IsNullOrWhiteSpace(url))
+    if (!enabled)
     {
         services.AddSingleton<IOperatorBackendPushAdapter, NullOperatorBackendPushAdapter>();
+        services.AddHostedService<OperatorBackendPushDisabledWarningHostedService>();
         return;
     }
 

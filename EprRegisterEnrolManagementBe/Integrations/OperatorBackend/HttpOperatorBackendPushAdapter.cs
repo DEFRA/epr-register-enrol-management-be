@@ -5,6 +5,8 @@ using System.Text.Json.Serialization;
 using EprRegisterEnrolManagementBe.Auth;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Polly;
+using Polly.Retry;
 
 namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 
@@ -21,18 +23,24 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// exactly as the operator backend's adapter does against this service
 /// today.
 ///
-/// <b>Contract TBC with the OBE-2 owner (RA-311 plan §4):</b> the relative
-/// path and request shape below are a placeholder pending agreement on the
-/// exact MBE-1 ↔ OBE-2 push contract. Confined to this one file/constant/DTO
-/// so it is a small, isolated change once the real contract lands.
+/// Posts to OBE-2's real, confirmed contract:
+/// <c>POST api/v1/accreditation-applications/case-management/{workItemId}/query</c>
+/// with <c>workItemId</c> in the route and <c>{ queryNote, sectionKeys }</c>
+/// as the body (RA-311 fix doc, MBE-F1/F2).
+///
+/// Retries transient failures (5xx / transport exceptions) up to twice with
+/// jittered exponential backoff before giving up; never retries a 4xx, since
+/// the most likely first-enablement failure is a systemic auth/validation
+/// error that a retry would only amplify (MBE-F6).
 /// </summary>
 internal sealed class HttpOperatorBackendPushAdapter(
     IHttpClientFactory httpClientFactory,
     IOptions<OperatorBackendApiConfig> config,
-    ILogger<HttpOperatorBackendPushAdapter> logger) : IOperatorBackendPushAdapter
+    ILogger<HttpOperatorBackendPushAdapter> logger,
+    ResiliencePipeline<HttpResponseMessage>? retryPipeline = null) : IOperatorBackendPushAdapter
 {
-    // Contract TBC with OBE-2 owner — RA-311 plan §4.
-    private const string RelativePath = "/case-working/re-accreditation/query-raised";
+    private const string RelativePathTemplate =
+        "/api/v1/accreditation-applications/case-management/{0}/query";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -41,6 +49,8 @@ internal sealed class HttpOperatorBackendPushAdapter(
     };
 
     private readonly OperatorBackendApiConfig _config = config.Value;
+    private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline =
+        retryPipeline ?? BuildRetryPipeline(logger);
 
     public async Task<OperatorBackendPushResult> PushQueryRaisedAsync(
         Guid workItemId,
@@ -53,13 +63,23 @@ internal sealed class HttpOperatorBackendPushAdapter(
             return OperatorBackendPushResult.Failure("OperatorBackendApi:Url is not configured.");
         }
 
-        var endpoint = $"{_config.Url.TrimEnd('/')}{RelativePath}";
+        var relativePath = string.Format(RelativePathTemplate, Uri.EscapeDataString(workItemId.ToString()));
+        var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
         try
         {
-            using var request = BuildRequest(endpoint, workItemId, queryNote, sectionKeys);
-            var client = httpClientFactory.CreateClient("DefaultClient");
-            var response = await client.SendAsync(request, cancellationToken);
+            var response = await _retryPipeline.ExecuteAsync(
+                async ct =>
+                {
+                    // Rebuilt on every attempt (retry included): the request
+                    // content can only be sent once, and a fresh
+                    // timestamp/nonce per attempt is correct anyway — see
+                    // A4 in the RA-311 fix doc (5-minute signature window).
+                    using var request = BuildRequest(endpoint, queryNote, sectionKeys);
+                    var client = httpClientFactory.CreateClient("DefaultClient");
+                    return await client.SendAsync(request, ct);
+                },
+                cancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
@@ -81,10 +101,40 @@ internal sealed class HttpOperatorBackendPushAdapter(
         }
     }
 
-    private HttpRequestMessage BuildRequest(
-        string endpoint, Guid workItemId, string queryNote, IReadOnlyList<string> sectionKeys)
+    /// <summary>
+    /// 2 retries (3 attempts total) with jittered exponential backoff.
+    /// Retries transport exceptions and 5xx responses only — never a 4xx,
+    /// which on first enablement is most likely a systemic auth/contract
+    /// problem (e.g. a shared-secret mismatch) that a retry would only
+    /// triple the volume of, not fix.
+    /// </summary>
+    private static ResiliencePipeline<HttpResponseMessage> BuildRetryPipeline(ILogger logger) =>
+        new ResiliencePipelineBuilder<HttpResponseMessage>()
+            .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+            {
+                MaxRetryAttempts = 2,
+                BackoffType = DelayBackoffType.Exponential,
+                UseJitter = true,
+                Delay = TimeSpan.FromMilliseconds(500),
+                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                    .Handle<HttpRequestException>()
+                    .Handle<TaskCanceledException>()
+                    .HandleResult(response => (int)response.StatusCode >= 500),
+                OnRetry = args =>
+                {
+                    logger.LogWarning(
+                        "Operator backend push attempt {Attempt} failed{StatusInfo}; retrying in {DelayMs}ms.",
+                        args.AttemptNumber + 1,
+                        args.Outcome.Result is { } result ? $" (HTTP {(int)result.StatusCode})" : string.Empty,
+                        (long)args.RetryDelay.TotalMilliseconds);
+                    return ValueTask.CompletedTask;
+                },
+            })
+            .Build();
+
+    private HttpRequestMessage BuildRequest(string endpoint, string queryNote, IReadOnlyList<string> sectionKeys)
     {
-        var body = new QueryRaisedPushRequest(workItemId, queryNote, sectionKeys);
+        var body = new QueryRaisedPushRequest(queryNote, sectionKeys);
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
             Content = JsonContent.Create(body, options: JsonOptions),
@@ -107,5 +157,5 @@ internal sealed class HttpOperatorBackendPushAdapter(
         return request;
     }
 
-    private sealed record QueryRaisedPushRequest(Guid WorkItemId, string QueryNote, IReadOnlyList<string> SectionKeys);
+    private sealed record QueryRaisedPushRequest(string QueryNote, IReadOnlyList<string> SectionKeys);
 }
