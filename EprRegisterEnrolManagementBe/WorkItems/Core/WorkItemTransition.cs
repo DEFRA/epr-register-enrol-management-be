@@ -1,3 +1,5 @@
+using MongoDB.Bson.Serialization.Attributes;
+
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
@@ -5,7 +7,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// as a named action (e.g. "approve", "reject"). Modules attach transitions to
 /// their <see cref="IWorkItemType"/> so the engine can decide which actions a
 /// caller may invoke for a work item in its current state.
+///
+/// Embedded verbatim in a frozen <see cref="WorkItemTemplateSnapshot"/>, so it
+/// ignores extra BSON elements: a snapshot persisted under an older template
+/// (e.g. the role-tiered <c>requiredRoles</c> field dropped in RA-323) must
+/// still deserialise when the worklist is queried rather than throwing a
+/// <see cref="System.FormatException"/> for the whole batch.
 /// </summary>
+[BsonIgnoreExtraElements]
 /// <param name="ActionId">Stable, machine-readable id of the action (e.g. "approve").</param>
 /// <param name="DisplayName">Human-readable label shown in UIs and audit logs.</param>
 /// <param name="FromStateId">State the work item must be in for the action to be allowed.</param>
