@@ -14,7 +14,6 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// still deserialise when the worklist is queried rather than throwing a
 /// <see cref="System.FormatException"/> for the whole batch.
 /// </summary>
-[BsonIgnoreExtraElements]
 /// <param name="ActionId">Stable, machine-readable id of the action (e.g. "approve").</param>
 /// <param name="DisplayName">Human-readable label shown in UIs and audit logs.</param>
 /// <param name="FromStateId">State the work item must be in for the action to be allowed.</param>
@@ -25,6 +24,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// must be marked complete before the action is allowed. Set to <c>false</c>
 /// for transitions that should always be available (e.g. "withdraw").
 /// </param>
+[BsonIgnoreExtraElements]
 public sealed record WorkItemTransition(
     string ActionId,
     string DisplayName,
