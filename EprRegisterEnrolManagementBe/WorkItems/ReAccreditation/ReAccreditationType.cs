@@ -206,33 +206,47 @@ internal sealed class ReAccreditationType : IWorkItemType
         // re-evaluated there, not gated on the way in.
         // RA-337: these land on 'updated' rather than jumping straight back
         // to the originating state — see continue-review-during-* below.
+        //
+        // Security review (RA-311/MBE-1): CallerInvocable is false on all
+        // four. Unlike query-during-*, these four transitions all share the
+        // same FromStateId ('queried'), so the engine's normal from-state
+        // guard cannot tell them apart — a caller who could invoke them
+        // directly via the generic action endpoint could pick any of the
+        // four target states regardless of which state the item was
+        // actually queried from, bypassing ReAccreditationResumeService's
+        // audit-history resolution and the validation/audit trail it
+        // performs, and skipping intermediate states/tasks entirely.
         new WorkItemTransition(
             "resume-during-duly-making",
             "Resume",
             s_queried.Id,
             s_updated.Id,
-            RequiresAllTasksComplete: false
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "resume-during-duly-made",
             "Resume",
             s_queried.Id,
             s_updated.Id,
-            RequiresAllTasksComplete: false
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "resume-during-assessment",
             "Resume",
             s_queried.Id,
             s_updated.Id,
-            RequiresAllTasksComplete: false
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "resume-during-decision",
             "Resume",
             s_queried.Id,
             s_updated.Id,
-            RequiresAllTasksComplete: false
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         // RA-337: the inverse of the four resume-during-* transitions above,
         // one per originating state, so a work item a caseworker has
@@ -243,33 +257,43 @@ internal sealed class ReAccreditationType : IWorkItemType
         // RequiresAllTasksComplete is false because 'updated' has no tasks
         // of its own — task completeness for the target state is
         // re-evaluated there, not gated on the way in.
+        //
+        // Security review (RA-311/MBE-1): CallerInvocable is false for the
+        // same reason as resume-during-* above — all four share FromStateId
+        // 'updated', so a directly-invoked caller choice would bypass
+        // ReAccreditationContinueReviewService's audit-history resolution
+        // and could send the item to the wrong (attacker-chosen) stage.
         new WorkItemTransition(
             "continue-review-during-duly-making",
             "Continue review",
             s_updated.Id,
             s_submitted.Id,
-            RequiresAllTasksComplete: false
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "continue-review-during-duly-made",
             "Continue review",
             s_updated.Id,
             s_dulyMade.Id,
-            RequiresAllTasksComplete: false
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "continue-review-during-assessment",
             "Continue review",
             s_updated.Id,
             s_assessmentInProgress.Id,
-            RequiresAllTasksComplete: false
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "continue-review-during-decision",
             "Continue review",
             s_updated.Id,
             s_awaitingDecision.Id,
-            RequiresAllTasksComplete: false
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         // Withdrawal is always available before a decision is recorded; it
         // bypasses the "all tasks complete" gate so an organisation can

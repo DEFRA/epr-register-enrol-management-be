@@ -32,12 +32,19 @@ internal sealed class ReAccreditationResumeSnapshotMigration(
     /// </summary>
     private const string MarkerActionId = "resume-during-duly-making";
 
+    // Security review (RA-311/MBE-1): CallerInvocable: false on all four —
+    // kept in sync with the live ReAccreditationType.Transitions declaration.
+    // These four share FromStateId 'queried', so if they were directly
+    // invocable via the generic action endpoint a caller could pick any
+    // target state regardless of which state the item was actually queried
+    // from, bypassing ReAccreditationResumeService's audit-history
+    // resolution.
     private static readonly IReadOnlyList<WorkItemTransition> s_newTransitions =
     [
-        new WorkItemTransition("resume-during-duly-making", "Resume", "queried", "submitted", RequiresAllTasksComplete: false),
-        new WorkItemTransition("resume-during-duly-made", "Resume", "queried", "duly-made", RequiresAllTasksComplete: false),
-        new WorkItemTransition("resume-during-assessment", "Resume", "queried", "assessment-in-progress", RequiresAllTasksComplete: false),
-        new WorkItemTransition("resume-during-decision", "Resume", "queried", "awaiting-decision", RequiresAllTasksComplete: false),
+        new WorkItemTransition("resume-during-duly-making", "Resume", "queried", "submitted", RequiresAllTasksComplete: false, CallerInvocable: false),
+        new WorkItemTransition("resume-during-duly-made", "Resume", "queried", "duly-made", RequiresAllTasksComplete: false, CallerInvocable: false),
+        new WorkItemTransition("resume-during-assessment", "Resume", "queried", "assessment-in-progress", RequiresAllTasksComplete: false, CallerInvocable: false),
+        new WorkItemTransition("resume-during-decision", "Resume", "queried", "awaiting-decision", RequiresAllTasksComplete: false, CallerInvocable: false),
     ];
 
     public string Name => "ReAccreditation: add resume-during-* transitions to snapshot (v6 → v7)";

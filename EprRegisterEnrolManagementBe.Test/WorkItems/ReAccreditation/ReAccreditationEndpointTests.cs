@@ -1085,6 +1085,64 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
+    public async Task ResumeFromQuery_returns_conflict_when_another_writer_wins_the_race()
+    {
+        // Mirrors Query_returns_conflict_when_another_writer_wins_the_race:
+        // proves the PR's "idempotent on a duplicate/concurrent resubmit
+        // call" claim only holds for a genuinely SEQUENTIAL duplicate (the
+        // second call observes the already-'updated' state before it starts
+        // and takes the idempotent-replay branch). A truly concurrent
+        // resubmit — another writer's replace lands between this request's
+        // read and its own transition write — is not idempotent: the
+        // engine's optimistic-concurrency check fires and this call gets a
+        // clean 409, not a 200. That is a reasonable, safe outcome (the
+        // caller can retry, and the retry *will* be an idempotent replay),
+        // but it was previously entirely unproven — only the sequential
+        // "call twice" case had a test.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(
+            BuildQueried(id, TenantClientId, "query-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+        Assert.DoesNotContain(persisted.AuditLog,
+            a => a.Action == ReAccreditationResumeService.AuditAction);
+    }
+
+    [Fact]
+    public async Task ResumeFromQuery_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        // New endpoint, same auth contract as every other mutating
+        // re-accreditation endpoint (see Query_returns_unauthorized_...):
+        // a missing 'user:id' claim must 401, not silently proceed or 500.
+        // This was previously untested for resume-from-query specifically.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildQueried(id, TenantClientId, "query-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+    }
+
+    [Fact]
     public async Task ResumeFromQuery_returns_not_found_when_the_work_item_is_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -1233,6 +1291,55 @@ public class ReAccreditationEndpointTests
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task ContinueReview_returns_conflict_when_another_writer_wins_the_race()
+    {
+        // Same concurrency argument as ResumeFromQuery_returns_conflict_...:
+        // a genuinely concurrent continue-review (another writer's replace
+        // lands between this request's read and its own transition write)
+        // must not corrupt state or 500 — it should surface as a clean 409,
+        // distinct from the sequential "call twice" idempotent-replay case
+        // already covered by ContinueReview_is_idempotent_on_a_duplicate_call.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(
+            BuildUpdated(id, TenantClientId, "resume-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("updated", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task ContinueReview_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        // New endpoint, same auth contract as every other mutating
+        // re-accreditation endpoint — previously untested for
+        // continue-review specifically.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildUpdated(id, TenantClientId, "resume-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("updated", persisted!.StateId);
     }
 
     [Fact]

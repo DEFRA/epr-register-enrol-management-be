@@ -29,4 +29,17 @@ public sealed class OperatorBackendApiConfig
     public string ClientId { get; set; } = "epr-register-enrol-management-be";
 
     public string? SharedSecret { get; set; }
+
+    /// <summary>
+    /// Per-attempt timeout applied to each push attempt (including retries).
+    /// Guards against the underlying <c>HttpClient</c>'s 100s default
+    /// timeout, which — combined with the up-to-two retries — could
+    /// otherwise stall the synchronous, request-path
+    /// <see cref="EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReAccreditationQueryPushHook"/>
+    /// (and therefore the caseworker's own query action request) for several
+    /// minutes if the operator backend hangs rather than failing fast.
+    /// Mirrors <c>Notify:RequestTimeoutSeconds</c>'s same-purpose guard on
+    /// <c>GovukNotifyClient</c>'s outbound pipeline. Set to 0 to disable.
+    /// </summary>
+    public int RequestTimeoutSeconds { get; set; } = 15;
 }

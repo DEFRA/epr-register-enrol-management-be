@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
+using Polly.Timeout;
 
 namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 
@@ -50,7 +51,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
 
     private readonly OperatorBackendApiConfig _config = config.Value;
     private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline =
-        retryPipeline ?? BuildRetryPipeline(logger);
+        retryPipeline ?? BuildRetryPipeline(logger, config.Value.RequestTimeoutSeconds);
 
     public async Task<OperatorBackendPushResult> PushQueryRaisedAsync(
         Guid workItemId,
@@ -102,14 +103,28 @@ internal sealed class HttpOperatorBackendPushAdapter(
     }
 
     /// <summary>
-    /// 2 retries (3 attempts total) with jittered exponential backoff.
-    /// Retries transport exceptions and 5xx responses only — never a 4xx,
-    /// which on first enablement is most likely a systemic auth/contract
-    /// problem (e.g. a shared-secret mismatch) that a retry would only
-    /// triple the volume of, not fix.
+    /// 2 retries (3 attempts total) with jittered exponential backoff, each
+    /// attempt bounded by <paramref name="requestTimeoutSeconds"/>. Retries
+    /// transport exceptions, per-attempt timeouts, and 5xx responses only —
+    /// never a 4xx, which on first enablement is most likely a systemic
+    /// auth/contract problem (e.g. a shared-secret mismatch) that a retry
+    /// would only triple the volume of, not fix.
+    ///
+    /// The per-attempt timeout guards against the underlying
+    /// <c>HttpClient</c>'s 100s default (no timeout is configured on the
+    /// "DefaultClient" registration) which, combined with up to two
+    /// retries, could otherwise stall this adapter's caller — the
+    /// synchronous, request-path <c>ReAccreditationQueryPushHook</c> — for
+    /// several minutes if the operator backend hangs rather than
+    /// responding with an error. Strategy order matters: retry is outer,
+    /// timeout is inner, so the timeout applies to each attempt
+    /// individually rather than to the whole retry sequence (mirrors
+    /// <c>GovukNotifyClient</c>'s pipeline for the same reason).
     /// </summary>
-    private static ResiliencePipeline<HttpResponseMessage> BuildRetryPipeline(ILogger logger) =>
-        new ResiliencePipelineBuilder<HttpResponseMessage>()
+    private static ResiliencePipeline<HttpResponseMessage> BuildRetryPipeline(
+        ILogger logger, int requestTimeoutSeconds)
+    {
+        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>()
             .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
             {
                 MaxRetryAttempts = 2,
@@ -119,6 +134,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
                 ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
                     .Handle<HttpRequestException>()
                     .Handle<TaskCanceledException>()
+                    .Handle<TimeoutRejectedException>()
                     .HandleResult(response => (int)response.StatusCode >= 500),
                 OnRetry = args =>
                 {
@@ -129,8 +145,25 @@ internal sealed class HttpOperatorBackendPushAdapter(
                         (long)args.RetryDelay.TotalMilliseconds);
                     return ValueTask.CompletedTask;
                 },
-            })
-            .Build();
+            });
+
+        if (requestTimeoutSeconds > 0)
+        {
+            builder.AddTimeout(new TimeoutStrategyOptions
+            {
+                Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
+                OnTimeout = args =>
+                {
+                    logger.LogWarning(
+                        "Operator backend push attempt timed out after {TimeoutSeconds}s.",
+                        args.Timeout.TotalSeconds);
+                    return ValueTask.CompletedTask;
+                },
+            });
+        }
+
+        return builder.Build();
+    }
 
     private HttpRequestMessage BuildRequest(string endpoint, string queryNote, IReadOnlyList<string> sectionKeys)
     {

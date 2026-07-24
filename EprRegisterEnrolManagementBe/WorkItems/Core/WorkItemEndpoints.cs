@@ -469,10 +469,35 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         [FromRoute] string actionId,
         HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
+        // Security boundary (RA-311/MBE-1 review): some transitions
+        // (currently the re-accreditation module's resume-during-*/
+        // continue-review-during-* pairs) are declared with
+        // CallerInvocable: false because several of them share the same
+        // FromStateId — the engine's normal "is the item in the right
+        // state" guard cannot tell them apart, so a caller who could invoke
+        // one directly here would pick the target state themselves instead
+        // of the module's bespoke service resolving it server-side from
+        // audit history. Checked against the work item's own frozen
+        // TemplateSnapshot (the same source ApplyActionAsync itself
+        // resolves the transition from) so this rejects using the exact
+        // rules the item was submitted under.
+        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
+        var transition = workItem?.TemplateSnapshot?.Transitions.FirstOrDefault(t =>
+            string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase));
+        if (transition is { CallerInvocable: false })
+        {
+            return ToHttpResult(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.UnknownAction,
+                    $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'."),
+                engine);
+        }
+
         var result = await engine.ApplyActionAsync(
             id,
             actionId,

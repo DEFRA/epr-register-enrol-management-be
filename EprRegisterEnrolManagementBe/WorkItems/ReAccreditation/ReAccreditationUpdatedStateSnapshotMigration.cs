@@ -45,12 +45,19 @@ internal sealed class ReAccreditationUpdatedStateSnapshotMigration(
         "resume-during-decision",
     };
 
+    // Security review (RA-311/MBE-1): CallerInvocable: false on all four —
+    // kept in sync with the live ReAccreditationType.Transitions declaration.
+    // These four share FromStateId 'updated', so if they were directly
+    // invocable via the generic action endpoint a caller could pick any
+    // target state regardless of which state the item was actually queried
+    // from, bypassing ReAccreditationContinueReviewService's audit-history
+    // resolution.
     private static readonly IReadOnlyList<WorkItemTransition> s_continueReviewTransitions =
     [
-        new WorkItemTransition("continue-review-during-duly-making", "Continue review", "updated", "submitted", RequiresAllTasksComplete: false),
-        new WorkItemTransition("continue-review-during-duly-made", "Continue review", "updated", "duly-made", RequiresAllTasksComplete: false),
-        new WorkItemTransition("continue-review-during-assessment", "Continue review", "updated", "assessment-in-progress", RequiresAllTasksComplete: false),
-        new WorkItemTransition("continue-review-during-decision", "Continue review", "updated", "awaiting-decision", RequiresAllTasksComplete: false),
+        new WorkItemTransition("continue-review-during-duly-making", "Continue review", "updated", "submitted", RequiresAllTasksComplete: false, CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-duly-made", "Continue review", "updated", "duly-made", RequiresAllTasksComplete: false, CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-assessment", "Continue review", "updated", "assessment-in-progress", RequiresAllTasksComplete: false, CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-decision", "Continue review", "updated", "awaiting-decision", RequiresAllTasksComplete: false, CallerInvocable: false),
     ];
 
     public string Name => "ReAccreditation: add 'updated' state + continue-review-during-* transitions to snapshot (v7 → v8)";
@@ -128,8 +135,14 @@ internal sealed class ReAccreditationUpdatedStateSnapshotMigration(
     {
         var snapshot = workItem.TemplateSnapshot!;
 
+        // CallerInvocable is force-set to false here (not just preserved via
+        // `with`) so a snapshot migrated by an older build of this migration
+        // — from before the RA-311/MBE-1 security review added the flag —
+        // is brought up to the safe value too, not just items migrated fresh.
         var retargetedTransitions = snapshot.Transitions.Select(t =>
-            s_resumeActionIds.Contains(t.ActionId) ? t with { ToStateId = s_updatedState.Id } : t);
+            s_resumeActionIds.Contains(t.ActionId)
+                ? t with { ToStateId = s_updatedState.Id, CallerInvocable = false }
+                : t);
 
         workItem.TemplateSnapshot = new WorkItemTemplateSnapshot
         {
