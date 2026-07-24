@@ -469,4 +469,122 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             _persistence.SetPayloadFieldAsync(
                 Guid.NewGuid(), "currentQuery", null!, TestContext.Current.CancellationToken));
     }
+    // ------------------- RA-342 legacy snapshot tolerance -------------------
+
+    /// <summary>
+    /// RA-342: a work item whose frozen <c>templateSnapshot</c> was persisted
+    /// under an older template carries a since-removed <c>requiredRoles</c>
+    /// element on a transition (role tiering was dropped in RA-323). Before the
+    /// fix, the default <c>BsonClassMapSerializer</c> rejected that unknown
+    /// element with a <see cref="FormatException"/>, failing the whole worklist
+    /// batch with a 500. Both the projected worklist query and the single-item
+    /// fetch must now silently ignore the stray elements and return the item.
+    ///
+    /// The raw BSON is inserted directly (bypassing the typed serializer) so
+    /// the stray elements land exactly as a legacy document holds them. Stray
+    /// elements are seeded on every annotated snapshot type — the transition
+    /// (the class in the reported stack trace), a state, a task and the
+    /// snapshot root — so this single case exercises all four
+    /// <c>[BsonIgnoreExtraElements]</c> annotations at once: if any were
+    /// missing, deserialization would still throw.
+    /// </summary>
+    [Fact]
+    public async Task QueryAsync_and_GetById_tolerate_a_legacy_snapshot_with_removed_fields()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        var id = Guid.NewGuid();
+
+        // Camel-cased element names to match the CamelCaseElementNameConvention
+        // the production serializers register (MongoConversions).
+        var legacyDoc = new BsonDocument
+        {
+            ["_id"] = id.ToString(),
+            ["typeId"] = "re-accreditation",
+            ["stateId"] = "submitted",
+            ["submittedAt"] = new BsonDateTime(now),
+            ["lastModifiedAt"] = new BsonDateTime(now),
+            ["templateVersion"] = "1",
+            ["version"] = 0,
+            ["templateSnapshot"] = new BsonDocument
+            {
+                ["templateVersion"] = "1",
+                // Snapshot-root stray element (WorkItemTemplateSnapshot).
+                ["retiredSnapshotField"] = "legacy",
+                ["states"] = new BsonArray
+                {
+                    // WorkItemState.Id / WorkItemTask.Id map to the "_id" element
+                    // (default NamedIdMemberConvention), not "id".
+                    new BsonDocument
+                    {
+                        ["_id"] = "submitted",
+                        ["displayName"] = "Submitted",
+                        ["isTerminal"] = false,
+                        // State stray element (WorkItemState).
+                        ["colour"] = "amber"
+                    },
+                    new BsonDocument
+                    {
+                        ["_id"] = "approved",
+                        ["displayName"] = "Approved",
+                        ["isTerminal"] = true
+                    }
+                },
+                ["transitions"] = new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        ["actionId"] = "approve",
+                        ["displayName"] = "Approve",
+                        ["fromStateId"] = "submitted",
+                        ["toStateId"] = "approved",
+                        ["requiresAllTasksComplete"] = true,
+                        // The exact element from the reported stack trace: an
+                        // array of role names on a transition (WorkItemTransition).
+                        ["requiredRoles"] = new BsonArray { "regulator-admin", "regulator-approver" }
+                    }
+                },
+                ["tasksByState"] = new BsonDocument
+                {
+                    ["submitted"] = new BsonArray
+                    {
+                        new BsonDocument
+                        {
+                            ["_id"] = "task-one",
+                            ["displayName"] = "Task One",
+                            // Task stray element (WorkItemTask).
+                            ["mandatory"] = true
+                        }
+                    }
+                }
+            }
+        };
+
+        // Insert the raw document so the stray elements are stored verbatim,
+        // exactly as a legacy work item holds them.
+        await _clientFactory.GetCollection<BsonDocument>("workItems")
+            .InsertOneAsync(legacyDoc, cancellationToken: ct);
+
+        // Projected worklist path (WorkItemPersistence.QueryAsync) — the code
+        // path in the reported 500. Must not throw and must return the item.
+        var page = await _persistence.QueryAsync(new WorkItemQuery(), ct);
+        var listed = Assert.Single(page.Items);
+        Assert.Equal(id, listed.Id);
+        Assert.NotNull(listed.TemplateSnapshot);
+        // Everything else deserialized normally, the stray fields simply ignored.
+        var transition = Assert.Single(listed.TemplateSnapshot!.Transitions);
+        Assert.Equal("approve", transition.ActionId);
+        Assert.Equal("submitted", transition.FromStateId);
+
+        // Single-item fetch path (WorkItemPersistence.GetByIdAsync) must be
+        // equally tolerant.
+        var fetched = await _persistence.GetByIdAsync(id, ct);
+        Assert.NotNull(fetched);
+        Assert.Equal(id, fetched!.Id);
+        Assert.NotNull(fetched.TemplateSnapshot);
+        Assert.Equal("Submitted", Assert.Single(
+            fetched.TemplateSnapshot!.States, s => s.Id == "submitted").DisplayName);
+        Assert.Equal("task-one",
+            Assert.Single(fetched.TemplateSnapshot.GetTasksForState("submitted")).Id);
+    }
 }

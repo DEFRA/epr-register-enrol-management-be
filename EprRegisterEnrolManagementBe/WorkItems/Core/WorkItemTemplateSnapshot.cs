@@ -1,3 +1,5 @@
+using MongoDB.Bson.Serialization.Attributes;
+
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
@@ -11,7 +13,13 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// Snapshots are taken eagerly at submission rather than lazily on read so
 /// that the frozen view survives the live module being unregistered or its
 /// task definitions changing.
+///
+/// By design a frozen snapshot can contain fields the live model has since
+/// removed, so it ignores extra BSON elements: a snapshot persisted under an
+/// older template must still deserialise when the worklist is queried rather
+/// than throwing a <see cref="System.FormatException"/> for the whole batch.
 /// </summary>
+[BsonIgnoreExtraElements]
 public sealed class WorkItemTemplateSnapshot : IWorkItemTemplate
 {
     public required string TemplateVersion { get; init; }
