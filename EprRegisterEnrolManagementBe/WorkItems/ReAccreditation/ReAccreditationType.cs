@@ -26,8 +26,8 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     // RA-211: not terminal — a queried application is paused pending regulator
     // clarification, not a closed outcome like approved/rejected/withdrawn.
-    // No outgoing transition is declared yet; resuming from 'queried' back
-    // into the assessment flow is out of scope for this ticket.
+    // RA-311/MBE-1: the resume-during-* transitions below are the way out,
+    // one per originating state.
     private static readonly WorkItemState s_queried = new("queried", "Queried");
     private static readonly WorkItemState s_approved = new(
         "approved",
@@ -82,7 +82,12 @@ internal sealed class ReAccreditationType : IWorkItemType
     // query-during-duly-made (duly-made → queried). Items snapshotted at v5
     // keep the v5 action set, so only work items submitted from this version
     // onwards can be queried before assessment starts.
-    public string TemplateVersion => "v6";
+    // v7 (RA-311/MBE-1): added the four resume-during-* transitions out of
+    // 'queried', one per originating state, so a resubmitted application can
+    // return to the state it was queried from. Items snapshotted before v7
+    // have no way out of 'queried' until ReAccreditationResumeSnapshotMigration
+    // patches their frozen snapshot.
+    public string TemplateVersion => "v7";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -166,6 +171,42 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Query",
             s_awaitingDecision.Id,
             s_queried.Id,
+            RequiresAllTasksComplete: false
+        ),
+        // RA-311/MBE-1: the inverse of the four query-during-* transitions
+        // above, one per originating state, so a resubmitted application
+        // returns to wherever it was queried from. Which one applies is
+        // resolved server-side (ReAccreditationResumeService) from the
+        // work item's own 'application-queried' audit history, never
+        // chosen by the caller. RequiresAllTasksComplete is false for the
+        // same reason as query-during-*: task completeness for the target
+        // state is re-evaluated there, not gated on the way in.
+        new WorkItemTransition(
+            "resume-during-duly-making",
+            "Resume",
+            s_queried.Id,
+            s_submitted.Id,
+            RequiresAllTasksComplete: false
+        ),
+        new WorkItemTransition(
+            "resume-during-duly-made",
+            "Resume",
+            s_queried.Id,
+            s_dulyMade.Id,
+            RequiresAllTasksComplete: false
+        ),
+        new WorkItemTransition(
+            "resume-during-assessment",
+            "Resume",
+            s_queried.Id,
+            s_assessmentInProgress.Id,
+            RequiresAllTasksComplete: false
+        ),
+        new WorkItemTransition(
+            "resume-during-decision",
+            "Resume",
+            s_queried.Id,
+            s_awaitingDecision.Id,
             RequiresAllTasksComplete: false
         ),
         // Withdrawal is always available before a decision is recorded; it

@@ -26,10 +26,16 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationSlaStampHook>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
+        // RA-311/MBE-1: pushes the query note + sections to the operator
+        // backend whenever a query is raised.
+        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
         services.AddSingleton<IWorkItemPostTaskHook, ReAccreditationDulyMadeHook>();
         services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSnapshotMigration>();
         services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSlaClockBackfillMigration>();
         services.AddSingleton<IWorkItemMigration, ReAccreditationMaterialBackfillMigration>();
+        // RA-311/MBE-1: adds the resume-during-* transitions to every
+        // existing work item's frozen template snapshot (v6 → v7).
+        services.AddSingleton<IWorkItemMigration, ReAccreditationResumeSnapshotMigration>();
         // RA-132: accreditation-id generator + module-scoped approval
         // service that owns the bespoke approval workflow (id issuance,
         // SLA clock stop, queued publishing). RA-133: the generator
@@ -40,6 +46,9 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // RA-291: bespoke query workflow (state-derived query-during-* action
         // + query-detail audit entry).
         services.AddSingleton<IReAccreditationQueryService, ReAccreditationQueryService>();
+        // RA-311/MBE-1: bespoke resume workflow (state-derived
+        // resume-during-* action + query-responded audit entry).
+        services.AddSingleton<IReAccreditationResumeService, ReAccreditationResumeService>();
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)

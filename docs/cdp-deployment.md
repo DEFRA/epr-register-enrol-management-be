@@ -27,6 +27,9 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 | `TraceHeader`              | Service config        | Defaults to `x-cdp-request-id`.                             |
 | `HTTP_PROXY` / `HTTPS_PROXY` | CDP platform        | CDP outbound proxy. Required for any external HTTP call.    |
 | `TRUSTSTORE_*`             | CDP platform          | Loaded by `LoadCustomTrustStoreFromEnvironment`.            |
+| `OperatorBackendApi__Enabled` | Service config     | Master switch for the RA-311/MBE-1 outbound query push (see [Operator backend push](#operator-backend-push-ra-311mbe-1) below). Defaults to `false` — deploying this code is behaviour-neutral until this is explicitly set. |
+| `OperatorBackendApi__Url`  | Service config        | Internal base URL of `epr-register-enrol-backend` (CDP service-discovery name, not a public ingress hostname). Required (non-blank) when `OperatorBackendApi__Enabled=true` — startup fails otherwise. |
+| `OperatorBackendApi__ClientId` | Service config    | Defaults to `epr-register-enrol-management-be`. Only override if `epr-register-enrol-backend`'s `CaseManagementAuth:ExpectedCognitoClientId` expects a different value — prefer leaving both at their defaults. |
 
 ## Required secrets (cdp-portal)
 
@@ -36,6 +39,7 @@ Create via the CDP self-service portal under the service's "secrets" tab:
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `AUTH_SHARED_SECRET` | HMAC shared secret used by the BFF to sign trust headers (see [BFF signing contract](#bff-signing-contract) below). **Required in all non-Development environments.** The service will reject every authenticated request with `401` until this is set. Generate with `openssl rand -base64 32`. |
 | `NOTIFY_API_KEY`     | GOV.UK Notify API key. When absent the service boots with a no-op Notify client — notifications are logged but not sent. |
+| `OperatorBackendApi__SharedSecret` | HMAC shared secret this service signs its outbound RA-311/MBE-1 query-push requests with. Must match `CaseManagementAuth__SharedSecret` on `epr-register-enrol-backend` exactly — a mismatch on either side 401s every push. **Required when `OperatorBackendApi__Enabled=true`** — startup fails otherwise. Generate with `openssl rand -base64 32`. Distinct from `AUTH_SHARED_SECRET` above (this service's *inbound* secret) and from whatever `epr-register-enrol-backend` uses for its own calls into this service — three separate secrets, not one, do not conflate them when rotating. |
 
 ## BFF signing contract
 
@@ -72,6 +76,25 @@ of the payload — authorization is entirely the BFF's concern (see
 `CognitoClientIdAuthenticationHandler.ComputeSignature` for the authoritative
 implementation and `docs/adr/0003-hmac-canonical-v2-timestamp-nonce.md` for
 the timestamp/nonce rationale.
+
+## Operator backend push (RA-311/MBE-1)
+
+When a case worker raises a query on a re-accreditation application, this
+service pushes the query note and queried sections to
+`epr-register-enrol-backend` so the operator's own record reflects it. The
+push is off by default (`OperatorBackendApi:Enabled=false`) so deploying this
+code never changes behaviour on its own — it must be explicitly turned on per
+environment once `Url`/`ClientId`/`SharedSecret` are configured there. The
+same flag is the rollback lever: set it back to `false` to disable the push
+without a code deploy (queries still succeed for the case worker either way —
+the push is fire-and-forget). Sequencing note: set the matching
+`CaseManagementAuth__SharedSecret` on `epr-register-enrol-backend` **before**
+flipping `OperatorBackendApi__Enabled=true` here, or the first pushes 401.
+
+Every push attempt is recorded on the work item's audit log:
+`query-push-sent` (2xx), `query-push-skipped` (disabled — not an error, does
+not alert), or `query-push-failed` (attempted and errored — does not alert on
+its own yet; see the RA-311 fix doc for the planned failure-rate alert).
 
 ## AWS resources to provision
 
