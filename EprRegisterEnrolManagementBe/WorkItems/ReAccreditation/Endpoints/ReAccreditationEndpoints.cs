@@ -103,6 +103,14 @@ internal static class ReAccreditationEndpoints
             .WithMetadata(new RequestSizeLimitAttribute(MaxResumeBodyBytes))
             .RequireAuthorization();
 
+        // RA-337: caseworker-facing endpoint that moves a work item on from
+        // 'updated' once the resubmission has been reviewed. No body — the
+        // correct continue-review-during-* transition is resolved server-side
+        // from the work item's own resume-during-* audit history.
+        group.MapPost("/{id:guid}/continue-review", ContinueReview)
+            .WithName("ContinueReAccreditationReview")
+            .RequireAuthorization();
+
         // Live prior-year accreditation data from ReEx, scoped to this
         // work item type because no other module needs ReEx access.
         group.MapGet("/{id:guid}/prior-year", GetPriorYear)
@@ -474,6 +482,57 @@ internal static class ReAccreditationEndpoints
             title: "Could not resume re-accreditation from query",
             detail: result.Message,
             statusCode: status);
+    }
+
+    /// <summary>
+    /// RA-337: move a re-accreditation work item on from the non-terminal
+    /// <c>updated</c> state once a caseworker has reviewed a query
+    /// resubmission. No body — the correct <c>continue-review-during-*</c>
+    /// transition is derived server-side from the work item's own
+    /// <c>resume-during-*</c> audit history.
+    ///
+    /// A state that cannot be continued from (never resumed into, or a
+    /// decided/withdrawn/still-queried outcome) is 409, not a 500. A work
+    /// item that has already left <c>updated</c> into a valid continue
+    /// target succeeds as an idempotent replay, so a duplicate call does not
+    /// fail the caller's retry.
+    /// </summary>
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> ContinueReview(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationContinueReviewService continueReviewService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken)
+    {
+        var result = await continueReviewService.ContinueReviewAsync(id, httpContext.User, cancellationToken);
+
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[WorkItemEndpoints.IdempotentReplayHeader] = "true";
+        }
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var continueStatus = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
+            WorkItemActionFailureCode.InvalidTransition
+                or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest
+        };
+
+        return TypedResults.Problem(
+            title: "Could not continue re-accreditation review",
+            detail: result.Message,
+            statusCode: continueStatus);
     }
 }
 

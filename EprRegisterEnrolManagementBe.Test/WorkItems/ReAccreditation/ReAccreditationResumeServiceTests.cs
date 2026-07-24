@@ -125,15 +125,11 @@ public class ReAccreditationResumeServiceTests
 
     // ------------------------------- idempotency -------------------------------
 
-    [Theory]
-    [InlineData("submitted")]
-    [InlineData("duly-made")]
-    [InlineData("assessment-in-progress")]
-    [InlineData("awaiting-decision")]
-    public async Task ResumeFromQueryAsync_is_an_idempotent_replay_when_already_resumed(string stateId)
+    [Fact]
+    public async Task ResumeFromQueryAsync_is_an_idempotent_replay_when_already_resumed()
     {
         var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(queryActionId: null, stateId: stateId);
+        var harness = new Harness(queryActionId: null, stateId: "updated");
 
         var result = await harness.Service.ResumeFromQueryAsync(
             harness.WorkItem.Id, s_request, harness.User, ct);
@@ -150,7 +146,16 @@ public class ReAccreditationResumeServiceTests
     [InlineData("approved")]
     [InlineData("rejected")]
     [InlineData("withdrawn")]
-    public async Task ResumeFromQueryAsync_fails_with_invalid_transition_from_a_decided_outcome(string stateId)
+    // RA-337: once resumed, a work item passes through 'submitted' /
+    // 'duly-made' / 'assessment-in-progress' / 'awaiting-decision' via
+    // continue-review-during-*, not resume-during-* directly, so a resume
+    // retry landing on one of those states is a real conflict now, not an
+    // idempotent replay.
+    [InlineData("submitted")]
+    [InlineData("duly-made")]
+    [InlineData("assessment-in-progress")]
+    [InlineData("awaiting-decision")]
+    public async Task ResumeFromQueryAsync_fails_with_invalid_transition_when_not_queried_or_updated(string stateId)
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(queryActionId: null, stateId: stateId);

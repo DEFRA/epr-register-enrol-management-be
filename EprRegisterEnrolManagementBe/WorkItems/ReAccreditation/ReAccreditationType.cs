@@ -29,6 +29,15 @@ internal sealed class ReAccreditationType : IWorkItemType
     // RA-311/MBE-1: the resume-during-* transitions below are the way out,
     // one per originating state.
     private static readonly WorkItemState s_queried = new("queried", "Queried");
+
+    // RA-337: not terminal — a resubmitted-but-not-yet-reviewed application.
+    // resume-during-* lands here (instead of jumping straight back to the
+    // originating state) so CM has a distinct status to show a caseworker
+    // that a query response has arrived. continue-review-during-* is the way
+    // out, one per originating state, resolved server-side by
+    // ReAccreditationContinueReviewService from the resume-during-* action
+    // that put the item here.
+    private static readonly WorkItemState s_updated = new("updated", "Updated");
     private static readonly WorkItemState s_approved = new(
         "approved",
         "Approved",
@@ -87,7 +96,20 @@ internal sealed class ReAccreditationType : IWorkItemType
     // return to the state it was queried from. Items snapshotted before v7
     // have no way out of 'queried' until ReAccreditationResumeSnapshotMigration
     // patches their frozen snapshot.
-    public string TemplateVersion => "v7";
+    // v8 (RA-337): CM previously showed the pre-query state's label
+    // immediately after a resume, with no signal that a response had
+    // arrived — the resume-during-* transitions now land on a new
+    // non-terminal 'updated' state instead of jumping straight back to the
+    // originating state. Four new continue-review-during-* transitions, one
+    // per originating state, carry a work item on from 'updated' once a
+    // caseworker has reviewed the response; which one applies is resolved
+    // server-side by ReAccreditationContinueReviewService from the
+    // resume-during-* action that put the item in 'updated', never chosen
+    // by the caller. Items snapshotted before v8 have resume-during-*
+    // transitions that still jump straight to the originating state until
+    // ReAccreditationUpdatedStateSnapshotMigration patches their frozen
+    // snapshot.
+    public string TemplateVersion => "v8";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -97,6 +119,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         s_assessmentInProgress,
         s_awaitingDecision,
         s_queried,
+        s_updated,
         s_approved,
         s_rejected,
         s_withdrawn,
@@ -175,37 +198,76 @@ internal sealed class ReAccreditationType : IWorkItemType
         ),
         // RA-311/MBE-1: the inverse of the four query-during-* transitions
         // above, one per originating state, so a resubmitted application
-        // returns to wherever it was queried from. Which one applies is
-        // resolved server-side (ReAccreditationResumeService) from the
-        // work item's own 'application-queried' audit history, never
-        // chosen by the caller. RequiresAllTasksComplete is false for the
-        // same reason as query-during-*: task completeness for the target
-        // state is re-evaluated there, not gated on the way in.
+        // moves out of 'queried'. Which one applies is resolved server-side
+        // (ReAccreditationResumeService) from the work item's own
+        // 'application-queried' audit history, never chosen by the caller.
+        // RequiresAllTasksComplete is false for the same reason as
+        // query-during-*: task completeness for the target state is
+        // re-evaluated there, not gated on the way in.
+        // RA-337: these land on 'updated' rather than jumping straight back
+        // to the originating state — see continue-review-during-* below.
         new WorkItemTransition(
             "resume-during-duly-making",
             "Resume",
             s_queried.Id,
-            s_submitted.Id,
+            s_updated.Id,
             RequiresAllTasksComplete: false
         ),
         new WorkItemTransition(
             "resume-during-duly-made",
             "Resume",
             s_queried.Id,
-            s_dulyMade.Id,
+            s_updated.Id,
             RequiresAllTasksComplete: false
         ),
         new WorkItemTransition(
             "resume-during-assessment",
             "Resume",
             s_queried.Id,
-            s_assessmentInProgress.Id,
+            s_updated.Id,
             RequiresAllTasksComplete: false
         ),
         new WorkItemTransition(
             "resume-during-decision",
             "Resume",
             s_queried.Id,
+            s_updated.Id,
+            RequiresAllTasksComplete: false
+        ),
+        // RA-337: the inverse of the four resume-during-* transitions above,
+        // one per originating state, so a work item a caseworker has
+        // finished reviewing in 'updated' moves on to wherever it was
+        // queried from. Which one applies is resolved server-side
+        // (ReAccreditationContinueReviewService) from the work item's own
+        // resume-during-* audit entry, never chosen by the caller.
+        // RequiresAllTasksComplete is false because 'updated' has no tasks
+        // of its own — task completeness for the target state is
+        // re-evaluated there, not gated on the way in.
+        new WorkItemTransition(
+            "continue-review-during-duly-making",
+            "Continue review",
+            s_updated.Id,
+            s_submitted.Id,
+            RequiresAllTasksComplete: false
+        ),
+        new WorkItemTransition(
+            "continue-review-during-duly-made",
+            "Continue review",
+            s_updated.Id,
+            s_dulyMade.Id,
+            RequiresAllTasksComplete: false
+        ),
+        new WorkItemTransition(
+            "continue-review-during-assessment",
+            "Continue review",
+            s_updated.Id,
+            s_assessmentInProgress.Id,
+            RequiresAllTasksComplete: false
+        ),
+        new WorkItemTransition(
+            "continue-review-during-decision",
+            "Continue review",
+            s_updated.Id,
             s_awaitingDecision.Id,
             RequiresAllTasksComplete: false
         ),

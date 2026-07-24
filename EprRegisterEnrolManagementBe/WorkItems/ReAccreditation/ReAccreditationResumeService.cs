@@ -44,12 +44,15 @@ internal sealed class ReAccreditationResumeService(
     /// genuine "already resumed" idempotent replay apart from a work item
     /// that has moved on to some other, unrelated state (which is a real
     /// conflict, not a replay).
+    ///
+    /// RA-337: resume-during-* now lands on the single 'updated' waypoint
+    /// state rather than jumping straight back to the originating state, so
+    /// 'updated' is the only valid resume target — even though a caseworker
+    /// may since have moved the item on further via continue-review-during-*,
+    /// that is a distinct, later step this service has no opinion on.
     /// </summary>
     private static readonly IReadOnlySet<string> s_resumeTargetStates =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "submitted", "duly-made", "assessment-in-progress", "awaiting-decision",
-        };
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "updated" };
 
     /// <summary>
     /// Inverse of <see cref="ReAccreditationQueryService"/>'s
