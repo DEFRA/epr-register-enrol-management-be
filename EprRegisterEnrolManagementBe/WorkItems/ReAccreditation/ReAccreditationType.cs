@@ -26,9 +26,18 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     // RA-211: not terminal — a queried application is paused pending regulator
     // clarification, not a closed outcome like approved/rejected/withdrawn.
-    // No outgoing transition is declared yet; resuming from 'queried' back
-    // into the assessment flow is out of scope for this ticket.
+    // RA-311/MBE-1: the resume-during-* transitions below are the way out,
+    // one per originating state.
     private static readonly WorkItemState s_queried = new("queried", "Queried");
+
+    // RA-337: not terminal — a resubmitted-but-not-yet-reviewed application.
+    // resume-during-* lands here (instead of jumping straight back to the
+    // originating state) so CM has a distinct status to show a caseworker
+    // that a query response has arrived. continue-review-during-* is the way
+    // out, one per originating state, resolved server-side by
+    // ReAccreditationContinueReviewService from the resume-during-* action
+    // that put the item here.
+    private static readonly WorkItemState s_updated = new("updated", "Updated");
     private static readonly WorkItemState s_approved = new(
         "approved",
         "Approved",
@@ -82,7 +91,25 @@ internal sealed class ReAccreditationType : IWorkItemType
     // query-during-duly-made (duly-made → queried). Items snapshotted at v5
     // keep the v5 action set, so only work items submitted from this version
     // onwards can be queried before assessment starts.
-    public string TemplateVersion => "v6";
+    // v7 (RA-311/MBE-1): added the four resume-during-* transitions out of
+    // 'queried', one per originating state, so a resubmitted application can
+    // return to the state it was queried from. Items snapshotted before v7
+    // have no way out of 'queried' until ReAccreditationResumeSnapshotMigration
+    // patches their frozen snapshot.
+    // v8 (RA-337): CM previously showed the pre-query state's label
+    // immediately after a resume, with no signal that a response had
+    // arrived — the resume-during-* transitions now land on a new
+    // non-terminal 'updated' state instead of jumping straight back to the
+    // originating state. Four new continue-review-during-* transitions, one
+    // per originating state, carry a work item on from 'updated' once a
+    // caseworker has reviewed the response; which one applies is resolved
+    // server-side by ReAccreditationContinueReviewService from the
+    // resume-during-* action that put the item in 'updated', never chosen
+    // by the caller. Items snapshotted before v8 have resume-during-*
+    // transitions that still jump straight to the originating state until
+    // ReAccreditationUpdatedStateSnapshotMigration patches their frozen
+    // snapshot.
+    public string TemplateVersion => "v8";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -92,6 +119,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         s_assessmentInProgress,
         s_awaitingDecision,
         s_queried,
+        s_updated,
         s_approved,
         s_rejected,
         s_withdrawn,
@@ -167,6 +195,105 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_awaitingDecision.Id,
             s_queried.Id,
             RequiresAllTasksComplete: false
+        ),
+        // RA-311/MBE-1: the inverse of the four query-during-* transitions
+        // above, one per originating state, so a resubmitted application
+        // moves out of 'queried'. Which one applies is resolved server-side
+        // (ReAccreditationResumeService) from the work item's own
+        // 'application-queried' audit history, never chosen by the caller.
+        // RequiresAllTasksComplete is false for the same reason as
+        // query-during-*: task completeness for the target state is
+        // re-evaluated there, not gated on the way in.
+        // RA-337: these land on 'updated' rather than jumping straight back
+        // to the originating state — see continue-review-during-* below.
+        //
+        // Security review (RA-311/MBE-1): CallerInvocable is false on all
+        // four. Unlike query-during-*, these four transitions all share the
+        // same FromStateId ('queried'), so the engine's normal from-state
+        // guard cannot tell them apart — a caller who could invoke them
+        // directly via the generic action endpoint could pick any of the
+        // four target states regardless of which state the item was
+        // actually queried from, bypassing ReAccreditationResumeService's
+        // audit-history resolution and the validation/audit trail it
+        // performs, and skipping intermediate states/tasks entirely.
+        new WorkItemTransition(
+            "resume-during-duly-making",
+            "Resume",
+            s_queried.Id,
+            s_updated.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
+        ),
+        new WorkItemTransition(
+            "resume-during-duly-made",
+            "Resume",
+            s_queried.Id,
+            s_updated.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
+        ),
+        new WorkItemTransition(
+            "resume-during-assessment",
+            "Resume",
+            s_queried.Id,
+            s_updated.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
+        ),
+        new WorkItemTransition(
+            "resume-during-decision",
+            "Resume",
+            s_queried.Id,
+            s_updated.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
+        ),
+        // RA-337: the inverse of the four resume-during-* transitions above,
+        // one per originating state, so a work item a caseworker has
+        // finished reviewing in 'updated' moves on to wherever it was
+        // queried from. Which one applies is resolved server-side
+        // (ReAccreditationContinueReviewService) from the work item's own
+        // resume-during-* audit entry, never chosen by the caller.
+        // RequiresAllTasksComplete is false because 'updated' has no tasks
+        // of its own — task completeness for the target state is
+        // re-evaluated there, not gated on the way in.
+        //
+        // Security review (RA-311/MBE-1): CallerInvocable is false for the
+        // same reason as resume-during-* above — all four share FromStateId
+        // 'updated', so a directly-invoked caller choice would bypass
+        // ReAccreditationContinueReviewService's audit-history resolution
+        // and could send the item to the wrong (attacker-chosen) stage.
+        new WorkItemTransition(
+            "continue-review-during-duly-making",
+            "Continue review",
+            s_updated.Id,
+            s_submitted.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
+        ),
+        new WorkItemTransition(
+            "continue-review-during-duly-made",
+            "Continue review",
+            s_updated.Id,
+            s_dulyMade.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
+        ),
+        new WorkItemTransition(
+            "continue-review-during-assessment",
+            "Continue review",
+            s_updated.Id,
+            s_assessmentInProgress.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
+        ),
+        new WorkItemTransition(
+            "continue-review-during-decision",
+            "Continue review",
+            s_updated.Id,
+            s_awaitingDecision.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
         ),
         // Withdrawal is always available before a decision is recorded; it
         // bypasses the "all tasks complete" gate so an organisation can

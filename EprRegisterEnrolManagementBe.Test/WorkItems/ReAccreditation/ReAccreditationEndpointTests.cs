@@ -992,6 +992,389 @@ public class ReAccreditationEndpointTests
         }
     }
 
+    // ------------------------- RA-311/MBE-1 ResumeFromQuery -------------------------
+
+    private static ResumeFromQueryRequest ResumeBody() =>
+        ResumeBody(s_querySections);
+
+    // Takes sectionKeys without defaulting an explicit null away, so callers
+    // testing "sectionKeys omitted/empty" get exactly what they pass.
+    private static ResumeFromQueryRequest ResumeBody(IReadOnlyList<string>? sectionKeys) =>
+        new(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            sectionKeys,
+            Sections: null,
+            FileReferences: [new SectionFileReference("prn-tonnage", "file-1", "evidence.pdf", "s3/key/evidence.pdf")]);
+
+    private static WorkItem BuildQueried(Guid id, string submittedBy, string queryActionId)
+    {
+        var item = BuildInState(id, "queried", submittedBy);
+        item.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = ReAccreditationQueryService.AuditAction,
+            ActionDisplayName = "Application queried",
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = DefaultUserId,
+            CreatedByName = DefaultUserName,
+            Details = new Dictionary<string, string?> { ["actionId"] = queryActionId },
+        });
+        return item;
+    }
+
+    [Theory]
+    [InlineData("query-during-duly-making", "resume-during-duly-making")]
+    [InlineData("query-during-duly-made", "resume-during-duly-made")]
+    [InlineData("query-during-assessment", "resume-during-assessment")]
+    [InlineData("query-during-decision", "resume-during-decision")]
+    public async Task ResumeFromQuery_moves_the_application_to_updated(
+        string queryActionId, string expectedResumeActionId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildQueried(id, TenantClientId, queryActionId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        // RA-337: resume-during-* lands on 'updated', not the originating
+        // state, so CM shows an "Updated" status until a caseworker moves
+        // it on via continue-review.
+        Assert.Equal("updated", persisted!.StateId);
+        Assert.Contains(persisted.AuditLog, a => a.Action == "action-applied"
+            && a.Details.GetValueOrDefault("actionId") == expectedResumeActionId);
+
+        var responseEntry = Assert.Single(persisted.AuditLog,
+            a => a.Action == ReAccreditationResumeService.AuditAction);
+        Assert.Equal("business-plan,prn-tonnage", responseEntry.Details.GetValueOrDefault("sectionKeys"));
+        Assert.Equal("Jane Doe", responseEntry.Details.GetValueOrDefault("responderFullName"));
+
+        var latestSections = persisted.Payload!["latestSections"].AsBsonDocument;
+        Assert.Equal(
+            ["business-plan", "prn-tonnage"],
+            latestSections["sectionKeys"].AsBsonArray.Select(v => v.AsString));
+    }
+
+    [Fact]
+    public async Task ResumeFromQuery_is_idempotent_on_a_duplicate_call()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildQueried(id, TenantClientId, "query-during-duly-making"), cancellationToken);
+
+        var first = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+        var second = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("updated", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task ResumeFromQuery_returns_conflict_when_another_writer_wins_the_race()
+    {
+        // Mirrors Query_returns_conflict_when_another_writer_wins_the_race:
+        // proves the PR's "idempotent on a duplicate/concurrent resubmit
+        // call" claim only holds for a genuinely SEQUENTIAL duplicate (the
+        // second call observes the already-'updated' state before it starts
+        // and takes the idempotent-replay branch). A truly concurrent
+        // resubmit — another writer's replace lands between this request's
+        // read and its own transition write — is not idempotent: the
+        // engine's optimistic-concurrency check fires and this call gets a
+        // clean 409, not a 200. That is a reasonable, safe outcome (the
+        // caller can retry, and the retry *will* be an idempotent replay),
+        // but it was previously entirely unproven — only the sequential
+        // "call twice" case had a test.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(
+            BuildQueried(id, TenantClientId, "query-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+        Assert.DoesNotContain(persisted.AuditLog,
+            a => a.Action == ReAccreditationResumeService.AuditAction);
+    }
+
+    [Fact]
+    public async Task ResumeFromQuery_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        // New endpoint, same auth contract as every other mutating
+        // re-accreditation endpoint (see Query_returns_unauthorized_...):
+        // a missing 'user:id' claim must 401, not silently proceed or 500.
+        // This was previously untested for resume-from-query specifically.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildQueried(id, TenantClientId, "query-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task ResumeFromQuery_returns_not_found_when_the_work_item_is_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/resume-from-query",
+            ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ResumeFromQuery_succeeds_for_another_tenants_work_item()
+    {
+        // RBAC lives in the frontend now (ADR-0005) — the endpoint performs
+        // the resume regardless of who submitted the item.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildQueried(id, "a-different-tenant", "query-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    public async Task ResumeFromQuery_returns_conflict_for_a_decided_outcome(string stateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, stateId, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query", ResumeBody(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null, "sectionKeys must contain at least one section")]
+    [InlineData(new string[0], "sectionKeys must contain at least one section")]
+    [InlineData(new[] { "not-a-section" }, "sectionKeys must only contain valid sections")]
+    public async Task ResumeFromQuery_rejects_an_invalid_body_before_touching_the_work_item(
+        string[]? sectionKeys, string expectedDetail)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildQueried(id, TenantClientId, "query-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query",
+            ResumeBody(sectionKeys: sectionKeys), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal(expectedDetail, problem!.Detail);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+    }
+
+    // ------------------------------- RA-337 ContinueReview -------------------------------
+
+    private static WorkItem BuildUpdated(Guid id, string submittedBy, string resumeActionId)
+    {
+        var item = BuildInState(id, "updated", submittedBy);
+        item.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "action-applied",
+            ActionDisplayName = "Action applied",
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = DefaultUserId,
+            CreatedByName = DefaultUserName,
+            Details = new Dictionary<string, string?>
+            {
+                ["actionId"] = resumeActionId,
+                ["fromStateId"] = "queried",
+                ["toStateId"] = "updated",
+            },
+        });
+        return item;
+    }
+
+    [Theory]
+    [InlineData("resume-during-duly-making", "continue-review-during-duly-making", "submitted")]
+    [InlineData("resume-during-duly-made", "continue-review-during-duly-made", "duly-made")]
+    [InlineData("resume-during-assessment", "continue-review-during-assessment", "assessment-in-progress")]
+    [InlineData("resume-during-decision", "continue-review-during-decision", "awaiting-decision")]
+    public async Task ContinueReview_moves_the_application_back_to_the_originating_state(
+        string resumeActionId, string expectedContinueActionId, string expectedStateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildUpdated(id, TenantClientId, resumeActionId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        Assert.Equal(expectedStateId, persisted!.StateId);
+        Assert.Contains(persisted.AuditLog, a => a.Action == "action-applied"
+            && a.Details.GetValueOrDefault("actionId") == expectedContinueActionId);
+    }
+
+    [Fact]
+    public async Task ContinueReview_is_idempotent_on_a_duplicate_call()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildUpdated(id, TenantClientId, "resume-during-duly-making"), cancellationToken);
+
+        var first = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review", content: null, cancellationToken);
+        var second = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task ContinueReview_returns_conflict_when_another_writer_wins_the_race()
+    {
+        // Same concurrency argument as ResumeFromQuery_returns_conflict_...:
+        // a genuinely concurrent continue-review (another writer's replace
+        // lands between this request's read and its own transition write)
+        // must not corrupt state or 500 — it should surface as a clean 409,
+        // distinct from the sequential "call twice" idempotent-replay case
+        // already covered by ContinueReview_is_idempotent_on_a_duplicate_call.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(
+            BuildUpdated(id, TenantClientId, "resume-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("updated", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task ContinueReview_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        // New endpoint, same auth contract as every other mutating
+        // re-accreditation endpoint — previously untested for
+        // continue-review specifically.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildUpdated(id, TenantClientId, "resume-during-duly-making"), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("updated", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task ContinueReview_returns_not_found_when_the_work_item_is_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/continue-review", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    [InlineData("queried")]
+    public async Task ContinueReview_returns_conflict_when_not_updated(string stateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, stateId, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
     private static WorkItem BuildInState(Guid id, string stateId, string submittedBy)
     {
         var type = new ReAccreditationType();

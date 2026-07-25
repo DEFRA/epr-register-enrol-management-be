@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v6", _type.TemplateVersion);
+        Assert.Equal("v8", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -34,6 +34,8 @@ public class ReAccreditationTypeTests
         Assert.False(states["awaiting-decision"].IsTerminal);
         Assert.True(states.ContainsKey("queried"));
         Assert.False(states["queried"].IsTerminal);
+        Assert.True(states.ContainsKey("updated"));
+        Assert.False(states["updated"].IsTerminal);
     }
 
     [Theory]
@@ -48,6 +50,17 @@ public class ReAccreditationTypeTests
     [InlineData("query-during-duly-made", "duly-made", "queried", false)]
     [InlineData("query-during-assessment", "assessment-in-progress", "queried", false)]
     [InlineData("query-during-decision", "awaiting-decision", "queried", false)]
+    // RA-311/MBE-1: the inverse of the four query-during-* transitions above.
+    // RA-337: these land on 'updated', not the originating state directly.
+    [InlineData("resume-during-duly-making", "queried", "updated", false)]
+    [InlineData("resume-during-duly-made", "queried", "updated", false)]
+    [InlineData("resume-during-assessment", "queried", "updated", false)]
+    [InlineData("resume-during-decision", "queried", "updated", false)]
+    // RA-337: the inverse of the four resume-during-* transitions above.
+    [InlineData("continue-review-during-duly-making", "updated", "submitted", false)]
+    [InlineData("continue-review-during-duly-made", "updated", "duly-made", false)]
+    [InlineData("continue-review-during-assessment", "updated", "assessment-in-progress", false)]
+    [InlineData("continue-review-during-decision", "updated", "awaiting-decision", false)]
     [InlineData("withdraw", "submitted", "withdrawn", false)]
     [InlineData("withdraw-during-duly-made", "duly-made", "withdrawn", false)]
     [InlineData("withdraw-during-assessment", "assessment-in-progress", "withdrawn", false)]
