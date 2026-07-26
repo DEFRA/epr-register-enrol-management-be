@@ -31,7 +31,10 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
         services.AddSingleton<IWorkItemPostTaskHook, ReAccreditationDulyMadeHook>();
         services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSnapshotMigration>();
-        services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSlaClockBackfillMigration>();
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationDulyMadeSlaClockBackfillMigration
+        >();
         services.AddSingleton<IWorkItemMigration, ReAccreditationMaterialBackfillMigration>();
         // RA-311/MBE-1: adds the resume-during-* transitions to every
         // existing work item's frozen template snapshot (v6 → v7).
@@ -57,7 +60,15 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // RA-337: bespoke continue-review workflow (audit-derived
         // continue-review-during-* action) that carries a work item on from
         // 'updated' once a caseworker has reviewed a query resubmission.
-        services.AddSingleton<IReAccreditationContinueReviewService, ReAccreditationContinueReviewService>();
+        services.AddSingleton<
+            IReAccreditationContinueReviewService,
+            ReAccreditationContinueReviewService
+        >();
+        // RA-294/RA-297: thin notification service that appends a
+        // 'site-added' audit entry whenever the operator backend reports a
+        // new ORS/interim site added to the application. No state
+        // transition — this is purely an audit-trail side effect.
+        services.AddSingleton<IReAccreditationSiteAddedService, ReAccreditationSiteAddedService>();
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)
