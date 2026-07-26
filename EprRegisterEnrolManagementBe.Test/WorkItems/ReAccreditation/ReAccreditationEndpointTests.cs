@@ -1670,14 +1670,9 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
             isNewSite,
         };
 
-    [Theory]
-    [InlineData("ors")]
-    [InlineData("interim")]
-    public async Task SiteAdded_returns_ok_for_a_valid_request(string siteType)
+    [Fact]
+    public async Task SiteAdded_appends_a_site_added_audit_entry_for_an_ors_site()
     {
-        // RA102-2nr scaffold: the route, request model and validation are in
-        // place and delegate to the service; RA102-cx9 adds the actual
-        // 'site-added' audit-log side effect on top of this.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
@@ -1688,10 +1683,9 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
             cancellationToken
         );
 
-        var body = siteType == "ors" ? OrsBody() : InterimBody();
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/site-added",
-            body,
+            OrsBody(orsId: "001", isNewSite: true),
             cancellationToken
         );
 
@@ -1701,6 +1695,45 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         Assert.NotNull(persisted);
         // No state transition — adding a site does not move the application on.
         Assert.Equal("assessment-in-progress", persisted!.StateId);
+
+        var entry = Assert.Single(persisted.AuditLog, a => a.Action == "site-added");
+        Assert.Equal("ors", entry.Details.GetValueOrDefault("siteType"));
+        Assert.Equal("001", entry.Details.GetValueOrDefault("orsId"));
+        Assert.Null(entry.Details.GetValueOrDefault("siteNumber"));
+        Assert.Equal("True", entry.Details.GetValueOrDefault("isNewSite"));
+
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(body);
+        Assert.Contains(body!.AuditLog!, a => a.Action == "site-added");
+    }
+
+    [Fact]
+    public async Task SiteAdded_appends_a_site_added_audit_entry_for_an_interim_site()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildInState(id, "assessment-in-progress", TenantClientId),
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/site-added",
+            InterimBody(orsId: "001", siteNumber: "INT-1", isNewSite: false),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        var entry = Assert.Single(persisted!.AuditLog, a => a.Action == "site-added");
+        Assert.Equal("interim", entry.Details.GetValueOrDefault("siteType"));
+        Assert.Equal("001", entry.Details.GetValueOrDefault("orsId"));
+        Assert.Equal("INT-1", entry.Details.GetValueOrDefault("siteNumber"));
+        Assert.Equal("False", entry.Details.GetValueOrDefault("isNewSite"));
     }
 
     [Fact]
@@ -1790,7 +1823,10 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
     {
         // Unlike Query/Resume/ContinueReview, this is a system notification
         // from the operator backend rather than a case-worker action, so it
-        // does not require an end-user identity.
+        // does not require an end-user identity — the audit entry's
+        // CreatedBy/CreatedByName are simply null, mirroring the "system
+        // entry" convention ReAccreditationPaymentService's own
+        // notification-outcome audit entries use.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture, userId: null);
         using var client = factory.CreateClient();
@@ -1808,6 +1844,10 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        var entry = Assert.Single(persisted!.AuditLog, a => a.Action == "site-added");
+        Assert.Null(entry.CreatedBy);
     }
 
     private static WorkItem BuildInState(Guid id, string stateId, string submittedBy)
