@@ -109,7 +109,14 @@ internal sealed class ReAccreditationType : IWorkItemType
     // transitions that still jump straight to the originating state until
     // ReAccreditationUpdatedStateSnapshotMigration patches their frozen
     // snapshot.
-    public string TemplateVersion => "v8";
+    // v9 (RA-252): added withdraw-during-query (queried -> withdrawn) so an
+    // operator can withdraw an application that is currently awaiting a
+    // query response, not just the four pre-decision states already
+    // covered by withdraw/withdraw-during-*. Items snapshotted before v9
+    // have no way to reach 'withdrawn' from 'queried' until
+    // ReAccreditationWithdrawQuerySnapshotMigration patches their frozen
+    // snapshot.
+    public string TemplateVersion => "v9";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -155,12 +162,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         // /work-items/{id}/actions/approve, preventing a caller from bypassing the
         // bespoke side-effects (accreditation id issuance, SLA clock stop, queued
         // publishing job). Reject still goes through awaiting-decision via the generic engine.
-        new WorkItemTransition(
-            "reject",
-            "Reject",
-            s_awaitingDecision.Id,
-            s_rejected.Id
-        ),
+        new WorkItemTransition("reject", "Reject", s_awaitingDecision.Id, s_rejected.Id),
         // RA-211 / RA-291: a case worker can query an application from any
         // pre-decision state when they need clarification before proceeding.
         // Like sla-extend/withdraw, this bypasses the "all tasks complete"
@@ -324,6 +326,18 @@ internal sealed class ReAccreditationType : IWorkItemType
             "withdraw-during-decision",
             "Withdraw",
             s_awaitingDecision.Id,
+            s_withdrawn.Id,
+            RequiresAllTasksComplete: false
+        ),
+        // RA-252: an operator can withdraw an application awaiting a query
+        // response too — unlike resume-during-*/continue-review-during-*
+        // there is only one possible target state (withdrawn) from
+        // 'queried', so this is CallerInvocable (default) with no ambiguity
+        // for the engine's from-state guard to resolve.
+        new WorkItemTransition(
+            "withdraw-during-query",
+            "Withdraw",
+            s_queried.Id,
             s_withdrawn.Id,
             RequiresAllTasksComplete: false
         ),

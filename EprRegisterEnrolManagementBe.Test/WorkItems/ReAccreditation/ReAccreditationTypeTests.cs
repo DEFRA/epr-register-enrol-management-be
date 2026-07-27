@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v8", _type.TemplateVersion);
+        Assert.Equal("v9", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -65,6 +65,7 @@ public class ReAccreditationTypeTests
     [InlineData("withdraw-during-duly-made", "duly-made", "withdrawn", false)]
     [InlineData("withdraw-during-assessment", "assessment-in-progress", "withdrawn", false)]
     [InlineData("withdraw-during-decision", "awaiting-decision", "withdrawn", false)]
+    [InlineData("withdraw-during-query", "queried", "withdrawn", false)]
     public void Declares_expected_transition(
         string actionId,
         string fromStateId,
