@@ -19,112 +19,71 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationDulyMadeSnapshotMigration(
     ILogger<ReAccreditationDulyMadeSnapshotMigration> logger,
-    TimeProvider? timeProvider = null) : IWorkItemMigration
+    TimeProvider? timeProvider = null)
+    : ReAccreditationMigrationBase(logger)
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private int _autoTransitioned;
 
-    public string Name => "ReAccreditation: remove duly-make transition from snapshot (v4 → v5)";
+    public override string Name => "ReAccreditation: remove duly-make transition from snapshot (v4 → v5)";
 
-    public async Task ApplyAsync(IWorkItemPersistence persistence, CancellationToken cancellationToken)
+    protected override void OnRunStarting() => _autoTransitioned = 0;
+
+    protected override bool ShouldConsider(WorkItem candidate) => NeedsMigration(candidate);
+
+    protected override bool TryMigrate(WorkItem full)
     {
-        var migrated = 0;
-        var autoTransitioned = 0;
-        var skipped = 0;
-        var page = 1;
-        const int pageSize = WorkItemQuery.MaxPageSize;
-
-        while (true)
+        // Re-check against the full document: another instance may have
+        // migrated it between the query and the re-read.
+        if (!NeedsMigration(full))
         {
-            var result = await persistence.QueryAsync(
-                new WorkItemQuery(
-                    TypeIds: [ReAccreditationType.Id],
-                    Page: page,
-                    PageSize: pageSize,
-                    IncludeArchived: true),
-                cancellationToken);
-
-            foreach (var candidate in result.Items)
-            {
-                if (!NeedsMigration(candidate))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                // QueryAsync omits AuditLog/Notes — fetch the full document before saving
-                // so we do not accidentally wipe audit history on ReplaceAsync.
-                var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
-                if (full is null || !NeedsMigration(full))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                PatchSnapshot(full);
-
-                if (full.StateId == "submitted" && AllTasksComplete(full, "submitted"))
-                {
-                    var now = _timeProvider.GetUtcNow().UtcDateTime;
-                    full.StateId = "duly-made";
-                    full.SlaClock = new WorkItemSlaClock { StartedAt = now };
-                    full.AuditLog.Add(new WorkItemAuditEntry
-                    {
-                        Action = "action-applied",
-                        ActionDisplayName = "Action applied",
-                        CreatedAt = now,
-                        CreatedBy = "migration",
-                        CreatedByName = "Migration",
-                        Details = new Dictionary<string, string?>
-                        {
-                            ["actionId"] = "duly-make",
-                            ["fromStateId"] = "submitted",
-                            ["toStateId"] = "duly-made"
-                        }
-                    });
-                    full.AuditLog.Add(new WorkItemAuditEntry
-                    {
-                        Action = "sla-clock-started",
-                        ActionDisplayName = "SLA clock started",
-                        CreatedAt = now,
-                        CreatedBy = "migration",
-                        CreatedByName = "Migration",
-                        Details = new Dictionary<string, string?>
-                        {
-                            ["startedAt"] = now.ToString("O"),
-                            ["targetDays"] = new WorkItemSlaClock().TargetDuration.TotalDays.ToString()
-                        }
-                    });
-                    autoTransitioned++;
-                }
-
-                try
-                {
-                    await persistence.ReplaceAsync(full, cancellationToken);
-                    migrated++;
-                }
-                catch (WorkItemConcurrencyException)
-                {
-                    // Another instance migrated this item concurrently; it is already up to date.
-                    logger.LogDebug(
-                        "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                        full.Id);
-                    skipped++;
-                }
-            }
-
-            var processed = (long)(page - 1) * pageSize + result.Items.Count;
-            if (processed >= result.TotalCount)
-            {
-                break;
-            }
-
-            page++;
+            return false;
         }
 
-        logger.LogInformation(
-            "Migration '{Name}' complete: {Migrated} updated ({AutoTransitioned} auto-transitioned to duly-made), {Skipped} already current.",
-            Name, migrated, autoTransitioned, skipped);
+        PatchSnapshot(full);
+
+        if (full.StateId == "submitted" && AllTasksComplete(full, "submitted"))
+        {
+            var now = _timeProvider.GetUtcNow().UtcDateTime;
+            full.StateId = "duly-made";
+            full.SlaClock = new WorkItemSlaClock { StartedAt = now };
+            full.AuditLog.Add(new WorkItemAuditEntry
+            {
+                Action = "action-applied",
+                ActionDisplayName = "Action applied",
+                CreatedAt = now,
+                CreatedBy = "migration",
+                CreatedByName = "Migration",
+                Details = new Dictionary<string, string?>
+                {
+                    ["actionId"] = "duly-make",
+                    ["fromStateId"] = "submitted",
+                    ["toStateId"] = "duly-made"
+                }
+            });
+            full.AuditLog.Add(new WorkItemAuditEntry
+            {
+                Action = "sla-clock-started",
+                ActionDisplayName = "SLA clock started",
+                CreatedAt = now,
+                CreatedBy = "migration",
+                CreatedByName = "Migration",
+                Details = new Dictionary<string, string?>
+                {
+                    ["startedAt"] = now.ToString("O"),
+                    ["targetDays"] = new WorkItemSlaClock().TargetDuration.TotalDays.ToString()
+                }
+            });
+            _autoTransitioned++;
+        }
+
+        return true;
     }
+
+    protected override void LogCompletion(int migrated, int skipped) =>
+        Logger.LogInformation(
+            "Migration '{Name}' complete: {Migrated} updated ({AutoTransitioned} auto-transitioned to duly-made), {Skipped} already current.",
+            Name, migrated, _autoTransitioned, skipped);
 
     private static bool NeedsMigration(WorkItem workItem) =>
         workItem.TemplateSnapshot is not null &&
