@@ -21,7 +21,7 @@ internal static class ReAccreditationEndpoints
     private static readonly JsonSerializerOptions s_payloadJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter() },
     };
 
     // Request body cap (epr-e5h) for the manually-parsed
@@ -49,16 +49,24 @@ internal static class ReAccreditationEndpoints
     // reference list, not just section ids and a short reason.
     public const long MaxResumeBodyBytes = 64 * 1024;
 
+    // RA-294/RA-297: same rationale as MaxQueryBodyBytes — a legitimate
+    // site-added notification body is a handful of short string fields plus
+    // a bool, so 16 KiB is generous while still making a multi-MB body
+    // pointless.
+    public const long MaxSiteAddedBodyBytes = 16 * 1024;
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/work-items/re-accreditation").WithTags("ReAccreditation");
 
-        group.MapGet("/{id:guid}/recommendation", GetRecommendation)
+        group
+            .MapGet("/{id:guid}/recommendation", GetRecommendation)
             .WithName("GetReAccreditationRecommendation")
             .RequireAuthorization();
 
-        group.MapPost("/{id:guid}/decision-rationale", RecordDecisionRationale)
+        group
+            .MapPost("/{id:guid}/decision-rationale", RecordDecisionRationale)
             .WithName("RecordReAccreditationDecisionRationale")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxRationaleBodyBytes))
@@ -67,7 +75,8 @@ internal static class ReAccreditationEndpoints
         // Operator-backend endpoint for when payment is confirmed programmatically.
         // Not yet wired to the caseworker UI — caseworkers use the payment-received
         // engine action instead. Reserved for future operator backend integration.
-        group.MapPost("/{id:guid}/payment-completed", RecordPaymentCompleted)
+        group
+            .MapPost("/{id:guid}/payment-completed", RecordPaymentCompleted)
             .WithName("RecordReAccreditationPaymentCompleted")
             .RequireAuthorization();
 
@@ -77,7 +86,8 @@ internal static class ReAccreditationEndpoints
         // path because it stamps the accreditation id / SLA clock and
         // queues the publishing job; routing through the framework's
         // generic action handler would skip those side effects.
-        group.MapPost("/{id:guid}/approve", Approve)
+        group
+            .MapPost("/{id:guid}/approve", Approve)
             .WithName("ApproveReAccreditation")
             .RequireAuthorization();
 
@@ -85,7 +95,8 @@ internal static class ReAccreditationEndpoints
         // the service derives the right query-during-* transition from the
         // work item's current state — and the query sections + reason are
         // recorded on the audit log, which the generic action route cannot do.
-        group.MapPost("/{id:guid}/query", QueryApplication)
+        group
+            .MapPost("/{id:guid}/query", QueryApplication)
             .WithName("QueryReAccreditation")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxQueryBodyBytes))
@@ -97,7 +108,8 @@ internal static class ReAccreditationEndpoints
         // resolved server-side from the work item's own query audit
         // history — and the resubmitted section values / file references
         // are recorded on the audit log.
-        group.MapPost("/{id:guid}/resume-from-query", ResumeFromQuery)
+        group
+            .MapPost("/{id:guid}/resume-from-query", ResumeFromQuery)
             .WithName("ResumeReAccreditationFromQuery")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxResumeBodyBytes))
@@ -107,14 +119,29 @@ internal static class ReAccreditationEndpoints
         // 'updated' once the resubmission has been reviewed. No body — the
         // correct continue-review-during-* transition is resolved server-side
         // from the work item's own resume-during-* audit history.
-        group.MapPost("/{id:guid}/continue-review", ContinueReview)
+        group
+            .MapPost("/{id:guid}/continue-review", ContinueReview)
             .WithName("ContinueReAccreditationReview")
             .RequireAuthorization();
 
         // Live prior-year accreditation data from ReEx, scoped to this
         // work item type because no other module needs ReEx access.
-        group.MapGet("/{id:guid}/prior-year", GetPriorYear)
+        group
+            .MapGet("/{id:guid}/prior-year", GetPriorYear)
             .WithName("GetReAccreditationPriorYear")
+            .RequireAuthorization();
+
+        // RA-294/RA-297: operator-backend notification whenever a new ORS or
+        // interim site is added to an accreditation application. There is no
+        // state transition — adding a site does not move the application's
+        // lifecycle on — so the only side effect is a 'site-added' audit
+        // entry. This repo never models ORS/interim-site detail itself (see
+        // WorkItem.Payload); the request's fields are recorded verbatim.
+        group
+            .MapPost("/{id:guid}/site-added", SiteAdded)
+            .WithName("ReAccreditationSiteAdded")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxSiteAddedBodyBytes))
             .RequireAuthorization();
 
         return app;
@@ -127,12 +154,15 @@ internal static class ReAccreditationEndpoints
     /// <see cref="WorkItem.Payload"/> envelope and call its own service
     /// objects from its own routes — the framework never has to know.
     /// </summary>
-    public static async Task<Results<Ok<ReAccreditationRecommendationResponse>, NotFound, ProblemHttpResult>> GetRecommendation(
+    public static async Task<
+        Results<Ok<ReAccreditationRecommendationResponse>, NotFound, ProblemHttpResult>
+    > GetRecommendation(
         [FromRoute] Guid id,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IReAccreditationDecisionService decisionService,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
         if (workItem is null)
@@ -140,12 +170,19 @@ internal static class ReAccreditationEndpoints
             return TypedResults.NotFound();
         }
 
-        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.Equals(
+                workItem.TypeId,
+                ReAccreditationType.Id,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             return TypedResults.Problem(
                 title: "Wrong work item type",
                 detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
         ReAccreditationPayload? payload;
@@ -159,12 +196,19 @@ internal static class ReAccreditationEndpoints
             return TypedResults.Problem(
                 title: "Invalid re-accreditation payload",
                 detail: ex.Message,
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
-        var recommendation = decisionService.EvaluateRecommendation(payload ?? new ReAccreditationPayload());
-        return TypedResults.Ok(new ReAccreditationRecommendationResponse(
-            recommendation.Outcome, recommendation.Rationale));
+        var recommendation = decisionService.EvaluateRecommendation(
+            payload ?? new ReAccreditationPayload()
+        );
+        return TypedResults.Ok(
+            new ReAccreditationRecommendationResponse(
+                recommendation.Outcome,
+                recommendation.Rationale
+            )
+        );
     }
 
     /// <summary>
@@ -175,13 +219,16 @@ internal static class ReAccreditationEndpoints
     /// <see cref="WorkItemTransition.RequiresAllTasksComplete"/> on approve
     /// / reject.
     /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> RecordDecisionRationale(
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > RecordDecisionRationale(
         [FromRoute] Guid id,
         DecisionRationaleRequest request,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         // RA-323: every caseworker holds the same role, so recording the
         // decision rationale (which completes the record-decision-rationale
@@ -194,14 +241,16 @@ internal static class ReAccreditationEndpoints
             return TypedResults.Problem(
                 title: "Invalid rationale",
                 detail: "'rationale' is required and must not be whitespace.",
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
         if (rationale.Length < ReAccreditationEndpointsRationale.MinRationaleLength)
         {
             return TypedResults.Problem(
                 title: "Invalid rationale",
                 detail: $"'rationale' must be at least {ReAccreditationEndpointsRationale.MinRationaleLength} characters.",
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
@@ -209,12 +258,19 @@ internal static class ReAccreditationEndpoints
         {
             return TypedResults.NotFound();
         }
-        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.Equals(
+                workItem.TypeId,
+                ReAccreditationType.Id,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             return TypedResults.Problem(
                 title: "Wrong work item type",
                 detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
         var noteText = $"[decision-rationale] {rationale}";
@@ -224,13 +280,19 @@ internal static class ReAccreditationEndpoints
         // failure cannot leave the work item with an orphan rationale note
         // and an incomplete record-decision-rationale task.
         var result = await engine.AddNoteAndCompleteTaskAsync(
-            id, "record-decision-rationale", noteText, httpContext.User, cancellationToken);
+            id,
+            "record-decision-rationale",
+            noteText,
+            httpContext.User,
+            cancellationToken
+        );
         if (!result.IsSuccess)
         {
             return TypedResults.Problem(
                 title: "Could not record decision rationale",
                 detail: result.Message,
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
         return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
@@ -244,12 +306,15 @@ internal static class ReAccreditationEndpoints
     /// UI — caseworkers use the <c>payment-received</c> engine action instead.
     /// Reserved for future operator backend integration.
     /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> RecordPaymentCompleted(
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > RecordPaymentCompleted(
         [FromRoute] Guid id,
         [FromBody] PaymentCompletedRequest request,
         [FromServices] IReAccreditationPaymentService paymentService,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var result = await paymentService.RecordPaymentAsync(id, request, cancellationToken);
         if (!result.IsSuccess)
@@ -259,7 +324,8 @@ internal static class ReAccreditationEndpoints
                 : TypedResults.Problem(
                     title: "Could not record payment",
                     detail: result.Message,
-                    statusCode: StatusCodes.Status400BadRequest);
+                    statusCode: StatusCodes.Status400BadRequest
+                );
         }
 
         return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
@@ -273,22 +339,32 @@ internal static class ReAccreditationEndpoints
     /// (work item created via the case management form) or when ReEx returns no
     /// matching accreditation for the prior year.
     /// </summary>
-    private static async Task<Results<Ok<PriorYearAccreditationDto>, NotFound, ProblemHttpResult>> GetPriorYear(
+    private static async Task<
+        Results<Ok<PriorYearAccreditationDto>, NotFound, ProblemHttpResult>
+    > GetPriorYear(
         [FromRoute] Guid id,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IReExAccreditationClient reExClient,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
         if (workItem is null)
             return TypedResults.NotFound();
 
-        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.Equals(
+                workItem.TypeId,
+                ReAccreditationType.Id,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
             return TypedResults.Problem(
                 title: "Wrong work item type",
                 detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
 
         ReAccreditationPayload? payload;
         try
@@ -301,19 +377,22 @@ internal static class ReAccreditationEndpoints
             return TypedResults.Problem(
                 title: "Invalid re-accreditation payload",
                 detail: ex.Message,
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
         // PreviousAccreditationYear is set by new operator submissions (Year − 1).
         // Older work items only carry AccreditationYear; derive the prior year from that.
-        var priorYearValue = payload?.PreviousAccreditationYear
+        var priorYearValue =
+            payload?.PreviousAccreditationYear
             ?? (payload?.AccreditationYear is int ay ? ay - 1 : (int?)null);
 
         var priorYear = await reExClient.GetPriorYearAsync(
             payload?.OperatorOrganisationId,
             payload?.OperatorRegistrationId,
             priorYearValue,
-            cancellationToken);
+            cancellationToken
+        );
 
         if (priorYear is null)
             return TypedResults.NotFound();
@@ -335,7 +414,8 @@ internal static class ReAccreditationEndpoints
         HttpContext httpContext,
         [FromServices] IReAccreditationApprovalService approvalService,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         var result = await approvalService.ApproveAsync(id, httpContext.User, cancellationToken);
         if (result.IsSuccess)
@@ -353,13 +433,14 @@ internal static class ReAccreditationEndpoints
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
             WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
             WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest
+            _ => StatusCodes.Status400BadRequest,
         };
 
         return TypedResults.Problem(
             title: "Could not approve re-accreditation",
             detail: result.Message,
-            statusCode: status);
+            statusCode: status
+        );
     }
 
     /// <summary>
@@ -373,24 +454,33 @@ internal static class ReAccreditationEndpoints
     /// including an application that is already <c>queried</c> — is 409,
     /// not a 500.
     /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> QueryApplication(
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > QueryApplication(
         [FromRoute] Guid id,
         QueryApplicationRequest request,
         HttpContext httpContext,
         [FromServices] IReAccreditationQueryService queryService,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (ReAccreditationQueryValidator.Validate(request) is { } validationError)
         {
             return TypedResults.Problem(
                 title: "Invalid query",
                 detail: validationError,
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
         var result = await queryService.QueryAsync(
-            id, request.Sections!, request.Reason!.Trim(), httpContext.User, cancellationToken);
+            id,
+            request.Sections!,
+            request.Reason!.Trim(),
+            httpContext.User,
+            cancellationToken
+        );
 
         if (result.IsSuccess)
         {
@@ -418,14 +508,15 @@ internal static class ReAccreditationEndpoints
             // from here — a state with no query transition is rejected as an
             // InvalidTransition before the engine is called.
             WorkItemActionFailureCode.InvalidTransition
-                or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest
+            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
         };
 
         return TypedResults.Problem(
             title: "Could not query re-accreditation",
             detail: result.Message,
-            statusCode: status);
+            statusCode: status
+        );
     }
 
     /// <summary>
@@ -442,23 +533,32 @@ internal static class ReAccreditationEndpoints
     /// target succeeds as an idempotent replay, so a duplicate resubmit call
     /// does not fail the caller's retry.
     /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> ResumeFromQuery(
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > ResumeFromQuery(
         [FromRoute] Guid id,
         ResumeFromQueryRequest request,
         HttpContext httpContext,
         [FromServices] IReAccreditationResumeService resumeService,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (ReAccreditationResumeValidator.Validate(request) is { } validationError)
         {
             return TypedResults.Problem(
                 title: "Invalid resume-from-query request",
                 detail: validationError,
-                statusCode: StatusCodes.Status400BadRequest);
+                statusCode: StatusCodes.Status400BadRequest
+            );
         }
 
-        var result = await resumeService.ResumeFromQueryAsync(id, request, httpContext.User, cancellationToken);
+        var result = await resumeService.ResumeFromQueryAsync(
+            id,
+            request,
+            httpContext.User,
+            cancellationToken
+        );
 
         if (result.IsSuccess)
         {
@@ -474,14 +574,15 @@ internal static class ReAccreditationEndpoints
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
             WorkItemActionFailureCode.InvalidTransition
-                or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest
+            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
         };
 
         return TypedResults.Problem(
             title: "Could not resume re-accreditation from query",
             detail: result.Message,
-            statusCode: status);
+            statusCode: status
+        );
     }
 
     /// <summary>
@@ -497,14 +598,21 @@ internal static class ReAccreditationEndpoints
     /// target succeeds as an idempotent replay, so a duplicate call does not
     /// fail the caller's retry.
     /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> ContinueReview(
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > ContinueReview(
         [FromRoute] Guid id,
         HttpContext httpContext,
         [FromServices] IReAccreditationContinueReviewService continueReviewService,
         [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var result = await continueReviewService.ContinueReviewAsync(id, httpContext.User, cancellationToken);
+        var result = await continueReviewService.ContinueReviewAsync(
+            id,
+            httpContext.User,
+            cancellationToken
+        );
 
         if (result.IsIdempotentReplay)
         {
@@ -525,18 +633,84 @@ internal static class ReAccreditationEndpoints
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
             WorkItemActionFailureCode.InvalidTransition
-                or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest
+            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
         };
 
         return TypedResults.Problem(
             title: "Could not continue re-accreditation review",
             detail: result.Message,
-            statusCode: continueStatus);
+            statusCode: continueStatus
+        );
+    }
+
+    /// <summary>
+    /// RA-294/RA-297: record that the operator backend added a new Overseas
+    /// Reprocessing Site (ORS) or interim site (a waste staging point linked
+    /// 1:1 to an ORS) to a re-accreditation application. This repo never
+    /// models ORS/interim-site detail itself (<see cref="WorkItem.Payload"/>
+    /// stays schemaless BSON) — the only side effect is a <c>site-added</c>
+    /// audit-log entry so the event is visible on the work item's detail/
+    /// audit-log page.
+    ///
+    /// There is no state transition, so unlike <see cref="QueryApplication"/>
+    /// and <see cref="ResumeFromQuery"/> there is no state-derived 409 — the
+    /// only failure paths are a malformed body (400), an unknown work item
+    /// (404), and a concurrency-exhausted audit append (409).
+    /// </summary>
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> SiteAdded(
+        [FromRoute] Guid id,
+        SiteAddedRequest request,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationSiteAddedService siteAddedService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken
+    )
+    {
+        if (ReAccreditationSiteAddedValidator.Validate(request) is { } validationError)
+        {
+            return TypedResults.Problem(
+                title: "Invalid site-added notification",
+                detail: validationError,
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        var result = await siteAddedService.RecordSiteAddedAsync(
+            id,
+            request,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var status = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
+        };
+
+        return TypedResults.Problem(
+            title: "Could not record site added",
+            detail: result.Message,
+            statusCode: status
+        );
     }
 }
 
-internal sealed record ReAccreditationRecommendationResponse(string Recommendation, string Rationale);
+internal sealed record ReAccreditationRecommendationResponse(
+    string Recommendation,
+    string Rationale
+);
 
 /// <summary>Request body for <see cref="ReAccreditationEndpoints.RecordDecisionRationale"/>.</summary>
 internal sealed record DecisionRationaleRequest(string Rationale);
