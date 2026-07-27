@@ -736,6 +736,16 @@ public static class WorkItemEndpoints
     }
 
     /// <summary>
+    /// RA-324: the absolute SLA deadline (<c>slaClock.StartedAt +
+    /// TargetDuration</c>) for the Applications card's "Due on:" line, or
+    /// <c>null</c> when no SLA clock has started. Unlike
+    /// <see cref="ComputeSla"/> this needs no "now" — the deadline is a fixed
+    /// instant, not a relative countdown.
+    /// </summary>
+    internal static DateTime? ComputeSlaDueDate(WorkItemSlaClock? clock) =>
+        clock is null ? null : clock.StartedAt + clock.TargetDuration;
+
+    /// <summary>
     /// Slim per-item projection used by the list endpoint (epr-4pf).
     /// Identical to <see cref="ToResponse(WorkItemEngineProjection)"/>
     /// except the per-item <c>Notes</c> and <c>AuditLog</c> collections
@@ -767,7 +777,8 @@ public static class WorkItemEndpoints
             w.AssignedAt,
             w.AssignedBy,
             slaRemaining,
-            slaState
+            slaState,
+            ComputeSlaDueDate(w.SlaClock)
         );
     }
 }

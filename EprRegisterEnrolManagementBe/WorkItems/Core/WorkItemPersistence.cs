@@ -96,6 +96,9 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     // from the active worklist by default.
     private readonly IReadOnlySet<string> _terminalStateIds;
 
+    // Computed once: state id → workflow rank (RA-324), used by the Status sort.
+    private readonly IReadOnlyDictionary<string, int> _statusRank;
+
     public WorkItemPersistence(
         IMongoDbClientFactory connectionFactory,
         ILoggerFactory loggerFactory,
@@ -103,6 +106,7 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         : base(connectionFactory, "workItems", loggerFactory)
     {
         _terminalStateIds = TerminalStates.Ids(registry);
+        _statusRank = WorkItemSort.StatusRank(registry);
     }
 
     /// <summary>
@@ -166,32 +170,63 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
 
         var filter = BuildFilter(query, _terminalStateIds);
 
-        // Project away the per-item Notes and AuditLog collections
-        // (epr-4pf): the list endpoint never renders them and they
-        // dominate document size on chatty items. The deserialiser
-        // re-runs against the trimmed BSON and falls back to the
-        // List<>'s default initialiser for the missing fields, so
-        // returned WorkItem instances carry empty Notes / AuditLog
-        // regardless of what is on disk.
-        var projection = Builders<WorkItem>.Projection
-            .Exclude(w => w.Notes)
-            .Exclude(w => w.AuditLog);
-
-        var find = Collection
-            .Find(filter)
-            .Project<WorkItem>(projection)
-            .SortByDescending(w => w.SubmittedAt);
-
         var totalCount = await Collection.CountDocumentsAsync(filter, cancellationToken: cancellationToken);
 
         var page = query.NormalisedPage;
         var pageSize = query.NormalisedPageSize;
         var skip = (page - 1) * pageSize;
 
-        var items = await find
-            .Skip(skip)
-            .Limit(pageSize)
-            .ToListAsync(cancellationToken);
+        var sortStages = WorkItemSort.BuildStages(query.Sort, query.SortDescending, _statusRank);
+
+        List<WorkItem> items;
+        if (sortStages is null)
+        {
+            // Default path (RA-324: unchanged from the original behaviour) —
+            // newest submitted first, with the per-item Notes / AuditLog
+            // collections projected away (epr-4pf): the list endpoint never
+            // renders them and they dominate document size on chatty items.
+            var projection = Builders<WorkItem>.Projection
+                .Exclude(w => w.Notes)
+                .Exclude(w => w.AuditLog);
+
+            items = await Collection
+                .Find(filter)
+                .Project<WorkItem>(projection)
+                .SortByDescending(w => w.SubmittedAt)
+                .Skip(skip)
+                .Limit(pageSize)
+                .ToListAsync(cancellationToken);
+        }
+        else
+        {
+            // Explicit RA-324 sort (organisation / status / due-date). Status
+            // and due-date can't be expressed as a plain field sort, so an
+            // aggregation computes the sort key. The $unset drops the same
+            // Notes / AuditLog the default projection excludes AND every
+            // computed sort field, so the result still deserialises to WorkItem
+            // (which does not ignore extra BSON elements).
+            var (addFields, sort) = sortStages.Value;
+            var serializer = MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry
+                .GetSerializer<WorkItem>();
+            var matchDoc = filter.Render(
+                new RenderArgs<WorkItem>(serializer, MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry));
+
+            var stages = new List<BsonDocument> { new("$match", matchDoc) };
+            if (addFields is not null)
+            {
+                stages.Add(new BsonDocument("$addFields", addFields));
+            }
+            stages.Add(new BsonDocument("$sort", sort));
+            stages.Add(new BsonDocument("$unset",
+                new BsonArray(new[] { "notes", "auditLog" }.Concat(WorkItemSort.ComputedFields))));
+            stages.Add(new BsonDocument("$skip", skip));
+            stages.Add(new BsonDocument("$limit", pageSize));
+
+            PipelineDefinition<WorkItem, WorkItem> pipeline = stages;
+            items = await Collection
+                .Aggregate(pipeline, cancellationToken: cancellationToken)
+                .ToListAsync(cancellationToken);
+        }
 
         return new WorkItemPage(items, totalCount, page, pageSize);
     }
@@ -248,6 +283,42 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             // Wrap in quotes for phrase matching: prevents OR word-matching where common
             // words like "Org" in the query accidentally match unrelated items.
             clauses.Add(builder.Text($"\"{orgName}\"", new TextSearchOptions { CaseSensitive = false }));
+        }
+
+        // RA-324: the Applications page merges the old separate orgName / orgId
+        // inputs into ONE "Organisation name or ID" box. It matches the needle
+        // case-insensitively as a substring of payload.organisationName OR
+        // payload.operatorOrganisationId (e.g. ORG-123-001). Registration-id is
+        // deliberately NOT matched here (dropped from the product per RA-324).
+        // Uses a regex on organisationName rather than the $text index because
+        // Mongo forbids OR-ing a $text clause with other conditions; fine at
+        // this volume since the list is always pre-filtered by typeId/state.
+        var organisation = query.NormalisedOrganisation;
+        if (!string.IsNullOrEmpty(organisation))
+        {
+            var escaped = System.Text.RegularExpressions.Regex.Escape(organisation);
+            var contains = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            clauses.Add(builder.Or(
+                builder.Regex("payload.organisationName", contains),
+                builder.Regex("payload.operatorOrganisationId", contains)));
+        }
+
+        // RA-324: material filter (multi-select). payload.material stores a
+        // single lowercase token (plastic/glass/paper/steel/wood/aluminium/
+        // fibre); match each requested value case-insensitively as an exact
+        // token (anchored regex) so casing differences never hide a match, and
+        // OR multiple selections together.
+        if (query.Materials is { Count: > 0 } materials)
+        {
+            var materialClauses = materials
+                .Select(m => builder.Regex(
+                    "payload.material",
+                    new MongoDB.Bson.BsonRegularExpression(
+                        $"^{System.Text.RegularExpressions.Regex.Escape(m)}$", "i")))
+                .ToList();
+            clauses.Add(materialClauses.Count == 1
+                ? materialClauses[0]
+                : builder.Or(materialClauses));
         }
 
         var assigneeId = query.NormalisedAssigneeId;

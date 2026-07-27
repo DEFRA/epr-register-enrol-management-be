@@ -305,6 +305,206 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Empty(item.AuditLog);
     }
 
+    // ─────────────────────── RA-324 filter + sort (real Mongo) ───────────────────────
+
+    private async Task SeedAsync(
+        string organisationName,
+        string? operatorOrganisationId = null,
+        string? material = null,
+        string stateId = "submitted",
+        int submittedMinutesAgo = 0,
+        WorkItemSlaClock? slaClock = null)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var payload = new BsonDocument { ["organisationName"] = organisationName };
+        if (operatorOrganisationId is not null)
+        {
+            payload["operatorOrganisationId"] = operatorOrganisationId;
+        }
+        if (material is not null)
+        {
+            payload["material"] = material;
+        }
+        var item = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = stateId,
+            SubmittedAt = now.AddMinutes(-submittedMinutesAgo),
+            LastModifiedAt = now,
+            Payload = payload,
+            SlaClock = slaClock
+        };
+        await _persistence.CreateAsync(item, TestContext.Current.CancellationToken);
+    }
+
+    private static string[] OrgOrder(WorkItemPage page) =>
+        page.Items.Select(i => i.Payload["organisationName"].AsString).ToArray();
+
+    [Fact]
+    public async Task QueryAsync_default_sort_is_newest_submitted_first()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("older", submittedMinutesAgo: 60);
+        await SeedAsync("newer", submittedMinutesAgo: 0);
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(), ct);
+
+        Assert.Equal(new[] { "newer", "older" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_organisation_orders_case_insensitively_ascending()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("banana");
+        await SeedAsync("Apple");
+        await SeedAsync("Cherry");
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "organisation"), ct);
+
+        Assert.Equal(new[] { "Apple", "banana", "Cherry" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_organisation_descending_reverses()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("banana");
+        await SeedAsync("Apple");
+        await SeedAsync("Cherry");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "organisation", SortDescending: true), ct);
+
+        Assert.Equal(new[] { "Cherry", "banana", "Apple" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_status_orders_by_workflow_rank()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Seeded out of workflow order; all non-terminal so none are archived.
+        await SeedAsync("q", stateId: "queried");
+        await SeedAsync("aw", stateId: "awaiting-decision");
+        await SeedAsync("s", stateId: "submitted");
+        await SeedAsync("a", stateId: "assessment-in-progress");
+        await SeedAsync("d", stateId: "duly-made");
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "status"), ct);
+
+        Assert.Equal(
+            new[] { "submitted", "duly-made", "assessment-in-progress", "awaiting-decision", "queried" },
+            page.Items.Select(i => i.StateId).ToArray());
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_due_date_soonest_first_and_no_clock_last()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        // Same start, longer target => later deadline: proves the sort reflects
+        // targetDuration (SLA extensions), not just startedAt.
+        await SeedAsync("B", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(30) });
+        await SeedAsync("A", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(10) });
+        await SeedAsync("NoClock", stateId: "submitted", slaClock: null);
+        await SeedAsync("C", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now.AddDays(-5), TargetDuration = TimeSpan.FromDays(84) });
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "due-date"), ct);
+
+        // A (now+10), B (now+30), C (now+79), then the clock-less item last.
+        Assert.Equal(new[] { "A", "B", "C", "NoClock" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_due_date_descending_keeps_no_clock_item_last()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        await SeedAsync("B", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(30) });
+        await SeedAsync("A", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(10) });
+        await SeedAsync("NoClock", stateId: "submitted", slaClock: null);
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "due-date", SortDescending: true), ct);
+
+        // Latest deadline first, but the clock-less item still sorts last.
+        Assert.Equal(new[] { "B", "A", "NoClock" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sorted_path_still_strips_notes_and_audit_log()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        var item = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            Payload = new BsonDocument { ["organisationName"] = "Acme" },
+            Notes = { new WorkItemNote { Text = "secret", CreatedAt = now, CreatedBy = "u", CreatedByName = "U" } },
+            AuditLog = { new WorkItemAuditEntry { Action = "submitted", ActionDisplayName = "Submitted", CreatedAt = now, CreatedBy = "u", CreatedByName = "U" } }
+        };
+        await _persistence.CreateAsync(item, ct);
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "organisation"), ct);
+
+        var got = Assert.Single(page.Items);
+        // Projection preserved on the aggregation path, and the computed sort
+        // fields were $unset so the document still deserialises cleanly.
+        Assert.Empty(got.Notes);
+        Assert.Empty(got.AuditLog);
+        Assert.Equal("Acme", got.Payload["organisationName"].AsString);
+    }
+
+    [Fact]
+    public async Task QueryAsync_material_filter_matches_case_insensitively()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("p", material: "plastic");
+        await SeedAsync("g", material: "glass");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Materials: new[] { "PLASTIC" }), ct);
+
+        var got = Assert.Single(page.Items);
+        Assert.Equal("plastic", got.Payload["material"].AsString);
+    }
+
+    [Fact]
+    public async Task QueryAsync_material_filter_matches_any_of_multiple_selections()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("p", material: "plastic");
+        await SeedAsync("g", material: "glass");
+        await SeedAsync("w", material: "wood");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Materials: new[] { "plastic", "glass" }, Sort: "organisation"), ct);
+
+        Assert.Equal(new[] { "g", "p" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_organisation_filter_matches_name_or_operator_org_id()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("Acme Recycling", operatorOrganisationId: "ORG-111-001");
+        await SeedAsync("Beta Metals", operatorOrganisationId: "ORG-222-002");
+
+        var byName = await _persistence.QueryAsync(new WorkItemQuery(Organisation: "acme"), ct);
+        Assert.Equal("Acme Recycling", Assert.Single(byName.Items).Payload["organisationName"].AsString);
+
+        var byOrgId = await _persistence.QueryAsync(new WorkItemQuery(Organisation: "ORG-222"), ct);
+        Assert.Equal("Beta Metals", Assert.Single(byOrgId.Items).Payload["organisationName"].AsString);
+    }
+
     [Fact]
     public async Task ReplaceAsync_throws_concurrency_exception_when_version_does_not_match()
     {
