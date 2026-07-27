@@ -196,6 +196,41 @@ public class ReAccreditationDisplayNameSnapshotMigrationTests
     }
 
     [Fact]
+    public async Task ApplyAsync_saves_the_full_audit_bearing_document_not_the_query_candidate()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        // QueryAsync omits AuditLog/Notes, so the candidate arrives audit-stripped.
+        var candidate = BuildItem();
+        Assert.Empty(candidate.AuditLog);
+
+        // GetByIdAsync returns the full document, distinct from the candidate,
+        // carrying the audit history. Saving the candidate instead would wipe it.
+        var full = BuildItem();
+        full.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "submitted",
+            ActionDisplayName = "Submitted",
+            CreatedAt = DateTime.UtcNow,
+            CreatedBy = "user-1",
+            CreatedByName = "Alice"
+        });
+
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(candidate));
+        persistence.GetByIdAsync(candidate.Id, ct).Returns(full);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        await persistence.Received(1).ReplaceAsync(full, ct);
+        await persistence.DidNotReceive().ReplaceAsync(candidate, ct);
+        // The saved (full) document keeps its audit entries and gets relabelled.
+        Assert.Single(full.AuditLog);
+        Assert.Equal("Not started", full.TemplateSnapshot!.States.Single(s => s.Id == "submitted").DisplayName);
+        Assert.Equal("v9", full.TemplateVersion);
+    }
+
+    [Fact]
     public async Task ApplyAsync_skips_when_full_document_is_missing()
     {
         var ct = TestContext.Current.CancellationToken;

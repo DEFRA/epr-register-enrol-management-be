@@ -29,9 +29,13 @@ internal sealed class ReAccreditationDisplayNameSnapshotMigration(
     ILogger<ReAccreditationDisplayNameSnapshotMigration> logger) : IWorkItemMigration
 {
     /// <summary>
-    /// State id → new AC06 display label. Kept in sync with the four renamed
-    /// states declared in <see cref="ReAccreditationType"/>. Ordinal-ignore-case
-    /// because state ids are compared case-insensitively across the engine.
+    /// State id → new AC06 display label. These target labels are deliberately
+    /// duplicated here rather than read from <see cref="ReAccreditationType"/>:
+    /// a snapshot migration must freeze the exact labels its version produces so
+    /// a future rename of the live type can never retroactively change what the
+    /// v9 migration wrote. Kept in sync with the four renamed states declared in
+    /// <see cref="ReAccreditationType"/>. Ordinal-ignore-case because state ids
+    /// are compared case-insensitively across the engine.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> s_displayNameRenames =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
