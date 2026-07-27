@@ -201,24 +201,30 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         {
             // Explicit RA-324 sort (organisation / status / due-date). Status
             // and due-date can't be expressed as a plain field sort, so an
-            // aggregation computes the sort key. The $unset drops the same
-            // Notes / AuditLog the default projection excludes AND every
-            // computed sort field, so the result still deserialises to WorkItem
-            // (which does not ignore extra BSON elements).
+            // aggregation computes the sort key. Two $unset stages: the first
+            // drops the fat Notes / AuditLog collections (the same ones the
+            // default projection excludes) BEFORE the in-memory $sort so the
+            // sort buffers slim documents; the second drops the computed sort
+            // scratch fields AFTER the $sort that reads them, so the result
+            // still deserialises to WorkItem (which does not ignore extra BSON
+            // elements).
             var (addFields, sort) = sortStages.Value;
             var serializer = MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry
                 .GetSerializer<WorkItem>();
             var matchDoc = filter.Render(
                 new RenderArgs<WorkItem>(serializer, MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry));
 
-            var stages = new List<BsonDocument> { new("$match", matchDoc) };
+            var stages = new List<BsonDocument>
+            {
+                new("$match", matchDoc),
+                new("$unset", new BsonArray { "notes", "auditLog" }),
+            };
             if (addFields is not null)
             {
                 stages.Add(new BsonDocument("$addFields", addFields));
             }
             stages.Add(new BsonDocument("$sort", sort));
-            stages.Add(new BsonDocument("$unset",
-                new BsonArray(new[] { "notes", "auditLog" }.Concat(WorkItemSort.ComputedFields))));
+            stages.Add(new BsonDocument("$unset", new BsonArray(WorkItemSort.ComputedFields)));
             stages.Add(new BsonDocument("$skip", skip));
             stages.Add(new BsonDocument("$limit", pageSize));
 

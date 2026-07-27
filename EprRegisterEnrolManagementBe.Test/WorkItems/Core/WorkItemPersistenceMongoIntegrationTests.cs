@@ -398,6 +398,54 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     }
 
     [Fact]
+    public async Task QueryAsync_sort_status_descending_reverses_rank_with_submitted_tiebreak()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Two items share the 'submitted' rank so the submittedAt-desc tiebreak
+        // is exercised end-to-end, not just at the BSON level.
+        await SeedAsync("q", stateId: "queried");
+        await SeedAsync("a", stateId: "assessment-in-progress");
+        await SeedAsync("s-old", stateId: "submitted", submittedMinutesAgo: 60);
+        await SeedAsync("s-new", stateId: "submitted", submittedMinutesAgo: 0);
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "status", SortDescending: true), ct);
+
+        // Descending workflow rank: queried(4), assessment-in-progress(2), then
+        // the two submitted(0) items broken newest-first by the tiebreak.
+        Assert.Equal(new[] { "q", "a", "s-new", "s-old" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sorted_path_paginates_and_reports_full_total()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Five items, page size 2, sorted A→Z: exercises the aggregation
+        // $sort → $unset → $skip → $limit across more than one page and checks
+        // TotalCount reflects the full filtered count, not the page size — so a
+        // swapped $sort/$limit order or off-by-one $skip cannot stay green.
+        foreach (var name in new[] { "e", "a", "d", "b", "c" })
+        {
+            await SeedAsync(name);
+        }
+
+        var page1 = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "organisation", Page: 1, PageSize: 2), ct);
+        var page2 = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "organisation", Page: 2, PageSize: 2), ct);
+        var page3 = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "organisation", Page: 3, PageSize: 2), ct);
+
+        Assert.Equal(new[] { "a", "b" }, OrgOrder(page1));
+        Assert.Equal(new[] { "c", "d" }, OrgOrder(page2));
+        Assert.Equal(new[] { "e" }, OrgOrder(page3));
+        Assert.Equal(5, page1.TotalCount);
+        Assert.Equal(5, page2.TotalCount);
+        Assert.Equal(2, page1.PageSize);
+        Assert.Equal(2, page2.Page);
+    }
+
+    [Fact]
     public async Task QueryAsync_sort_due_date_soonest_first_and_no_clock_last()
     {
         var ct = TestContext.Current.CancellationToken;

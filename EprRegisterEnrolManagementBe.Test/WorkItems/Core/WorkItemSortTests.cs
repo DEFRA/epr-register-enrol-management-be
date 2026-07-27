@@ -97,14 +97,20 @@ public class WorkItemSortTests
     }
 
     [Theory]
-    [InlineData("  Due-Date  ")]
-    [InlineData("ORGANISATION")]
-    [InlineData("Status")]
-    public void BuildStages_normalises_token_casing_and_whitespace(string token)
+    [InlineData("  Due-Date  ", WorkItemSort.DeadlineField)]
+    [InlineData("ORGANISATION", WorkItemSort.OrgField)]
+    [InlineData("Status", WorkItemSort.RankField)]
+    public void BuildStages_normalises_token_casing_and_whitespace(string token, string expectedComputedField)
     {
-        // Trimmed + lower-cased before matching, so mixed casing / padding
-        // still resolves to a real sort rather than falling through to null.
-        Assert.NotNull(WorkItemSort.BuildStages(token, descendingOverride: null, s_rank));
+        // Trimmed + lower-cased before matching, and — crucially — resolves to
+        // the INTENDED column: assert an identifying computed field of that
+        // column's $addFields stage, not merely that some stage came back.
+        var stages = WorkItemSort.BuildStages(token, descendingOverride: null, s_rank);
+
+        Assert.NotNull(stages);
+        Assert.True(
+            stages!.Value.AddFields!.Contains(expectedComputedField),
+            $"Token '{token}' should resolve to the stage adding '{expectedComputedField}'.");
     }
 
     [Fact]
