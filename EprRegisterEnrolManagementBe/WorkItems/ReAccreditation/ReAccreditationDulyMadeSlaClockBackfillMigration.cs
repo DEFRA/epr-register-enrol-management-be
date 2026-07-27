@@ -19,81 +19,49 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationDulyMadeSlaClockBackfillMigration(
     ILogger<ReAccreditationDulyMadeSlaClockBackfillMigration> logger,
-    TimeProvider? timeProvider = null) : IWorkItemMigration
+    TimeProvider? timeProvider = null)
+    : ReAccreditationMigrationBase(logger)
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
-    public string Name => "ReAccreditation: backfill SLA clock for duly-made items with null clock";
+    public override string Name => "ReAccreditation: backfill SLA clock for duly-made items with null clock";
 
-    public async Task ApplyAsync(IWorkItemPersistence persistence, CancellationToken cancellationToken)
+    protected override WorkItemQuery BuildPageQuery(int page, int pageSize) =>
+        new(
+            TypeIds: [ReAccreditationType.Id],
+            StateIds: ["duly-made"],
+            Page: page,
+            PageSize: pageSize,
+            IncludeArchived: false);
+
+    protected override bool TryMigrate(WorkItem full)
     {
-        var backfilled = 0;
-        var skipped = 0;
-        var page = 1;
-        const int pageSize = WorkItemQuery.MaxPageSize;
-
-        while (true)
+        if (full.SlaClock is not null)
         {
-            var result = await persistence.QueryAsync(
-                new WorkItemQuery(
-                    TypeIds: [ReAccreditationType.Id],
-                    StateIds: ["duly-made"],
-                    Page: page,
-                    PageSize: pageSize,
-                    IncludeArchived: false),
-                cancellationToken);
-
-            foreach (var candidate in result.Items)
-            {
-                // QueryAsync does not project SlaClock — fetch the full document.
-                var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
-                if (full is null || full.SlaClock is not null)
-                {
-                    skipped++;
-                    continue;
-                }
-
-                var now = _timeProvider.GetUtcNow().UtcDateTime;
-                full.SlaClock = new WorkItemSlaClock { StartedAt = full.LastModifiedAt };
-                full.AuditLog.Add(new WorkItemAuditEntry
-                {
-                    Action = "sla-clock-started",
-                    ActionDisplayName = "SLA clock started",
-                    CreatedAt = now,
-                    CreatedBy = "migration",
-                    CreatedByName = "Migration",
-                    Details = new Dictionary<string, string?>
-                    {
-                        ["startedAt"] = full.LastModifiedAt.ToString("O"),
-                        ["targetDays"] = new WorkItemSlaClock().TargetDuration.TotalDays.ToString()
-                    }
-                });
-
-                try
-                {
-                    await persistence.ReplaceAsync(full, cancellationToken);
-                    backfilled++;
-                }
-                catch (WorkItemConcurrencyException)
-                {
-                    logger.LogDebug(
-                        "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                        full.Id);
-                    skipped++;
-                }
-            }
-
-            var processed = (long)(page - 1) * pageSize + result.Items.Count;
-            if (processed >= result.TotalCount)
-            {
-                break;
-            }
-
-            page++;
+            return false;
         }
 
-        logger.LogInformation(
-            "Migration '{Name}' complete: {Backfilled} SLA clocks backfilled, {Skipped} already current.",
-            Name, backfilled, skipped);
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        full.SlaClock = new WorkItemSlaClock { StartedAt = full.LastModifiedAt };
+        full.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "sla-clock-started",
+            ActionDisplayName = "SLA clock started",
+            CreatedAt = now,
+            CreatedBy = "migration",
+            CreatedByName = "Migration",
+            Details = new Dictionary<string, string?>
+            {
+                ["startedAt"] = full.LastModifiedAt.ToString("O"),
+                ["targetDays"] = new WorkItemSlaClock().TargetDuration.TotalDays.ToString()
+            }
+        });
+
+        return true;
     }
+
+    protected override void LogCompletion(int migrated, int skipped) =>
+        Logger.LogInformation(
+            "Migration '{Name}' complete: {Backfilled} SLA clocks backfilled, {Skipped} already current.",
+            Name, migrated, skipped);
 }

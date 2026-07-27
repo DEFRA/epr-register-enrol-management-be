@@ -1,7 +1,6 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -48,8 +47,8 @@ public class ReAccreditationDulyMadeSnapshotMigrationTests
     private static WorkItemPage SinglePage(params WorkItem[] items) =>
         new(items, items.Length, 1, WorkItemQuery.MaxPageSize);
 
-    private static ReAccreditationDulyMadeSnapshotMigration BuildSut(TimeProvider? clock = null) =>
-        new(NullLogger<ReAccreditationDulyMadeSnapshotMigration>.Instance, clock);
+    private static ReAccreditationDulyMadeSnapshotMigration BuildSut() =>
+        new(NullLogger<ReAccreditationDulyMadeSnapshotMigration>.Instance);
 
     [Fact]
     public async Task ApplyAsync_skips_an_item_whose_full_document_has_disappeared_by_the_time_it_is_refetched()
