@@ -12,8 +12,28 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v8", _type.TemplateVersion);
+        Assert.Equal("v9", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
+    }
+
+    // RA-324/AC06: state DisplayNames align with the "Applications" design.
+    // Only the labels changed; the ids are the wire contract and stay put.
+    [Theory]
+    [InlineData("submitted", "Not started")]
+    [InlineData("assessment-in-progress", "Updated")]
+    [InlineData("approved", "Granted")]
+    [InlineData("rejected", "Refused")]
+    // Untouched labels — proves the rename did not spill over.
+    [InlineData("duly-made", "Duly made")]
+    [InlineData("awaiting-decision", "Awaiting decision")]
+    [InlineData("queried", "Queried")]
+    [InlineData("updated", "Updated")]
+    [InlineData("withdrawn", "Withdrawn")]
+    public void States_declare_expected_display_names(string stateId, string expectedDisplayName)
+    {
+        var state = _type.States.Single(s => s.Id == stateId);
+
+        Assert.Equal(expectedDisplayName, state.DisplayName);
     }
 
     [Fact]

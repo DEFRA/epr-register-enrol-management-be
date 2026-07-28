@@ -49,4 +49,9 @@ public sealed record WorkItemListItemResponse(
     DateTime? AssignedAt = null,
     string? AssignedBy = null,
     TimeSpan? SlaRemaining = null,
-    WorkItemSlaState? SlaState = null);
+    WorkItemSlaState? SlaState = null,
+    // RA-324: absolute SLA deadline (slaClock.StartedAt + TargetDuration) so the
+    // Applications card can render "Due on: {date}". Null under the same
+    // condition as SlaState/SlaRemaining — no SLA clock started yet. Additive +
+    // nullable, so the list DTO stays backward-compatible.
+    DateTime? SlaDueDate = null);

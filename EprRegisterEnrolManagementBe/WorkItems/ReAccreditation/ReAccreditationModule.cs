@@ -44,6 +44,11 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // snapshot (v7 → v8). Must run after ReAccreditationResumeSnapshotMigration
         // so a v5/v6 item picks up the v7 resume-during-* transitions first.
         services.AddSingleton<IWorkItemMigration, ReAccreditationUpdatedStateSnapshotMigration>();
+        // RA-324/AC06: renames four state display labels in every existing work
+        // item's frozen snapshot to the "Applications" set (v8 → v9). Runs last:
+        // it is label-only and independent of the structural migrations above,
+        // so an item picks up any missing states first, then gets relabelled.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationDisplayNameSnapshotMigration>();
         // RA-132: accreditation-id generator + module-scoped approval
         // service that owns the bespoke approval workflow (id issuance,
         // SLA clock stop, queued publishing). RA-133: the generator
