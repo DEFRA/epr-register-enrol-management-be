@@ -25,6 +25,7 @@ public class ReAccreditationWithdrawServiceTests
     [InlineData("assessment-in-progress", "withdraw-during-assessment")]
     [InlineData("awaiting-decision", "withdraw-during-decision")]
     [InlineData("queried", "withdraw-during-query")]
+    [InlineData("updated", "withdraw-during-updated")]
     // Case-insensitive: state ids are compared the same way the engine does.
     [InlineData("SUBMITTED", "withdraw")]
     public void ResolveWithdrawActionId_maps_each_withdrawable_state(
@@ -39,7 +40,6 @@ public class ReAccreditationWithdrawServiceTests
     [InlineData("approved")]
     [InlineData("rejected")]
     [InlineData("withdrawn")]
-    [InlineData("updated")]
     [InlineData("something-else")]
     [InlineData(null)]
     public void ResolveWithdrawActionId_returns_null_for_a_non_withdrawable_state(string? stateId)
@@ -55,6 +55,7 @@ public class ReAccreditationWithdrawServiceTests
     [InlineData("assessment-in-progress", "withdraw-during-assessment")]
     [InlineData("awaiting-decision", "withdraw-during-decision")]
     [InlineData("queried", "withdraw-during-query")]
+    [InlineData("updated", "withdraw-during-updated")]
     public async Task WithdrawAsync_applies_the_action_for_the_current_state(
         string stateId,
         string expectedActionId

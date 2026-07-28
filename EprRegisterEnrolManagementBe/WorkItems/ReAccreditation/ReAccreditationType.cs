@@ -116,7 +116,17 @@ internal sealed class ReAccreditationType : IWorkItemType
     // have no way to reach 'withdrawn' from 'queried' until
     // ReAccreditationWithdrawQuerySnapshotMigration patches their frozen
     // snapshot.
-    public string TemplateVersion => "v9";
+    // v10 (RA-252): added withdraw-during-updated (updated -> withdrawn) so
+    // an operator can withdraw an application that is currently in
+    // 'updated' — a query response has arrived but a caseworker has not
+    // yet actioned continue-review-during-* to carry it back into review.
+    // Without this, an operator whose application sits in 'updated' had no
+    // way to withdraw at all, even though RA-252's business rule permits
+    // withdrawal at any point before a final decision. Items snapshotted
+    // before v10 have no way to reach 'withdrawn' from 'updated' until
+    // ReAccreditationWithdrawUpdatedSnapshotMigration patches their frozen
+    // snapshot.
+    public string TemplateVersion => "v10";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -338,6 +348,19 @@ internal sealed class ReAccreditationType : IWorkItemType
             "withdraw-during-query",
             "Withdraw",
             s_queried.Id,
+            s_withdrawn.Id,
+            RequiresAllTasksComplete: false
+        ),
+        // RA-252: an operator can also withdraw an application sitting in
+        // 'updated' — a query response has arrived but a caseworker has not
+        // yet reviewed it via continue-review-during-*. As with
+        // withdraw-during-query, there is only one possible target state
+        // (withdrawn) from 'updated', so this is CallerInvocable (default)
+        // with no ambiguity for the engine's from-state guard to resolve.
+        new WorkItemTransition(
+            "withdraw-during-updated",
+            "Withdraw",
+            s_updated.Id,
             s_withdrawn.Id,
             RequiresAllTasksComplete: false
         ),

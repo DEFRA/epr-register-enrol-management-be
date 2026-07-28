@@ -235,6 +235,41 @@ public class ReAccreditationLifecycleTests
     }
 
     [Fact]
+    public async Task Withdraw_from_updated_is_allowed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var type = new ReAccreditationType();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var engine = new WorkItemService(
+            new WorkItemRegistry([type]),
+            persistence,
+            NullLogger<WorkItemService>.Instance
+        );
+
+        var workItem = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = "updated",
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+        persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var user = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("user:id", "alice-1")], "test")
+        );
+        var result = await engine.ApplyActionAsync(
+            workItem.Id,
+            "withdraw-during-updated",
+            user,
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("withdrawn", workItem.StateId);
+    }
+
+    [Fact]
     public async Task Query_from_assessment_in_progress_is_allowed()
     {
         var ct = TestContext.Current.CancellationToken;

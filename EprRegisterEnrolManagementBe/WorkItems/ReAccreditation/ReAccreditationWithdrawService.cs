@@ -48,6 +48,7 @@ internal sealed class ReAccreditationWithdrawService(
         ["assessment-in-progress"] = "withdraw-during-assessment",
         ["awaiting-decision"] = "withdraw-during-decision",
         ["queried"] = "withdraw-during-query",
+        ["updated"] = "withdraw-during-updated",
     };
 
     /// <summary>
