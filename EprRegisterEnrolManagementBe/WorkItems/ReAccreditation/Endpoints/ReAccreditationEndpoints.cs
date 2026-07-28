@@ -124,6 +124,20 @@ internal static class ReAccreditationEndpoints
             .WithName("ContinueReAccreditationReview")
             .RequireAuthorization();
 
+        // RA-252: called by the operator backend when an operator withdraws
+        // their application. Like /query, the caller never names an action —
+        // the correct withdraw/withdraw-during-* transition is resolved
+        // server-side from the work item's current state, since the operator
+        // backend does not track case-working's finer-grained state machine —
+        // and the reason is recorded as a work item note before the
+        // transition so the Withdrawn notification email can include it.
+        group
+            .MapPost("/{id:guid}/withdraw", WithdrawApplication)
+            .WithName("WithdrawReAccreditation")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxQueryBodyBytes))
+            .RequireAuthorization();
+
         // Live prior-year accreditation data from ReEx, scoped to this
         // work item type because no other module needs ReEx access.
         group
@@ -514,6 +528,70 @@ internal static class ReAccreditationEndpoints
 
         return TypedResults.Problem(
             title: "Could not query re-accreditation",
+            detail: result.Message,
+            statusCode: status
+        );
+    }
+
+    /// <summary>
+    /// RA-252: withdraw a re-accreditation application on the operator's
+    /// behalf. The body carries the operator's withdrawal reason; the
+    /// withdraw/withdraw-during-* transition is derived server-side from the
+    /// work item's current state, so the caller cannot choose one that does
+    /// not apply.
+    ///
+    /// Validation failures are 400. A state with no withdraw transition
+    /// (already decided) is 409, not a 500. An already-withdrawn work item
+    /// succeeds as an idempotent replay, so a duplicate withdraw call does
+    /// not fail the caller's retry.
+    /// </summary>
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > WithdrawApplication(
+        [FromRoute] Guid id,
+        WithdrawApplicationRequest request,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationWithdrawService withdrawService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken
+    )
+    {
+        if (ReAccreditationWithdrawValidator.Validate(request) is { } validationError)
+        {
+            return TypedResults.Problem(
+                title: "Invalid withdrawal",
+                detail: validationError,
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        var result = await withdrawService.WithdrawAsync(
+            id,
+            request.Reason!.Trim(),
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var status = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
+            WorkItemActionFailureCode.InvalidTransition
+            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
+        };
+
+        return TypedResults.Problem(
+            title: "Could not withdraw re-accreditation",
             detail: result.Message,
             statusCode: status
         );

@@ -44,11 +44,20 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // snapshot (v7 → v8). Must run after ReAccreditationResumeSnapshotMigration
         // so a v5/v6 item picks up the v7 resume-during-* transitions first.
         services.AddSingleton<IWorkItemMigration, ReAccreditationUpdatedStateSnapshotMigration>();
-        // RA-324/AC06: renames four state display labels in every existing work
-        // item's frozen snapshot to the "Applications" set (v8 → v9). Runs last:
-        // it is label-only and independent of the structural migrations above,
-        // so an item picks up any missing states first, then gets relabelled.
-        services.AddSingleton<IWorkItemMigration, ReAccreditationDisplayNameSnapshotMigration>();
+        // RA-252: adds the withdraw-during-query transition to every
+        // existing work item's frozen template snapshot (v8 → v9). No
+        // ordering dependency on the migrations above — it only appends a
+        // single self-contained transition.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationWithdrawQuerySnapshotMigration>();
+        // RA-252: adds the withdraw-during-updated transition to every
+        // existing work item's frozen template snapshot (v9 → v10). Runs
+        // after ReAccreditationWithdrawQuerySnapshotMigration so a v8 (or
+        // earlier) item picks up the v9 withdraw-during-query transition
+        // first.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationWithdrawUpdatedSnapshotMigration
+        >();
         // RA-132: accreditation-id generator + module-scoped approval
         // service that owns the bespoke approval workflow (id issuance,
         // SLA clock stop, queued publishing). RA-133: the generator
@@ -62,6 +71,9 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // RA-311/MBE-1: bespoke resume workflow (state-derived
         // resume-during-* action + query-responded audit entry).
         services.AddSingleton<IReAccreditationResumeService, ReAccreditationResumeService>();
+        // RA-252: bespoke withdraw workflow (state-derived
+        // withdraw/withdraw-during-* action + withdrawal-reason note).
+        services.AddSingleton<IReAccreditationWithdrawService, ReAccreditationWithdrawService>();
         // RA-337: bespoke continue-review workflow (audit-derived
         // continue-review-during-* action) that carries a work item on from
         // 'updated' once a caseworker has reviewed a query resubmission.

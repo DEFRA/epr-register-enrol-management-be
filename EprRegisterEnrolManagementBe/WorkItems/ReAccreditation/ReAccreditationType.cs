@@ -115,13 +115,24 @@ internal sealed class ReAccreditationType : IWorkItemType
     // transitions that still jump straight to the originating state until
     // ReAccreditationUpdatedStateSnapshotMigration patches their frozen
     // snapshot.
-    // v9 (RA-324/AC06): state DisplayNames only — submitted "Submitted" →
-    // "Not started", assessment-in-progress "Assessment in progress" →
-    // "Updated", approved "Approved" → "Granted", rejected "Rejected" →
-    // "Refused". No state ids, transitions or tasks change. Items snapshotted
-    // before v9 keep the old frozen labels until
-    // ReAccreditationDisplayNameSnapshotMigration patches their snapshot.
-    public string TemplateVersion => "v9";
+    // v9 (RA-252): added withdraw-during-query (queried -> withdrawn) so an
+    // operator can withdraw an application that is currently awaiting a
+    // query response, not just the four pre-decision states already
+    // covered by withdraw/withdraw-during-*. Items snapshotted before v9
+    // have no way to reach 'withdrawn' from 'queried' until
+    // ReAccreditationWithdrawQuerySnapshotMigration patches their frozen
+    // snapshot.
+    // v10 (RA-252): added withdraw-during-updated (updated -> withdrawn) so
+    // an operator can withdraw an application that is currently in
+    // 'updated' — a query response has arrived but a caseworker has not
+    // yet actioned continue-review-during-* to carry it back into review.
+    // Without this, an operator whose application sits in 'updated' had no
+    // way to withdraw at all, even though RA-252's business rule permits
+    // withdrawal at any point before a final decision. Items snapshotted
+    // before v10 have no way to reach 'withdrawn' from 'updated' until
+    // ReAccreditationWithdrawUpdatedSnapshotMigration patches their frozen
+    // snapshot.
+    public string TemplateVersion => "v10";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -167,12 +178,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         // /work-items/{id}/actions/approve, preventing a caller from bypassing the
         // bespoke side-effects (accreditation id issuance, SLA clock stop, queued
         // publishing job). Reject still goes through awaiting-decision via the generic engine.
-        new WorkItemTransition(
-            "reject",
-            "Reject",
-            s_awaitingDecision.Id,
-            s_rejected.Id
-        ),
+        new WorkItemTransition("reject", "Reject", s_awaitingDecision.Id, s_rejected.Id),
         // RA-211 / RA-291: a case worker can query an application from any
         // pre-decision state when they need clarification before proceeding.
         // Like sla-extend/withdraw, this bypasses the "all tasks complete"
@@ -336,6 +342,31 @@ internal sealed class ReAccreditationType : IWorkItemType
             "withdraw-during-decision",
             "Withdraw",
             s_awaitingDecision.Id,
+            s_withdrawn.Id,
+            RequiresAllTasksComplete: false
+        ),
+        // RA-252: an operator can withdraw an application awaiting a query
+        // response too — unlike resume-during-*/continue-review-during-*
+        // there is only one possible target state (withdrawn) from
+        // 'queried', so this is CallerInvocable (default) with no ambiguity
+        // for the engine's from-state guard to resolve.
+        new WorkItemTransition(
+            "withdraw-during-query",
+            "Withdraw",
+            s_queried.Id,
+            s_withdrawn.Id,
+            RequiresAllTasksComplete: false
+        ),
+        // RA-252: an operator can also withdraw an application sitting in
+        // 'updated' — a query response has arrived but a caseworker has not
+        // yet reviewed it via continue-review-during-*. As with
+        // withdraw-during-query, there is only one possible target state
+        // (withdrawn) from 'updated', so this is CallerInvocable (default)
+        // with no ambiguity for the engine's from-state guard to resolve.
+        new WorkItemTransition(
+            "withdraw-during-updated",
+            "Withdraw",
+            s_updated.Id,
             s_withdrawn.Id,
             RequiresAllTasksComplete: false
         ),
