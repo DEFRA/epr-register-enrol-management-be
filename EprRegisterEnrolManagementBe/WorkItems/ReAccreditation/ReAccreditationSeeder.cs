@@ -33,6 +33,13 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// </summary>
     public const string SeederAssignedBy = "system:seeder";
 
+    /// <summary>
+    /// The only seeded state that precedes <c>duly-made</c>, and therefore the
+    /// only one that legitimately carries a null <see cref="WorkItem.SlaClock"/>
+    /// (RA-295).
+    /// </summary>
+    private const string SubmittedStateId = "submitted";
+
     public string TypeId => ReAccreditationType.Id;
 
     public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
@@ -372,6 +379,26 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // resolves to a real object end-to-end.
                             ["s3Key"] = "sampling-plans/full-payload-verification/sampling-plan.pdf",
                             ["s3Bucket"] = "epr-register-enrol-sampling-plans"
+                        },
+                        // RA-295 / AC02: the sampling & inspection plan "could
+                        // have other supporting docs and should be listed", so
+                        // the fixture needs more than one file — with a single
+                        // entry a "lists every document" assertion passes even
+                        // against a template that renders files[0] and stops.
+                        new BsonDocument
+                        {
+                            ["fileId"] = "sampling-plan-002",
+                            ["filename"] = "sampling-plan-appendix.pdf",
+                            ["contentType"] = "application/pdf",
+                            ["uploadedAt"] = "2026-06-02T10:00:00.000Z",
+                            ["scanStatus"] = "Clean",
+                            // No matching object exists in the mgmt-tests
+                            // localstack bucket yet — the download link
+                            // resolves only once one is added to
+                            // docker/scripts/localstack/10-setup-buckets.sh
+                            // in that repo. Listing assertions work today.
+                            ["s3Key"] = "sampling-plans/full-payload-verification/sampling-plan-appendix.pdf",
+                            ["s3Bucket"] = "epr-register-enrol-sampling-plans"
                         }
                     }
                 },
@@ -471,6 +498,19 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             // falsify the audit trail to claim the user assigned
             // themselves.
             AssignedBy = assignedToId is null ? null : SeederAssignedBy,
+            // RA-295: every state after `submitted` is only reachable via
+            // `duly-made`, and that transition stamps the SLA clock
+            // (ReAccreditationDulyMadeHook). Seeded items skip `duly-made`
+            // entirely, so they used to carry a null clock — which meant the
+            // Applications card and the individual case header rendered no
+            // "Due on" date anywhere outside production. Stamp the clock the
+            // way the hook would have: the day after submission. Items still
+            // in `submitted` correctly keep a null clock (and therefore a null
+            // slaDueDate), so both the populated and the empty case are
+            // represented in the seed set.
+            SlaClock = stateId == SubmittedStateId
+                ? null
+                : new WorkItemSlaClock { StartedAt = submittedAt.AddDays(1) },
             Payload = payload
         };
 

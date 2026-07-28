@@ -31,6 +31,15 @@ public sealed record WorkItemResponse(
     IReadOnlyCollection<WorkItemAuditEntryResponse>? AuditLog = null,
     TimeSpan? SlaRemaining = null,
     WorkItemSlaState? SlaState = null,
+    // RA-295: absolute SLA deadline (slaClock.StartedAt + TargetDuration) so the
+    // case header can render "Due on: {date}" without re-deriving it from the
+    // relative SlaRemaining countdown. Mirrors
+    // WorkItemListItemResponse.SlaDueDate (RA-324) so the single-item and list
+    // shapes agree. Null under the same condition as SlaState/SlaRemaining —
+    // no SLA clock started yet — so a UI renders a dash rather than a bogus
+    // date. Always reflects the current clock, so an SLA extend/override moves
+    // it. Additive + nullable, so the DTO stays backward-compatible.
+    DateTime? SlaDueDate = null,
     // RA-318: surfaced as a top-level field (mirroring payload.applicationReference)
     // so callers don't need to parse the payload JSON to obtain it.
     string? ApplicationReference = null
