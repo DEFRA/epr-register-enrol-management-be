@@ -508,6 +508,15 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             // in `submitted` correctly keep a null clock (and therefore a null
             // slaDueDate), so both the populated and the empty case are
             // represented in the seed set.
+            //
+            // Beware when writing assertions against a `submitted` fixture:
+            // slaDueDate, slaRemaining and slaState are all null *together*, so
+            // any UI rendered behind a truthiness check on one of them does not
+            // exist on such an item at all. A test asserting that some
+            // SLA-derived element is absent therefore passes against a build
+            // that still renders it. Point those at an item with a clock (or
+            // pin one via the SLA override endpoint) — this already made an
+            // mgmt-tests SLA-badge-removal spec silently vacuous.
             SlaClock = stateId == SubmittedStateId
                 ? null
                 : new WorkItemSlaClock { StartedAt = submittedAt.AddDays(1) },
