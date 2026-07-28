@@ -525,6 +525,90 @@ public class GovukNotifyClientTests
             );
     }
 
+    // ─────── reaccreditation-regulator-notify-timeout incident (2026-07-27) ───────
+
+    [Fact]
+    public async Task SendEmailAsync_converts_a_timeout_that_is_not_the_callers_token_into_a_failure_result()
+    {
+        using var pollyInternalTimeoutSource = new CancellationTokenSource();
+        pollyInternalTimeoutSource.Cancel();
+
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>()
+            )
+            .ThrowsAsync(new OperationCanceledException(pollyInternalTimeoutSource.Token));
+
+        // Zero-delay retry pipeline (same one the retry-count tests use):
+        // simulates Polly's own per-attempt timeout token firing (distinct
+        // from the caller's cancellationToken, which is never cancelled
+        // here) without depending on Polly's real retry/timeout timing.
+        var sut = new GovukNotifyClient(
+            inner,
+            Options.Create(ConfigWithTemplates(("DulyMade", "t-id"))),
+            Substitute.For<IStructuredLogger<GovukNotifyClient>>(),
+            retryPipeline: ZeroDelayRetryPipeline()
+        );
+
+        // Regression test: this used to rethrow OperationCanceledException
+        // unconditionally, which skipped the NotifySendResult.Failure path
+        // and left no notification-failed audit entry for a Notify timeout.
+        var result = await sut.SendEmailAsync(
+            "DulyMade",
+            "op@ex.com",
+            new Dictionary<string, string>(),
+            "ref-timeout",
+            cancellationToken: CancellationToken.None
+        );
+
+        Assert.False(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_rethrows_when_the_callers_own_cancellation_token_fires()
+    {
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>()
+            )
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        // Zero-delay retry pipeline: isolates the exception-filter logic in
+        // SendEmailAsync from Polly's real retry/timeout timing (the
+        // production pipeline's 15s per-attempt timeout would make this
+        // test take up to ~48s for no benefit).
+        var sut = new GovukNotifyClient(
+            inner,
+            Options.Create(ConfigWithTemplates(("DulyMade", "t-id"))),
+            Substitute.For<IStructuredLogger<GovukNotifyClient>>(),
+            retryPipeline: ZeroDelayRetryPipeline()
+        );
+
+        // The caller's own cancellationToken firing must still propagate
+        // as a cancellation rather than being swallowed into a
+        // NotifySendResult.Failure.
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            sut.SendEmailAsync(
+                "DulyMade",
+                "op@ex.com",
+                new Dictionary<string, string>(),
+                "ref-caller-cancel",
+                cancellationToken: cts.Token
+            )
+        );
+    }
+
     [Fact]
     public async Task SendEmailAsync_emits_ecs_success_log_on_happy_path()
     {
