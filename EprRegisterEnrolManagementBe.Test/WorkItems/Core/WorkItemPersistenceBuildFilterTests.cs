@@ -355,4 +355,101 @@ public class WorkItemPersistenceBuildFilterTests
 
         Assert.Equal(new BsonDocument(), doc);
     }
+
+    // ──────────────────────────── Organisation (name or ID) ─────────────────────────────
+
+    [Fact]
+    public void OrganisationRendersAsCaseInsensitiveOrAcrossNameAndOperatorOrgId()
+    {
+        var doc = Render(new WorkItemQuery(Organisation: "  Acme  ", IncludeArchived: true));
+
+        var or = doc["$or"].AsBsonArray;
+        Assert.Equal(2, or.Count);
+        var nameRegex = or[0]["payload.organisationName"].AsBsonRegularExpression;
+        var idRegex = or[1]["payload.operatorOrganisationId"].AsBsonRegularExpression;
+        // Trimmed, case-insensitive substring (not anchored) on both fields.
+        Assert.Equal("Acme", nameRegex.Pattern);
+        Assert.Equal("i", nameRegex.Options);
+        Assert.Equal("Acme", idRegex.Pattern);
+        Assert.Equal("i", idRegex.Options);
+    }
+
+    [Fact]
+    public void OrganisationDoesNotMatchRegistrationIdOrWorkItemId()
+    {
+        // RA-324: reg-id is dropped from the combined box — it must not add an
+        // _id clause (that would resurrect registration-id findability).
+        var doc = Render(new WorkItemQuery(Organisation: "ORG-123", IncludeArchived: true));
+
+        var or = doc["$or"].AsBsonArray;
+        Assert.All(or, clause => Assert.False(clause.AsBsonDocument.Contains("_id")));
+    }
+
+    [Fact]
+    public void OrganisationEscapesRegexMetacharacters()
+    {
+        var doc = Render(new WorkItemQuery(Organisation: "a.b*", IncludeArchived: true));
+
+        var pattern = doc["$or"][0]["payload.organisationName"].AsBsonRegularExpression.Pattern;
+        Assert.Contains(@"\.", pattern);
+        Assert.Contains(@"\*", pattern);
+    }
+
+    [Fact]
+    public void BlankOrganisationIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(Organisation: "   ", IncludeArchived: true));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    // ──────────────────────────────── Materials ─────────────────────────────
+
+    [Fact]
+    public void SingleMaterialRendersAsAnchoredCaseInsensitiveRegex()
+    {
+        var doc = Render(new WorkItemQuery(Materials: new[] { "plastic" }, IncludeArchived: true));
+
+        var regex = doc["payload.material"].AsBsonRegularExpression;
+        // Anchored so it is an exact-token match, "i" so casing never hides it.
+        Assert.Equal("^plastic$", regex.Pattern);
+        Assert.Equal("i", regex.Options);
+    }
+
+    [Fact]
+    public void MultipleMaterialsRenderAsOrOfAnchoredRegexes()
+    {
+        var doc = Render(new WorkItemQuery(
+            Materials: new[] { "plastic", "glass" }, IncludeArchived: true));
+
+        var or = doc["$or"].AsBsonArray;
+        Assert.Equal(2, or.Count);
+        Assert.Equal("^plastic$", or[0]["payload.material"].AsBsonRegularExpression.Pattern);
+        Assert.Equal("^glass$", or[1]["payload.material"].AsBsonRegularExpression.Pattern);
+    }
+
+    [Fact]
+    public void MaterialEscapesRegexMetacharacters()
+    {
+        var doc = Render(new WorkItemQuery(Materials: new[] { "a.b" }, IncludeArchived: true));
+
+        var pattern = doc["payload.material"].AsBsonRegularExpression.Pattern;
+        Assert.Equal(@"^a\.b$", pattern);
+    }
+
+    [Fact]
+    public void EmptyMaterialsIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(Materials: Array.Empty<string>(), IncludeArchived: true));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void NullMaterialsIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(Materials: null, IncludeArchived: true));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
 }

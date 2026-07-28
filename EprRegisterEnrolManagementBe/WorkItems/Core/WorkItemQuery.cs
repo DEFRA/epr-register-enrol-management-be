@@ -64,7 +64,11 @@ public sealed record WorkItemQuery(
     bool IncludeArchived = false,
     string? OrgId = null,
     string? RegistrationId = null,
-    string? OrgName = null)
+    string? OrgName = null,
+    IReadOnlyCollection<string>? Materials = null,
+    string? Organisation = null,
+    string? Sort = null,
+    bool? SortDescending = null)
 {
     public const int DefaultPageSize = 20;
     public const int MinPageSize = 1;
@@ -115,6 +119,14 @@ public sealed record WorkItemQuery(
     /// <summary>Trimmed org name (payload.organisationName), or <c>null</c> if blank/whitespace.</summary>
     public string? NormalisedOrgName =>
         string.IsNullOrWhiteSpace(OrgName) ? null : OrgName.Trim();
+
+    /// <summary>
+    /// Trimmed combined "organisation name or ID" needle (RA-324), or
+    /// <c>null</c> if blank/whitespace. Matched against
+    /// <c>payload.organisationName</c> and <c>payload.operatorOrganisationId</c>.
+    /// </summary>
+    public string? NormalisedOrganisation =>
+        string.IsNullOrWhiteSpace(Organisation) ? null : Organisation.Trim();
 }
 
 /// <summary>

@@ -13,11 +13,17 @@ internal sealed class ReAccreditationType : IWorkItemType
 {
     public const string Id = "re-accreditation";
 
-    private static readonly WorkItemState s_submitted = new("submitted", "Submitted");
+    // RA-324 (AC06): state DisplayNames align with the prototype "Applications"
+    // design. Only the labels change here — the state ids are the wire contract
+    // the management-fe and mgmt-tests key off and MUST stay exactly as they
+    // are. Per literal AC06 this deliberately makes 'assessment-in-progress'
+    // and the existing 'updated' state both display "Updated"; that clash is
+    // accepted, not reconciled.
+    private static readonly WorkItemState s_submitted = new("submitted", "Not started");
     private static readonly WorkItemState s_dulyMade = new("duly-made", "Duly made");
     private static readonly WorkItemState s_assessmentInProgress = new(
         "assessment-in-progress",
-        "Assessment in progress"
+        "Updated"
     );
     private static readonly WorkItemState s_awaitingDecision = new(
         "awaiting-decision",
@@ -40,12 +46,12 @@ internal sealed class ReAccreditationType : IWorkItemType
     private static readonly WorkItemState s_updated = new("updated", "Updated");
     private static readonly WorkItemState s_approved = new(
         "approved",
-        "Approved",
+        "Granted",
         IsTerminal: true
     );
     private static readonly WorkItemState s_rejected = new(
         "rejected",
-        "Rejected",
+        "Refused",
         IsTerminal: true
     );
     private static readonly WorkItemState s_withdrawn = new(

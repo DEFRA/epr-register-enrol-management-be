@@ -23,6 +23,12 @@ internal static class WorkItemQueryBinding
     internal const string RegistrationIdParam = "registrationId";
     internal const string OrgNameParam = "orgName";
 
+    // RA-324 (Applications page) filter + sort params.
+    internal const string MaterialParam = "material";
+    internal const string OrganisationParam = "organisation";
+    internal const string SortParam = "sort";
+    internal const string SortDirectionParam = "dir";
+
     internal const string SubmittedByParam = "submittedBy";
 
     public static WorkItemQuery FromQueryString(IQueryCollection query)
@@ -42,7 +48,37 @@ internal static class WorkItemQueryBinding
             IncludeArchived: ReadBool(query, IncludeArchivedParam),
             OrgId: ReadString(query, OrgIdParam),
             RegistrationId: ReadString(query, RegistrationIdParam),
-            OrgName: ReadString(query, OrgNameParam));
+            OrgName: ReadString(query, OrgNameParam),
+            Materials: ReadStrings(query, MaterialParam),
+            Organisation: ReadString(query, OrganisationParam),
+            Sort: ReadString(query, SortParam),
+            SortDescending: ReadSortDirection(query, SortDirectionParam));
+    }
+
+    /// <summary>
+    /// Reads the optional <c>?dir=</c> value: <c>desc</c>/<c>descending</c> →
+    /// <c>true</c>, <c>asc</c>/<c>ascending</c> → <c>false</c>, anything else
+    /// (absent, blank, unrecognised) → <c>null</c> so the requested sort column
+    /// applies its own natural default direction.
+    /// </summary>
+    private static bool? ReadSortDirection(IQueryCollection query, string key)
+    {
+        var value = ReadString(query, key)?.Trim();
+        if (string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+        if (value.Equals("desc", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("descending", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (value.Equals("asc", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("ascending", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        return null;
     }
 
     private static IReadOnlyCollection<string>? ReadStrings(IQueryCollection query, string key)

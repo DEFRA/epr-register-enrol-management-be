@@ -192,4 +192,90 @@ public class WorkItemQueryBindingTests
         Assert.Null(query.RegistrationId);
         Assert.Null(query.OrgName);
     }
+
+    // ─────────────────────────── RA-324 filter + sort params ──────────────────────────
+
+    [Fact]
+    public void OrganisationIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("organisation", "Acme or ORG-1")));
+
+        Assert.Equal("Acme or ORG-1", query.Organisation);
+    }
+
+    [Fact]
+    public void SingleMaterialIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("material", "plastic")));
+
+        Assert.NotNull(query.Materials);
+        Assert.Equal(new[] { "plastic" }, query.Materials!);
+    }
+
+    [Fact]
+    public void RepeatedMaterialParamsAreAllBound()
+    {
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["material"] = new Microsoft.Extensions.Primitives.StringValues(
+                new[] { "plastic", "glass", "paper" })
+        };
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.Equal(new[] { "plastic", "glass", "paper" }, query.Materials!);
+    }
+
+    [Fact]
+    public void MissingMaterialAndOrganisationDefaultToNull()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.Materials);
+        Assert.Null(query.Organisation);
+    }
+
+    [Theory]
+    [InlineData("organisation")]
+    [InlineData("status")]
+    [InlineData("due-date")]
+    public void SortTokenIsBound(string token)
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("sort", token)));
+
+        Assert.Equal(token, query.Sort);
+    }
+
+    [Theory]
+    [InlineData("desc", true)]
+    [InlineData("DESC", true)]
+    [InlineData("descending", true)]
+    [InlineData("asc", false)]
+    [InlineData("ascending", false)]
+    public void SortDirectionIsParsed(string dir, bool expectedDescending)
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("dir", dir)));
+
+        Assert.Equal(expectedDescending, query.SortDescending);
+    }
+
+    [Theory]
+    [InlineData("sideways")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void UnrecognisedOrBlankSortDirectionIsNull(string dir)
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("dir", dir)));
+
+        Assert.Null(query.SortDescending);
+    }
+
+    [Fact]
+    public void MissingSortAndDirectionDefaultToNull()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.Sort);
+        Assert.Null(query.SortDescending);
+    }
 }
