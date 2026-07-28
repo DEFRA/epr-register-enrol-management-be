@@ -392,11 +392,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["contentType"] = "application/pdf",
                             ["uploadedAt"] = "2026-06-02T10:00:00.000Z",
                             ["scanStatus"] = "Clean",
-                            // No matching object exists in the mgmt-tests
-                            // localstack bucket yet — the download link
-                            // resolves only once one is added to
-                            // docker/scripts/localstack/10-setup-buckets.sh
-                            // in that repo. Listing assertions work today.
+                            // Backed by a real object in the mgmt-tests
+                            // localstack bucket (seeded by
+                            // docker/scripts/localstack/10-setup-buckets.sh in
+                            // that repo), so the e2e suite fetches this href
+                            // and asserts a 200 + PDF content type. Keep the
+                            // two s3Keys distinct: an href bug that serves
+                            // file one for both documents is invisible to a
+                            // filename-only assertion.
                             ["s3Key"] = "sampling-plans/full-payload-verification/sampling-plan-appendix.pdf",
                             ["s3Bucket"] = "epr-register-enrol-sampling-plans"
                         }
