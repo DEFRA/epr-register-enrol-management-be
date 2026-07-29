@@ -14,8 +14,17 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// </summary>
 public interface IOperatorBackendPushAdapter
 {
+    /// <summary>
+    /// <paramref name="correlationId"/> is generated once per push attempt by
+    /// the caller (<c>ReAccreditationQueryPushHook</c>), sent to the operator
+    /// backend as the <c>X-Correlation-Id</c> header, and included on every
+    /// log line and audit entry associated with this push so the two sides'
+    /// logs can be joined on a single value (RA-311/MBE-1 cross-repo
+    /// contract).
+    /// </summary>
     Task<OperatorBackendPushResult> PushQueryRaisedAsync(
         Guid workItemId,
+        Guid correlationId,
         string queryNote,
         IReadOnlyList<string> sectionKeys,
         CancellationToken cancellationToken = default);

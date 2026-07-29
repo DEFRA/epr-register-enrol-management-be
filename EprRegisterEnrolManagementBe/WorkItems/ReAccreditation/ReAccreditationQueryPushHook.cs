@@ -64,18 +64,27 @@ internal sealed class ReAccreditationQueryPushHook(
             return;
         }
 
+        // RA-311/MBE-1 cross-repo contract: one correlation id per push,
+        // generated here (the point where the outbound call to the operator
+        // backend originates) and threaded through the HTTP header, every
+        // log line, and every audit entry for this push so the two
+        // services' logs can be joined on a single value.
+        var correlationId = Guid.NewGuid();
+
         try
         {
             var payload = DeserialisePayload(workItem);
             var queryNote = payload?.CurrentQuery?.Reason ?? string.Empty;
             var sectionKeys = payload?.CurrentQuery?.Sections ?? [];
 
-            var result = await pushAdapter.PushQueryRaisedAsync(workItem.Id, queryNote, sectionKeys, cancellationToken);
+            var result = await pushAdapter.PushQueryRaisedAsync(
+                workItem.Id, correlationId, queryNote, sectionKeys, cancellationToken);
 
             var details = new Dictionary<string, string?>
             {
                 ["actionId"] = actionId,
                 ["sectionKeys"] = string.Join(",", sectionKeys),
+                ["correlationId"] = correlationId.ToString(),
             };
 
             if (result.IsSuccess)
@@ -85,7 +94,8 @@ internal sealed class ReAccreditationQueryPushHook(
                 if (!appended)
                 {
                     logger.LogWarning(
-                        "query-push-sent audit entry could not be persisted for work item {WorkItemId}.", workItem.Id);
+                        "query-push-sent audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
+                        workItem.Id, correlationId);
                 }
             }
             else if (result.IsSkipped)
@@ -95,27 +105,34 @@ internal sealed class ReAccreditationQueryPushHook(
                 // distinct outcome that must never alert (MBE-F5).
                 details["reason"] = result.ErrorMessage;
                 logger.LogDebug(
-                    "Query push skipped for work item {WorkItemId}: {Reason}", workItem.Id, result.ErrorMessage);
+                    "Query push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
+                    workItem.Id, correlationId, result.ErrorMessage);
                 var appended = await auditAppender.AppendAsync(
                     workItem.Id, "query-push-skipped", "Query push to operator backend skipped", details, user, cancellationToken);
                 if (!appended)
                 {
                     logger.LogWarning(
-                        "query-push-skipped audit entry could not be persisted for work item {WorkItemId}.", workItem.Id);
+                        "query-push-skipped audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
+                        workItem.Id, correlationId);
                 }
             }
             else
             {
                 details["errorMessage"] = result.ErrorMessage;
-                logger.LogWarning(
-                    "Push of query-raised for work item {WorkItemId} failed: {ErrorMessage}",
-                    workItem.Id, result.ErrorMessage);
+                // Promoted to LogError (was LogWarning): a failed push means
+                // the operator backend's record has silently drifted from
+                // ours, which should alert rather than blend into warning
+                // noise.
+                logger.LogError(
+                    "Push of query-raised for work item {WorkItemId} (correlation {CorrelationId}) failed: {ErrorMessage}",
+                    workItem.Id, correlationId, result.ErrorMessage);
                 var appended = await auditAppender.AppendAsync(
                     workItem.Id, "query-push-failed", "Query push to operator backend failed", details, user, cancellationToken);
                 if (!appended)
                 {
                     logger.LogWarning(
-                        "query-push-failed audit entry could not be persisted for work item {WorkItemId}.", workItem.Id);
+                        "query-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
+                        workItem.Id, correlationId);
                 }
             }
         }
@@ -124,7 +141,9 @@ internal sealed class ReAccreditationQueryPushHook(
             // Hooks must never throw — a push failure (or a failure to even
             // attempt the push, e.g. a payload deserialisation error) must
             // not unwind the already-persisted query transition.
-            logger.LogError(ex, "Unexpected failure pushing query-raised for work item {WorkItemId}.", workItem.Id);
+            logger.LogError(
+                ex, "Unexpected failure pushing query-raised for work item {WorkItemId} (correlation {CorrelationId}).",
+                workItem.Id, correlationId);
         }
     }
 

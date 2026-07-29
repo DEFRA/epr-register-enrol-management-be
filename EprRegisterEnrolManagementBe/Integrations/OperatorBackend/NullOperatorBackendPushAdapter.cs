@@ -15,6 +15,7 @@ internal sealed class NullOperatorBackendPushAdapter : IOperatorBackendPushAdapt
 {
     public Task<OperatorBackendPushResult> PushQueryRaisedAsync(
         Guid workItemId,
+        Guid correlationId,
         string queryNote,
         IReadOnlyList<string> sectionKeys,
         CancellationToken cancellationToken = default) =>
