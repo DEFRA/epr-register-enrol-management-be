@@ -1769,6 +1769,109 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         Assert.Single(page.Items);
     }
 
+    [Fact]
+    public async Task Submit_is_idempotent_for_a_retried_operatorApplicationId()
+    {
+        // RA-311/MBE-3: the operator backend forwards the operator's
+        // original "submit application" call and may retry it after OJ
+        // FE's 5s client timeout even though the first attempt already
+        // succeeded here (this round trip can take up to 100s). A retried
+        // submit carrying the same operatorApplicationId must hand back
+        // the SAME work item rather than creating a second one.
+        var type = BuildType();
+
+        var first = await BuildService(type).SubmitAsync(
+            type,
+            new BsonDocument { ["operatorApplicationId"] = "app-001" },
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        Assert.True(first.IsSuccess);
+        Assert.False(first.IsIdempotentReplay);
+
+        // A fresh payload instance with the same operatorApplicationId,
+        // mirroring a real retried HTTP POST rather than reusing the first
+        // call's (now server-mutated) BsonDocument.
+        var second = await BuildService(type).SubmitAsync(
+            type,
+            new BsonDocument { ["operatorApplicationId"] = "app-001" },
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.True(second.IsSuccess);
+        Assert.True(second.IsIdempotentReplay);
+        Assert.Equal(first.WorkItem!.Id, second.WorkItem!.Id);
+
+        // Exactly one document exists for this operatorApplicationId — the
+        // retry did not create a duplicate work item.
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(TypeIds: [TypeId], Page: 1, PageSize: 10),
+            TestContext.Current.CancellationToken
+        );
+        Assert.Single(page.Items);
+    }
+
+    [Fact]
+    public async Task Submit_does_not_rerun_submitted_hooks_on_an_idempotent_replay()
+    {
+        // A replay must not re-trigger downstream side effects (e.g. a
+        // notification hook that already fired for the original submission).
+        var type = BuildType();
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+        var service = BuildServiceWithHook(type, hook);
+
+        await service.SubmitAsync(
+            type,
+            new BsonDocument { ["operatorApplicationId"] = "app-002" },
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        await hook.Received(1).OnSubmittedAsync(
+            Arg.Any<WorkItem>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+
+        var second = await service.SubmitAsync(
+            type,
+            new BsonDocument { ["operatorApplicationId"] = "app-002" },
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.True(second.IsIdempotentReplay);
+        // Still exactly the one call from the original submission — the
+        // replay path returns before the hook fan-out runs again.
+        await hook.Received(1).OnSubmittedAsync(
+            Arg.Any<WorkItem>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Submit_without_an_operatorApplicationId_always_creates_a_new_work_item()
+    {
+        // Sanity check: the idempotency guard only engages when the payload
+        // actually carries an operatorApplicationId. Case-management-created
+        // items (and any legacy submission) never set it, so two otherwise
+        // identical submissions must still create two distinct work items.
+        var type = BuildType();
+
+        var first = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var second = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.False(second.IsIdempotentReplay);
+        Assert.NotEqual(first.WorkItem!.Id, second.WorkItem!.Id);
+    }
+
     /// <summary>
     /// Deterministic generator for the collision tests. Returns the supplied
     /// values in order; once the script is exhausted it repeats the last
@@ -1834,6 +1937,10 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             Guid id,
             CancellationToken cancellationToken = default
         ) => inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default
+        ) => inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
 
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,

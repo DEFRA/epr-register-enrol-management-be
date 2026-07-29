@@ -122,7 +122,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_seven_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_eight_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -138,7 +138,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(7, keyDocs.Count);
+        Assert.Equal(8, keyDocs.Count);
         Assert.Contains(keyDocs, k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"stateId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"assignedToId\" : 1") && k.Contains("\"submittedAt\" : -1"));
@@ -150,6 +150,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Contains(keyDocs, k => k.Contains("\"_fts\" : \"text\""));
         // Ascending index for applicationReference prefix search.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.applicationReference\" : 1"));
+        // RA-311/MBE-3: ascending index backing the operatorApplicationId
+        // idempotent-submit lookup.
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorApplicationId\" : 1"));
 
         // RA-219: that index must be UNIQUE (enforce one ref per work item /
         // give the engine a collision signal) and SPARSE (legacy docs without
@@ -158,6 +161,14 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             i["key"].AsBsonDocument.Contains("payload.applicationReference"));
         Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
         Assert.True(appRefIndex.GetValue("sparse", false).ToBoolean());
+
+        // RA-311/MBE-3: same UNIQUE + SPARSE contract for operatorApplicationId
+        // — one work item per operator application id, but legacy/manual
+        // items without the field are never constrained.
+        var operatorApplicationIdIndex = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("payload.operatorApplicationId"));
+        Assert.True(operatorApplicationIdIndex.GetValue("unique", false).ToBoolean());
+        Assert.True(operatorApplicationIdIndex.GetValue("sparse", false).ToBoolean());
     }
 
     [Fact]

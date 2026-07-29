@@ -87,6 +87,22 @@ public interface IWorkItemPersistence
         string fieldName,
         BsonValue value,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// RA-311/MBE-3: find an existing work item of <paramref name="typeId"/>
+    /// whose <c>payload.operatorApplicationId</c> matches
+    /// <paramref name="operatorApplicationId"/>, or <c>null</c> if none
+    /// exists. Backs the idempotent-submit check in
+    /// <see cref="WorkItemService.SubmitAsync"/>: a caller (the operator
+    /// backend, forwarding an operator's original "submit application" call)
+    /// that retries after a client-side timeout must be handed back the
+    /// work item created by the first attempt rather than creating a
+    /// duplicate.
+    /// </summary>
+    Task<WorkItem?> FindByOperatorApplicationIdAsync(
+        string typeId,
+        string operatorApplicationId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersistence
@@ -161,6 +177,17 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         return await Collection
             .Find(w => w.Id == id)
             .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    [ExcludeFromCodeCoverage]
+    public async Task<WorkItem?> FindByOperatorApplicationIdAsync(
+        string typeId, string operatorApplicationId, CancellationToken cancellationToken = default)
+    {
+        var filter = Builders<WorkItem>.Filter.And(
+            Builders<WorkItem>.Filter.Eq(w => w.TypeId, typeId),
+            Builders<WorkItem>.Filter.Eq("payload.operatorApplicationId", operatorApplicationId));
+
+        return await Collection.Find(filter).FirstOrDefaultAsync(cancellationToken);
     }
 
     [ExcludeFromCodeCoverage]
@@ -478,7 +505,22 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         var applicationReference = new CreateIndexModel<WorkItem>(
             builder.Ascending("payload.applicationReference"),
             new CreateIndexOptions { Unique = true, Sparse = true });
-        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference];
+        // RA-311/MBE-3: the operator backend forwards the operator's own
+        // "submit application" call and may retry it after a client-side
+        // timeout even though the original request already succeeded here
+        // (CDP logs show OJ FE aborting at 5s while this round-trip can take
+        // up to 100s). Unique + sparse on the same principle as
+        // applicationReference above: only documents that actually carry
+        // payload.operatorApplicationId are constrained, so items submitted
+        // without one (e.g. case-management-created items, legacy items)
+        // are unaffected, but two submissions carrying the same operator
+        // application id can never both persist — the engine's retry-lookup
+        // in WorkItemService.SubmitAsync uses this as its duplicate-key
+        // signal to hand back the original work item instead of erroring.
+        var operatorApplicationId = new CreateIndexModel<WorkItem>(
+            builder.Ascending("payload.operatorApplicationId"),
+            new CreateIndexOptions { Unique = true, Sparse = true });
+        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference, operatorApplicationId];
     }
 }
 
