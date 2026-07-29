@@ -715,6 +715,7 @@ public static class WorkItemEndpoints
                 .ToList(),
             slaRemaining,
             slaState,
+            ComputeSlaDueDate(w.SlaClock),
             w.Payload.TryGetValue("applicationReference", out var reference) && reference.IsString
                 ? reference.AsString
                 : null
@@ -736,11 +737,13 @@ public static class WorkItemEndpoints
     }
 
     /// <summary>
-    /// RA-324: the absolute SLA deadline (<c>slaClock.StartedAt +
-    /// TargetDuration</c>) for the Applications card's "Due on:" line, or
-    /// <c>null</c> when no SLA clock has started. Unlike
+    /// RA-324 / RA-295: the absolute SLA deadline (<c>slaClock.StartedAt +
+    /// TargetDuration</c>) for the Applications card's and the case header's
+    /// "Due on:" line, or <c>null</c> when no SLA clock has started. Unlike
     /// <see cref="ComputeSla"/> this needs no "now" — the deadline is a fixed
-    /// instant, not a relative countdown.
+    /// instant, not a relative countdown. Read straight off the live clock, so
+    /// an <see cref="ISlaService"/> extend or override is reflected
+    /// immediately.
     /// </summary>
     internal static DateTime? ComputeSlaDueDate(WorkItemSlaClock? clock) =>
         clock is null ? null : clock.StartedAt + clock.TargetDuration;

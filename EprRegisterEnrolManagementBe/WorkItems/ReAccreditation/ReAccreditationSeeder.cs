@@ -33,6 +33,13 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// </summary>
     public const string SeederAssignedBy = "system:seeder";
 
+    /// <summary>
+    /// The only seeded state that precedes <c>duly-made</c>, and therefore the
+    /// only one that legitimately carries a null <see cref="WorkItem.SlaClock"/>
+    /// (RA-295).
+    /// </summary>
+    private const string SubmittedStateId = "submitted";
+
     public string TypeId => ReAccreditationType.Id;
 
     public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
@@ -372,6 +379,29 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // resolves to a real object end-to-end.
                             ["s3Key"] = "sampling-plans/full-payload-verification/sampling-plan.pdf",
                             ["s3Bucket"] = "epr-register-enrol-sampling-plans"
+                        },
+                        // RA-295 / AC02: the sampling & inspection plan "could
+                        // have other supporting docs and should be listed", so
+                        // the fixture needs more than one file — with a single
+                        // entry a "lists every document" assertion passes even
+                        // against a template that renders files[0] and stops.
+                        new BsonDocument
+                        {
+                            ["fileId"] = "sampling-plan-002",
+                            ["filename"] = "sampling-plan-appendix.pdf",
+                            ["contentType"] = "application/pdf",
+                            ["uploadedAt"] = "2026-06-02T10:00:00.000Z",
+                            ["scanStatus"] = "Clean",
+                            // Backed by a real object in the mgmt-tests
+                            // localstack bucket (seeded by
+                            // docker/scripts/localstack/10-setup-buckets.sh in
+                            // that repo), so the e2e suite fetches this href
+                            // and asserts a 200 + PDF content type. Keep the
+                            // two s3Keys distinct: an href bug that serves
+                            // file one for both documents is invisible to a
+                            // filename-only assertion.
+                            ["s3Key"] = "sampling-plans/full-payload-verification/sampling-plan-appendix.pdf",
+                            ["s3Bucket"] = "epr-register-enrol-sampling-plans"
                         }
                     }
                 },
@@ -471,6 +501,28 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             // falsify the audit trail to claim the user assigned
             // themselves.
             AssignedBy = assignedToId is null ? null : SeederAssignedBy,
+            // RA-295: every state after `submitted` is only reachable via
+            // `duly-made`, and that transition stamps the SLA clock
+            // (ReAccreditationDulyMadeHook). Seeded items skip `duly-made`
+            // entirely, so they used to carry a null clock — which meant the
+            // Applications card and the individual case header rendered no
+            // "Due on" date anywhere outside production. Stamp the clock the
+            // way the hook would have: the day after submission. Items still
+            // in `submitted` correctly keep a null clock (and therefore a null
+            // slaDueDate), so both the populated and the empty case are
+            // represented in the seed set.
+            //
+            // Beware when writing assertions against a `submitted` fixture:
+            // slaDueDate, slaRemaining and slaState are all null *together*, so
+            // any UI rendered behind a truthiness check on one of them does not
+            // exist on such an item at all. A test asserting that some
+            // SLA-derived element is absent therefore passes against a build
+            // that still renders it. Point those at an item with a clock (or
+            // pin one via the SLA override endpoint) — this already made an
+            // mgmt-tests SLA-badge-removal spec silently vacuous.
+            SlaClock = stateId == SubmittedStateId
+                ? null
+                : new WorkItemSlaClock { StartedAt = submittedAt.AddDays(1) },
             Payload = payload
         };
 

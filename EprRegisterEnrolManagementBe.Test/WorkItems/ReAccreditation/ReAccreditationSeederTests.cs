@@ -205,5 +205,56 @@ public class ReAccreditationSeederTests
             Assert.Equal(timestamps.OrderBy(t => t).ToList(), timestamps);
         });
     }
+
+    // ── RA-295: SLA clock ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Build_items_past_submitted_carry_an_sla_clock()
+    {
+        // Every state after `submitted` is only reachable via `duly-made`,
+        // which stamps the clock. Without one the case header and the
+        // Applications card can render no "Due on" date.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var past = items.Where(i => i.StateId != "submitted").ToList();
+
+        Assert.NotEmpty(past);
+        Assert.All(past, item =>
+        {
+            Assert.NotNull(item.SlaClock);
+            Assert.Equal(item.SubmittedAt.AddDays(1), item.SlaClock!.StartedAt);
+            Assert.False(item.SlaClock.Breached);
+        });
+    }
+
+    [Fact]
+    public void Build_submitted_items_have_no_sla_clock()
+    {
+        // The clock has genuinely not started yet, so the due date must stay
+        // null and the UI must render a dash rather than a fabricated date.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var submitted = items.Where(i => i.StateId == "submitted").ToList();
+
+        Assert.NotEmpty(submitted);
+        Assert.All(submitted, item => Assert.Null(item.SlaClock));
+    }
+
+    [Fact]
+    public void Build_full_payload_fixture_lists_more_than_one_sampling_plan_document()
+    {
+        // AC02: supporting documents "should be listed" (plural). A
+        // single-file fixture cannot distinguish a template that renders
+        // every file from one that renders files[0] and stops.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var fullPayload = items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString == "Full Payload Verification Ltd");
+
+        var files = fullPayload.Payload["samplingPlan"]["files"].AsBsonArray;
+
+        Assert.True(files.Count > 1);
+        Assert.Equal(
+            files.Select(f => f["filename"].AsString).Distinct().Count(),
+            files.Count);
+    }
 }
 
