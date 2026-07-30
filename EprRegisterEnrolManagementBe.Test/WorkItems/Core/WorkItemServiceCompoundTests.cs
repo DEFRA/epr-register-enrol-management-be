@@ -332,6 +332,10 @@ public class WorkItemServiceCompoundTests
         public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             inner.GetByIdAsync(id, cancellationToken);
 
+        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default) =>
+            inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
+
         public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default) =>
             inner.QueryAsync(query, cancellationToken);
 

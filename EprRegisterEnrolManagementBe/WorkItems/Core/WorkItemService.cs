@@ -237,6 +237,42 @@ public sealed class WorkItemService : IWorkItemService
             payload["source"] = sourceVal;
         }
 
+        // RA-311/MBE-3: idempotent submit. The operator backend forwards the
+        // operator's original "submit application" call and may retry it
+        // after OJ FE's client-side timeout even though the first attempt
+        // already succeeded here (CDP logs show a 5s client timeout against
+        // a round-trip that can take up to 100s). When the payload carries
+        // an operatorApplicationId, a submit for one already on file is
+        // treated as a replay: hand back the SAME work item rather than
+        // minting a second one. This up-front lookup handles the common
+        // case (a genuinely sequential retry) cheaply; the unique + sparse
+        // payload.operatorApplicationId index (see WorkItemPersistence)
+        // is the backstop for a true concurrent race between two
+        // simultaneous requests, handled in the catch clause below.
+        var operatorApplicationId =
+            payload.TryGetValue("operatorApplicationId", out var operatorApplicationIdValue)
+            && operatorApplicationIdValue.IsString
+            && !string.IsNullOrWhiteSpace(operatorApplicationIdValue.AsString)
+                ? operatorApplicationIdValue.AsString
+                : null;
+
+        if (operatorApplicationId is not null)
+        {
+            var existingByOperatorApplicationId = await _persistence.FindByOperatorApplicationIdAsync(
+                type.TypeId, operatorApplicationId, cancellationToken);
+            if (existingByOperatorApplicationId is not null)
+            {
+                _logger.LogInformation(
+                    "Submit for operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) is a replay; " +
+                        "returning existing work item {WorkItemId} instead of creating a duplicate.",
+                    operatorApplicationId,
+                    type.TypeId,
+                    existingByOperatorApplicationId.Id
+                );
+                return WorkItemActionResult.IdempotentReplay(existingByOperatorApplicationId);
+            }
+        }
+
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
 
         // RA-219: the backend owns the applicationReference. Generate one
@@ -312,6 +348,39 @@ public sealed class WorkItemService : IWorkItemService
             {
                 await _persistence.CreateAsync(workItem, cancellationToken);
                 break;
+            }
+            // RA-311/MBE-3: a genuine race — another request carrying the
+            // same operatorApplicationId won the insert between the
+            // up-front lookup above and this write. Regenerating a fresh
+            // applicationReference and retrying would not help: the
+            // collision is on the caller-supplied operatorApplicationId,
+            // which never changes between attempts. Look up whatever the
+            // winner persisted and hand that back as a replay instead.
+            catch (MongoWriteException ex)
+                when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey
+                    && IsOperatorApplicationIdDuplicate(ex)
+                )
+            {
+                var winner = operatorApplicationId is null
+                    ? null
+                    : await _persistence.FindByOperatorApplicationIdAsync(
+                        type.TypeId, operatorApplicationId, cancellationToken);
+                if (winner is not null)
+                {
+                    _logger.LogInformation(
+                        "operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) collided on insert; " +
+                            "treating as a submit replay and returning the existing work item {WorkItemId}.",
+                        operatorApplicationId,
+                        type.TypeId,
+                        winner.Id
+                    );
+                    return WorkItemActionResult.IdempotentReplay(winner);
+                }
+                // Extremely unlikely: the winning document is gone by the
+                // time we look for it. Nothing about retrying with a new
+                // applicationReference fixes an operatorApplicationId
+                // collision, so propagate rather than loop forever.
+                throw;
             }
             // Only retry on a duplicate-key error that is actually the
             // applicationReference unique index. Keying on the DuplicateKey
@@ -394,6 +463,21 @@ public sealed class WorkItemService : IWorkItemService
     private static bool IsApplicationReferenceDuplicate(MongoWriteException ex) =>
         ex.WriteError?.Message?.Contains(
             ApplicationReferenceField,
+            StringComparison.OrdinalIgnoreCase
+        ) == true;
+
+    /// <summary>
+    /// True when a duplicate-key write error was raised by the
+    /// <c>payload.operatorApplicationId</c> unique index specifically
+    /// (RA-311/MBE-3) — the same substring-match approach as
+    /// <see cref="IsApplicationReferenceDuplicate"/>, just against a
+    /// different index name.
+    /// </summary>
+    private const string OperatorApplicationIdField = "operatorApplicationId";
+
+    private static bool IsOperatorApplicationIdDuplicate(MongoWriteException ex) =>
+        ex.WriteError?.Message?.Contains(
+            OperatorApplicationIdField,
             StringComparison.OrdinalIgnoreCase
         ) == true;
 

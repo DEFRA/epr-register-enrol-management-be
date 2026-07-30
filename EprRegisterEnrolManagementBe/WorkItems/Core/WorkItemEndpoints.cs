@@ -309,7 +309,7 @@ public static class WorkItemEndpoints
         var workItem = result.WorkItem!;
         log.Log(
             LogLevel.Information,
-            "Work item submission succeeded",
+            result.IsIdempotentReplay ? "Work item submission was an idempotent replay" : "Work item submission succeeded",
             new Dictionary<string, object?>
             {
                 ["work_item.id"] = workItem.Id.ToString(),
@@ -317,6 +317,15 @@ public static class WorkItemEndpoints
                 ["caller.client_id"] = submittedBy ?? "(unknown)",
             }
         );
+        // RA-311/MBE-3: a retried "submit application" call for an
+        // operatorApplicationId already on file is handed the existing
+        // work item rather than a new one — surface that via the same
+        // X-Idempotent-Replay header the other idempotent mutations use so
+        // a caller (the operator backend) can tell first-hit from replay.
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[IdempotentReplayHeader] = "true";
+        }
         var response = ToResponse(engine.Project(workItem));
         return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
     }

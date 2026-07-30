@@ -45,7 +45,7 @@ public class ReAccreditationQueryPushHookTests
         var adapter = Substitute.For<IOperatorBackendPushAdapter>();
         adapter
             .PushQueryRaisedAsync(
-                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Success());
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
         auditAppender
@@ -75,6 +75,7 @@ public class ReAccreditationQueryPushHookTests
         var expectedSections = new[] { "business-plan", "prn-tonnage" };
         await adapter.Received(1).PushQueryRaisedAsync(
             workItem.Id,
+            Arg.Any<Guid>(),
             "Tonnage does not reconcile",
             Arg.Is<IReadOnlyList<string>>(s => s.SequenceEqual(expectedSections)),
             ct);
@@ -94,7 +95,7 @@ public class ReAccreditationQueryPushHookTests
         await hook.OnActionAppliedAsync(workItem, actionId, "submitted", s_user, ct);
 
         await adapter.DidNotReceiveWithAnyArgs()
-            .PushQueryRaisedAsync(default, default!, default!, default);
+            .PushQueryRaisedAsync(default, default, default!, default!, default);
     }
 
     [Fact]
@@ -107,7 +108,7 @@ public class ReAccreditationQueryPushHookTests
         await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
 
         await adapter.DidNotReceiveWithAnyArgs()
-            .PushQueryRaisedAsync(default, default!, default!, default);
+            .PushQueryRaisedAsync(default, default, default!, default!, default);
     }
 
     [Fact]
@@ -131,7 +132,7 @@ public class ReAccreditationQueryPushHookTests
         var (hook, adapter, auditAppender) = BuildSut();
         adapter
             .PushQueryRaisedAsync(
-                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
         var workItem = BuildWorkItem();
 
@@ -154,7 +155,7 @@ public class ReAccreditationQueryPushHookTests
         var (hook, adapter, auditAppender) = BuildSut();
         adapter
             .PushQueryRaisedAsync(
-                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Failure("connection refused"));
         var workItem = BuildWorkItem();
 
@@ -167,13 +168,67 @@ public class ReAccreditationQueryPushHookTests
     }
 
     [Fact]
+    public async Task OnActionAppliedAsync_includes_the_same_correlation_id_in_the_push_call_and_the_sent_audit_entry()
+    {
+        // RA-311/MBE-1 cross-repo contract: one correlation id generated per
+        // push, passed to the adapter AND recorded in the audit trail, so
+        // this service's own record of a successful push can be joined back
+        // to the operator backend's logs for the same request.
+        var ct = TestContext.Current.CancellationToken;
+        var (hook, adapter, auditAppender) = BuildSut();
+        var workItem = BuildWorkItem();
+        Guid? correlationIdPassedToAdapter = null;
+        adapter
+            .PushQueryRaisedAsync(
+                Arg.Any<Guid>(), Arg.Do<Guid>(id => correlationIdPassedToAdapter = id),
+                Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Success());
+
+        await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
+
+        Assert.NotNull(correlationIdPassedToAdapter);
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id, "query-push-sent", Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d.GetValueOrDefault("correlationId") == correlationIdPassedToAdapter.ToString()),
+            s_user, ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_includes_the_same_correlation_id_in_the_push_call_and_the_failed_audit_entry()
+    {
+        // Same contract as the success case above, but for a failed push:
+        // the query-push-failed audit entry must carry the exact
+        // correlation id the adapter was called with, so a failure can be
+        // traced back to the operator backend's own logs for that attempt.
+        var ct = TestContext.Current.CancellationToken;
+        var (hook, adapter, auditAppender) = BuildSut();
+        var workItem = BuildWorkItem();
+        Guid? correlationIdPassedToAdapter = null;
+        adapter
+            .PushQueryRaisedAsync(
+                Arg.Any<Guid>(), Arg.Do<Guid>(id => correlationIdPassedToAdapter = id),
+                Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Failure("connection refused"));
+
+        await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
+
+        Assert.NotNull(correlationIdPassedToAdapter);
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id, "query-push-failed", Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d.GetValueOrDefault("correlationId") == correlationIdPassedToAdapter.ToString()),
+            s_user, ct);
+    }
+
+    [Fact]
     public async Task OnActionAppliedAsync_never_throws_when_the_adapter_throws()
     {
         var ct = TestContext.Current.CancellationToken;
         var (hook, adapter, _) = BuildSut();
         adapter
             .PushQueryRaisedAsync(
-                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
             .Returns<OperatorBackendPushResult>(_ => throw new InvalidOperationException("boom"));
         var workItem = BuildWorkItem();
 
@@ -209,6 +264,6 @@ public class ReAccreditationQueryPushHookTests
         await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
 
         await adapter.Received(1).PushQueryRaisedAsync(
-            workItem.Id, string.Empty, Arg.Is<IReadOnlyList<string>>(s => s.Count == 0), ct);
+            workItem.Id, Arg.Any<Guid>(), string.Empty, Arg.Is<IReadOnlyList<string>>(s => s.Count == 0), ct);
     }
 }

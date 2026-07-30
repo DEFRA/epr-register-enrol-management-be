@@ -1484,6 +1484,10 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             CancellationToken cancellationToken = default
         ) => Inner.GetByIdAsync(id, cancellationToken);
 
+        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default
+        ) => Inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
+
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,
             CancellationToken cancellationToken = default
