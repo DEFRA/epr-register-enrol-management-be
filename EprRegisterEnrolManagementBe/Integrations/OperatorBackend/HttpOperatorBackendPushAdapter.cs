@@ -14,10 +14,11 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// <summary>
 /// RA-311/MBE-1 real <see cref="IOperatorBackendPushAdapter"/>.
 ///
-/// Uses the plain <c>"DefaultClient"</c> (no <c>ProxyHttpMessageHandler</c>)
-/// — this is CDP-service-to-CDP-service traffic, the mirror image of the
-/// operator backend's own <c>HttpCaseWorkingApiAdapter</c>, which also skips
-/// the egress proxy for its calls into this service. Signs with
+/// Uses the plain <c>"DefaultClient"</c> (explicitly <c>UseProxy = false</c>,
+/// see <c>Program.cs::ConfigureHttpClients</c>) — this is CDP-service-to-CDP-service
+/// traffic, the mirror image of the operator backend's own
+/// <c>HttpCaseWorkingApiAdapter</c>, which also skips the egress proxy for its
+/// calls into this service. Signs with
 /// <see cref="CognitoClientIdAuthenticationHandler.ComputeSignature"/> — the
 /// same v3 canonical-payload HMAC this service's own inbound handler
 /// verifies — reused here to *produce* a signature rather than verify one,
