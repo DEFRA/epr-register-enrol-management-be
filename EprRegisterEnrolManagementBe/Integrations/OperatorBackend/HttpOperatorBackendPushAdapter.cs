@@ -69,14 +69,16 @@ internal sealed class HttpOperatorBackendPushAdapter(
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
         // RA-311/MBE-1: request payload metadata + correlation id, logged
-        // once up front regardless of how many retry attempts follow. The
-        // query note and section keys are passed as structured logging
-        // parameters (never string-concatenated into the template) so a
-        // structured log sink can redact/filter on {QueryNote} without the
-        // message text itself carrying raw operator-supplied content.
+        // once up front regardless of how many retry attempts follow.
+        // queryNote is regulator-supplied free text and is intentionally
+        // never logged — not even as a structured parameter, since Serilog
+        // still writes structured parameter values into the rendered
+        // message/property set. Only its length is logged as a size signal.
+        // This matches the rule the paired operator-backend change applies
+        // to the same field (RA-311 security note).
         logger.LogInformation(
-            "Pushing query-raised for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); sections {SectionKeys}, note {QueryNote}",
-            workItemId, endpoint, correlationId, sectionKeys, queryNote);
+            "Pushing query-raised for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); sections {SectionKeys}, note length {QueryNoteLength}",
+            workItemId, endpoint, correlationId, sectionKeys, queryNote.Length);
 
         try
         {
