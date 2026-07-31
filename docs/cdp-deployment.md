@@ -25,7 +25,7 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 | `Mongo__DatabaseUri`       | CDP MongoDB binding   | Authenticated via IAM (`MONGODB-AWS`).                      |
 | `Mongo__DatabaseName`      | Service config        | Defaults to `epr-register-enrol-management-be`.     |
 | `TraceHeader`              | Service config        | Defaults to `x-cdp-request-id`.                             |
-| `HTTP_PROXY` / `HTTPS_PROXY` | CDP platform        | CDP outbound proxy. Required for any external HTTP call.    |
+| `HTTP_PROXY` / `HTTPS_PROXY` | CDP platform        | CDP outbound proxy. Required for any external HTTP call. Also assigned process-wide to `HttpClient.DefaultProxy` at startup (for the GOV.UK Notify SDK's bare `HttpClient`) — any named `HttpClient` that must bypass Squid (e.g. `"DefaultClient"`, see [Operator backend push](#operator-backend-push-ra-311mbe-1)) has to opt out explicitly via `ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseProxy = false })`; omitting a primary handler is not the same as being unproxied. |
 | `TRUSTSTORE_*`             | CDP platform          | Loaded by `LoadCustomTrustStoreFromEnvironment`.            |
 | `OperatorBackendApi__Enabled` | Service config     | Master switch for the RA-311/MBE-1 outbound query push (see [Operator backend push](#operator-backend-push-ra-311mbe-1) below). Defaults to `false` — deploying this code is behaviour-neutral until this is explicitly set. |
 | `OperatorBackendApi__Url`  | Service config        | Internal base URL of `epr-register-enrol-backend` (CDP service-discovery name, not a public ingress hostname). Required (non-blank) when `OperatorBackendApi__Enabled=true` — startup fails otherwise. |
@@ -95,6 +95,16 @@ Every push attempt is recorded on the work item's audit log:
 `query-push-sent` (2xx), `query-push-skipped` (disabled — not an error, does
 not alert), or `query-push-failed` (attempted and errored — does not alert on
 its own yet; see the RA-311 fix doc for the planned failure-rate alert).
+
+The push goes out on the `"DefaultClient"` named `HttpClient`
+(`Program.cs::ConfigureHttpClients`), which deliberately bypasses the Squid
+proxy (`UseProxy = false`) rather than inheriting `HttpClient.DefaultProxy`.
+This is required, not incidental: the target is an internal
+`*.cdp-int.defra.cloud` service-discovery hostname, which isn't (and
+shouldn't be) on Squid's outbound allow-list — see
+[Squid proxy allow-list](#squid-proxy-allow-list). Routing this traffic
+through Squid causes a `502` proxy-tunnel failure that only surfaces in CDP
+(where `HTTPS_PROXY` is set), not locally.
 
 ## AWS resources to provision
 

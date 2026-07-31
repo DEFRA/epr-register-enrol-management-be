@@ -76,6 +76,16 @@ static void ConfigureServices(WebApplicationBuilder builder)
     // on the Squid proxy. Without this the SDK egresses direct and
     // hangs on the platform's deny-all firewall
     // (cdp-documentation/how-to/proxy.md).
+    //
+    // This is process-global: it silently applies to every HttpClient in
+    // the process that doesn't explicitly opt out, not just Notify's bare
+    // one — including named clients from AddHttpClient(...) that don't
+    // configure a primary handler (an omitted handler is NOT the same as
+    // "unproxied"; it just inherits this). Any client that must bypass
+    // Squid (e.g. "DefaultClient" below, for CDP-service-to-CDP-service
+    // calls) has to say so explicitly via
+    // ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    // { UseProxy = false }) — see RA-311 query-push-proxy-fix.
     var defaultProxy = ProxyHttpMessageHandler.BuildDefaultProxy();
     if (defaultProxy is not null)
     {
@@ -262,10 +272,18 @@ static void ConfigureHttpClients(IServiceCollection services)
     services.AddTransient<ProxyHttpMessageHandler>();
 
     // RA-311/MBE-1: plain, unproxied client for direct CDP-service-to-CDP-service
-    // calls (the operator backend push adapter). No ProxyHttpMessageHandler —
-    // mirrors the operator backend's own "DefaultClient" registration, which
-    // it uses for its own calls into this service.
-    services.AddHttpClient("DefaultClient").AddHeaderPropagation();
+    // calls (the operator backend push adapter) — mirrors the operator
+    // backend's own "DefaultClient" registration, which it uses for its own
+    // calls into this service. UseProxy = false is required, not optional:
+    // omitting the primary handler here would silently inherit
+    // HttpClient.DefaultProxy (set process-wide above for the Notify SDK),
+    // routing this internal cdp-int.defra.cloud traffic through Squid, which
+    // doesn't allow-list it and 502s the tunnel (see RA-311
+    // query-push-proxy-fix; caught this in CDP `test`, not locally, because
+    // HTTPS_PROXY is only set in CDP).
+    services.AddHttpClient("DefaultClient")
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseProxy = false })
+        .AddHeaderPropagation();
 
     // services.AddHttpClientWithTracing<IExampleClient, ExampleClient>();
     // services.AddHttpClientWithProxy<IExternalClient, ExternalClient>();
