@@ -29,6 +29,13 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // RA-311/MBE-1: pushes the query note + sections to the operator
         // backend whenever a query is raised.
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
+        // RA-368: pushes every other state transition to the operator
+        // backend. Registered both as itself and as an IWorkItemPostActionHook
+        // (same singleton instance) so ReAccreditationDulyMadeHook can inject
+        // it directly to call it explicitly for the submitted→duly-made
+        // transition, which bypasses the generic engine's hook fan-out.
+        services.AddSingleton<WorkItemStatusPushHook>();
+        services.AddSingleton<IWorkItemPostActionHook>(sp => sp.GetRequiredService<WorkItemStatusPushHook>());
         services.AddSingleton<IWorkItemPostTaskHook, ReAccreditationDulyMadeHook>();
         services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSnapshotMigration>();
         services.AddSingleton<

@@ -29,6 +29,7 @@ internal sealed class ReAccreditationDulyMadeHook(
     IWorkItemPersistence persistence,
     INotifyClient notifyClient,
     IWorkItemAuditAppender auditAppender,
+    WorkItemStatusPushHook statusPushHook,
     TimeProvider timeProvider,
     ILogger<ReAccreditationDulyMadeHook> logger
 ) : IWorkItemPostTaskHook
@@ -95,6 +96,12 @@ internal sealed class ReAccreditationDulyMadeHook(
         );
 
         await persistence.ReplaceAsync(workItem, cancellationToken);
+
+        // RA-368: this transition mutates state directly rather than going
+        // through WorkItemService.ApplyActionAsync, so it bypasses the
+        // generic engine's post-action hook fan-out — call the status push
+        // hook explicitly so the operator backend still learns about it.
+        await statusPushHook.OnActionAppliedAsync(workItem, "duly-make", fromStateId, user, cancellationToken);
 
         logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) auto-transitioned submitted→duly-made "

@@ -28,6 +28,24 @@ public interface IOperatorBackendPushAdapter
         string queryNote,
         IReadOnlyList<string> sectionKeys,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// RA-368: push a work item's state transition to the operator backend so
+    /// its own record of application progress (<c>ApplicationStatus</c>)
+    /// reflects CM's lifecycle beyond just queries. <paramref name="correlationId"/>
+    /// follows the same one-per-push, cross-repo-log-joining contract as
+    /// <see cref="PushQueryRaisedAsync"/>.
+    /// </summary>
+    Task<OperatorBackendPushResult> PushStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

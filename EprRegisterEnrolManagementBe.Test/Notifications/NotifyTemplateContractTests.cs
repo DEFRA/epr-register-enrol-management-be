@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -164,10 +165,23 @@ public class NotifyTemplateContractTests
             .Returns(NotifySendResult.Success("msg"));
 
         var workItem = BuildRepresentativeWorkItem(false);
+        var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
+        pushAdapter
+            .PushStatusChangedAsync(
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Skipped("test"));
+        var statusPushHook = new WorkItemStatusPushHook(
+            pushAdapter,
+            new WorkItemRegistry([new ReAccreditationType()]),
+            auditAppender,
+            NullLogger<WorkItemStatusPushHook>.Instance
+        );
         var sut = new ReAccreditationDulyMadeHook(
             persistence,
             notifyClient,
             auditAppender,
+            statusPushHook,
             new FakeTimeProvider(),
             NullLogger<ReAccreditationDulyMadeHook>.Instance
         );

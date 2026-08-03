@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -58,14 +59,30 @@ public class ReAccreditationDulyMadeHookTests
         INotifyClient notifyClient,
         IWorkItemAuditAppender auditAppender,
         TimeProvider? timeProvider = null
-    ) =>
-        new(
+    )
+    {
+        var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
+        pushAdapter
+            .PushStatusChangedAsync(
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Skipped("test"));
+        var statusPushHook = new WorkItemStatusPushHook(
+            pushAdapter,
+            new WorkItemRegistry([new ReAccreditationType()]),
+            auditAppender,
+            NullLogger<WorkItemStatusPushHook>.Instance
+        );
+
+        return new(
             persistence,
             notifyClient,
             auditAppender,
+            statusPushHook,
             timeProvider ?? TimeProvider.System,
             NullLogger<ReAccreditationDulyMadeHook>.Instance
         );
+    }
 
     [Fact]
     public async Task OnAllTasksCompletedAsync_transitions_submitted_to_duly_made_and_appends_audit_entry()
