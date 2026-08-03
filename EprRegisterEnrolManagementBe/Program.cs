@@ -204,13 +204,13 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
         .AddCognitoClientId();
 
     // Bind options lazily via PostConfigure so test fixtures that add
-    // AUTH_SHARED_SECRET via WebApplicationFactory.ConfigureAppConfiguration
-    // (which fires during builder.Build(), after this method runs) can still
+    // config via WebApplicationFactory.ConfigureAppConfiguration (which
+    // fires during builder.Build(), after this method runs) can still
     // override the value.
     services.AddOptions<CognitoClientIdAuthenticationOptions>(CognitoClientIdDefaults.AuthenticationScheme)
         .Configure<IConfiguration>((options, config) =>
         {
-            options.SharedSecret = config.GetValue<string>("AUTH_SHARED_SECRET");
+            options.ClientSecrets = BuildClientSecrets(config);
             options.MaxClientIdLength = config.GetValue("Auth:MaxClientIdLength", options.MaxClientIdLength);
             options.MaxUserIdLength = config.GetValue("Auth:MaxUserIdLength", options.MaxUserIdLength);
             options.MaxUserNameLength = config.GetValue("Auth:MaxUserNameLength", options.MaxUserNameLength);
@@ -220,6 +220,44 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
         });
 
     services.AddAuthorization();
+}
+
+// RA-345: per-caller secrets, keyed by the clientId each caller is expected
+// to assert. Each caller gets its own secret env var so one can be rotated
+// without touching the other — see ADR-0005's "Follow-up: per-caller
+// shared secrets" section and CaseManagementAuthConfig in
+// epr-register-enrol-backend for the single-caller precedent this mirrors.
+[ExcludeFromCodeCoverage]
+static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration config)
+{
+    var map = new Dictionary<string, string>(StringComparer.Ordinal);
+    AddCallerSecret(map, config,
+        clientIdKey: "Auth:ManagementFeClientId", clientIdDefault: "frontend",
+        secretKey: "AUTH_SHARED_SECRET__MANAGEMENT_FE");
+    AddCallerSecret(map, config,
+        clientIdKey: "Auth:BackendClientId", clientIdDefault: "epr-register-enrol-backend",
+        secretKey: "AUTH_SHARED_SECRET__BACKEND");
+    return map;
+}
+
+[ExcludeFromCodeCoverage]
+static void AddCallerSecret(
+    Dictionary<string, string> map,
+    IConfiguration config,
+    string clientIdKey,
+    string clientIdDefault,
+    string secretKey)
+{
+    var secret = config.GetValue<string>(secretKey);
+    if (string.IsNullOrEmpty(secret))
+    {
+        // Caller not configured yet — same "not signed" posture as today
+        // when AUTH_SHARED_SECRET was unset.
+        return;
+    }
+
+    var clientId = config.GetValue(clientIdKey, clientIdDefault);
+    map[clientId] = secret;
 }
 
 [ExcludeFromCodeCoverage]
