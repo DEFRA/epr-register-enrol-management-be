@@ -112,8 +112,9 @@ POST http://case-management-backend:8085/work-items
 
 `CognitoClientIdAuthenticationHandler`
 (`Auth/CognitoClientIdAuthenticationHandler.cs`) runs as ASP.NET middleware
-before any endpoint code. When `AUTH_SHARED_SECRET` is set it enforces three
-checks in order:
+before any endpoint code. When `AUTH_SHARED_SECRET__BACKEND` is set (the
+per-caller secret registered for `epr-register-enrol-backend`'s clientId —
+see RA-345 in `docs/cdp-deployment.md`) it enforces three checks in order:
 
 1. **Timestamp** — must be within ±5 minutes of server time (clock-skew
    guard against request replay).
@@ -126,11 +127,12 @@ checks in order:
 On success a `ClaimsPrincipal` is created from the identity headers and the
 request proceeds.
 
-> **Fails closed**: if `AUTH_SHARED_SECRET` is not set in any non-Development
-> environment the handler emits a `LogCritical` and rejects **every** request
-> with 401. Trusting caller-supplied identity headers without a shared secret
-> would let any service forge an identity. The fix is purely deployment config
-> — see [Configuration](#configuration--the-401-matrix) below.
+> **Fails closed**: if no per-caller secrets are configured (`ClientSecrets`
+> empty) in any non-Development environment the handler emits a `LogCritical`
+> and rejects **every** request with 401. Trusting caller-supplied identity
+> headers without a secret would let any service forge an identity. The fix
+> is purely deployment config — see [Configuration](#configuration--the-401-matrix)
+> below.
 
 When a 401 fires, `HandleChallengeAsync` emits a `LogWarning` that captures
 the failure reason alongside every auth-relevant header value, so operators
@@ -272,13 +274,18 @@ management FE's inbox when the work-items list is next polled.
 
 ## Configuration — the 401 matrix
 
-| `CaseWorking__SharedSecret` (Operator BE) | `AUTH_SHARED_SECRET` (Management BE) | Result |
+| `CaseWorking__SharedSecret` (Operator BE) | `AUTH_SHARED_SECRET__BACKEND` (Management BE) | Result |
 | --- | --- | --- |
 | absent | absent | **401** — management BE fails closed |
 | `"secret"` | absent | **401** — operator sends a signature; management BE can't verify it |
 | absent | `"secret"` | **401** — no signature sent; management BE expects one |
 | `"X"` | `"Y"` (different) | **401** — HMAC mismatch |
 | `"secret"` | `"secret"` (matching) | **201** — work item created |
+
+`AUTH_SHARED_SECRET__BACKEND` is verified only against the clientId
+`epr-register-enrol-backend` asserts (`Auth__BackendClientId`, default
+`epr-register-enrol-backend`) — it is independent of `AUTH_SHARED_SECRET__MANAGEMENT_FE`,
+the separate secret management-fe's requests are verified against (RA-345).
 
 Env var names are case-insensitive in .NET's configuration system:
 `CaseWorking__SharedSecret` and `CASEWORKING__SHAREDSECRET` are equivalent.

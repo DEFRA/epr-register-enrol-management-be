@@ -188,6 +188,38 @@ public class CognitoClientIdAuthenticationTests
     }
 
     [Fact]
+    public async Task Colliding_caller_client_ids_fail_startup_binding_loudly()
+    {
+        // RA-345: Auth:ManagementFeClientId and Auth:BackendClientId must
+        // resolve to distinct clientIds — a misconfiguration that points
+        // both at the same value would let one caller's secret silently
+        // overwrite the other's in the resolved ClientSecrets map
+        // (Program.cs::BuildClientSecrets/AddCallerSecret). This exercises
+        // the REAL env-var-driven binding (not the clientSecrets/PostConfigure
+        // test bypass used elsewhere in this file) so the guard itself is
+        // covered, not just asserted against a hand-built dictionary.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(configOverrides: new Dictionary<string, string?>
+        {
+            ["AUTH_SHARED_SECRET__MANAGEMENT_FE"] = Secret,
+            ["AUTH_SHARED_SECRET__BACKEND"] = OtherSecret,
+            ["Auth:BackendClientId"] = "frontend" // collides with ManagementFe's default clientId
+        });
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "frontend");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        // Options resolution throws InvalidOperationException; the app's
+        // global exception handler (ExceptionLoggingHandler) turns that
+        // into a 500 ProblemDetails response rather than a bare 401 — the
+        // point is this fails LOUDLY and distinctly from ordinary auth
+        // failures, not that it 401s.
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Each_callers_own_secret_independently_succeeds()
     {
         // RA-345: both known callers can authenticate concurrently, each
@@ -521,7 +553,9 @@ public class CognitoClientIdAuthenticationTests
     }
 
     private sealed class BareFactory(
-        IReadOnlyDictionary<string, string>? clientSecrets = null, string? environment = null)
+        IReadOnlyDictionary<string, string>? clientSecrets = null,
+        string? environment = null,
+        IReadOnlyDictionary<string, string?>? configOverrides = null)
         : WebApplicationFactory<Program>
     {
         public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
@@ -532,6 +566,15 @@ public class CognitoClientIdAuthenticationTests
             if (environment is not null)
             {
                 builder.UseEnvironment(environment);
+            }
+            if (configOverrides is not null)
+            {
+                // Exercises Program.cs's real env-var-driven BuildClientSecrets
+                // binding (as opposed to the clientSecrets/PostConfigure
+                // bypass below) — needed for tests that assert on that
+                // binding logic itself, e.g. the clientId-collision guard.
+                builder.ConfigureAppConfiguration((_, config) =>
+                    config.AddInMemoryCollection(configOverrides));
             }
             builder.ConfigureServices(services =>
             {

@@ -232,9 +232,11 @@ static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration con
 {
     var map = new Dictionary<string, string>(StringComparer.Ordinal);
     AddCallerSecret(map, config,
+        callerName: "ManagementFe",
         clientIdKey: "Auth:ManagementFeClientId", clientIdDefault: "frontend",
         secretKey: "AUTH_SHARED_SECRET__MANAGEMENT_FE");
     AddCallerSecret(map, config,
+        callerName: "Backend",
         clientIdKey: "Auth:BackendClientId", clientIdDefault: "epr-register-enrol-backend",
         secretKey: "AUTH_SHARED_SECRET__BACKEND");
     return map;
@@ -244,6 +246,7 @@ static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration con
 static void AddCallerSecret(
     Dictionary<string, string> map,
     IConfiguration config,
+    string callerName,
     string clientIdKey,
     string clientIdDefault,
     string secretKey)
@@ -257,6 +260,22 @@ static void AddCallerSecret(
     }
 
     var clientId = config.GetValue(clientIdKey, clientIdDefault);
+
+    // Fail LOUD: two callers configured to assert the same clientId would
+    // mean the second caller's secret silently overwrites the first's in
+    // the map, breaking the first caller's signing and defeating the
+    // entire point of per-caller secrets (RA-345). Always a config
+    // mistake — never a legitimate state — so this throws rather than
+    // silently letting the later AddCallerSecret call win.
+    if (map.ContainsKey(clientId))
+    {
+        throw new InvalidOperationException(
+            $"CognitoClientIdAuthentication misconfigured: caller '{callerName}' asserts " +
+            $"clientId '{clientId}' (via {clientIdKey}), which is already registered to " +
+            "another caller. Each caller must have a distinct clientId — check for a " +
+            "copy-pasted or missing override.");
+    }
+
     map[clientId] = secret;
 }
 
