@@ -601,14 +601,11 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        var currentState = template.States.FirstOrDefault(s =>
-            string.Equals(s.Id, workItem!.StateId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (currentState?.IsTerminal == true)
+        if (TerminalStates.Find(template, workItem!.StateId) is { } currentTerminalState)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,
-                $"Work item {workItemId} is in terminal state '{currentState.Id}'; no actions are allowed."
+                $"Work item {workItemId} is in terminal state '{currentTerminalState.Id}'; no actions are allowed."
             );
         }
 
@@ -712,6 +709,11 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
+        if (RequireNonTerminalState(workItem, "assigned") is { } terminalFailure)
+        {
+            return terminalFailure;
+        }
+
         var trimmedAssigneeId = assigneeId.Trim();
         var actorUserId = ResolveActorUserId(user);
 
@@ -804,6 +806,11 @@ public sealed class WorkItemService : IWorkItemService
                 WorkItemActionFailureCode.WorkItemNotFound,
                 $"No work item exists with id '{workItemId}'."
             );
+        }
+
+        if (RequireNonTerminalState(workItem, "unassigned") is { } terminalFailure)
+        {
+            return terminalFailure;
         }
 
         if (workItem.AssignedToId is null)
@@ -1268,10 +1275,7 @@ public sealed class WorkItemService : IWorkItemService
             })
             .ToList();
 
-        var currentState = template.States.FirstOrDefault(s =>
-            string.Equals(s.Id, workItem.StateId, StringComparison.OrdinalIgnoreCase)
-        );
-        var isTerminal = currentState?.IsTerminal == true;
+        var isTerminal = TerminalStates.Find(template, workItem.StateId) is not null;
 
         IReadOnlyCollection<WorkItemTransition> available = isTerminal
             ? Array.Empty<WorkItemTransition>()
@@ -1343,6 +1347,46 @@ public sealed class WorkItemService : IWorkItemService
             return workItem.TemplateSnapshot;
         }
         return _registry.Find(workItem.TypeId);
+    }
+
+    /// <summary>
+    /// RA-358: refuse an envelope mutation on a closed case. Assignment and
+    /// unassignment are the two operations that reach a work item without
+    /// going through <see cref="ApplyActionAsync"/>, so before this check a
+    /// direct POST could still hand a withdrawn / approved / rejected item to
+    /// someone (the front end only hid the buttons). Terminality comes from
+    /// the item's own template via <see cref="TerminalStates.Find"/> — no
+    /// state id is hardcoded here, and an in-flight item is judged by the
+    /// template version it was submitted under.
+    /// </summary>
+    /// <param name="operation">
+    /// Past-tense verb naming the refused mutation, e.g. <c>"assigned"</c>.
+    /// </param>
+    private WorkItemActionResult? RequireNonTerminalState(WorkItem workItem, string operation)
+    {
+        if (TerminalStates.Find(ResolveTemplate(workItem), workItem.StateId) is not { } terminal)
+        {
+            return null;
+        }
+
+        _logger.LogInformation(
+            "Work item {WorkItemId} ({TypeId}) refused {Operation}: terminal state {StateId}",
+            workItem.Id,
+            workItem.TypeId,
+            operation,
+            terminal.Id
+        );
+
+        // RA-358: the BFF renders ProblemDetails.detail verbatim in a
+        // user-facing error banner, so the message must name the case in
+        // human terms only. Deliberately no work item id here — removing the
+        // system-generated GUID from user-visible errors is the point of this
+        // story. The id stays in the log line above for support.
+        return WorkItemActionResult.Failure(
+            WorkItemActionFailureCode.TerminalState,
+            $"This case has been {terminal.DisplayName.ToLowerInvariant()} "
+                + $"and can no longer be {operation}."
+        );
     }
 
     private string ResolveTemplateVersion(WorkItem workItem) =>
