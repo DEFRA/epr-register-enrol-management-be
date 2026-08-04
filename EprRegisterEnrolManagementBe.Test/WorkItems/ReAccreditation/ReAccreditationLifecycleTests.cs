@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -36,10 +37,22 @@ public class ReAccreditationLifecycleTests
                 cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg-id"));
+        var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
+        pushAdapter
+            .PushStatusChangedAsync(
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Skipped("test"));
+        var statusPushHook = new ReAccreditationStatusPushHook(
+            pushAdapter,
+            auditAppender,
+            NullLogger<ReAccreditationStatusPushHook>.Instance
+        );
         var dulyMadeHook = new ReAccreditationDulyMadeHook(
             persistence,
             notifyClient,
             auditAppender,
+            statusPushHook,
             TimeProvider.System,
             NullLogger<ReAccreditationDulyMadeHook>.Instance
         );

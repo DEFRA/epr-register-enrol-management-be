@@ -20,4 +20,16 @@ internal sealed class NullOperatorBackendPushAdapter : IOperatorBackendPushAdapt
         IReadOnlyList<string> sectionKeys,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
+
+    public Task<OperatorBackendPushResult> PushStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
 }
