@@ -9,11 +9,15 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// supply, spoof or collide a reference.
 ///
 /// Format (RA-318): <c>AP</c> + 2-digit accreditation year + 2-char
-/// agency code (derived from the site postcode) + the operator
-/// organisation id + the last 3 characters of the site postcode + the
-/// first 2 characters of the material, all upper-cased. The result is
-/// truncated to <see cref="MaxLength"/> characters because this value is
-/// also used as a BACS payment reference. Deterministic for a given
+/// agency code + the last 5 characters of the operator organisation id +
+/// the last 3 characters of the regulator postcode + the first 2
+/// characters of the material, all upper-cased. The agency code and
+/// postcode suffix are both derived from the same postcode, chosen per
+/// RA-314 AC01/AC02: an Exporter's is their registered office location
+/// (<c>companyRegisterAddressPostcode</c>); a Reprocessor's — and any
+/// payload without a <c>wasteProcessingType</c> — is the site location.
+/// The result is truncated to <see cref="MaxLength"/> characters because
+/// this value is also used as a BACS payment reference. Deterministic for a given
 /// payload and <paramref name="attempt"/> of 1 — unlike the previous
 /// random-suffix format, the same submission always yields the same
 /// reference on the first attempt. Payloads with no operator organisation
@@ -95,9 +99,10 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         ArgumentNullException.ThrowIfNull(payload);
 
         var year = ResolveYear(payload);
-        var postcode = ExtractPostcode(payload);
+        var postcode = ResolveRegulatorPostcode(payload);
         var agency = ResolveAgencyCode(postcode);
         var organisationId = GetString(payload, "operatorOrganisationId") ?? string.Empty;
+        organisationId = organisationId.Length > 5 ? organisationId[^5..] : organisationId;
         var postcodeSuffix = PostcodeSuffix(postcode);
         var materialPrefix = MaterialPrefix(GetString(payload, "material"));
 
@@ -217,6 +222,23 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 
         var doc = siteAddress.AsBsonDocument;
         return doc.TryGetValue("postcode", out var value) && value.IsString ? value.AsString : null;
+    }
+
+    // RA-314 AC01/AC02: an Exporter's payment reference is derived from their
+    // registered office location; a Reprocessor's is derived from the site
+    // location. wasteProcessingType ("exporter" | "reprocessor") is set by
+    // HttpCaseWorkingApiAdapter.BuildPayload in the operator-facing backend;
+    // payloads without it (e.g. the case-management admin UI) fall back to
+    // the site postcode, matching pre-RA-314 behaviour.
+    private static string? ResolveRegulatorPostcode(BsonDocument payload)
+    {
+        var wasteProcessingType = GetString(payload, "wasteProcessingType");
+        var isExporter =
+            wasteProcessingType?.Equals("exporter", StringComparison.OrdinalIgnoreCase) == true;
+
+        return isExporter
+            ? GetString(payload, "companyRegisterAddressPostcode")
+            : ExtractPostcode(payload);
     }
 }
 
