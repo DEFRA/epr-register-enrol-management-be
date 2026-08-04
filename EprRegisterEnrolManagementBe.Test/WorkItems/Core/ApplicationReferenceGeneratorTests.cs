@@ -1,4 +1,5 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 
@@ -357,6 +358,57 @@ public sealed class ApplicationReferenceGeneratorTests
         var reference = generator.Generate(payload);
 
         Assert.Equal("EA", reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void AC01_exporter_with_no_registered_office_postcode_logs_a_warning()
+    {
+        var logger = new CapturingLogger<ApplicationReferenceGenerator>();
+        var generator = new ApplicationReferenceGenerator(logger: logger);
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "exporter",
+            companyRegisterAddressPostcode: null
+        );
+
+        generator.Generate(payload);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+    }
+
+    [Fact]
+    public void Generate_does_not_log_when_exporter_has_a_registered_office_postcode()
+    {
+        var logger = new CapturingLogger<ApplicationReferenceGenerator>();
+        var generator = new ApplicationReferenceGenerator(logger: logger);
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "exporter",
+            companyRegisterAddressPostcode: "EH1 1AA"
+        );
+
+        generator.Generate(payload);
+
+        Assert.Empty(logger.Entries);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) => Entries.Add((logLevel, formatter(state, exception)));
     }
 
     [Theory]

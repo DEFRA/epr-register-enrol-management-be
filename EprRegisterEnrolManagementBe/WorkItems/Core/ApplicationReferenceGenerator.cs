@@ -1,4 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -16,6 +18,13 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// RA-314 AC01/AC02: an Exporter's is their registered office location
 /// (<c>companyRegisterAddressPostcode</c>); a Reprocessor's — and any
 /// payload without a <c>wasteProcessingType</c> — is the site location.
+/// An Exporter payload missing <c>companyRegisterAddressPostcode</c> fails
+/// open to the default England agency code (<c>EA</c>) rather than
+/// erroring, matching the existing fallback for a missing
+/// <c>wasteProcessingType</c>; a warning is logged so the gap stays
+/// observable even though generation still succeeds. The upstream
+/// backend (RA-314) is expected to reject such payloads before they
+/// reach this generator.
 /// The result is truncated to <see cref="MaxLength"/> characters because
 /// this value is also used as a BACS payment reference. Deterministic for a given
 /// payload and <paramref name="attempt"/> of 1 — unlike the previous
@@ -88,10 +97,15 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
     private const string NiPrefix = "BT";
 
     private readonly TimeProvider _timeProvider;
+    private readonly ILogger<ApplicationReferenceGenerator> _logger;
 
-    public ApplicationReferenceGenerator(TimeProvider? timeProvider = null)
+    public ApplicationReferenceGenerator(
+        TimeProvider? timeProvider = null,
+        ILogger<ApplicationReferenceGenerator>? logger = null
+    )
     {
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _logger = logger ?? NullLogger<ApplicationReferenceGenerator>.Instance;
     }
 
     public string Generate(BsonDocument payload, int attempt = 1)
@@ -230,15 +244,33 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
     // HttpCaseWorkingApiAdapter.BuildPayload in the operator-facing backend;
     // payloads without it (e.g. the case-management admin UI) fall back to
     // the site postcode, matching pre-RA-314 behaviour.
-    private static string? ResolveRegulatorPostcode(BsonDocument payload)
+    private string? ResolveRegulatorPostcode(BsonDocument payload)
     {
         var wasteProcessingType = GetString(payload, "wasteProcessingType");
         var isExporter =
             wasteProcessingType?.Equals("exporter", StringComparison.OrdinalIgnoreCase) == true;
 
-        return isExporter
-            ? GetString(payload, "companyRegisterAddressPostcode")
-            : ExtractPostcode(payload);
+        if (!isExporter)
+        {
+            return ExtractPostcode(payload);
+        }
+
+        var registeredOfficePostcode = GetString(payload, "companyRegisterAddressPostcode");
+        if (string.IsNullOrWhiteSpace(registeredOfficePostcode))
+        {
+            // Fail-open by design (see class summary) rather than blocking
+            // work-item submission on a data gap the upstream backend
+            // should already prevent — but the gap must stay visible.
+            _logger.LogWarning(
+                "Exporter payload for operatorOrganisationId {OperatorOrganisationId} has no "
+                    + "companyRegisterAddressPostcode; falling open to the default England ({DefaultAgencyCode}) "
+                    + "agency code for the payment reference.",
+                GetString(payload, "operatorOrganisationId"),
+                DefaultAgencyCode
+            );
+        }
+
+        return registeredOfficePostcode;
     }
 }
 
