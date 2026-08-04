@@ -38,9 +38,18 @@ internal static class TerminalStates
     /// <see cref="WorkItemState.IsTerminal"/> metadata — there is no second,
     /// hardcoded list of "closed" states anywhere in the engine.
     /// </remarks>
-    internal static WorkItemState? Find(IWorkItemTemplate? template, string stateId)
+    /// <remarks>
+    /// Takes a resolved template rather than a nullable one on purpose: an
+    /// unresolvable template means terminality is <em>unknown</em>, which is
+    /// not the same as "not terminal" and must not collapse into it. Callers
+    /// decide what to do about that before they get here — see
+    /// <c>WorkItemService.RequireNonTerminalState</c>, which fails closed.
+    /// </remarks>
+    internal static WorkItemState? Find(IWorkItemTemplate template, string stateId)
     {
-        var state = template?.States.FirstOrDefault(s =>
+        ArgumentNullException.ThrowIfNull(template);
+
+        var state = template.States.FirstOrDefault(s =>
             string.Equals(s.Id, stateId, StringComparison.OrdinalIgnoreCase)
         );
 

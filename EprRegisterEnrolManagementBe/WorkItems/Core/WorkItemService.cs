@@ -1359,12 +1359,55 @@ public sealed class WorkItemService : IWorkItemService
     /// state id is hardcoded here, and an in-flight item is judged by the
     /// template version it was submitted under.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This deliberately reverses RA-295 AC03, which required assignment to
+    /// stay available "all the way through" and is the reason no gate existed.
+    /// That was about hand-over: keeping a closed case reassignable so it can
+    /// be passed to someone else after the fact. RA-358 trades that capability
+    /// away — confirmed with the product owner on 2026-08-04, for every
+    /// terminal state rather than withdrawal alone. If hand-over on closed
+    /// cases is ever wanted back, it needs a route that is explicitly about
+    /// hand-over, not an unguarded assign endpoint.
+    /// </para>
+    /// <para>
+    /// Fails <em>closed</em> when the template cannot be resolved at all,
+    /// matching <see cref="ApplyActionAsync"/>, which refuses the same
+    /// condition before it ever reaches its terminal check. Otherwise a legacy
+    /// pre-snapshot item sitting in a terminal state would become freely
+    /// assignable the moment its type was de-registered or renamed — the very
+    /// hole this guard exists to close, reached through a different door.
+    /// </para>
+    /// </remarks>
     /// <param name="operation">
     /// Past-tense verb naming the refused mutation, e.g. <c>"assigned"</c>.
     /// </param>
     private WorkItemActionResult? RequireNonTerminalState(WorkItem workItem, string operation)
     {
-        if (TerminalStates.Find(ResolveTemplate(workItem), workItem.StateId) is not { } terminal)
+        var template = ResolveTemplate(workItem);
+        if (template is null)
+        {
+            _logger.LogWarning(
+                "Work item {WorkItemId} refused {Operation}: type {TypeId} is not registered "
+                    + "and the item has no template snapshot, so terminality cannot be determined",
+                workItem.Id,
+                operation,
+                workItem.TypeId
+            );
+
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.UnknownAction,
+                "This case cannot be changed because its type is no longer available."
+            );
+        }
+
+        // A state the template does not declare carries no terminal metadata,
+        // so there is nothing to fail closed on: it is not evidence the case is
+        // closed, only that the state is unmodelled. Kept permissive so a
+        // mis-seeded state id does not silently freeze assignment; the
+        // unresolvable-template case above is the one that hides real terminal
+        // states behind an absence.
+        if (TerminalStates.Find(template, workItem.StateId) is not { } terminal)
         {
             return null;
         }

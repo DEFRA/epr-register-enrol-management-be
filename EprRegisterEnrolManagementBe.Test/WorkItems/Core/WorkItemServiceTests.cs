@@ -1052,11 +1052,17 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         Assert.Equal("alice-1", (await GetAsync(workItem.Id)).AssignedToId);
     }
 
-    [Fact]
-    public async Task Assign_succeeds_when_no_template_can_be_resolved_for_the_work_item()
+    /// <summary>
+    /// Unregistered type and no snapshot: terminality cannot be determined, so
+    /// the guard fails closed rather than waving the mutation through. Without
+    /// this, a legacy pre-snapshot item in a terminal state becomes freely
+    /// assignable as soon as its type is de-registered or renamed — the same
+    /// hole RA-358 closes, reached through a different door. Matches
+    /// ApplyActionAsync, which refuses this condition before its own terminal
+    /// check.
+    /// </summary>
+    private async Task<WorkItem> SeedUnresolvableTemplateItemAsync()
     {
-        // Unregistered type and no snapshot: terminality is unknowable, so
-        // assignment behaves exactly as it did before RA-358.
         var workItem = new WorkItem
         {
             Id = Guid.NewGuid(),
@@ -1065,8 +1071,19 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             SubmittedAt = InitialNow,
             LastModifiedAt = InitialNow,
             SubmittedBy = "test-client",
+            AssignedToId = "bob-1",
+            AssignedToName = "Bob",
+            AssignedAt = InitialNow,
+            AssignedBy = "old-actor",
         };
         await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
+        return workItem;
+    }
+
+    [Fact]
+    public async Task Assign_is_rejected_when_no_template_can_be_resolved_for_the_work_item()
+    {
+        var workItem = await SeedUnresolvableTemplateItemAsync();
 
         var result = await BuildService(BuildType()).AssignAsync(
             workItem.Id,
@@ -1076,8 +1093,33 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
             TestContext.Current.CancellationToken
         );
 
-        Assert.True(result.IsSuccess);
-        Assert.Equal("alice-1", (await GetAsync(workItem.Id)).AssignedToId);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+        Assert.DoesNotContain(workItem.Id.ToString(), result.Message);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("bob-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+        Assert.Empty(fetched.AuditLog);
+    }
+
+    [Fact]
+    public async Task Unassign_is_rejected_when_no_template_can_be_resolved_for_the_work_item()
+    {
+        var workItem = await SeedUnresolvableTemplateItemAsync();
+
+        var result = await BuildService(BuildType()).UnassignAsync(
+            workItem.Id,
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("bob-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
