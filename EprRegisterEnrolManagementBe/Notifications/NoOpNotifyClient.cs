@@ -4,9 +4,11 @@ using Microsoft.Extensions.Logging;
 namespace EprRegisterEnrolManagementBe.Notifications;
 
 /// <summary>
-/// Fallback <see cref="INotifyClient"/> registered when
-/// <c>NOTIFY_API_KEY</c> is absent or empty. Logs the intended send
-/// via <see cref="IStructuredLogger{T}"/> using the same
+/// Non-dispatching <see cref="INotifyClient"/>. Registered when
+/// <c>NOTIFY_API_KEY</c> is absent or empty, and when
+/// <see cref="NotifySendingPolicy"/> says the current environment must not
+/// send real email (dev / localhost — see that class for why). Logs the
+/// intended send via <see cref="IStructuredLogger{T}"/> using the same
 /// <c>event.category=notify</c> / <c>event.action=send_email</c>
 /// shape as <see cref="GovukNotifyClient"/> so local / non-Notify
 /// environments expose the same OpenSearch shape as the real client,
@@ -14,7 +16,15 @@ namespace EprRegisterEnrolManagementBe.Notifications;
 /// caller's audit-log path is exercised in development without
 /// contacting Notify.
 /// </summary>
-internal sealed class NoOpNotifyClient(IStructuredLogger<NoOpNotifyClient> log) : INotifyClient
+/// <param name="suppressionReason">
+/// Emitted as <c>notify.suppression_reason</c> so a log reader can tell
+/// "no API key configured" apart from "this environment deliberately does
+/// not send" — see <see cref="NotifySendingPolicy"/> for the values.
+/// </param>
+internal sealed class NoOpNotifyClient(
+    IStructuredLogger<NoOpNotifyClient> log,
+    string suppressionReason = NotifySendingPolicy.SuppressedByMissingApiKeyReason
+) : INotifyClient
 {
     public Task<NotifySendResult> SendEmailAsync(
         string templateKey,
@@ -37,6 +47,7 @@ internal sealed class NoOpNotifyClient(IStructuredLogger<NoOpNotifyClient> log) 
                 ["event.reference"] = reference,
                 ["notify.template_key"] = templateKey,
                 ["notify.region"] = region,
+                ["notify.suppression_reason"] = suppressionReason,
             }
         );
         return Task.FromResult(NotifySendResult.Success(providerMessageId: null));

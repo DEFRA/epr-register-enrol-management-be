@@ -30,6 +30,8 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 | `OperatorBackendApi__Enabled` | Service config     | Master switch for the RA-311/MBE-1 outbound query push (see [Operator backend push](#operator-backend-push-ra-311mbe-1) below). Defaults to `false` — deploying this code is behaviour-neutral until this is explicitly set. |
 | `OperatorBackendApi__Url`  | Service config        | Internal base URL of `epr-register-enrol-backend` (CDP service-discovery name, not a public ingress hostname). Required (non-blank) when `OperatorBackendApi__Enabled=true` — startup fails otherwise. |
 | `OperatorBackendApi__ClientId` | Service config    | Defaults to `epr-register-enrol-management-be`. Only override if `epr-register-enrol-backend`'s `CaseManagementAuth:ExpectedCognitoClientId` expects a different value — prefer leaving both at their defaults. |
+| `ENVIRONMENT`              | CDP platform          | Platform environment name (`local`, `dev`, `test`, `perf-test`, `ext-test`, `prod`). Read by `NotifySendingPolicy` — see [Notify sending by environment](#notify-sending-by-environment) below. |
+| `Notify__SendEmails`       | Service config        | Optional. Overrides the environment-derived decision about whether email is really dispatched. Leave unset in normal operation. |
 
 ## Required secrets (cdp-portal)
 
@@ -38,8 +40,51 @@ Create via the CDP self-service portal under the service's "secrets" tab:
 | Secret               | Notes                                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `AUTH_SHARED_SECRET` | HMAC shared secret used by the BFF to sign trust headers (see [BFF signing contract](#bff-signing-contract) below). **Required in all non-Development environments.** The service will reject every authenticated request with `401` until this is set. Generate with `openssl rand -base64 32`. |
-| `NOTIFY_API_KEY`     | GOV.UK Notify API key. When absent the service boots with a no-op Notify client — notifications are logged but not sent. |
+| `NOTIFY_API_KEY`     | GOV.UK Notify API key. When absent the service boots with a no-op Notify client — notifications are logged but not sent. Setting it is necessary but not sufficient: dev and localhost suppress sending regardless, see [Notify sending by environment](#notify-sending-by-environment). |
 | `OperatorBackendApi__SharedSecret` | HMAC shared secret this service signs its outbound RA-311/MBE-1 query-push requests with. Must match `CaseManagementAuth__SharedSecret` on `epr-register-enrol-backend` exactly — a mismatch on either side 401s every push. **Required when `OperatorBackendApi__Enabled=true`** — startup fails otherwise. Generate with `openssl rand -base64 32`. Distinct from `AUTH_SHARED_SECRET` above (this service's *inbound* secret) and from whatever `epr-register-enrol-backend` uses for its own calls into this service — three separate secrets, not one, do not conflate them when rotating. |
+
+## Notify sending by environment
+
+The non-production GOV.UK Notify service is driven by a **team** API key. A
+team key may only send to addresses registered on the Notify team, plus a hard
+limit of five guest addresses — and those guest slots are exhausted. A send to
+any other address fails, and the case worker sees that failure in the
+case-management UI as a failed action.
+
+`NotifySendingPolicy` therefore decides, at startup, whether sends are really
+dispatched:
+
+| `ENVIRONMENT`                            | Dispatches email? |
+| ---------------------------------------- | ----------------- |
+| `local`, `dev`                            | No                |
+| unset, with `ASPNETCORE_ENVIRONMENT=Development` (Compose, `dotnet run`) | No |
+| `test`, `perf-test`, `ext-test`, `prod`   | Yes               |
+| unset or unrecognised, non-Development host | Yes (fail-open) |
+
+When sending is suppressed, `NoOpNotifyClient` is registered **even though
+`NOTIFY_API_KEY` is set**. It returns success, so the work item's audit log
+still records a `notification-sent` entry and the UI behaves exactly as it does
+in a sending environment. The only difference is that no HTTP traffic reaches
+Notify. Suppressed sends are logged with
+`notify.suppression_reason=sending_disabled_for_environment` (as opposed to
+`no_api_key` when no key is configured at all), and the startup line
+`Notify integration: … sendingEnabled=… environment=…` records the decision.
+
+`ENVIRONMENT` is read straight from the process environment
+(`NotifySendingPolicy.ReadCdpEnvironment`), not through `IConfiguration`:
+`ENVIRONMENT` is also `WebHostDefaults.EnvironmentKey`, so when the ASP.NET
+host environment is set explicitly, host configuration shadows the key and
+`configuration["ENVIRONMENT"]` returns the host environment name
+(`Development`) rather than the platform value (`dev`). It cannot therefore be
+set from `appsettings.json`.
+
+The fail-open default is deliberate: an unset or renamed `ENVIRONMENT` in a
+deployed environment must not silently swallow real notifications. To force the
+decision either way, set `Notify__SendEmails` (`true` to smoke-test the real
+integration in dev against a Notify-registered address, `false` to silence a
+sending environment). Environment variables for deployed environments live in
+[DEFRA/cdp-app-config](https://github.com/DEFRA/cdp-app-config), not in this
+repo.
 
 ## BFF signing contract
 

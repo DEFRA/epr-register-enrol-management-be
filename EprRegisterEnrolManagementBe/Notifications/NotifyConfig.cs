@@ -9,6 +9,21 @@ namespace EprRegisterEnrolManagementBe.Notifications;
 public sealed class NotifyConfig
 {
     /// <summary>
+    /// Explicit override for whether outbound email is really dispatched.
+    /// <c>null</c> (the default) means "decide from the environment" — see
+    /// <see cref="NotifySendingPolicy"/>, which suppresses sending on dev and
+    /// localhost. Set <c>Notify__SendEmails=true</c> to smoke-test the real
+    /// Notify integration in an otherwise non-sending environment, or
+    /// <c>false</c> to silence a sending one.
+    ///
+    /// Read at startup in <c>ConfigureNotifications</c> to choose the
+    /// <see cref="INotifyClient"/> implementation; it is bound here so the
+    /// key is discoverable alongside the rest of the Notify config, not
+    /// because anything reads it off this object at send time.
+    /// </summary>
+    public bool? SendEmails { get; set; }
+
+    /// <summary>
     /// Optional override for the Notify base URI. Defaults to the
     /// production <c>https://api.notifications.service.gov.uk/</c> baked
     /// into the GovukNotify SDK when null/empty.
