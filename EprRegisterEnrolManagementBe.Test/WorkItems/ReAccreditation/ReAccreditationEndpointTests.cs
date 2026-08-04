@@ -296,7 +296,13 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+        // RA-346: this test exercises the not-started -> completed path,
+        // so it must seed an outstanding task rather than take the
+        // builder's approve-oriented default.
+        await factory.SeedAsync(
+            BuildAwaitingDecision(id, TenantClientId, completeTasks: false),
+            cancellationToken
+        );
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/decision-rationale",
@@ -340,7 +346,13 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
         using var client = factory.CreateClient();
 
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+        // RA-346: this test exercises the not-started -> completed path,
+        // so it must seed an outstanding task rather than take the
+        // builder's approve-oriented default.
+        await factory.SeedAsync(
+            BuildAwaitingDecision(id, TenantClientId, completeTasks: false),
+            cancellationToken
+        );
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/decision-rationale",
@@ -474,7 +486,13 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, "other-tenant"), cancellationToken);
+        // RA-346: this test exercises the not-started -> completed path,
+        // so it must seed an outstanding task rather than take the
+        // builder's approve-oriented default.
+        await factory.SeedAsync(
+            BuildAwaitingDecision(id, "other-tenant", completeTasks: false),
+            cancellationToken
+        );
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/decision-rationale",

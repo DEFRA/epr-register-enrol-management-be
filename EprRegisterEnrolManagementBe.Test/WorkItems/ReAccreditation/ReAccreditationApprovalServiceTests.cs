@@ -250,6 +250,62 @@ public class ReAccreditationApprovalServiceTests
     }
 
     /// <summary>
+    /// RA-346: the stored snapshot — not the live registered type — decides
+    /// which tasks gate approval. This is what makes the "no TemplateVersion
+    /// bump" decision safe: an in-flight item snapshotted under an older
+    /// template is judged against the task list it was submitted with.
+    ///
+    /// Deliberately constructed so the two disagree: the snapshot declares an
+    /// awaiting-decision task that today's ReAccreditationType does not, and
+    /// the item completes only the live type's task. An inverted
+    /// ResolveTemplate would approve; reading the snapshot must refuse.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_gates_on_the_stored_snapshot_not_the_live_type()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        workItem.TemplateSnapshot = WorkItemTemplateSnapshot.Capture(
+            new StubType("awaiting-decision", "record-decision-rationale", "second-approval"));
+
+        // Only the task the live type knows about is complete; the extra task
+        // that exists solely in the snapshot is still outstanding.
+        workItem.TaskStatusesByState["awaiting-decision"] =
+            new Dictionary<string, WorkItemTaskStatus>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["record-decision-rationale"] = WorkItemTaskStatus.Completed
+            };
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
+        Assert.Equal("awaiting-decision", workItem.StateId);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    /// <summary>
+    /// Minimal type used only to capture a snapshot whose awaiting-decision
+    /// task list deliberately differs from the live ReAccreditationType.
+    /// </summary>
+    private sealed class StubType(string stateId, params string[] taskIds) : IWorkItemType
+    {
+        public string TypeId => ReAccreditationType.Id;
+        public string DisplayName => "Re-accreditation (stub)";
+        public string TemplateVersion => "stub-v1";
+        public WorkItemState InitialState => new(stateId, stateId);
+        public IReadOnlyCollection<WorkItemState> States { get; } = [new(stateId, stateId)];
+        public IReadOnlyCollection<WorkItemTransition> Transitions { get; } = [];
+
+        public IReadOnlyCollection<WorkItemTask> GetTasksForState(string id) =>
+            string.Equals(id, stateId, StringComparison.OrdinalIgnoreCase)
+                ? taskIds.Select(t => new WorkItemTask(t, t)).ToArray()
+                : [];
+    }
+
+    /// <summary>
     /// RA-346: with neither a snapshot nor a registered type there is no
     /// template to judge tasks against. Refuse rather than approve blind.
     /// </summary>

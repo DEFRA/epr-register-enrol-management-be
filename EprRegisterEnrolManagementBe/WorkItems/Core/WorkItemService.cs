@@ -1233,33 +1233,20 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        var completed = workItem.CompletedTaskIdsByState.TryGetValue(workItem.StateId, out var done)
-            ? done
-            : new HashSet<string>();
-
-        // epr-gl6: per-task status map is the canonical source of truth
-        // when present; fall back to the legacy CompletedTaskIdsByState
-        // bucket for documents written before the map existed (Completed
-        // when in the bucket, NotStarted otherwise).
-        var statuses = workItem.TaskStatusesByState.TryGetValue(
-            workItem.StateId,
-            out var stateStatuses
-        )
-            ? stateStatuses
-            : null;
-
+        // RA-346: read task status through the shared rules rather than
+        // re-implementing the canonical-map-then-legacy-bucket fallback here.
+        // This projection is what the management-fe gates its Approve CTA on,
+        // so it must agree with the engine and with the bespoke module
+        // services by construction, not by two copies happening to match.
         var taskProgress = template
             .GetTasksForState(workItem.StateId)
             .Select(task =>
             {
-                var status =
-                    statuses is not null && statuses.TryGetValue(task.Id, out var explicitStatus)
-                        ? explicitStatus
-                        : (
-                            completed.Contains(task.Id)
-                                ? WorkItemTaskStatus.Completed
-                                : WorkItemTaskStatus.NotStarted
-                        );
+                var status = WorkItemEngineRules.GetCurrentTaskStatus(
+                    workItem,
+                    workItem.StateId,
+                    task.Id
+                );
                 return new WorkItemTaskProgress(
                     task.Id,
                     task.DisplayName,
@@ -1274,6 +1261,12 @@ public sealed class WorkItemService : IWorkItemService
         );
         var isTerminal = currentState?.IsTerminal == true;
 
+        // RA-346: same gate the engine enforces in ApplyActionAsync, from the
+        // same helper — an action must never be offered that applying would
+        // reject. Hoisted out of the predicate so it is evaluated once rather
+        // than per candidate transition.
+        var allTasksComplete = !WorkItemEngineRules.HasIncompleteTasks(template, workItem);
+
         IReadOnlyCollection<WorkItemTransition> available = isTerminal
             ? Array.Empty<WorkItemTransition>()
             : template
@@ -1284,7 +1277,7 @@ public sealed class WorkItemService : IWorkItemService
                         StringComparison.OrdinalIgnoreCase
                     )
                 )
-                .Where(t => !t.RequiresAllTasksComplete || taskProgress.All(p => p.IsComplete))
+                .Where(t => !t.RequiresAllTasksComplete || allTasksComplete)
                 .ToList();
 
         return new WorkItemEngineProjection(
