@@ -171,11 +171,10 @@ public class NotifyTemplateContractTests
                 Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Skipped("test"));
-        var statusPushHook = new WorkItemStatusPushHook(
+        var statusPushHook = new ReAccreditationStatusPushHook(
             pushAdapter,
-            new WorkItemRegistry([new ReAccreditationType()]),
             auditAppender,
-            NullLogger<WorkItemStatusPushHook>.Instance
+            NullLogger<ReAccreditationStatusPushHook>.Instance
         );
         var sut = new ReAccreditationDulyMadeHook(
             persistence,

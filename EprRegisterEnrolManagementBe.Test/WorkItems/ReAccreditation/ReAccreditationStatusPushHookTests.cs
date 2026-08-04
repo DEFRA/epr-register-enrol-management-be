@@ -6,15 +6,16 @@ using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using NSubstitute;
 
-namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
+namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-368: pushes every work item state transition to the operator backend,
-/// except the query/withdraw families which are out of scope (query keeps
-/// its own richer push; withdrawal is a separate, future ticket). Never
-/// throws — a push failure must not unwind the already-persisted transition.
+/// RA-368: pushes every re-accreditation state transition to the operator
+/// backend, except the query/withdraw families which are out of scope (query
+/// keeps its own richer push; withdrawal is a separate, future ticket).
+/// Never throws — a push failure must not unwind the already-persisted
+/// transition.
 /// </summary>
-public class WorkItemStatusPushHookTests
+public class ReAccreditationStatusPushHookTests
 {
     private static readonly ClaimsPrincipal s_user = new(
         new ClaimsIdentity([new Claim("user:id", "alice-1")], "test"));
@@ -58,7 +59,7 @@ public class WorkItemStatusPushHookTests
         return workItem;
     }
 
-    private static (WorkItemStatusPushHook Hook, IOperatorBackendPushAdapter Adapter, IWorkItemAuditAppender AuditAppender)
+    private static (ReAccreditationStatusPushHook Hook, IOperatorBackendPushAdapter Adapter, IWorkItemAuditAppender AuditAppender)
         BuildSut()
     {
         var adapter = Substitute.For<IOperatorBackendPushAdapter>();
@@ -74,9 +75,8 @@ public class WorkItemStatusPushHookTests
                 Arg.Any<Dictionary<string, string?>>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        var registry = new WorkItemRegistry([new ReAccreditationType()]);
-        var hook = new WorkItemStatusPushHook(
-            adapter, registry, auditAppender, NullLogger<WorkItemStatusPushHook>.Instance);
+        var hook = new ReAccreditationStatusPushHook(
+            adapter, auditAppender, NullLogger<ReAccreditationStatusPushHook>.Instance);
         return (hook, adapter, auditAppender);
     }
 
@@ -144,6 +144,24 @@ public class WorkItemStatusPushHookTests
     }
 
     [Fact]
+    public async Task OnActionAppliedAsync_ignores_a_work_item_of_a_different_type()
+    {
+        // Mirrors ReAccreditationQueryPushHook's own type guard — this hook
+        // must not fire for a work item type it doesn't own, or it would
+        // POST to the re-accreditation-specific status endpoint for every
+        // other module's transitions too.
+        var ct = TestContext.Current.CancellationToken;
+        var (hook, adapter, _) = BuildSut();
+        var workItem = BuildWorkItem(
+            "rejected", "reject", "Reject", "awaiting-decision", typeId: "some-other-type");
+
+        await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+
+        await adapter.DidNotReceiveWithAnyArgs().PushStatusChangedAsync(
+            default, default, default!, default!, default!, default!, default!, default, default);
+    }
+
+    [Fact]
     public async Task OnActionAppliedAsync_resolves_toStateDisplayName_from_the_template_snapshot()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -196,17 +214,24 @@ public class WorkItemStatusPushHookTests
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_records_a_sent_audit_entry_on_success()
+    public async Task OnActionAppliedAsync_records_a_sent_audit_entry_with_actionDisplayName_and_toStateDisplayName()
     {
+        // management-fe's audit-log projection (statusPushDetailRows /
+        // summariseAuditEntry) reads details.actionDisplayName and
+        // details.toStateDisplayName, falling back to the raw ids only when
+        // absent — both must be present or a caseworker sees wire ids
+        // instead of "Approve" / "Granted" in the audit trail.
         var ct = TestContext.Current.CancellationToken;
         var (hook, _, auditAppender) = BuildSut();
-        var workItem = BuildWorkItem("rejected", "reject", "Reject", "awaiting-decision");
+        var workItem = BuildWorkItem("approved", "approve", "Approve", "awaiting-decision");
 
-        await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
 
         await auditAppender.Received(1).AppendAsync(
-            workItem.Id, "status-push-sent", Arg.Any<string>(),
-            Arg.Any<Dictionary<string, string?>>(), s_user, ct);
+            workItem.Id, "status-push-sent", "Status sent to OJ",
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["actionDisplayName"] == "Approve" && d["toStateDisplayName"] == "Granted"),
+            s_user, ct);
     }
 
     [Fact]
@@ -226,7 +251,7 @@ public class WorkItemStatusPushHookTests
         // MBE-F5: skipped (deliberately disabled) must never look like a
         // failure — a distinct audit outcome, not status-push-failed.
         await auditAppender.Received(1).AppendAsync(
-            workItem.Id, "status-push-skipped", Arg.Any<string>(),
+            workItem.Id, "status-push-skipped", "Status not sent to OJ (disabled)",
             Arg.Any<Dictionary<string, string?>>(), s_user, ct);
         await auditAppender.DidNotReceive().AppendAsync(
             workItem.Id, "status-push-failed", Arg.Any<string>(),
@@ -248,7 +273,7 @@ public class WorkItemStatusPushHookTests
         await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
 
         await auditAppender.Received(1).AppendAsync(
-            workItem.Id, "status-push-failed", Arg.Any<string>(),
+            workItem.Id, "status-push-failed", "Status failed to send to OJ",
             Arg.Is<Dictionary<string, string?>>(d => d["errorMessage"] == "connection refused"),
             s_user, ct);
     }
@@ -291,24 +316,5 @@ public class WorkItemStatusPushHookTests
 
         // Should not throw.
         await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
-    }
-
-    [Fact]
-    public async Task OnActionAppliedAsync_does_not_filter_by_work_item_type()
-    {
-        // Unlike ReAccreditationQueryPushHook, this hook is framework-level
-        // (WorkItems/Core) — it fires for every work item type, not just
-        // re-accreditation. Only the excluded action-id families (query/
-        // withdraw) and an unconfigured/disabled adapter suppress a push.
-        var ct = TestContext.Current.CancellationToken;
-        var (hook, adapter, _) = BuildSut();
-        var workItem = BuildWorkItem(
-            "rejected", "reject", "Reject", "awaiting-decision", typeId: "some-other-type");
-
-        await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
-
-        await adapter.Received(1).PushStatusChangedAsync(
-            workItem.Id, Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), ct);
     }
 }

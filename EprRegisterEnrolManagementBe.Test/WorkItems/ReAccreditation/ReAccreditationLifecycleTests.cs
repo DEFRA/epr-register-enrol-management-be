@@ -43,11 +43,10 @@ public class ReAccreditationLifecycleTests
                 Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Skipped("test"));
-        var statusPushHook = new WorkItemStatusPushHook(
+        var statusPushHook = new ReAccreditationStatusPushHook(
             pushAdapter,
-            new WorkItemRegistry([type]),
             auditAppender,
-            NullLogger<WorkItemStatusPushHook>.Instance
+            NullLogger<ReAccreditationStatusPushHook>.Instance
         );
         var dulyMadeHook = new ReAccreditationDulyMadeHook(
             persistence,

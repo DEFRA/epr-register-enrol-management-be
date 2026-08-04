@@ -34,8 +34,8 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // (same singleton instance) so ReAccreditationDulyMadeHook can inject
         // it directly to call it explicitly for the submitted→duly-made
         // transition, which bypasses the generic engine's hook fan-out.
-        services.AddSingleton<WorkItemStatusPushHook>();
-        services.AddSingleton<IWorkItemPostActionHook>(sp => sp.GetRequiredService<WorkItemStatusPushHook>());
+        services.AddSingleton<ReAccreditationStatusPushHook>();
+        services.AddSingleton<IWorkItemPostActionHook>(sp => sp.GetRequiredService<ReAccreditationStatusPushHook>());
         services.AddSingleton<IWorkItemPostTaskHook, ReAccreditationDulyMadeHook>();
         services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSnapshotMigration>();
         services.AddSingleton<

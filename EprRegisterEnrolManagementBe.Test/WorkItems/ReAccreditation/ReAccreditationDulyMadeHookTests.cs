@@ -58,20 +58,24 @@ public class ReAccreditationDulyMadeHookTests
         IWorkItemPersistence persistence,
         INotifyClient notifyClient,
         IWorkItemAuditAppender auditAppender,
-        TimeProvider? timeProvider = null
+        TimeProvider? timeProvider = null,
+        IOperatorBackendPushAdapter? pushAdapter = null
     )
     {
-        var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
-        pushAdapter
-            .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
-            .Returns(OperatorBackendPushResult.Skipped("test"));
-        var statusPushHook = new WorkItemStatusPushHook(
+        if (pushAdapter is null)
+        {
+            pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
+            pushAdapter
+                .PushStatusChangedAsync(
+                    Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+                .Returns(OperatorBackendPushResult.Skipped("test"));
+        }
+
+        var statusPushHook = new ReAccreditationStatusPushHook(
             pushAdapter,
-            new WorkItemRegistry([new ReAccreditationType()]),
             auditAppender,
-            NullLogger<WorkItemStatusPushHook>.Instance
+            NullLogger<ReAccreditationStatusPushHook>.Instance
         );
 
         return new(
@@ -116,6 +120,45 @@ public class ReAccreditationDulyMadeHookTests
                 && e.Details["toStateId"] == "duly-made"
         );
         await persistence.Received(1).ReplaceAsync(workItem, ct);
+    }
+
+    [Fact]
+    public async Task OnAllTasksCompletedAsync_pushes_the_status_change_for_the_submitted_to_duly_made_transition()
+    {
+        // RA-368: this transition mutates state directly rather than going
+        // through WorkItemService.ApplyActionAsync, so it bypasses the
+        // generic engine's post-action hook fan-out — ReAccreditationDulyMadeHook
+        // must call ReAccreditationStatusPushHook explicitly. "Duly made" is
+        // the headline status this plan introduces, and the only one CM
+        // reaches through this bypass rather than the generic engine.
+        var ct = TestContext.Current.CancellationToken;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-id"));
+        var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
+        pushAdapter
+            .PushStatusChangedAsync(
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Success());
+
+        var workItem = BuildWorkItem();
+        var sut = BuildSut(persistence, notifyClient, auditAppender, pushAdapter: pushAdapter);
+
+        await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
+
+        await pushAdapter.Received(1).PushStatusChangedAsync(
+            workItem.Id, Arg.Any<Guid>(), "submitted", "duly-made", "Duly made",
+            "duly-make", "Mark as duly made", workItem.LastModifiedAt, ct);
     }
 
     [Fact]

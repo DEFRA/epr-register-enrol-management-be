@@ -29,7 +29,7 @@ internal sealed class ReAccreditationDulyMadeHook(
     IWorkItemPersistence persistence,
     INotifyClient notifyClient,
     IWorkItemAuditAppender auditAppender,
-    WorkItemStatusPushHook statusPushHook,
+    ReAccreditationStatusPushHook statusPushHook,
     TimeProvider timeProvider,
     ILogger<ReAccreditationDulyMadeHook> logger
 ) : IWorkItemPostTaskHook
