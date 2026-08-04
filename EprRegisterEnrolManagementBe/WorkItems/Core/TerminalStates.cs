@@ -34,7 +34,7 @@ internal static class TerminalStates
     /// Engine operations resolve terminality against the work item's own
     /// template (its snapshot where it has one) rather than against
     /// <see cref="Ids"/>, so an in-flight item is never re-judged under a
-    /// newer template version. Both overloads read the same
+    /// newer template version. This and <see cref="Ids"/> read the same
     /// <see cref="WorkItemState.IsTerminal"/> metadata — there is no second,
     /// hardcoded list of "closed" states anywhere in the engine.
     /// </remarks>
