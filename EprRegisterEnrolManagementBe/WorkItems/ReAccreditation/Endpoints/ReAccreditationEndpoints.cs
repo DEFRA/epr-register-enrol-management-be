@@ -446,7 +446,12 @@ internal static class ReAccreditationEndpoints
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
             WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
-            WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            // RA-346: an approval refused because the awaiting-decision tasks
+            // are still outstanding is a conflict with the resource's current
+            // state, not a malformed request — the same 409 the framework's
+            // /actions/{actionId} endpoint returns for IncompleteTasks.
+            WorkItemActionFailureCode.IncompleteTasks
+            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status400BadRequest,
         };
 

@@ -627,12 +627,13 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        if (transition.RequiresAllTasksComplete && HasIncompleteTasks(template, workItem))
+        if (
+            transition.RequiresAllTasksComplete
+            && WorkItemEngineRules.RequireAllTasksComplete(template, workItem, actionId) is
+                { } incompleteTasksFailure
+        )
         {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.IncompleteTasks,
-                $"Action '{actionId}' requires every task for state '{workItem.StateId}' to be complete first."
-            );
+            return incompleteTasksFailure;
         }
 
         var previousState = workItem.StateId;
@@ -1330,20 +1331,12 @@ public sealed class WorkItemService : IWorkItemService
     }
 
     /// <summary>
-    /// Pick the template the engine should reason about for a work item. The
-    /// snapshot stored on the work item wins so that historical items keep
-    /// their original task list and action set even if the live type has
-    /// since changed; the live type is used only as a fallback for legacy
-    /// items submitted before snapshots existed.
+    /// Pick the template the engine should reason about for a work item.
+    /// Delegates to <see cref="WorkItemEngineRules.ResolveTemplate"/> so
+    /// bespoke module services resolve the same template the engine does.
     /// </summary>
-    private IWorkItemTemplate? ResolveTemplate(WorkItem workItem)
-    {
-        if (workItem.TemplateSnapshot is not null)
-        {
-            return workItem.TemplateSnapshot;
-        }
-        return _registry.Find(workItem.TypeId);
-    }
+    private IWorkItemTemplate? ResolveTemplate(WorkItem workItem) =>
+        WorkItemEngineRules.ResolveTemplate(workItem, _registry);
 
     private string ResolveTemplateVersion(WorkItem workItem) =>
         workItem.TemplateVersion
@@ -1371,24 +1364,7 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem workItem,
         string stateId,
         string taskId
-    )
-    {
-        if (
-            workItem.TaskStatusesByState.TryGetValue(stateId, out var inner)
-            && inner.TryGetValue(taskId, out var explicitStatus)
-        )
-        {
-            return explicitStatus;
-        }
-        if (
-            workItem.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket)
-            && bucket.Contains(taskId)
-        )
-        {
-            return WorkItemTaskStatus.Completed;
-        }
-        return WorkItemTaskStatus.NotStarted;
-    }
+    ) => WorkItemEngineRules.GetCurrentTaskStatus(workItem, stateId, taskId);
 
     /// <summary>
     /// Apply a status change to both <see cref="WorkItem.TaskStatusesByState"/>
@@ -1422,23 +1398,8 @@ public sealed class WorkItemService : IWorkItemService
         }
     }
 
-    private static bool HasIncompleteTasks(IWorkItemTemplate template, WorkItem workItem)
-    {
-        var required = template.GetTasksForState(workItem.StateId);
-        if (required.Count == 0)
-        {
-            return false;
-        }
-        // epr-08y: TaskStatusesByState is the canonical source of truth
-        // (epr-gl6 / WorkItem.cs:99-110). Consult it first and only fall
-        // back to the legacy CompletedTaskIdsByState bucket when no
-        // per-task status is recorded for a task. Reading only the legacy
-        // bucket would let a v2 module that writes only to the canonical
-        // map silently transition past incomplete tasks.
-        return required.Any(t =>
-            GetCurrentTaskStatus(workItem, workItem.StateId, t.Id) != WorkItemTaskStatus.Completed
-        );
-    }
+    private static bool HasIncompleteTasks(IWorkItemTemplate template, WorkItem workItem) =>
+        WorkItemEngineRules.HasIncompleteTasks(template, workItem);
 
     /// <summary>
     /// Append a single entry to the work item's audit log (RA-97). Called

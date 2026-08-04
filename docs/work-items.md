@@ -112,6 +112,18 @@ That is the complete list of changes required outside the new module folder.
   `IWorkItemService` covers task completion and transitions; module-scoped
   services should follow the same pattern (intent-named methods, return
   result objects rather than raw exceptions).
+- A bespoke module endpoint that performs a state change **outside** a
+  registered `WorkItemTransition` does not inherit the engine's gates — most
+  importantly `RequiresAllTasksComplete`. Such a service **must** apply them
+  itself via `WorkItemEngineRules` (`ResolveTemplate`,
+  `RequireAllTasksComplete`) so it agrees with the engine on which template
+  applies, what "task complete" means, and what a refusal looks like. Put the
+  check before any side effect, and return the shared failure rather than a
+  bespoke one — the frontend maps a single message per failure reason.
+  RA-346 fixed exactly this: `POST /work-items/re-accreditation/{id}/approve`
+  runs through `ReAccreditationApprovalService` rather than a registered
+  transition, so it silently bypassed the task gate and let a caseworker
+  approve a determination with `record-decision-rationale` still outstanding.
 
 ## Template versioning (RA-94)
 
