@@ -62,11 +62,18 @@ public class NotifyApiKeyRegistrationTests : IClassFixture<MongoIntegrationFixtu
 
     // Always set NOTIFY_API_KEY explicitly so an ambient value in the test
     // runner's environment cannot influence the no-key test cases.
+    //
+    // Notify:SendEmails=true pins NotifySendingPolicy open. Without it these
+    // tests would assert the dev/localhost environment gate (the test host
+    // defaults to the Development environment) instead of the API-key branch
+    // they are about — NotifyEnvironmentGatingTests covers the gate itself.
     private EphemeralMongoTestFactory NewFactory(string? apiKey) =>
-        new(_fixture, "notify-key", settings: new Dictionary<string, string?>
-        {
-            ["NOTIFY_API_KEY"] = apiKey ?? string.Empty,
-        });
+        new(_fixture, "notify-key",
+            settings: new Dictionary<string, string?>
+            {
+                ["NOTIFY_API_KEY"] = apiKey ?? string.Empty,
+                [NotifySendingPolicy.SendEmailsKey] = "true",
+            });
 }
 
 /// <summary>
@@ -98,7 +105,14 @@ public class NotifyApiKeyEnvVarRegistrationTests : IClassFixture<MongoIntegratio
         {
             Environment.SetEnvironmentVariable("NOTIFY_API_KEY", NotifyTestConstants.FakeApiKey);
 
-            using var factory = new EphemeralMongoTestFactory(_fixture, "notify-key-env");
+            using var factory = new EphemeralMongoTestFactory(
+                _fixture, "notify-key-env",
+                settings: new Dictionary<string, string?>
+                {
+                    // See NewFactory above: pins the environment gate open so
+                    // this asserts the API-key branch, not the dev gate.
+                    [NotifySendingPolicy.SendEmailsKey] = "true",
+                });
             Assert.IsType<GovukNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
         }
         finally
@@ -115,7 +129,14 @@ public class NotifyApiKeyEnvVarRegistrationTests : IClassFixture<MongoIntegratio
         {
             Environment.SetEnvironmentVariable("NOTIFY_API_KEY", null);
 
-            using var factory = new EphemeralMongoTestFactory(_fixture, "notify-key-env");
+            using var factory = new EphemeralMongoTestFactory(
+                _fixture, "notify-key-env",
+                settings: new Dictionary<string, string?>
+                {
+                    // See NewFactory above: pins the environment gate open so
+                    // this asserts the API-key branch, not the dev gate.
+                    [NotifySendingPolicy.SendEmailsKey] = "true",
+                });
             Assert.IsType<NoOpNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
         }
         finally
