@@ -1,4 +1,5 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 
@@ -7,11 +8,12 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <summary>
 /// RA-318: unit coverage for the deterministic, payload-derived
 /// applicationReference generator. Format:
-/// AP + 2-digit year + 2-char agency + organisationId + last 3 chars of
-/// postcode + first 2 chars of material, upper-cased, capped at
-/// <see cref="ApplicationReferenceGenerator.MaxLength"/> chars (this value
-/// doubles as a BACS payment reference). Attempts beyond the first (the
-/// collision-retry path) replace the final character with a disambiguator.
+/// AP + 2-digit year + 2-char agency + last 5 chars of organisationId +
+/// last 3 chars of postcode + first 2 chars of material, upper-cased,
+/// capped at <see cref="ApplicationReferenceGenerator.MaxLength"/> chars
+/// (this value doubles as a BACS payment reference). Attempts beyond the
+/// first (the collision-retry path) replace the final character with a
+/// disambiguator.
 /// </summary>
 public sealed class ApplicationReferenceGeneratorTests
 {
@@ -48,7 +50,9 @@ public sealed class ApplicationReferenceGeneratorTests
         object? accreditationYear = null,
         string? operatorOrganisationId = "50002",
         string? siteAddressPostcode = "SW1A 1AA",
-        string? material = "Glass"
+        string? material = "Glass",
+        string? wasteProcessingType = null,
+        string? companyRegisterAddressPostcode = null
     )
     {
         var doc = new BsonDocument();
@@ -61,6 +65,10 @@ public sealed class ApplicationReferenceGeneratorTests
             doc["siteAddressPostcode"] = siteAddressPostcode;
         if (material is not null)
             doc["material"] = material;
+        if (wasteProcessingType is not null)
+            doc["wasteProcessingType"] = wasteProcessingType;
+        if (companyRegisterAddressPostcode is not null)
+            doc["companyRegisterAddressPostcode"] = companyRegisterAddressPostcode;
         return doc;
     }
 
@@ -120,7 +128,7 @@ public sealed class ApplicationReferenceGeneratorTests
     }
 
     [Fact]
-    public void Generate_truncates_to_MaxLength_when_organisationId_is_long()
+    public void Generate_caps_organisationId_to_its_last_five_characters()
     {
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(
@@ -130,8 +138,20 @@ public sealed class ApplicationReferenceGeneratorTests
 
         var reference = generator.Generate(payload);
 
-        Assert.Equal(ApplicationReferenceGenerator.MaxLength, reference.Length);
-        Assert.Equal("AP26EA6A2FCD74E168", reference);
+        // Only the last 5 chars of the raw id ("01188") appear, not the full 24-char id.
+        Assert.Equal("AP26EA011881AAGL", reference);
+        Assert.True(reference.Length < ApplicationReferenceGenerator.MaxLength);
+    }
+
+    [Fact]
+    public void Generate_leaves_organisationId_unchanged_when_five_characters_or_fewer()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, operatorOrganisationId: "1234");
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA12341AAGL", reference);
     }
 
     [Fact]
@@ -203,23 +223,13 @@ public sealed class ApplicationReferenceGeneratorTests
         Assert.Equal(attempts.Count, attempts.Distinct().Count());
     }
 
-    [Fact]
-    public void Generate_attempt_disambiguator_replaces_the_final_character_once_the_reference_is_already_at_MaxLength()
-    {
-        var generator = new ApplicationReferenceGenerator();
-        var payload = MakePayload(
-            accreditationYear: 2026,
-            operatorOrganisationId: "6a2fcd74e16883c137d01188"
-        );
-
-        var first = generator.Generate(payload, attempt: 1);
-        var second = generator.Generate(payload, attempt: 2);
-
-        Assert.Equal(ApplicationReferenceGenerator.MaxLength, first.Length);
-        Assert.Equal(ApplicationReferenceGenerator.MaxLength, second.Length);
-        Assert.Equal(first[..^1], second[..^1]);
-        Assert.NotEqual(first[^1], second[^1]);
-    }
+    // No payload can push a reference to MaxLength (18) any more: with the
+    // organisationId now capped to 5 chars, the longest possible reference is
+    // 2 (prefix) + 2 (year) + 2 (agency) + 5 (organisationId) + 3 (postcode) +
+    // 2 (material) = 16 chars. The "replace final char at MaxLength"
+    // disambiguator branch in Generate is therefore unreachable via the
+    // public API; Generate_disambiguator_extends_a_short_reference_rather_than_replacing_a_character
+    // below covers the (now universal) short-reference disambiguator path.
 
     [Fact]
     public void Generate_disambiguator_extends_a_short_reference_rather_than_replacing_a_character()
@@ -280,5 +290,179 @@ public sealed class ApplicationReferenceGeneratorTests
 
         // Last 3 chars of the flat "M1 1AE" ("1AE"), not the nested "BS1 1AA" ("1AA").
         Assert.Equal("AP26EA500021AEGL", reference);
+    }
+
+    // --- RA-314: regional regulator derived from operator type + location ---
+
+    [Fact]
+    public void AC01_exporter_reference_is_derived_from_the_registered_office_postcode()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "exporter",
+            siteAddressPostcode: "SW1A 1AA", // England site — must be ignored for an exporter
+            companyRegisterAddressPostcode: "EH1 1AA" // Scotland registered office
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("SE", reference.Substring(4, 2));
+        Assert.Equal("AP26SE500021AAGL", reference);
+    }
+
+    [Fact]
+    public void AC02_reprocessor_reference_is_derived_from_the_site_postcode()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "reprocessor",
+            siteAddressPostcode: "SW1A 1AA", // England site
+            companyRegisterAddressPostcode: "EH1 1AA" // Scotland registered office — must be ignored
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("EA", reference.Substring(4, 2));
+        Assert.Equal("AP26EA500021AAGL", reference);
+    }
+
+    [Fact]
+    public void AC02_payload_without_wasteProcessingType_falls_back_to_the_site_postcode()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            siteAddressPostcode: "SW1A 1AA",
+            companyRegisterAddressPostcode: "EH1 1AA"
+        );
+
+        var reference = generator.Generate(payload);
+
+        // No wasteProcessingType (e.g. case-management admin UI payloads) behaves like a reprocessor.
+        Assert.Equal("EA", reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void AC01_exporter_with_no_registered_office_postcode_fails_open_to_England()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "exporter",
+            siteAddressPostcode: "EH1 1AA", // Scotland site — must be ignored for an exporter
+            companyRegisterAddressPostcode: null
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("EA", reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void AC01_exporter_with_no_registered_office_postcode_logs_a_warning()
+    {
+        var logger = new CapturingLogger<ApplicationReferenceGenerator>();
+        var generator = new ApplicationReferenceGenerator(logger: logger);
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "exporter",
+            companyRegisterAddressPostcode: null
+        );
+
+        generator.Generate(payload);
+
+        var entry = Assert.Single(logger.Entries);
+        Assert.Equal(LogLevel.Warning, entry.Level);
+    }
+
+    [Fact]
+    public void Generate_does_not_log_when_exporter_has_a_registered_office_postcode()
+    {
+        var logger = new CapturingLogger<ApplicationReferenceGenerator>();
+        var generator = new ApplicationReferenceGenerator(logger: logger);
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "exporter",
+            companyRegisterAddressPostcode: "EH1 1AA"
+        );
+
+        generator.Generate(payload);
+
+        Assert.Empty(logger.Entries);
+    }
+
+    private sealed class CapturingLogger<T> : ILogger<T>
+    {
+        public List<(LogLevel Level, string Message)> Entries { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        ) => Entries.Add((logLevel, formatter(state, exception)));
+    }
+
+    [Theory]
+    [InlineData("Exporter")]
+    [InlineData("EXPORTER")]
+    public void AC01_wasteProcessingType_match_is_case_insensitive(string wasteProcessingType)
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: wasteProcessingType,
+            siteAddressPostcode: "SW1A 1AA",
+            companyRegisterAddressPostcode: "EH1 1AA"
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("SE", reference.Substring(4, 2));
+    }
+
+    [Theory]
+    [InlineData("EH1 1AA", "SE")] // Scotland — SEPA
+    [InlineData("CF10 1AA", "NR")] // Wales — NRW
+    [InlineData("BT1 1AA", "NI")] // Northern Ireland — DAERA
+    [InlineData("SW1A 1AA", "EA")] // England — Environment Agency
+    public void AC03_reference_maps_to_one_of_the_four_regional_regulators(
+        string postcode,
+        string expectedAgency
+    )
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(accreditationYear: 2026, siteAddressPostcode: postcode);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal(expectedAgency, reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void AC04_organisationId_longer_than_five_characters_is_limited_to_the_last_five()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.DoesNotContain(
+            "6a2fcd74e16883c137d0",
+            reference,
+            StringComparison.OrdinalIgnoreCase
+        );
+        Assert.Contains("01188", reference, StringComparison.OrdinalIgnoreCase);
     }
 }
