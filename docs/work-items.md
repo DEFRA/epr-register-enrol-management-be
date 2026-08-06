@@ -26,6 +26,7 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | `WorkItemTaskProgress` | A task's id + display name + its `WorkItemTaskStatus` (`NotStarted` / `InProgress` / `Blocked` / `Completed`) for the work item's current state. The legacy `IsComplete` boolean is retained for back-compat and equals `Status == Completed`. |
 | `IWorkItemType` | Declares a type's `TypeId`, `DisplayName`, `InitialState`, `States`, `GetTasksForState(stateId)` and `Transitions`. Pure & side-effect free. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
+| `IWorkItemTaskStateResolver` | Optional, module-supplied. Lets a type say "the tasks that apply to this item belong to some *other* state" — see [Effective task state](#effective-task-state-ra-372). |
 | `IWorkItemRegistry` | DI-resolvable lookup of every registered type. |
 | `IWorkItemService` | Framework service object that drives task completion and state transitions. Resolves the work item, validates the request against the type, persists the change and writes an audit log. |
 | `WorkItem` | The persisted work item envelope: id, type id, state id, submitted-at, last-modified-at, submitted-by (CDP Cognito client id), per-state completed task ids, free-form payload. |
@@ -159,6 +160,58 @@ v1 work item was being progressed.
 
 `WorkItemResponse` includes `templateVersion`. Clients use it (together
 with `typeId`) to pick the correct detail template for the work item.
+
+## Effective task state (RA-372)
+
+The engine normally treats a work item's `StateId` as answering two
+questions at once: *where is this item?* and *whose task list applies?*
+For most types those are the same thing. They come apart for a **waypoint
+state** — a state an item passes through that has no task list of its own,
+where the work still outstanding belongs to the state the item came from
+and will return to.
+
+`IWorkItemTaskStateResolver` is the seam. A module registers one as a
+singleton; the engine consults every registered resolver and takes the
+first that returns a non-null state id, falling back to `workItem.StateId`
+when they all abstain.
+
+The resolved state id governs **both halves consistently**:
+
+- the task list projected by `WorkItemService.Project`,
+- the task lookup performed by `CompleteTaskAsync` / `SetTaskStatusAsync` /
+  `AddNoteAndCompleteTaskAsync`,
+- the per-state bucket (`CompletedTaskIdsByState` / `TaskStatusesByState`)
+  those completions are read from and written to,
+- the `RequiresAllTasksComplete` gate in `ApplyActionAsync`,
+- the `stateId` handed to `IWorkItemPostTaskHook.OnAllTasksCompletedAsync`.
+
+Because completion has always been stored per state id, redirecting the
+state id makes prior progress visible during the detour and makes progress
+recorded during the detour survive the return — with no new storage and no
+template bump.
+
+What it deliberately does **not** govern is anything about where the item
+actually *is*: available actions, terminality and transition from-state
+matching all keep using `workItem.StateId`. Redirecting those would let a
+caller invoke an action from a state the item is not in.
+
+Rules for implementations:
+
+- **Return null to abstain**, including for every work item whose `TypeId`
+  is not your own. An abstaining resolver is invisible.
+- **Be pure.** This runs on every read projection and every task mutation;
+  no I/O.
+- **Resolve against the supplied template**, not the live type, so an
+  in-flight item is judged by the rules it was submitted under.
+- Core must never learn the module's state names. A resolver that throws,
+  abstains, or names a state the template does not declare is ignored and
+  the engine falls back to `workItem.StateId`.
+
+Reference implementation: `ReAccreditationTaskStateResolver`, which maps
+re-accreditation's `updated` waypoint back to the state a query was raised
+from (derived from audit history via `ReAccreditationUpdatedOrigin`, shared
+with `ReAccreditationContinueReviewService` so the checklist a caseworker
+works through and the state `continue-review` lands in cannot disagree).
 
 ## Assignment (RA-95)
 
