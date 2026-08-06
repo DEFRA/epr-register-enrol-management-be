@@ -88,7 +88,7 @@ x-cdp-cognito-client-id:  epr-register-enrol-backend
 x-cdp-user-id:            {submitter email}
 x-cdp-user-name:          {submitter full name}
 
-# only when CaseWorking__SharedSecret is configured
+# only when CASE_MANAGEMENT_API_SHARED_SECRET is configured
 x-cdp-auth-signature:     HMAC-SHA256(secret, v3-canonical-string)
 x-cdp-auth-timestamp:     2025-07-08T10:00:00Z
 x-cdp-auth-nonce:         {16-byte random, base64}
@@ -274,7 +274,7 @@ management FE's inbox when the work-items list is next polled.
 
 ## Configuration — the 401 matrix
 
-| `CaseWorking__SharedSecret` (Operator BE) | `AUTH_SHARED_SECRET__BACKEND` (Management BE) | Result |
+| `CASE_MANAGEMENT_API_SHARED_SECRET` (Operator BE) | `AUTH_SHARED_SECRET__BACKEND` (Management BE) | Result |
 | --- | --- | --- |
 | absent | absent | **401** — management BE fails closed |
 | `"secret"` | absent | **401** — operator sends a signature; management BE can't verify it |
@@ -287,10 +287,11 @@ management FE's inbox when the work-items list is next polled.
 `epr-register-enrol-backend`) — it is independent of `AUTH_SHARED_SECRET__MANAGEMENT_FE`,
 the separate secret management-fe's requests are verified against (RA-345).
 
-Env var names are case-insensitive in .NET's configuration system:
-`CaseWorking__SharedSecret` and `CASEWORKING__SHAREDSECRET` are equivalent.
-The double-underscore is the .NET convention for navigating config-section
-hierarchy (`CaseWorking` section → `SharedSecret` property).
+`CASE_MANAGEMENT_API_SHARED_SECRET` is a flat env var name on the Operator
+BE side, following CDP's secrets naming convention — unlike `Url`/`UseStub`/
+`CognitoClientId` on that same config, which remain under the nested
+`CaseWorking__*` form (`CaseWorking:SharedSecret` was retired by RA-345;
+see `epr-register-enrol-backend`'s `CaseWorkingApiConfig`).
 
 See also [ADR-0001](adr/0001-cognito-client-id-auth.md) and
 [ADR-0003](adr/0003-hmac-canonical-v2-timestamp-nonce.md) for the auth design
