@@ -68,6 +68,7 @@ public class ReAccreditationLifecycleTests
             .Returns("ACC-2027-X-TEST0000");
         var approvalService = new ReAccreditationApprovalService(
             persistence,
+            new WorkItemRegistry([type]),
             idGenerator,
             Substitute.For<IBackgroundTaskQueue>(),
             [],
