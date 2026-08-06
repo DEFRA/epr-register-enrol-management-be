@@ -231,14 +231,21 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
 static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration config)
 {
     var map = new Dictionary<string, string>(StringComparer.Ordinal);
+    // Config-key form, NOT the literal env var name: EnvironmentVariablesConfigurationProvider
+    // rewrites "__" to ":" while loading, so the real env var
+    // AUTH_SHARED_SECRET__MANAGEMENT_FE is stored under config key
+    // "AUTH_SHARED_SECRET:MANAGEMENT_FE" — a GetValue call using the literal
+    // double-underscore string never matches it. Same pattern OperatorBackendApi
+    // uses elsewhere in this file (GetSection("OperatorBackendApi"), not a
+    // literal "OperatorBackendApi__Url" GetValue key).
     AddCallerSecret(map, config,
         callerName: "ManagementFe",
         clientIdKey: "Auth:ManagementFeClientId", clientIdDefault: "frontend",
-        secretKey: "AUTH_SHARED_SECRET__MANAGEMENT_FE");
+        secretKey: "AUTH_SHARED_SECRET:MANAGEMENT_FE");
     AddCallerSecret(map, config,
         callerName: "Backend",
         clientIdKey: "Auth:BackendClientId", clientIdDefault: "epr-register-enrol-backend",
-        secretKey: "AUTH_SHARED_SECRET__BACKEND");
+        secretKey: "AUTH_SHARED_SECRET:BACKEND");
     return map;
 }
 

@@ -195,14 +195,19 @@ public class CognitoClientIdAuthenticationTests
         // both at the same value would let one caller's secret silently
         // overwrite the other's in the resolved ClientSecrets map
         // (Program.cs::BuildClientSecrets/AddCallerSecret). This exercises
-        // the REAL env-var-driven binding (not the clientSecrets/PostConfigure
-        // test bypass used elsewhere in this file) so the guard itself is
-        // covered, not just asserted against a hand-built dictionary.
+        // BuildClientSecrets' binding logic via config KEYS (colon form,
+        // the same form IConfiguration exposes real "__"-separated env
+        // vars under — see AUTH_SHARED_SECRET:MANAGEMENT_FE below) rather
+        // than a hand-built ClientSecrets dictionary. It does NOT exercise
+        // the actual EnvironmentVariablesConfigurationProvider "__" -> ":"
+        // rewrite itself — see
+        // ClientSecrets_bind_from_real_double_underscore_environment_variables
+        // for that.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory(configOverrides: new Dictionary<string, string?>
         {
-            ["AUTH_SHARED_SECRET__MANAGEMENT_FE"] = Secret,
-            ["AUTH_SHARED_SECRET__BACKEND"] = OtherSecret,
+            ["AUTH_SHARED_SECRET:MANAGEMENT_FE"] = Secret,
+            ["AUTH_SHARED_SECRET:BACKEND"] = OtherSecret,
             ["Auth:BackendClientId"] = "frontend" // collides with ManagementFe's default clientId
         });
 
@@ -551,50 +556,126 @@ public class CognitoClientIdAuthenticationTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+}
 
-    private sealed class BareFactory(
-        IReadOnlyDictionary<string, string>? clientSecrets = null,
-        string? environment = null,
-        IReadOnlyDictionary<string, string?>? configOverrides = null)
-        : WebApplicationFactory<Program>
+/// <summary>
+/// RA-345 regression: proves AUTH_SHARED_SECRET__MANAGEMENT_FE /
+/// AUTH_SHARED_SECRET__BACKEND actually bind through the REAL
+/// EnvironmentVariablesConfigurationProvider (which rewrites "__" to ":"
+/// while loading), not just through a hand-built config-key dictionary.
+/// A prior version of BuildClientSecrets read these with the literal
+/// double-underscore string as the GetValue key, which silently never
+/// matched — ClientSecrets resolved empty and the service 401'd every
+/// authenticated request in any real (env-var-driven) deployment. The
+/// other tests in CognitoClientIdAuthenticationTests use
+/// PostConfigure/config-key overrides that bypass this provider entirely,
+/// so none of them would have caught that. Mutates process-global env
+/// vars, hence the disabled-parallelization collection (same reasoning as
+/// NotifyApiKeyEnvVarRegistrationTests).
+/// </summary>
+[Collection(EprRegisterEnrolManagementBe.Test.Notifications.EnvVarMutationCollection.Name)]
+public class CognitoClientIdAuthenticationEnvVarTests
+{
+    private const string ManagementFeSecret = "management-fe-env-secret";
+    private const string BackendSecret = "backend-env-secret";
+
+    [Fact]
+    public async Task ClientSecrets_bind_from_real_double_underscore_environment_variables()
     {
-        public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
-        public readonly FakeTimeProvider FakeTime = new(DateTimeOffset.Parse("2026-04-30T12:00:00Z"));
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        var previousFe = Environment.GetEnvironmentVariable("AUTH_SHARED_SECRET__MANAGEMENT_FE");
+        var previousBackend = Environment.GetEnvironmentVariable("AUTH_SHARED_SECRET__BACKEND");
+        try
         {
-            if (environment is not null)
-            {
-                builder.UseEnvironment(environment);
-            }
-            if (configOverrides is not null)
-            {
-                // Exercises Program.cs's real env-var-driven BuildClientSecrets
-                // binding (as opposed to the clientSecrets/PostConfigure
-                // bypass below) — needed for tests that assert on that
-                // binding logic itself, e.g. the clientId-collision guard.
-                builder.ConfigureAppConfiguration((_, config) =>
-                    config.AddInMemoryCollection(configOverrides));
-            }
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IWorkItemPersistence>();
-                services.AddSingleton(MockPersistence);
-                services.RemoveAll<TimeProvider>();
-                services.AddSingleton<TimeProvider>(FakeTime);
+            Environment.SetEnvironmentVariable(
+                "AUTH_SHARED_SECRET__MANAGEMENT_FE", ManagementFeSecret);
+            Environment.SetEnvironmentVariable("AUTH_SHARED_SECRET__BACKEND", BackendSecret);
 
-                if (clientSecrets is not null)
-                {
-                    // Set the resolved option directly (after Program.cs's
-                    // own env-var-driven Configure<> runs) — the test
-                    // client ids don't necessarily match the real
-                    // management-fe/backend clientId defaults, so we
-                    // bypass env-var binding entirely here.
-                    services.PostConfigure<CognitoClientIdAuthenticationOptions>(
-                        CognitoClientIdDefaults.AuthenticationScheme,
-                        o => o.ClientSecrets = clientSecrets);
-                }
-            });
+            // No configOverrides/clientSecrets bypass here — this factory
+            // boots exactly as a real deployment would, reading whatever
+            // Program.cs's real AddEnvironmentVariables()-backed
+            // configuration resolves. environment MUST be non-Development:
+            // if BuildClientSecrets silently resolves ClientSecrets empty
+            // (the bug this test guards against), a Development host would
+            // fall back to unsigned header-trust mode and this request
+            // would still return 200 regardless of whether the signature
+            // was ever checked — masking the exact failure this test
+            // exists to catch. Production forces the fail-closed branch,
+            // so 200 here is only possible if the secret genuinely bound.
+            await using var factory = new BareFactory(environment: "Production");
+            factory.MockPersistence
+                .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+                .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+            var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+            var nonce = "nonce-real-env-var";
+            // Default expected clientId for the ManagementFe slot (Program.cs).
+            const string clientId = "frontend";
+            var signature = CognitoClientIdAuthenticationHandler.ComputeSignature(
+                ManagementFeSecret, clientId, null, null, timestamp, nonce);
+
+            using var client = factory.CreateClient();
+            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", clientId);
+            client.DefaultRequestHeaders.Add("x-cdp-auth-timestamp", timestamp);
+            client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", nonce);
+            client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+            var response = await client.GetAsync(
+                "/work-items", TestContext.Current.CancellationToken);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "AUTH_SHARED_SECRET__MANAGEMENT_FE", previousFe);
+            Environment.SetEnvironmentVariable("AUTH_SHARED_SECRET__BACKEND", previousBackend);
+        }
+    }
+}
+
+internal sealed class BareFactory(
+    IReadOnlyDictionary<string, string>? clientSecrets = null,
+    string? environment = null,
+    IReadOnlyDictionary<string, string?>? configOverrides = null)
+    : WebApplicationFactory<Program>
+{
+    public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
+    public readonly FakeTimeProvider FakeTime = new(DateTimeOffset.Parse("2026-04-30T12:00:00Z"));
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        if (environment is not null)
+        {
+            builder.UseEnvironment(environment);
+        }
+        if (configOverrides is not null)
+        {
+            // Config-KEY overrides (colon form) — exercises
+            // BuildClientSecrets' binding logic, but NOT the real
+            // EnvironmentVariablesConfigurationProvider "__" -> ":"
+            // rewrite itself. See
+            // CognitoClientIdAuthenticationEnvVarTests for that.
+            builder.ConfigureAppConfiguration((_, config) =>
+                config.AddInMemoryCollection(configOverrides));
+        }
+        builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IWorkItemPersistence>();
+            services.AddSingleton(MockPersistence);
+            services.RemoveAll<TimeProvider>();
+            services.AddSingleton<TimeProvider>(FakeTime);
+
+            if (clientSecrets is not null)
+            {
+                // Set the resolved option directly (after Program.cs's
+                // own env-var-driven Configure<> runs) — the test
+                // client ids don't necessarily match the real
+                // management-fe/backend clientId defaults, so we
+                // bypass env-var binding entirely here.
+                services.PostConfigure<CognitoClientIdAuthenticationOptions>(
+                    CognitoClientIdDefaults.AuthenticationScheme,
+                    o => o.ClientSecrets = clientSecrets);
+            }
+        });
     }
 }
