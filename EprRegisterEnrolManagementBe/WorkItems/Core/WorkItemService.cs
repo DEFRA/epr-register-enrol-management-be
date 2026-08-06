@@ -601,14 +601,11 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        var currentState = template.States.FirstOrDefault(s =>
-            string.Equals(s.Id, workItem!.StateId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (currentState?.IsTerminal == true)
+        if (TerminalStates.Find(template, workItem!.StateId) is { } currentTerminalState)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,
-                $"Work item {workItemId} is in terminal state '{currentState.Id}'; no actions are allowed."
+                $"Work item {workItemId} is in terminal state '{currentTerminalState.Id}'; no actions are allowed."
             );
         }
 
@@ -713,6 +710,11 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
+        if (RequireNonTerminalState(workItem, "assigned") is { } terminalFailure)
+        {
+            return terminalFailure;
+        }
+
         var trimmedAssigneeId = assigneeId.Trim();
         var actorUserId = ResolveActorUserId(user);
 
@@ -805,6 +807,11 @@ public sealed class WorkItemService : IWorkItemService
                 WorkItemActionFailureCode.WorkItemNotFound,
                 $"No work item exists with id '{workItemId}'."
             );
+        }
+
+        if (RequireNonTerminalState(workItem, "unassigned") is { } terminalFailure)
+        {
+            return terminalFailure;
         }
 
         if (workItem.AssignedToId is null)
@@ -1256,10 +1263,7 @@ public sealed class WorkItemService : IWorkItemService
             })
             .ToList();
 
-        var currentState = template.States.FirstOrDefault(s =>
-            string.Equals(s.Id, workItem.StateId, StringComparison.OrdinalIgnoreCase)
-        );
-        var isTerminal = currentState?.IsTerminal == true;
+        var isTerminal = TerminalStates.Find(template, workItem.StateId) is not null;
 
         // RA-346: same gate the engine enforces in ApplyActionAsync, from the
         // same helper — an action must never be offered that applying would
@@ -1330,6 +1334,89 @@ public sealed class WorkItemService : IWorkItemService
     /// </summary>
     private IWorkItemTemplate? ResolveTemplate(WorkItem workItem) =>
         WorkItemEngineRules.ResolveTemplate(workItem, _registry);
+
+    /// <summary>
+    /// RA-358: refuse an envelope mutation on a closed case. Assignment and
+    /// unassignment are the two operations that reach a work item without
+    /// going through <see cref="ApplyActionAsync"/>, so before this check a
+    /// direct POST could still hand a withdrawn / approved / rejected item to
+    /// someone (the front end only hid the buttons). Terminality comes from
+    /// the item's own template via <see cref="TerminalStates.Find"/> — no
+    /// state id is hardcoded here, and an in-flight item is judged by the
+    /// template version it was submitted under.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This deliberately reverses RA-295 AC03, which required assignment to
+    /// stay available "all the way through" and is the reason no gate existed.
+    /// That was about hand-over: keeping a closed case reassignable so it can
+    /// be passed to someone else after the fact. RA-358 trades that capability
+    /// away — confirmed with the product owner on 2026-08-04, for every
+    /// terminal state rather than withdrawal alone. If hand-over on closed
+    /// cases is ever wanted back, it needs a route that is explicitly about
+    /// hand-over, not an unguarded assign endpoint.
+    /// </para>
+    /// <para>
+    /// Fails <em>closed</em> when the template cannot be resolved at all,
+    /// matching <see cref="ApplyActionAsync"/>, which refuses the same
+    /// condition before it ever reaches its terminal check. Otherwise a legacy
+    /// pre-snapshot item sitting in a terminal state would become freely
+    /// assignable the moment its type was de-registered or renamed — the very
+    /// hole this guard exists to close, reached through a different door.
+    /// </para>
+    /// </remarks>
+    /// <param name="operation">
+    /// Past-tense verb naming the refused mutation, e.g. <c>"assigned"</c>.
+    /// </param>
+    private WorkItemActionResult? RequireNonTerminalState(WorkItem workItem, string operation)
+    {
+        var template = ResolveTemplate(workItem);
+        if (template is null)
+        {
+            _logger.LogWarning(
+                "Work item {WorkItemId} refused {Operation}: type {TypeId} is not registered "
+                    + "and the item has no template snapshot, so terminality cannot be determined",
+                workItem.Id,
+                operation,
+                workItem.TypeId
+            );
+
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.UnknownAction,
+                "This case cannot be changed because its type is no longer available."
+            );
+        }
+
+        // A state the template does not declare carries no terminal metadata,
+        // so there is nothing to fail closed on: it is not evidence the case is
+        // closed, only that the state is unmodelled. Kept permissive so a
+        // mis-seeded state id does not silently freeze assignment; the
+        // unresolvable-template case above is the one that hides real terminal
+        // states behind an absence.
+        if (TerminalStates.Find(template, workItem.StateId) is not { } terminal)
+        {
+            return null;
+        }
+
+        _logger.LogInformation(
+            "Work item {WorkItemId} ({TypeId}) refused {Operation}: terminal state {StateId}",
+            workItem.Id,
+            workItem.TypeId,
+            operation,
+            terminal.Id
+        );
+
+        // RA-358: the BFF renders ProblemDetails.detail verbatim in a
+        // user-facing error banner, so the message must name the case in
+        // human terms only. Deliberately no work item id here — removing the
+        // system-generated GUID from user-visible errors is the point of this
+        // story. The id stays in the log line above for support.
+        return WorkItemActionResult.Failure(
+            WorkItemActionFailureCode.TerminalState,
+            $"This case has been {terminal.DisplayName.ToLowerInvariant()} "
+                + $"and can no longer be {operation}."
+        );
+    }
 
     private string ResolveTemplateVersion(WorkItem workItem) =>
         workItem.TemplateVersion

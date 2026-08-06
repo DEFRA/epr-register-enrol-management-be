@@ -30,6 +30,11 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// with <c>workItemId</c> in the route and <c>{ queryNote, sectionKeys }</c>
 /// as the body (RA-311 fix doc, MBE-F1/F2).
 ///
+/// RA-368: also posts generic state-transition pushes to
+/// <c>POST api/v1/accreditation-applications/case-management/{workItemId}/status</c>
+/// via <see cref="PushStatusChangedAsync"/>, sharing the same signing,
+/// retry and never-throws behaviour.
+///
 /// Retries transient failures (5xx / transport exceptions) up to twice with
 /// jittered exponential backoff before giving up; never retries a 4xx, since
 /// the most likely first-enablement failure is a systemic auth/validation
@@ -41,8 +46,11 @@ internal sealed class HttpOperatorBackendPushAdapter(
     ILogger<HttpOperatorBackendPushAdapter> logger,
     ResiliencePipeline<HttpResponseMessage>? retryPipeline = null) : IOperatorBackendPushAdapter
 {
-    private const string RelativePathTemplate =
+    private const string QueryRelativePathTemplate =
         "/api/v1/accreditation-applications/case-management/{0}/query";
+
+    private const string StatusRelativePathTemplate =
+        "/api/v1/accreditation-applications/case-management/{0}/status";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -66,7 +74,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
             return OperatorBackendPushResult.Failure("OperatorBackendApi:Url is not configured.");
         }
 
-        var relativePath = string.Format(RelativePathTemplate, Uri.EscapeDataString(workItemId.ToString()));
+        var relativePath = string.Format(QueryRelativePathTemplate, Uri.EscapeDataString(workItemId.ToString()));
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
         // RA-311/MBE-1: request payload metadata + correlation id, logged
@@ -81,6 +89,49 @@ internal sealed class HttpOperatorBackendPushAdapter(
             "Pushing query-raised for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); sections {SectionKeys}, note length {QueryNoteLength}",
             workItemId, endpoint, correlationId, sectionKeys, queryNote.Length);
 
+        var body = new QueryRaisedPushRequest(queryNote, sectionKeys);
+        return await ExecutePushAsync(workItemId, endpoint, correlationId, body, "query-raised", cancellationToken);
+    }
+
+    public async Task<OperatorBackendPushResult> PushStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(_config.Url))
+        {
+            return OperatorBackendPushResult.Failure("OperatorBackendApi:Url is not configured.");
+        }
+
+        var relativePath = string.Format(StatusRelativePathTemplate, Uri.EscapeDataString(workItemId.ToString()));
+        var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
+
+        logger.LogInformation(
+            "Pushing status-changed for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); {FromStateId} -> {ToStateId} via {ActionId}",
+            workItemId, endpoint, correlationId, fromStateId, toStateId, actionId);
+
+        var body = new StatusChangedPushRequest(
+            fromStateId, toStateId, toStateDisplayName, actionId, actionDisplayName, occurredAt);
+        return await ExecutePushAsync(workItemId, endpoint, correlationId, body, "status-changed", cancellationToken);
+    }
+
+    /// <summary>
+    /// Shared attempt/retry/response-handling shape for both push
+    /// operations: rebuilds a fresh signed request per attempt, retries
+    /// transient (5xx/transport) failures via <see cref="_retryPipeline"/>,
+    /// and never throws its way out — a push failure must not unwind the
+    /// already-persisted transition it reports on.
+    /// </summary>
+    private async Task<OperatorBackendPushResult> ExecutePushAsync<TBody>(
+        Guid workItemId, string endpoint, Guid correlationId, TBody body, string operationName,
+        CancellationToken cancellationToken)
+    {
         try
         {
             var response = await _retryPipeline.ExecuteAsync(
@@ -90,7 +141,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
                     // content can only be sent once, and a fresh
                     // timestamp/nonce per attempt is correct anyway — see
                     // A4 in the RA-311 fix doc (5-minute signature window).
-                    using var request = BuildRequest(endpoint, correlationId, queryNote, sectionKeys);
+                    using var request = BuildRequest(endpoint, correlationId, body);
                     var client = httpClientFactory.CreateClient("DefaultClient");
                     return await client.SendAsync(request, ct);
                 },
@@ -98,24 +149,24 @@ internal sealed class HttpOperatorBackendPushAdapter(
 
             if (!response.IsSuccessStatusCode)
             {
-                var body = await response.Content.ReadAsStringAsync(cancellationToken);
+                var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 logger.LogError(
                     "Operator backend returned {Status} from {Endpoint} for work item {WorkItemId} (correlation {CorrelationId}): {Body}",
-                    (int)response.StatusCode, endpoint, workItemId, correlationId, body);
+                    (int)response.StatusCode, endpoint, workItemId, correlationId, responseBody);
                 return OperatorBackendPushResult.Failure(
                     $"Operator backend returned {(int)response.StatusCode} from {endpoint}.");
             }
 
             logger.LogInformation(
-                "Operator backend push succeeded for work item {WorkItemId} (correlation {CorrelationId}); status {Status}.",
-                workItemId, correlationId, (int)response.StatusCode);
+                "Operator backend {Operation} push succeeded for work item {WorkItemId} (correlation {CorrelationId}); status {Status}.",
+                operationName, workItemId, correlationId, (int)response.StatusCode);
             return OperatorBackendPushResult.Success();
         }
         catch (Exception ex)
         {
             logger.LogError(
-                ex, "Failed to push query-raised for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId})",
-                workItemId, endpoint, correlationId);
+                ex, "Failed to push {Operation} for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId})",
+                operationName, workItemId, endpoint, correlationId);
             return OperatorBackendPushResult.Failure(ex.Message);
         }
     }
@@ -183,10 +234,8 @@ internal sealed class HttpOperatorBackendPushAdapter(
         return builder.Build();
     }
 
-    private HttpRequestMessage BuildRequest(
-        string endpoint, Guid correlationId, string queryNote, IReadOnlyList<string> sectionKeys)
+    private HttpRequestMessage BuildRequest<TBody>(string endpoint, Guid correlationId, TBody body)
     {
-        var body = new QueryRaisedPushRequest(queryNote, sectionKeys);
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
             Content = JsonContent.Create(body, options: JsonOptions),
@@ -214,4 +263,12 @@ internal sealed class HttpOperatorBackendPushAdapter(
     }
 
     private sealed record QueryRaisedPushRequest(string QueryNote, IReadOnlyList<string> SectionKeys);
+
+    private sealed record StatusChangedPushRequest(
+        string FromStateId,
+        string ToStateId,
+        string ToStateDisplayName,
+        string ActionId,
+        string ActionDisplayName,
+        DateTime OccurredAt);
 }

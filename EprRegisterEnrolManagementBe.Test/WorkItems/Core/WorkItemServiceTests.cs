@@ -883,6 +883,245 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         Assert.Equal(0, fetched.Version);
     }
 
+    // ---- RA-358: assignment is refused on a closed (terminal) case ----
+
+    /// <summary>
+    /// A type whose closed states cover every terminal id the service uses in
+    /// anger. Built here rather than folded into <see cref="BuildType"/> so
+    /// the existing assignment tests keep their original state machine.
+    /// </summary>
+    private static TestWorkItemType BuildTypeWithTerminalStates()
+    {
+        var states = new[]
+        {
+            new WorkItemState("submitted", "Submitted"),
+            new WorkItemState("withdrawn", "Withdrawn", IsTerminal: true),
+            new WorkItemState("approved", "Approved", IsTerminal: true),
+            new WorkItemState("rejected", "Rejected", IsTerminal: true),
+        };
+        return new TestWorkItemType(TypeId, "Test type", initialState: states[0], states: states);
+    }
+
+    [Theory]
+    [InlineData("withdrawn")]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Assign_is_rejected_when_work_item_is_in_a_terminal_state(string stateId)
+    {
+        var type = BuildTypeWithTerminalStates();
+        var workItem = await SeedAsync(stateId: stateId);
+
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+        Assert.Contains(stateId, result.Message);
+        // RA-358: the message is rendered verbatim to the user, so it must
+        // never carry the system-generated work item id.
+        Assert.DoesNotContain(workItem.Id.ToString(), result.Message);
+        Assert.False(result.IsIdempotentReplay);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Null(fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+        Assert.Empty(fetched.AuditLog);
+    }
+
+    [Theory]
+    [InlineData("withdrawn")]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Unassign_is_rejected_when_work_item_is_in_a_terminal_state(string stateId)
+    {
+        var type = BuildTypeWithTerminalStates();
+        var workItem = await SeedAsync(stateId: stateId, configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).UnassignAsync(
+            workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+        Assert.Contains(stateId, result.Message);
+        Assert.DoesNotContain(workItem.Id.ToString(), result.Message);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("alice-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+        Assert.Empty(fetched.AuditLog);
+    }
+
+    [Fact]
+    public async Task Assign_terminal_check_runs_before_the_idempotent_replay_shortcut()
+    {
+        // Re-assigning a closed case to whoever already holds it must still be
+        // refused rather than answered with a misleading 200 + replay header.
+        var type = BuildTypeWithTerminalStates();
+        var workItem = await SeedAsync(stateId: "withdrawn", configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id,
+            "alice-1",
+            "Alice",
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+        Assert.False(result.IsIdempotentReplay);
+    }
+
+    [Fact]
+    public async Task Unassign_terminal_check_runs_before_the_idempotent_replay_shortcut()
+    {
+        var type = BuildTypeWithTerminalStates();
+        var workItem = await SeedAsync(stateId: "withdrawn");
+
+        var result = await BuildService(type).UnassignAsync(
+            workItem.Id,
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+        Assert.False(result.IsIdempotentReplay);
+    }
+
+    [Fact]
+    public async Task Assign_terminality_is_judged_by_the_stored_template_snapshot()
+    {
+        // Template versioning: the item was submitted under a template that
+        // calls "closed" terminal. The live registry no longer declares that
+        // state at all, but the in-flight item must still be treated as closed.
+        var snapshotType = new TestWorkItemType(
+            TypeId,
+            "Test type",
+            initialState: new WorkItemState("submitted", "Submitted"),
+            states:
+            [
+                new WorkItemState("submitted", "Submitted"),
+                new WorkItemState("closed", "Closed", IsTerminal: true),
+            ]
+        );
+        var workItem = await SeedAsync(
+            stateId: "closed",
+            configure: w => w.TemplateSnapshot = WorkItemTemplateSnapshot.Capture(snapshotType)
+        );
+
+        var result = await BuildService(BuildType()).AssignAsync(
+            workItem.Id,
+            "alice-1",
+            "Alice",
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task Assign_succeeds_when_the_current_state_is_unknown_to_the_template()
+    {
+        // Not terminal because nothing says it is — assignment stays open
+        // rather than failing closed on a state the template never declared.
+        var workItem = await SeedAsync(stateId: "some-unmodelled-state");
+
+        var result = await BuildService(BuildType()).AssignAsync(
+            workItem.Id,
+            "alice-1",
+            "Alice",
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("alice-1", (await GetAsync(workItem.Id)).AssignedToId);
+    }
+
+    /// <summary>
+    /// Unregistered type and no snapshot: terminality cannot be determined, so
+    /// the guard fails closed rather than waving the mutation through. Without
+    /// this, a legacy pre-snapshot item in a terminal state becomes freely
+    /// assignable as soon as its type is de-registered or renamed — the same
+    /// hole RA-358 closes, reached through a different door. Matches
+    /// ApplyActionAsync, which refuses this condition before its own terminal
+    /// check.
+    /// </summary>
+    private async Task<WorkItem> SeedUnresolvableTemplateItemAsync()
+    {
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = "not-registered",
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client",
+            AssignedToId = "bob-1",
+            AssignedToName = "Bob",
+            AssignedAt = InitialNow,
+            AssignedBy = "old-actor",
+        };
+        await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
+        return workItem;
+    }
+
+    [Fact]
+    public async Task Assign_is_rejected_when_no_template_can_be_resolved_for_the_work_item()
+    {
+        var workItem = await SeedUnresolvableTemplateItemAsync();
+
+        var result = await BuildService(BuildType()).AssignAsync(
+            workItem.Id,
+            "alice-1",
+            "Alice",
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+        Assert.DoesNotContain(workItem.Id.ToString(), result.Message);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("bob-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+        Assert.Empty(fetched.AuditLog);
+    }
+
+    [Fact]
+    public async Task Unassign_is_rejected_when_no_template_can_be_resolved_for_the_work_item()
+    {
+        var workItem = await SeedUnresolvableTemplateItemAsync();
+
+        var result = await BuildService(BuildType()).UnassignAsync(
+            workItem.Id,
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("bob-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+    }
+
     [Fact]
     public async Task Assign_blank_assignee_id_is_rejected()
     {
