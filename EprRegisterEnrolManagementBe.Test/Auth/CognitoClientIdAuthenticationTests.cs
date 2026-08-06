@@ -188,13 +188,20 @@ public class CognitoClientIdAuthenticationTests
     }
 
     [Fact]
-    public async Task Colliding_caller_client_ids_fail_startup_binding_loudly()
+    public async Task Colliding_caller_client_ids_fail_loudly_on_first_options_resolution()
     {
         // RA-345: Auth:ManagementFeClientId and Auth:BackendClientId must
         // resolve to distinct clientIds — a misconfiguration that points
         // both at the same value would let one caller's secret silently
         // overwrite the other's in the resolved ClientSecrets map
-        // (Program.cs::BuildClientSecrets/AddCallerSecret). This exercises
+        // (Program.cs::BuildClientSecrets/AddCallerSecret). NOT a startup
+        // check: ClientSecrets is bound lazily (see the comment on
+        // CognitoClientIdAuthenticationOptions.ClientSecrets binding in
+        // Program.cs), so this throws on first options resolution — the
+        // first request that hits the auth handler — not at app boot.
+        // /health is anonymous and never resolves auth options, so this
+        // misconfiguration passes health checks and looks like a green
+        // deploy right up until the first real request 500s. This exercises
         // BuildClientSecrets' binding logic via config KEYS (colon form,
         // the same form IConfiguration exposes real "__"-separated env
         // vars under — see AUTH_SHARED_SECRET:MANAGEMENT_FE below) rather

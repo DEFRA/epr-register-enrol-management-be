@@ -190,10 +190,18 @@ public class CognitoClientIdAuthenticationHandler(
             // --- Client secret lookup: the secret used to verify the
             // signature is the one registered for the clientId the caller
             // asserted (RA-345). An unrecognized clientId gets the same
-            // externally-visible failure as a bad signature — no new
-            // enumeration surface for probing which client ids are known —
-            // but is logged distinctly so operators can tell the two
-            // failure modes apart.
+            // externally-visible failure MESSAGE as a bad signature, so the
+            // response body/WWW-Authenticate header alone can't be used to
+            // probe which client ids are known — but is logged distinctly
+            // so operators can tell the two failure modes apart. This does
+            // NOT close the lookup as a timing side-channel: an unrecognized
+            // clientId returns immediately, while a known one goes on to
+            // compute an HMAC before failing, so response latency alone
+            // could in principle distinguish the two. Accepted as
+            // negligible here because the only client ids that could ever
+            // be confirmed "known" this way are the two documented public
+            // defaults (frontend, epr-register-enrol-backend) — there is
+            // nothing secret left to enumerate.
             if (!Options.ClientSecrets.TryGetValue(clientId, out var secret))
             {
                 Logger.LogWarning(
