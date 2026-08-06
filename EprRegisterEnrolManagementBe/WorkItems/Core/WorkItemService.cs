@@ -504,17 +504,22 @@ public sealed class WorkItemService : IWorkItemService
             return identityFailure;
         }
 
-        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
+        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
             return failure;
         }
 
+        // LoadAsync yields a non-null work item and template whenever it
+        // reports no failure. Bind once so the rest of the method reads
+        // without null-forgiving noise.
+        var workItem = loadedWorkItem!;
+
         // RA-372: the task list — and the completion bucket it is scored
         // against — belong to the *effective* task state, which is the item's
         // own state unless a module redirects it (re-accreditation's
         // 'updated' waypoint does). See ResolveTaskStateId.
-        var taskStateId = ResolveTaskStateId(workItem!, template!);
+        var taskStateId = ResolveTaskStateId(workItem, template!);
         var tasks = template!.GetTasksForState(taskStateId);
         var task = tasks.FirstOrDefault(t =>
             string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
@@ -523,18 +528,18 @@ public sealed class WorkItemService : IWorkItemService
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem!.StateId}'."
+                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
             );
         }
 
-        var bucket = GetCompletedBucket(workItem!, taskStateId);
+        var bucket = GetCompletedBucket(workItem, taskStateId);
         if (!bucket.Add(task.Id))
         {
             // Already completed: idempotent replay. Persist nothing, write
             // no audit entry, but tell the caller this was a no-op so they
             // can render an appropriate UI state instead of a confusing
             // "already done" error.
-            return WorkItemActionResult.IdempotentReplay(workItem!);
+            return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
         // epr-gl6: dual-write — the per-task status map is the canonical
@@ -542,7 +547,7 @@ public sealed class WorkItemService : IWorkItemService
         // CompletedTaskIdsByState is retained for one release cycle so
         // legacy readers continue to work. Keep them in lockstep.
         var completedStateId = taskStateId;
-        SetTaskStatus(workItem!, completedStateId, task.Id, WorkItemTaskStatus.Completed);
+        SetTaskStatus(workItem, completedStateId, task.Id, WorkItemTaskStatus.Completed);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.LastModifiedAt = now;
@@ -592,17 +597,17 @@ public sealed class WorkItemService : IWorkItemService
         // skipped so much as discharged — its purpose (tell the caseworker a
         // response arrived, let them act on it) has been served by the time
         // the last task goes green.
-        if (!HasIncompleteTasks(template!, workItem!, completedStateId))
+        if (!HasIncompleteTasks(template!, workItem, completedStateId))
         {
             await InvokeAllTasksCompletedHooksAsync(
-                workItem!,
+                workItem,
                 completedStateId,
                 user,
                 cancellationToken
             );
         }
 
-        return WorkItemActionResult.Success(workItem!);
+        return WorkItemActionResult.Success(workItem);
     }
 
     public async Task<WorkItemActionResult> ApplyActionAsync(
@@ -1041,15 +1046,20 @@ public sealed class WorkItemService : IWorkItemService
             return noteFailure!;
         }
 
-        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
+        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
             return failure;
         }
 
+        // LoadAsync yields a non-null work item and template whenever it
+        // reports no failure. Bind once so the rest of the method reads
+        // without null-forgiving noise.
+        var workItem = loadedWorkItem!;
+
         // RA-372: see CompleteTaskAsync — tasks are scoped to the effective
         // task state, which a module may redirect away from workItem.StateId.
-        var taskStateId = ResolveTaskStateId(workItem!, template!);
+        var taskStateId = ResolveTaskStateId(workItem, template!);
         var tasks = template!.GetTasksForState(taskStateId);
         var task = tasks.FirstOrDefault(t =>
             string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
@@ -1060,7 +1070,7 @@ public sealed class WorkItemService : IWorkItemService
             // unchanged, no note appended, no audit entries written.
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem!.StateId}'."
+                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
             );
         }
 
@@ -1146,7 +1156,7 @@ public sealed class WorkItemService : IWorkItemService
             DescribeUser(user)
         );
 
-        if (taskNewlyCompleted && !HasIncompleteTasks(template, workItem!, completedStateId))
+        if (taskNewlyCompleted && !HasIncompleteTasks(template, workItem, completedStateId))
         {
             await InvokeAllTasksCompletedHooksAsync(
                 workItem,
@@ -1172,15 +1182,20 @@ public sealed class WorkItemService : IWorkItemService
             return identityFailure;
         }
 
-        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
+        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
             return failure;
         }
 
+        // LoadAsync yields a non-null work item and template whenever it
+        // reports no failure. Bind once so the rest of the method reads
+        // without null-forgiving noise.
+        var workItem = loadedWorkItem!;
+
         // RA-372: see CompleteTaskAsync — tasks are scoped to the effective
         // task state, which a module may redirect away from workItem.StateId.
-        var taskStateId = ResolveTaskStateId(workItem!, template!);
+        var taskStateId = ResolveTaskStateId(workItem, template!);
         var tasks = template!.GetTasksForState(taskStateId);
         var task = tasks.FirstOrDefault(t =>
             string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
@@ -1189,11 +1204,11 @@ public sealed class WorkItemService : IWorkItemService
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem!.StateId}'."
+                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
             );
         }
 
-        var currentStatus = GetCurrentTaskStatus(workItem!, taskStateId, task.Id);
+        var currentStatus = GetCurrentTaskStatus(workItem, taskStateId, task.Id);
         if (currentStatus == status)
         {
             // Idempotent no-op: framework rule is that no-ops do not write

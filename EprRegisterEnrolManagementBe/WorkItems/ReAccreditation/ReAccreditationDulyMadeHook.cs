@@ -80,15 +80,28 @@ internal sealed class ReAccreditationDulyMadeHook(
         // leaves every consumer seeing only transitions it already knows:
         //   updated →(continue-review-during-duly-making) submitted
         //           →(duly-make) duly-made
-        if (
-            string.Equals(
-                workItem.StateId,
-                ReAccreditationUpdatedOrigin.StateId,
-                StringComparison.OrdinalIgnoreCase
-            )
-        )
+        //
+        // Recorded in memory and committed by the single ReplaceAsync below,
+        // NOT as its own persisted step. That is a hard constraint, not a
+        // style choice: this method already holds a loaded WorkItem and
+        // ReplaceAsync is guarded by an optimistic-concurrency check on
+        // WorkItem.Version. Any out-of-band write between our load and our
+        // save moves the stored version on and makes our save throw
+        // WorkItemConcurrencyException — and the status push below writes one,
+        // because IWorkItemAuditAppender.AppendAsync re-reads and replaces the
+        // document to record the push outcome. Persisting the discharge
+        // separately so it could be pushed separately therefore left the
+        // application stranded in 'submitted' with every task complete and the
+        // caseworker looking at a 500. Everything that mutates this instance
+        // must land in one write, before any push.
+        var dischargedWaypoint = string.Equals(
+            workItem.StateId,
+            ReAccreditationUpdatedOrigin.StateId,
+            StringComparison.OrdinalIgnoreCase
+        );
+        if (dischargedWaypoint)
         {
-            await DischargeUpdatedWaypointAsync(workItem, user, now, cancellationToken);
+            DischargeUpdatedWaypoint(workItem, user, now);
         }
 
         var fromStateId = workItem.StateId;
@@ -138,9 +151,13 @@ internal sealed class ReAccreditationDulyMadeHook(
 
         logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) auto-transitioned submitted→duly-made "
-                + "after all submitted-state tasks were completed.",
+                + "after all submitted-state tasks were completed"
+                + "{WaypointDischarge}.",
             workItem.Id,
-            workItem.TypeId
+            workItem.TypeId,
+            dischargedWaypoint
+                ? ", having first left the 'updated' waypoint via continue-review-during-duly-making"
+                : string.Empty
         );
 
         await SendDulyMadeNotificationAsync(workItem, user, cancellationToken);
@@ -162,16 +179,29 @@ internal sealed class ReAccreditationDulyMadeHook(
     /// resolves the origin through the very same transition and abstains when
     /// it is absent — so this cannot invent an edge the template lacks.
     ///
-    /// Persisted and pushed on its own, before the duly-made mutation, because
+    /// Mutates in memory only. The caller commits this together with the
+    /// duly-made transition in a single <see cref="IWorkItemPersistence.ReplaceAsync"/>
+    /// — see the concurrency note at the call site for why a separate write
+    /// here is not an option.
+    ///
+    /// A consequence worth naming: this transition is therefore not pushed to
+    /// the operator backend on its own.
     /// <see cref="ReAccreditationStatusPushHook"/> reads the destination state
-    /// off <see cref="WorkItem.StateId"/> at push time; pushing afterwards
-    /// would report this transition as ending in <c>duly-made</c>.
+    /// off <see cref="WorkItem.StateId"/> at push time, and the push must
+    /// happen after the save, by which point the item is already
+    /// <c>duly-made</c> — so pushing this separately could only report it as
+    /// ending somewhere it did not. The operator backend instead sees the one
+    /// push it can act on, <c>duly-make (submitted → duly-made)</c>, which is
+    /// a declared pair. Nothing is lost that it could use: <c>submitted</c>
+    /// here is a transient waypoint discharge that exists for the duration of
+    /// this method, not a stage of the application anyone can observe. The
+    /// full two-step path stays visible in the audit log, which is the
+    /// regulator-facing record.
     /// </summary>
-    private async Task DischargeUpdatedWaypointAsync(
+    private static void DischargeUpdatedWaypoint(
         WorkItem workItem,
         ClaimsPrincipal user,
-        DateTime now,
-        CancellationToken cancellationToken
+        DateTime now
     )
     {
         const string ContinueReviewActionId = "continue-review-during-duly-making";
@@ -198,24 +228,6 @@ internal sealed class ReAccreditationDulyMadeHook(
                 CreatedBy = user.FindFirstValue("user:id"),
                 CreatedByName = user.FindFirstValue("user:name"),
             }
-        );
-
-        await persistence.ReplaceAsync(workItem, cancellationToken);
-
-        await statusPushHook.OnActionAppliedAsync(
-            workItem,
-            ContinueReviewActionId,
-            fromStateId,
-            user,
-            cancellationToken
-        );
-
-        logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) left the 'updated' waypoint via {ActionId} "
-                + "after its duly-making tasks were completed during a query response.",
-            workItem.Id,
-            workItem.TypeId,
-            ContinueReviewActionId
         );
     }
 

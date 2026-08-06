@@ -298,11 +298,13 @@ public class ReAccreditationUpdatedTasksTests
         Assert.DoesNotContain(applied, e => e.From == "updated" && e.To == "duly-made");
 
         // The from-state that goes on the wire to the operator backend is
-        // 'submitted', never the unmodelled 'updated'.
-        Assert.Equal(
-            [("continue-review-during-duly-making", "updated"), ("duly-make", "submitted")],
-            harness.Pushes
-        );
+        // 'submitted', never the unmodelled 'updated'. Exactly one push: the
+        // waypoint discharge shares the duly-made save — it cannot have a save
+        // of its own, see ReAccreditationUpdatedWaypointPersistenceTests — and
+        // the push necessarily runs after that save, by which point the item is
+        // already duly-made, so a separate discharge push could only misreport
+        // where it ended.
+        Assert.Equal([("duly-make", "submitted")], harness.Pushes);
 
         // A caseworker who presses Continue review after the auto-advance is
         // not punished for it: the item has already reached a valid continue
