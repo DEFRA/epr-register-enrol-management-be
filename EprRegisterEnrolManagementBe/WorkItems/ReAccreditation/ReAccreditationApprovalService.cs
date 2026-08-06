@@ -21,6 +21,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   readable by the caller, and is in <c>assessment-in-progress</c>.
 ///   RA-323: any authenticated caseworker may approve — there is no
 ///   separate decision-maker role.</item>
+///   <item>RA-346: refuses, before any side effect, unless every task
+///   declared for <c>awaiting-decision</c> is complete. Because
+///   <c>approve</c> is not a registered <see cref="WorkItemTransition"/>
+///   it never met the engine's
+///   <see cref="WorkItemTransition.RequiresAllTasksComplete"/> gate, so
+///   this service applies the identical rule via
+///   <see cref="WorkItemEngineRules"/> and returns the identical
+///   <see cref="WorkItemActionFailureCode.IncompleteTasks"/> failure.</item>
 ///   <item>Stamps a fresh accreditation id, today's date as the
 ///   <c>AccreditationStartDate</c>, and a non-null
 ///   <see cref="SlaClock.StoppedAt"/> on the payload.</item>
@@ -43,6 +51,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationApprovalService(
     IWorkItemPersistence persistence,
+    IWorkItemRegistry registry,
     IAccreditationIdGenerator accreditationIdGenerator,
     IBackgroundTaskQueue backgroundTaskQueue,
     IEnumerable<IWorkItemPostActionHook> postActionHooks,
@@ -132,6 +141,36 @@ internal sealed class ReAccreditationApprovalService(
                     WorkItemActionFailureCode.InvalidTransition,
                     $"Action '{ActionId}' moves work items from '{FromStateId}', " +
                     $"but {workItemId} is in '{workItem.StateId}'.");
+            }
+
+            // RA-346: 'approve' is not a registered WorkItemTransition (see the
+            // comment in ReAccreditationType.Transitions), so it never passed
+            // through the generic engine's RequiresAllTasksComplete gate — a
+            // caseworker could approve a determination with the
+            // 'record-decision-rationale' task still outstanding. Enforce the
+            // very same rule here, against the same resolved template, and
+            // return the identical IncompleteTasks failure the engine produces
+            // for reject/submit-for-decision. Placed before any side effect so
+            // a rejected approval issues no accreditation id, stops no SLA
+            // clock, queues no publishing job, changes no state and writes no
+            // audit entry.
+            var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
+            if (template is null)
+            {
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.UnknownAction,
+                    $"Work item {workItemId} references unregistered type '{workItem.TypeId}' " +
+                    "and has no stored template snapshot.");
+            }
+
+            if (WorkItemEngineRules.RequireAllTasksComplete(template, workItem, ActionId)
+                is { } incompleteTasksFailure)
+            {
+                logger.LogInformation(
+                    "Approval of re-accreditation work item {WorkItemId} refused: " +
+                    "state {StateId} still has incomplete tasks.",
+                    workItem.Id, workItem.StateId);
+                return incompleteTasksFailure;
             }
 
             var now = _timeProvider.GetUtcNow();

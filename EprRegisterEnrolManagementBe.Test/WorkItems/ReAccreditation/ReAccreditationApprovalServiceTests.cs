@@ -45,14 +45,21 @@ public class ReAccreditationApprovalServiceTests
             new Claim(ClaimTypes.Role, "reaccreditation-decision-maker")
         ], "test"));
 
+    /// <summary>
+    /// Build a re-accreditation work item. RA-346: every task declared for
+    /// <paramref name="stateId"/> is marked complete by default, because
+    /// approval now requires it — pass <c>completeStateTasks: false</c> to
+    /// exercise the tasks-incomplete gate.
+    /// </summary>
     private static WorkItem BuildWorkItem(
         string stateId = "awaiting-decision",
         string? submittedBy = OwnerClientId,
         BsonDocument? payload = null,
-        string typeId = ReAccreditationType.Id)
+        string typeId = ReAccreditationType.Id,
+        bool completeStateTasks = true)
     {
         var type = new ReAccreditationType();
-        return new WorkItem
+        var workItem = new WorkItem
         {
             TypeId = typeId,
             StateId = stateId,
@@ -65,6 +72,19 @@ public class ReAccreditationApprovalServiceTests
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
             TemplateVersion = type.TemplateVersion
         };
+
+        if (completeStateTasks)
+        {
+            foreach (var task in type.GetTasksForState(stateId))
+            {
+                workItem.TaskStatusesByState.TryAdd(
+                    stateId,
+                    new Dictionary<string, WorkItemTaskStatus>(StringComparer.OrdinalIgnoreCase));
+                workItem.TaskStatusesByState[stateId][task.Id] = WorkItemTaskStatus.Completed;
+            }
+        }
+
+        return workItem;
     }
 
     private sealed record Sut(
@@ -78,7 +98,8 @@ public class ReAccreditationApprovalServiceTests
     private static Sut Build(
         string accreditationId = "ACC-2025-A-DEADBEEF",
         int currentYear = 2025,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        bool registerType = true)
     {
         var persistence = Substitute.For<IWorkItemPersistence>();
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
@@ -91,6 +112,7 @@ public class ReAccreditationApprovalServiceTests
 
         var sut = new ReAccreditationApprovalService(
             persistence,
+            new WorkItemRegistry(registerType ? [new ReAccreditationType()] : []),
             idGenerator,
             queue,
             hooks,
@@ -99,6 +121,209 @@ public class ReAccreditationApprovalServiceTests
             time);
 
         return new Sut(sut, persistence, idGenerator, queue, hooks, time);
+    }
+
+    // ──────────────── RA-346: awaiting-decision task gate ────────────────
+
+    /// <summary>
+    /// RA-346 AC2 root cause: 'approve' is not a registered
+    /// <see cref="WorkItemTransition"/>, so it bypassed the engine's
+    /// RequiresAllTasksComplete gate entirely and a caseworker could approve
+    /// a determination with 'record-decision-rationale' still pending. The
+    /// refusal must use the framework's IncompleteTasks failure verbatim.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_refuses_when_awaiting_decision_task_is_incomplete()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(completeStateTasks: false);
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
+        Assert.Equal(
+            "Action 'approve' requires every task for state 'awaiting-decision' to be complete first.",
+            result.Message);
+    }
+
+    /// <summary>
+    /// RA-346: the gate runs before every side effect, so a refused approval
+    /// mints no accreditation id, stops no SLA clock, queues no publishing
+    /// job, fires no post-action hook, changes no state and — per the
+    /// framework rule that rejections are not auditable events — writes no
+    /// audit entry and no document.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_performs_no_side_effects_when_tasks_are_incomplete()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(completeStateTasks: false);
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.Equal("awaiting-decision", workItem.StateId);
+        Assert.Empty(workItem.AuditLog);
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        Assert.Null(payload.AccreditationId);
+        Assert.Null(payload.AccreditationStartDate);
+        Assert.Null(payload.SlaClock?.StoppedAt);
+
+        await sut.IdGenerator.DidNotReceiveWithAnyArgs()
+            .GenerateAsync(default!, default, default);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await sut.Hooks[0].DidNotReceiveWithAnyArgs()
+            .OnActionAppliedAsync(default!, default!, default!, default!, default);
+    }
+
+    /// <summary>
+    /// RA-346: a task explicitly parked in a non-complete status is just as
+    /// blocking as one that was never started — the gate asserts
+    /// "Completed", not "touched".
+    /// </summary>
+    [Theory]
+    [InlineData(WorkItemTaskStatus.NotStarted)]
+    [InlineData(WorkItemTaskStatus.InProgress)]
+    [InlineData(WorkItemTaskStatus.Blocked)]
+    public async Task ApproveAsync_refuses_for_any_non_completed_task_status(
+        WorkItemTaskStatus status)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(completeStateTasks: false);
+        workItem.TaskStatusesByState["awaiting-decision"] =
+            new Dictionary<string, WorkItemTaskStatus>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["record-decision-rationale"] = status
+            };
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
+    }
+
+    /// <summary>
+    /// RA-346: legacy documents record completion only in the
+    /// CompletedTaskIdsByState bucket (no per-task status map). The gate
+    /// reuses the engine's reader, so those still approve rather than being
+    /// wrongly blocked.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_accepts_legacy_completed_task_bucket()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(completeStateTasks: false);
+        workItem.CompletedTaskIdsByState["awaiting-decision"] =
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "record-decision-rationale" };
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("approved", workItem.StateId);
+    }
+
+    /// <summary>
+    /// RA-346: a legacy work item with no stored snapshot falls back to the
+    /// live registered type, exactly as the engine does.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_falls_back_to_the_registered_type_when_no_snapshot_is_stored()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        workItem.TemplateSnapshot = null;
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("approved", workItem.StateId);
+    }
+
+    /// <summary>
+    /// RA-346: the stored snapshot — not the live registered type — decides
+    /// which tasks gate approval. This is what makes the "no TemplateVersion
+    /// bump" decision safe: an in-flight item snapshotted under an older
+    /// template is judged against the task list it was submitted with.
+    ///
+    /// Deliberately constructed so the two disagree: the snapshot declares an
+    /// awaiting-decision task that today's ReAccreditationType does not, and
+    /// the item completes only the live type's task. An inverted
+    /// ResolveTemplate would approve; reading the snapshot must refuse.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_gates_on_the_stored_snapshot_not_the_live_type()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        workItem.TemplateSnapshot = WorkItemTemplateSnapshot.Capture(
+            new StubType("awaiting-decision", "record-decision-rationale", "second-approval"));
+
+        // Only the task the live type knows about is complete; the extra task
+        // that exists solely in the snapshot is still outstanding.
+        workItem.TaskStatusesByState["awaiting-decision"] =
+            new Dictionary<string, WorkItemTaskStatus>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["record-decision-rationale"] = WorkItemTaskStatus.Completed
+            };
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
+        Assert.Equal("awaiting-decision", workItem.StateId);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    /// <summary>
+    /// Minimal type used only to capture a snapshot whose awaiting-decision
+    /// task list deliberately differs from the live ReAccreditationType.
+    /// </summary>
+    private sealed class StubType(string stateId, params string[] taskIds) : IWorkItemType
+    {
+        public string TypeId => ReAccreditationType.Id;
+        public string DisplayName => "Re-accreditation (stub)";
+        public string TemplateVersion => "stub-v1";
+        public WorkItemState InitialState => new(stateId, stateId);
+        public IReadOnlyCollection<WorkItemState> States { get; } = [new(stateId, stateId)];
+        public IReadOnlyCollection<WorkItemTransition> Transitions { get; } = [];
+
+        public IReadOnlyCollection<WorkItemTask> GetTasksForState(string id) =>
+            string.Equals(id, stateId, StringComparison.OrdinalIgnoreCase)
+                ? taskIds.Select(t => new WorkItemTask(t, t)).ToArray()
+                : [];
+    }
+
+    /// <summary>
+    /// RA-346: with neither a snapshot nor a registered type there is no
+    /// template to judge tasks against. Refuse rather than approve blind.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_refuses_when_no_template_can_be_resolved()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build(registerType: false);
+        var workItem = BuildWorkItem();
+        workItem.TemplateSnapshot = null;
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+        Assert.Contains("has no stored template snapshot", result.Message);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
     }
 
     // ─────────────────────────── happy path ───────────────────────────

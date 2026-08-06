@@ -662,20 +662,22 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
+// RA-346 + RA-372: one shared gate, asked about the checklist the
+        // caseworker is actually working. For nearly every item that is its
+        // own state; for one parked in a waypoint it is the redirected state.
         var gatedTaskStateId = ResolveTaskStateId(workItem, template);
         if (
             transition.RequiresAllTasksComplete
-            && HasIncompleteTasks(template, workItem, gatedTaskStateId)
+            && WorkItemEngineRules.RequireAllTasksComplete(
+                template,
+                workItem,
+                actionId,
+                gatedTaskStateId
+            ) is
+                { } incompleteTasksFailure
         )
         {
-            // RA-372: name the state whose checklist was actually enforced,
-            // which is not always the state the item is in. Reporting
-            // workItem.StateId here would send a caseworker looking for
-            // outstanding tasks on a state that may declare none.
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.IncompleteTasks,
-                $"Action '{actionId}' requires every task for state '{gatedTaskStateId}' to be complete first."
-            );
+            return incompleteTasksFailure;
         }
 
         var previousState = workItem.StateId;
@@ -1307,7 +1309,7 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        // RA-372: project the tasks of the *effective* task state. For nearly
+// RA-372: project the tasks of the *effective* task state. For nearly
         // every item that is its own state; for a re-accreditation item
         // parked in the 'updated' waypoint it is the state the query was
         // raised from, so the regulator sees that state's checklist —
@@ -1317,30 +1319,22 @@ public sealed class WorkItemService : IWorkItemService
         // free.
         var taskStateId = ResolveTaskStateId(workItem, template);
 
-        var completed = workItem.CompletedTaskIdsByState.TryGetValue(taskStateId, out var done)
-            ? done
-            : new HashSet<string>();
-
-        // epr-gl6: per-task status map is the canonical source of truth
-        // when present; fall back to the legacy CompletedTaskIdsByState
-        // bucket for documents written before the map existed (Completed
-        // when in the bucket, NotStarted otherwise).
-        var statuses = workItem.TaskStatusesByState.TryGetValue(taskStateId, out var stateStatuses)
-            ? stateStatuses
-            : null;
-
+        // RA-346: read task status through the shared rules rather than
+        // re-implementing the canonical-map-then-legacy-bucket fallback here.
+        // This projection is what the management-fe gates its Approve CTA on,
+        // so it must agree with the engine and with the bespoke module
+        // services by construction, not by two copies happening to match.
         var taskProgress = template
             .GetTasksForState(taskStateId)
             .Select(task =>
             {
-                var status =
-                    statuses is not null && statuses.TryGetValue(task.Id, out var explicitStatus)
-                        ? explicitStatus
-                        : (
-                            completed.Contains(task.Id)
-                                ? WorkItemTaskStatus.Completed
-                                : WorkItemTaskStatus.NotStarted
-                        );
+                // RA-372: keyed on taskStateId, not workItem.StateId — status
+                // must come from the same state the task list did.
+                var status = WorkItemEngineRules.GetCurrentTaskStatus(
+                    workItem,
+                    taskStateId,
+                    task.Id
+                );
                 return new WorkItemTaskProgress(
                     task.Id,
                     task.DisplayName,
@@ -1351,6 +1345,18 @@ public sealed class WorkItemService : IWorkItemService
             .ToList();
 
         var isTerminal = TerminalStates.Find(template, workItem.StateId) is not null;
+
+// RA-346: same gate the engine enforces in ApplyActionAsync, from the
+        // same helper — an action must never be offered that applying would
+        // reject. Hoisted out of the predicate so it is evaluated once rather
+        // than per candidate transition. RA-372: assessed against the
+        // effective task state so it asks exactly the question
+        // ApplyActionAsync will.
+        var allTasksComplete = !WorkItemEngineRules.HasIncompleteTasks(
+            template,
+            workItem,
+            taskStateId
+        );
 
         // RA-372: available actions are matched on the item's ACTUAL state,
         // never the effective task state. Which tasks are outstanding and
@@ -1368,7 +1374,7 @@ public sealed class WorkItemService : IWorkItemService
                         StringComparison.OrdinalIgnoreCase
                     )
                 )
-                .Where(t => !t.RequiresAllTasksComplete || taskProgress.All(p => p.IsComplete))
+                .Where(t => !t.RequiresAllTasksComplete || allTasksComplete)
                 .ToList();
 
         return new WorkItemEngineProjection(
@@ -1416,20 +1422,12 @@ public sealed class WorkItemService : IWorkItemService
     }
 
     /// <summary>
-    /// Pick the template the engine should reason about for a work item. The
-    /// snapshot stored on the work item wins so that historical items keep
-    /// their original task list and action set even if the live type has
-    /// since changed; the live type is used only as a fallback for legacy
-    /// items submitted before snapshots existed.
+    /// Pick the template the engine should reason about for a work item.
+    /// Delegates to <see cref="WorkItemEngineRules.ResolveTemplate"/> so
+    /// bespoke module services resolve the same template the engine does.
     /// </summary>
-    private IWorkItemTemplate? ResolveTemplate(WorkItem workItem)
-    {
-        if (workItem.TemplateSnapshot is not null)
-        {
-            return workItem.TemplateSnapshot;
-        }
-        return _registry.Find(workItem.TypeId);
-    }
+    private IWorkItemTemplate? ResolveTemplate(WorkItem workItem) =>
+        WorkItemEngineRules.ResolveTemplate(workItem, _registry);
 
     /// <summary>
     /// RA-358: refuse an envelope mutation on a closed case. Assignment and
@@ -1540,24 +1538,7 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem workItem,
         string stateId,
         string taskId
-    )
-    {
-        if (
-            workItem.TaskStatusesByState.TryGetValue(stateId, out var inner)
-            && inner.TryGetValue(taskId, out var explicitStatus)
-        )
-        {
-            return explicitStatus;
-        }
-        if (
-            workItem.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket)
-            && bucket.Contains(taskId)
-        )
-        {
-            return WorkItemTaskStatus.Completed;
-        }
-        return WorkItemTaskStatus.NotStarted;
-    }
+    ) => WorkItemEngineRules.GetCurrentTaskStatus(workItem, stateId, taskId);
 
     /// <summary>
     /// Apply a status change to both <see cref="WorkItem.TaskStatusesByState"/>
@@ -1674,23 +1655,7 @@ public sealed class WorkItemService : IWorkItemService
         IWorkItemTemplate template,
         WorkItem workItem,
         string taskStateId
-    )
-    {
-        var required = template.GetTasksForState(taskStateId);
-        if (required.Count == 0)
-        {
-            return false;
-        }
-        // epr-08y: TaskStatusesByState is the canonical source of truth
-        // (epr-gl6 / WorkItem.cs:99-110). Consult it first and only fall
-        // back to the legacy CompletedTaskIdsByState bucket when no
-        // per-task status is recorded for a task. Reading only the legacy
-        // bucket would let a v2 module that writes only to the canonical
-        // map silently transition past incomplete tasks.
-        return required.Any(t =>
-            GetCurrentTaskStatus(workItem, taskStateId, t.Id) != WorkItemTaskStatus.Completed
-        );
-    }
+    ) => WorkItemEngineRules.HasIncompleteTasks(template, workItem, taskStateId);
 
     /// <summary>
     /// Append a single entry to the work item's audit log (RA-97). Called

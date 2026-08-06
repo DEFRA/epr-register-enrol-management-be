@@ -1,9 +1,12 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.Utils.Background;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -412,6 +415,110 @@ public class ReAccreditationUpdatedTasksTests
     {
         Assert.Equal("v10", new ReAccreditationType().TemplateVersion);
         Assert.Empty(new ReAccreditationType().GetTasksForState("updated"));
+    }
+
+    // ----------------- RA-346 approve gating x RA-372 redirect -----------------
+
+    /// <summary>
+    /// Approve is refused outright while the item is in <c>updated</c> — and
+    /// refused for being in the wrong <em>state</em>, not waved through.
+    /// RA-346's gate is satisfied vacuously by any state declaring no tasks,
+    /// and <c>updated</c> declares none, so if that state check ever moved
+    /// after the task check this would silently start approving applications
+    /// mid-query. This pins the ordering.
+    /// </summary>
+    [Fact]
+    public async Task An_updated_item_cannot_be_approved_even_though_updated_declares_no_tasks()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = BuildUpdatedWorkItem("resume-during-decision");
+        var (_, persistence) = BuildEngine(workItem);
+
+        var result = await BuildApprovalService(persistence).ApproveAsync(workItem.Id, s_user, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        Assert.Equal("updated", workItem.StateId);
+    }
+
+    /// <summary>
+    /// The combined happy path, and the point of RA-372 for this origin: the
+    /// regulator completes <c>record-decision-rationale</c> while the item is
+    /// in <c>updated</c>, continue-review carries it back to
+    /// <c>awaiting-decision</c>, and RA-346's approve gate is satisfied by the
+    /// work done in the waypoint.
+    /// </summary>
+    [Fact]
+    public async Task Work_done_in_updated_satisfies_the_approve_gate_after_continue_review()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = BuildUpdatedWorkItem("resume-during-decision");
+        var (engine, persistence) = BuildEngine(workItem);
+        var continueReview = new ReAccreditationContinueReviewService(
+            persistence,
+            engine,
+            NullLogger<ReAccreditationContinueReviewService>.Instance
+        );
+
+        Assert.True(
+            (
+                await engine.CompleteTaskAsync(workItem.Id, "record-decision-rationale", s_user, ct)
+            ).IsSuccess
+        );
+        Assert.True((await continueReview.ContinueReviewAsync(workItem.Id, s_user, ct)).IsSuccess);
+        Assert.Equal("awaiting-decision", workItem.StateId);
+
+        var result = await BuildApprovalService(persistence).ApproveAsync(workItem.Id, s_user, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("approved", workItem.StateId);
+    }
+
+    /// <summary>
+    /// The inverse: RA-372 must not weaken RA-346. An item back in
+    /// <c>awaiting-decision</c> with its checklist still outstanding is still
+    /// refused, with the tasks-incomplete contract intact.
+    /// </summary>
+    [Fact]
+    public async Task Approve_is_still_refused_when_the_decision_task_was_never_completed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = BuildUpdatedWorkItem("resume-during-decision");
+        var (engine, persistence) = BuildEngine(workItem);
+        var continueReview = new ReAccreditationContinueReviewService(
+            persistence,
+            engine,
+            NullLogger<ReAccreditationContinueReviewService>.Instance
+        );
+
+        Assert.True((await continueReview.ContinueReviewAsync(workItem.Id, s_user, ct)).IsSuccess);
+        Assert.Equal("awaiting-decision", workItem.StateId);
+
+        var result = await BuildApprovalService(persistence).ApproveAsync(workItem.Id, s_user, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
+        Assert.Contains("awaiting-decision", result.Message);
+    }
+
+    private static ReAccreditationApprovalService BuildApprovalService(
+        IWorkItemPersistence persistence
+    )
+    {
+        var idGenerator = Substitute.For<IAccreditationIdGenerator>();
+        idGenerator
+            .GenerateAsync(Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns("ACC-2027-X-TEST0000");
+
+        return new ReAccreditationApprovalService(
+            persistence,
+            new WorkItemRegistry([new ReAccreditationType()]),
+            idGenerator,
+            Substitute.For<IBackgroundTaskQueue>(),
+            [],
+            NullLogger<ReAccreditationApprovalService>.Instance,
+            Options.Create(new AccreditationConfig { CurrentYear = 2027 })
+        );
     }
 
     // ------------------------------- doubles -------------------------------
