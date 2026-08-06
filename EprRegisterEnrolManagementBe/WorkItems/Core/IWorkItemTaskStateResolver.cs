@@ -23,19 +23,38 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 ///
 /// Implementations must:
 /// <list type="bullet">
-///   <item>Return <c>null</c> when they have no opinion — including for every
-///   work item whose <see cref="WorkItem.TypeId"/> is not their own. The
-///   engine falls back to <see cref="WorkItem.StateId"/>, so a resolver that
-///   abstains is invisible.</item>
+///   <item>Declare the <see cref="TypeId"/> they belong to. The engine only
+///   consults a resolver for work items of that type, so resolvers from
+///   different modules can never compete and the outcome never depends on DI
+///   registration order.</item>
+///   <item>Return <c>null</c> when they have no opinion. The engine falls back
+///   to <see cref="WorkItem.StateId"/>, so a resolver that abstains is
+///   invisible.</item>
 ///   <item>Be pure and side-effect free. This runs on every read projection
 ///   and on every task mutation, so it must not perform I/O.</item>
-///   <item>Resolve against the supplied <paramref name="template"/> — the
-///   work item's own frozen snapshot — rather than the live type, so an
-///   in-flight item is judged by the rules it was submitted under.</item>
+///   <item>Resolve against the supplied template — the work item's own frozen
+///   snapshot — rather than the live type, so an in-flight item is judged by
+///   the rules it was submitted under.</item>
 /// </list>
+///
+/// <para><strong>Redirecting can weaken a gate.</strong>
+/// <c>RequiresAllTasksComplete</c> is satisfied vacuously by any state that
+/// declares no tasks, and the engine only checks that a resolved state id is
+/// <em>declared by the template</em> — not that it bears any relation to where
+/// the item actually is. A resolver that redirects into a task-less state
+/// therefore turns every gated transition out of the item's real state into a
+/// no-op. Redirect only to a state whose checklist you intend to be the one
+/// enforced.</para>
 /// </summary>
 public interface IWorkItemTaskStateResolver
 {
+    /// <summary>
+    /// The <see cref="WorkItem.TypeId"/> this resolver speaks for. The engine
+    /// skips it entirely for work items of any other type, so an
+    /// implementation never has to guard on type itself.
+    /// </summary>
+    string TypeId { get; }
+
     /// <summary>
     /// The id of the state whose task list applies to <paramref name="workItem"/>,
     /// or <c>null</c> to defer to <see cref="WorkItem.StateId"/>.

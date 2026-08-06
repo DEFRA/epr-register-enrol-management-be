@@ -161,7 +161,14 @@ public sealed record WorkItemEngineProjection(
     WorkItem WorkItem,
     string TemplateVersion,
     IReadOnlyCollection<WorkItemTaskProgress> Tasks,
-    IReadOnlyCollection<WorkItemTransition> AvailableActions
+    IReadOnlyCollection<WorkItemTransition> AvailableActions,
+    // RA-372: the state whose checklist Tasks actually contains. Almost always
+    // WorkItem.StateId, but a module may redirect it (see
+    // IWorkItemTaskStateResolver), and without this a consumer cannot tell
+    // that Tasks has stopped describing StateId. Defaults to null so callers
+    // constructing a projection directly are unaffected; Project always
+    // populates it.
+    string? TaskStateId = null
 );
 
 public sealed class WorkItemService : IWorkItemService
@@ -650,14 +657,19 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
+        var gatedTaskStateId = ResolveTaskStateId(workItem, template);
         if (
             transition.RequiresAllTasksComplete
-            && HasIncompleteTasks(template, workItem, ResolveTaskStateId(workItem, template))
+            && HasIncompleteTasks(template, workItem, gatedTaskStateId)
         )
         {
+            // RA-372: name the state whose checklist was actually enforced,
+            // which is not always the state the item is in. Reporting
+            // workItem.StateId here would send a caseworker looking for
+            // outstanding tasks on a state that may declare none.
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.IncompleteTasks,
-                $"Action '{actionId}' requires every task for state '{workItem.StateId}' to be complete first."
+                $"Action '{actionId}' requires every task for state '{gatedTaskStateId}' to be complete first."
             );
         }
 
@@ -1273,7 +1285,10 @@ public sealed class WorkItemService : IWorkItemService
                 workItem,
                 ResolveTemplateVersion(workItem),
                 Array.Empty<WorkItemTaskProgress>(),
-                Array.Empty<WorkItemTransition>()
+                Array.Empty<WorkItemTransition>(),
+                // No template means no resolver could have been consulted, so
+                // the empty task list describes the item's own state.
+                workItem.StateId
             );
         }
 
@@ -1345,7 +1360,8 @@ public sealed class WorkItemService : IWorkItemService
             workItem,
             template.TemplateVersion,
             taskProgress,
-            available
+            available,
+            taskStateId
         );
     }
 
@@ -1580,6 +1596,17 @@ public sealed class WorkItemService : IWorkItemService
     {
         foreach (var resolver in _taskStateResolvers)
         {
+            // Scope by type before consulting. Without this every resolver
+            // would see every item, and "first non-null wins" would make the
+            // outcome depend on module registration order — not something any
+            // contract promises.
+            if (
+                !string.Equals(resolver.TypeId, workItem.TypeId, StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                continue;
+            }
+
             string? resolved;
             try
             {

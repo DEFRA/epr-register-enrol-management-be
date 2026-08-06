@@ -40,7 +40,14 @@ public class ReAccreditationTaskStateResolverTests
                     Action = "action-applied",
                     ActionDisplayName = "Action applied",
                     CreatedAt = new DateTime(2026, 8, 1, 9, 0, 0, DateTimeKind.Utc),
-                    Details = new Dictionary<string, string?> { ["actionId"] = resumeActionId },
+                    // Mirrors what WorkItemService.ApplyActionAsync actually
+                    // writes — actionId alone is not a faithful fixture.
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["actionId"] = resumeActionId,
+                        ["fromStateId"] = "queried",
+                        ["toStateId"] = "updated",
+                    },
                 }
             );
         }
@@ -86,6 +93,8 @@ public class ReAccreditationTaskStateResolverTests
                 Details = new Dictionary<string, string?>
                 {
                     ["actionId"] = "resume-during-duly-making",
+                    ["fromStateId"] = "queried",
+                    ["toStateId"] = "updated",
                 },
             }
         );
@@ -103,11 +112,64 @@ public class ReAccreditationTaskStateResolverTests
                 Action = "note-added",
                 ActionDisplayName = "Note added",
                 CreatedAt = workItem.AuditLog[0].CreatedAt.AddHours(1),
-                Details = new Dictionary<string, string?> { ["actionId"] = "resume-during-assessment" },
+                Details = new Dictionary<string, string?>
+                {
+                    ["actionId"] = "resume-during-assessment",
+                    ["toStateId"] = "updated",
+                },
             }
         );
 
         Assert.Equal("awaiting-decision", s_resolver.ResolveTaskStateId(workItem, s_template));
+    }
+
+    /// <summary>
+    /// Recency is not causality. Only an entry that actually moved the item
+    /// <em>into</em> <c>updated</c> may decide the origin — otherwise a
+    /// synthetic <c>action-applied</c> entry stamped with the current time
+    /// (migrations write these) could win the sort and silently redirect a
+    /// regulator's task completions into the wrong state's bucket.
+    /// </summary>
+    [Fact]
+    public void Ignores_a_newer_action_applied_entry_that_did_not_lead_into_updated()
+    {
+        var workItem = BuildWorkItem("resume-during-assessment");
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
+            {
+                Action = "action-applied",
+                ActionDisplayName = "Action applied",
+                CreatedAt = workItem.AuditLog[0].CreatedAt.AddHours(1),
+                Details = new Dictionary<string, string?>
+                {
+                    ["actionId"] = "resume-during-duly-making",
+                    ["toStateId"] = "submitted",
+                },
+            }
+        );
+
+        Assert.Equal("assessment-in-progress", s_resolver.ResolveTaskStateId(workItem, s_template));
+    }
+
+    [Fact]
+    public void Abstains_when_no_action_applied_entry_led_into_updated()
+    {
+        var workItem = BuildWorkItem(resumeActionId: null);
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
+            {
+                Action = "action-applied",
+                ActionDisplayName = "Action applied",
+                CreatedAt = new DateTime(2026, 8, 1, 9, 0, 0, DateTimeKind.Utc),
+                Details = new Dictionary<string, string?>
+                {
+                    ["actionId"] = "resume-during-assessment",
+                    ["toStateId"] = "assessment-in-progress",
+                },
+            }
+        );
+
+        Assert.Null(s_resolver.ResolveTaskStateId(workItem, s_template));
     }
 
     [Fact]
@@ -120,7 +182,11 @@ public class ReAccreditationTaskStateResolverTests
                 Action = "action-applied",
                 ActionDisplayName = "Action applied",
                 CreatedAt = workItem.AuditLog[0].CreatedAt.AddHours(1),
-                Details = new Dictionary<string, string?> { ["actionId"] = null },
+                Details = new Dictionary<string, string?>
+                {
+                    ["actionId"] = null,
+                    ["toStateId"] = "updated",
+                },
             }
         );
 

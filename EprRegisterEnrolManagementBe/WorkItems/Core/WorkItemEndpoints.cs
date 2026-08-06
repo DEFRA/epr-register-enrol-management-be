@@ -727,7 +727,10 @@ public static class WorkItemEndpoints
             ComputeSlaDueDate(w.SlaClock),
             w.Payload.TryGetValue("applicationReference", out var reference) && reference.IsString
                 ? reference.AsString
-                : null
+                : null,
+            // RA-372: falls back to the item's own state so the field is
+            // always populated, even for a projection built without one.
+            projection.TaskStateId ?? w.StateId
         );
     }
 

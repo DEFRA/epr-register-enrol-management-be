@@ -27,14 +27,19 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationTaskStateResolver : IWorkItemTaskStateResolver
 {
+    public string TypeId => ReAccreditationType.Id;
+
     public string? ResolveTaskStateId(WorkItem workItem, IWorkItemTemplate template)
     {
         ArgumentNullException.ThrowIfNull(workItem);
         ArgumentNullException.ThrowIfNull(template);
 
-        // Abstain for every other type and every other state — including
+        // Abstain for every state other than the waypoint — including
         // 'queried' — so the engine falls back to the item's own state and
         // this resolver stays invisible outside the one case it exists for.
+        // The type half of this check is now redundant with the engine's own
+        // TypeId scoping, but is kept as defence in depth: this method is
+        // public and exercised directly by unit tests.
         if (!ReAccreditationUpdatedOrigin.IsUpdatedReAccreditation(workItem))
         {
             return null;

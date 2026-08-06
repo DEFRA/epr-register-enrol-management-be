@@ -60,18 +60,36 @@ internal static class ReAccreditationUpdatedOrigin
     /// <paramref name="workItem"/> out of <c>updated</c>, or <c>null</c> when
     /// it cannot be determined.
     ///
-    /// Reads the most recent generic <c>action-applied</c> audit entry. While
-    /// an item is in <c>updated</c> that entry is necessarily the
-    /// <c>resume-during-*</c> transition that put it there: the only declared
-    /// ways out of <c>updated</c> are <c>continue-review-during-*</c> and
-    /// <c>withdraw-during-updated</c>, and both leave the state, so no later
-    /// action entry can exist while the item is still here.
+    /// Reads the most recent generic <c>action-applied</c> audit entry that
+    /// actually moved the item <em>into</em> <c>updated</c>.
+    ///
+    /// The <c>toStateId</c> requirement is load-bearing, not belt-and-braces.
+    /// Recency alone is not proof of causality: entries are ordered by
+    /// <see cref="WorkItemAuditEntry.CreatedAt"/>, ties fall back to insertion
+    /// order, and code outside the engine appends synthetic
+    /// <c>action-applied</c> entries stamped with the current time — see
+    /// <see cref="ReAccreditationDulyMadeSnapshotMigration"/>. Without this
+    /// check, such an entry landing in the same tick as a genuine resume could
+    /// win the sort and mis-derive the origin.
+    ///
+    /// Pre-RA-372 a mis-derivation only picked the wrong
+    /// <c>continue-review-during-*</c> action. Since RA-372 it also decides
+    /// which per-state bucket task completions are read from and
+    /// <em>written to</em>, so a wrong answer would silently record a
+    /// regulator's work against the wrong state. Requiring the entry to name
+    /// <c>updated</c> as its destination keeps the derivation tied to the
+    /// event that actually put the item where it is.
     /// </summary>
     public static string? ResolveContinueActionId(WorkItem workItem)
     {
         var resumeActionId = workItem
             .AuditLog.Where(entry =>
                 string.Equals(entry.Action, "action-applied", StringComparison.Ordinal)
+                && string.Equals(
+                    entry.Details.GetValueOrDefault("toStateId"),
+                    StateId,
+                    StringComparison.OrdinalIgnoreCase
+                )
             )
             .OrderByDescending(entry => entry.CreatedAt)
             .Select(entry => entry.Details.GetValueOrDefault("actionId"))

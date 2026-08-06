@@ -575,13 +575,18 @@ public class WorkItemTaskStateResolverTests
 
     // ------------------------------- doubles -------------------------------
 
-    private sealed class StubResolver(string? resolved) : IWorkItemTaskStateResolver
+    private sealed class StubResolver(string? resolved, string typeId = TypeId)
+        : IWorkItemTaskStateResolver
     {
+        public string TypeId { get; } = typeId;
+
         public string? ResolveTaskStateId(WorkItem workItem, IWorkItemTemplate template) => resolved;
     }
 
     private sealed class ThrowingResolver : IWorkItemTaskStateResolver
     {
+        public string TypeId => WorkItemTaskStateResolverTests.TypeId;
+
         public string? ResolveTaskStateId(WorkItem workItem, IWorkItemTemplate template) =>
             throw new InvalidOperationException("resolver is broken");
     }

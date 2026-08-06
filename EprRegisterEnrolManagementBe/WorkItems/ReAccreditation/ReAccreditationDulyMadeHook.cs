@@ -57,8 +57,41 @@ internal sealed class ReAccreditationDulyMadeHook(
             return;
         }
 
-        var fromStateId = workItem.StateId;
         var now = timeProvider.GetUtcNow().UtcDateTime;
+
+        // RA-372: stateId is the *effective* task state and may differ from
+        // workItem.StateId. The submitted-state checklist can be worked while
+        // the application is parked in the 'updated' waypoint — an operator
+        // has answered a query that was raised during duly-making. Discharge
+        // the waypoint through its declared continue-review edge before
+        // marking the application duly made, rather than jumping straight
+        // from 'updated' to 'duly-made'.
+        //
+        // Jumping would traverse an edge ReAccreditationType does not declare:
+        // the only declared exits from 'updated' are continue-review-during-*
+        // and withdraw-during-updated. Nothing would validate it, and the
+        // resulting fromStateId ('updated') would land in the audit trail and
+        // go on the wire to the operator backend via
+        // ReAccreditationStatusPushHook — a from/to pair neither management-fe
+        // nor the journey tests model, because it is not in the template both
+        // of them mirror.
+        //
+        // Going through the declared edge keeps the state machine closed and
+        // leaves every consumer seeing only transitions it already knows:
+        //   updated →(continue-review-during-duly-making) submitted
+        //           →(duly-make) duly-made
+        if (
+            string.Equals(
+                workItem.StateId,
+                ReAccreditationUpdatedOrigin.StateId,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            await DischargeUpdatedWaypointAsync(workItem, user, now, cancellationToken);
+        }
+
+        var fromStateId = workItem.StateId;
         workItem.StateId = "duly-made";
         workItem.LastModifiedAt = now;
         workItem.SlaClock = new WorkItemSlaClock { StartedAt = now };
@@ -111,6 +144,79 @@ internal sealed class ReAccreditationDulyMadeHook(
         );
 
         await SendDulyMadeNotificationAsync(workItem, user, cancellationToken);
+    }
+
+    /// <summary>
+    /// RA-372: carry a work item out of the <c>updated</c> waypoint via its
+    /// declared <c>continue-review-during-duly-making</c> transition, so the
+    /// duly-made transition that follows starts from <c>submitted</c> — a
+    /// from-state every downstream consumer already models.
+    ///
+    /// The action id is fixed rather than derived because only one value is
+    /// reachable here: this runs when the effective task state is
+    /// <c>submitted</c> (so the query was raised during duly-making) and the
+    /// item is in <c>updated</c>, which is precisely the pairing
+    /// <c>continue-review-during-duly-making</c> describes. A snapshot old
+    /// enough to lack that transition could not have produced the effective
+    /// state in the first place — <see cref="ReAccreditationTaskStateResolver"/>
+    /// resolves the origin through the very same transition and abstains when
+    /// it is absent — so this cannot invent an edge the template lacks.
+    ///
+    /// Persisted and pushed on its own, before the duly-made mutation, because
+    /// <see cref="ReAccreditationStatusPushHook"/> reads the destination state
+    /// off <see cref="WorkItem.StateId"/> at push time; pushing afterwards
+    /// would report this transition as ending in <c>duly-made</c>.
+    /// </summary>
+    private async Task DischargeUpdatedWaypointAsync(
+        WorkItem workItem,
+        ClaimsPrincipal user,
+        DateTime now,
+        CancellationToken cancellationToken
+    )
+    {
+        const string ContinueReviewActionId = "continue-review-during-duly-making";
+
+        var fromStateId = workItem.StateId;
+        workItem.StateId = "submitted";
+        workItem.LastModifiedAt = now;
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
+            {
+                Action = "action-applied",
+                ActionDisplayName = "Action applied",
+                Details = new Dictionary<string, string?>
+                {
+                    ["actionId"] = ContinueReviewActionId,
+                    // Mirrors the DisplayName ReAccreditationType declares for
+                    // this transition, matching how the duly-make entry below
+                    // states its own display name inline.
+                    ["actionDisplayName"] = "Continue review",
+                    ["fromStateId"] = fromStateId,
+                    ["toStateId"] = workItem.StateId,
+                },
+                CreatedAt = now,
+                CreatedBy = user.FindFirstValue("user:id"),
+                CreatedByName = user.FindFirstValue("user:name"),
+            }
+        );
+
+        await persistence.ReplaceAsync(workItem, cancellationToken);
+
+        await statusPushHook.OnActionAppliedAsync(
+            workItem,
+            ContinueReviewActionId,
+            fromStateId,
+            user,
+            cancellationToken
+        );
+
+        logger.LogInformation(
+            "Work item {WorkItemId} ({TypeId}) left the 'updated' waypoint via {ActionId} "
+                + "after its duly-making tasks were completed during a query response.",
+            workItem.Id,
+            workItem.TypeId,
+            ContinueReviewActionId
+        );
     }
 
     private async Task SendDulyMadeNotificationAsync(

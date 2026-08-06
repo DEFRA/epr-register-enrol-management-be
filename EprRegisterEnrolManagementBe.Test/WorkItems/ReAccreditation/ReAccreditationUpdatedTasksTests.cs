@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -259,15 +261,62 @@ public class ReAccreditationUpdatedTasksTests
             "resume-during-duly-making",
             completed: new() { ["submitted"] = ["verify-organisation-details"] }
         );
-        var hook = new RecordingPostTaskHook();
-        var (engine, _) = BuildEngine(workItem, hook);
+        var harness = new DulyMadeHarness(workItem);
+        var (engine, persistence) = BuildEngine(workItem, harness.Hook);
 
         await engine.CompleteTaskAsync(workItem.Id, "confirm-application-completeness", s_user, ct);
 
-        // The hook is told which checklist was finished, so the real
-        // ReAccreditationDulyMadeHook (which keys off stateId == "submitted")
-        // fires rather than silently skipping.
-        Assert.Equal(["submitted"], hook.StateIds);
+        // The real ReAccreditationDulyMadeHook ran end to end, not a stand-in:
+        // the application is duly made and its SLA clock has started.
+        Assert.Equal("duly-made", workItem.StateId);
+        Assert.NotNull(workItem.SlaClock);
+
+        // Every edge the item traversed is one the template declares. The
+        // waypoint was discharged via continue-review-during-duly-making
+        // rather than jumping updated → duly-made — an edge
+        // ReAccreditationType does not declare and which neither
+        // management-fe nor the journey tests model.
+        var applied = workItem
+            .AuditLog.Where(e => e.Action == "action-applied")
+            .Select(e =>
+                (
+                    ActionId: e.Details["actionId"],
+                    From: e.Details["fromStateId"],
+                    To: e.Details["toStateId"]
+                )
+            )
+            .ToList();
+
+        Assert.Equal(
+            [
+                ("resume-during-duly-making", "queried", "updated"),
+                ("continue-review-during-duly-making", "updated", "submitted"),
+                ("duly-make", "submitted", "duly-made"),
+            ],
+            applied
+        );
+        Assert.DoesNotContain(applied, e => e.From == "updated" && e.To == "duly-made");
+
+        // The from-state that goes on the wire to the operator backend is
+        // 'submitted', never the unmodelled 'updated'.
+        Assert.Equal(
+            [("continue-review-during-duly-making", "updated"), ("duly-make", "submitted")],
+            harness.Pushes
+        );
+
+        // A caseworker who presses Continue review after the auto-advance is
+        // not punished for it: the item has already reached a valid continue
+        // target, so this is an idempotent replay rather than an error.
+        var continueReview = new ReAccreditationContinueReviewService(
+            persistence,
+            engine,
+            NullLogger<ReAccreditationContinueReviewService>.Instance
+        );
+        var replay = await continueReview.ContinueReviewAsync(workItem.Id, s_user, ct);
+
+        Assert.True(replay.IsSuccess);
+        Assert.True(replay.IsIdempotentReplay);
+        Assert.Equal("duly-made", workItem.StateId);
     }
 
     /// <summary>
@@ -364,6 +413,72 @@ public class ReAccreditationUpdatedTasksTests
     }
 
     // ------------------------------- doubles -------------------------------
+
+    /// <summary>
+    /// Wires up the genuine <see cref="ReAccreditationDulyMadeHook"/> — real
+    /// status-push hook included — so the auto-advance is proved by the code
+    /// that actually runs in production rather than by a stand-in. Records
+    /// what reached the operator-backend push adapter, since the from-state on
+    /// that wire is the thing the undeclared edge would have corrupted.
+    /// </summary>
+    private sealed class DulyMadeHarness
+    {
+        public List<(string ActionId, string FromStateId)> Pushes { get; } = [];
+
+        public ReAccreditationDulyMadeHook Hook { get; }
+
+        public DulyMadeHarness(WorkItem workItem)
+        {
+            var persistence = Substitute.For<IWorkItemPersistence>();
+            persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+            var notifyClient = Substitute.For<INotifyClient>();
+            notifyClient
+                .SendEmailAsync(
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<Dictionary<string, string>>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<CancellationToken>()
+                )
+                .Returns(NotifySendResult.Success("msg-id"));
+
+            var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
+            pushAdapter
+                .PushStatusChangedAsync(
+                    Arg.Any<Guid>(),
+                    Arg.Any<Guid>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<DateTime>(),
+                    Arg.Any<CancellationToken>()
+                )
+                .Returns(call =>
+                {
+                    Pushes.Add((call.ArgAt<string>(5), call.ArgAt<string>(2)));
+                    return OperatorBackendPushResult.Skipped("test");
+                });
+
+            var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+
+            Hook = new ReAccreditationDulyMadeHook(
+                persistence,
+                notifyClient,
+                auditAppender,
+                new ReAccreditationStatusPushHook(
+                    pushAdapter,
+                    auditAppender,
+                    NullLogger<ReAccreditationStatusPushHook>.Instance
+                ),
+                TimeProvider.System,
+                NullLogger<ReAccreditationDulyMadeHook>.Instance
+            );
+        }
+    }
 
     private sealed class RecordingPostTaskHook : IWorkItemPostTaskHook
     {
