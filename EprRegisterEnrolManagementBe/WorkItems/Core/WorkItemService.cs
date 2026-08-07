@@ -1281,6 +1281,18 @@ public sealed class WorkItemService : IWorkItemService
                         StringComparison.OrdinalIgnoreCase
                     )
                 )
+                // RA-364: never offer an action the generic action endpoint
+                // would reject. Transitions declared CallerInvocable: false
+                // are reachable only through a module's own bespoke service
+                // resolving them server-side (re-accreditation's
+                // resume-during-* / continue-review-during-*), so listing
+                // them here advertised buttons that always failed — and,
+                // because each of those four shares a DisplayName and a
+                // FromStateId, rendered as four identical dead controls.
+                // This mirrors the guard in WorkItemEndpoints.Action; the
+                // bespoke services are unaffected because they call
+                // ApplyActionAsync directly and never consult AvailableActions.
+                .Where(t => t.CallerInvocable)
                 .Where(t => !t.RequiresAllTasksComplete || allTasksComplete)
                 .ToList();
 
