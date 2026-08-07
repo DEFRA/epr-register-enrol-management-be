@@ -37,6 +37,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<ReAccreditationStatusPushHook>();
         services.AddSingleton<IWorkItemPostActionHook>(sp => sp.GetRequiredService<ReAccreditationStatusPushHook>());
         services.AddSingleton<IWorkItemPostTaskHook, ReAccreditationDulyMadeHook>();
+        // RA-372: while an item sits in the 'updated' waypoint, the tasks
+        // that apply are the tasks of the state the query was raised from.
+        // Without this the regulator sees an empty checklist and cannot
+        // finish the review. Purely a projection-time redirect — no stored
+        // field, no template bump, no migration.
+        services.AddSingleton<IWorkItemTaskStateResolver, ReAccreditationTaskStateResolver>();
         services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSnapshotMigration>();
         services.AddSingleton<
             IWorkItemMigration,

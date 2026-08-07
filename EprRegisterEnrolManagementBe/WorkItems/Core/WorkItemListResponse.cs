@@ -54,4 +54,13 @@ public sealed record WorkItemListItemResponse(
     // Applications card can render "Due on: {date}". Null under the same
     // condition as SlaState/SlaRemaining — no SLA clock started yet. Additive +
     // nullable, so the list DTO stays backward-compatible.
-    DateTime? SlaDueDate = null);
+    DateTime? SlaDueDate = null,
+    // RA-372: the id of the state whose checklist Tasks actually contains.
+    // Normally equal to StateId, but a work item type may declare that another
+    // state's tasks apply while an item passes through a waypoint state
+    // (re-accreditation's 'updated'). Tasks above is projected through that
+    // same redirect, so without this a list row carries one state's progress
+    // labelled with another's and no consumer can tell. Mirrors
+    // WorkItemResponse.TaskStateId so the single-item and list shapes agree.
+    // Additive + nullable, so the list DTO stays backward-compatible.
+    string? TaskStateId = null);
