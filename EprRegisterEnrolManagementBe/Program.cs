@@ -204,13 +204,13 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
         .AddCognitoClientId();
 
     // Bind options lazily via PostConfigure so test fixtures that add
-    // AUTH_SHARED_SECRET via WebApplicationFactory.ConfigureAppConfiguration
-    // (which fires during builder.Build(), after this method runs) can still
+    // config via WebApplicationFactory.ConfigureAppConfiguration (which
+    // fires during builder.Build(), after this method runs) can still
     // override the value.
     services.AddOptions<CognitoClientIdAuthenticationOptions>(CognitoClientIdDefaults.AuthenticationScheme)
         .Configure<IConfiguration>((options, config) =>
         {
-            options.SharedSecret = config.GetValue<string>("AUTH_SHARED_SECRET");
+            options.ClientSecrets = BuildClientSecrets(config);
             options.MaxClientIdLength = config.GetValue("Auth:MaxClientIdLength", options.MaxClientIdLength);
             options.MaxUserIdLength = config.GetValue("Auth:MaxUserIdLength", options.MaxUserIdLength);
             options.MaxUserNameLength = config.GetValue("Auth:MaxUserNameLength", options.MaxUserNameLength);
@@ -220,6 +220,70 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
         });
 
     services.AddAuthorization();
+}
+
+// RA-345: per-caller secrets, keyed by the clientId each caller is expected
+// to assert. Each caller gets its own secret env var so one can be rotated
+// without touching the other — see ADR-0005's "Follow-up: per-caller
+// shared secrets" section and CaseManagementAuthConfig in
+// epr-register-enrol-backend for the single-caller precedent this mirrors.
+[ExcludeFromCodeCoverage]
+static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration config)
+{
+    var map = new Dictionary<string, string>(StringComparer.Ordinal);
+    // Config-key form, NOT the literal env var name: EnvironmentVariablesConfigurationProvider
+    // rewrites "__" to ":" while loading, so the real env var
+    // AUTH_SHARED_SECRET__MANAGEMENT_FE is stored under config key
+    // "AUTH_SHARED_SECRET:MANAGEMENT_FE" — a GetValue call using the literal
+    // double-underscore string never matches it. Same pattern OperatorBackendApi
+    // uses elsewhere in this file (GetSection("OperatorBackendApi"), not a
+    // literal "OperatorBackendApi__Url" GetValue key).
+    AddCallerSecret(map, config,
+        callerName: "ManagementFe",
+        clientIdKey: "Auth:ManagementFeClientId", clientIdDefault: "frontend",
+        secretKey: "AUTH_SHARED_SECRET:MANAGEMENT_FE");
+    AddCallerSecret(map, config,
+        callerName: "Backend",
+        clientIdKey: "Auth:BackendClientId", clientIdDefault: "epr-register-enrol-backend",
+        secretKey: "AUTH_SHARED_SECRET:BACKEND");
+    return map;
+}
+
+[ExcludeFromCodeCoverage]
+static void AddCallerSecret(
+    Dictionary<string, string> map,
+    IConfiguration config,
+    string callerName,
+    string clientIdKey,
+    string clientIdDefault,
+    string secretKey)
+{
+    var secret = config.GetValue<string>(secretKey);
+    if (string.IsNullOrEmpty(secret))
+    {
+        // Caller not configured yet — same "not signed" posture as today
+        // when AUTH_SHARED_SECRET was unset.
+        return;
+    }
+
+    var clientId = config.GetValue(clientIdKey, clientIdDefault);
+
+    // Fail LOUD: two callers configured to assert the same clientId would
+    // mean the second caller's secret silently overwrites the first's in
+    // the map, breaking the first caller's signing and defeating the
+    // entire point of per-caller secrets (RA-345). Always a config
+    // mistake — never a legitimate state — so this throws rather than
+    // silently letting the later AddCallerSecret call win.
+    if (map.ContainsKey(clientId))
+    {
+        throw new InvalidOperationException(
+            $"CognitoClientIdAuthentication misconfigured: caller '{callerName}' asserts " +
+            $"clientId '{clientId}' (via {clientIdKey}), which is already registered to " +
+            "another caller. Each caller must have a distinct clientId — check for a " +
+            "copy-pasted or missing override.");
+    }
+
+    map[clientId] = secret;
 }
 
 [ExcludeFromCodeCoverage]

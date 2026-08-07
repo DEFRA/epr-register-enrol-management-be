@@ -132,3 +132,11 @@ subsequently renamed to `AUTH_SHARED_SECRET` to align with the CDP convention
 of uppercase underscore secret names (e.g. `NOTIFY_API_KEY`). References to
 `Auth:SharedSecret` in the Context and Decision sections above reflect the
 original name at the time this ADR was written.
+
+`AUTH_SHARED_SECRET` was itself later retired by RA-345 — see
+[ADR-0006](0006-per-caller-client-secrets.md) — and replaced with a secret
+per caller (`AUTH_SHARED_SECRET__MANAGEMENT_FE` /
+`AUTH_SHARED_SECRET__BACKEND`). References to the single `AUTH_SHARED_SECRET`
+elsewhere in this document reflect the model at the time it was written; the
+timestamp/nonce/HMAC mechanics it describes are otherwise unchanged by that
+later split.

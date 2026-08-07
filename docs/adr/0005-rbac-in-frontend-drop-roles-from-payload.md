@@ -163,6 +163,11 @@ silently accepted. A ticket should be raised against the shared HMAC
 authentication scheme (`CognitoClientIdAuthenticationHandler` and its
 config in `Program.cs`/`compose/aws.env`) to scope the work.
 
+> **Actioned:** this follow-up was raised as RA-345 and implemented — see
+> [ADR-0006](0006-per-caller-client-secrets.md). `AUTH_SHARED_SECRET` no
+> longer exists; each caller now has its own secret, keyed by the
+> `clientId` it is expected to assert.
+
 ## Verification
 
 - `EprRegisterEnrolManagementBe.Test/Auth/CognitoClientIdAuthenticationTests.cs`

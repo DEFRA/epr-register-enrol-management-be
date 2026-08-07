@@ -17,18 +17,21 @@ namespace EprRegisterEnrolManagementBe.Auth;
 /// the request, so the presence of the header is sufficient — no further
 /// authorisation is performed.
 ///
-/// When <see cref="CognitoClientIdAuthenticationOptions.SharedSecret"/> is
-/// configured, requests must additionally carry a valid HMAC-SHA256
+/// When <see cref="CognitoClientIdAuthenticationOptions.ClientSecrets"/> is
+/// non-empty, requests must additionally carry a valid HMAC-SHA256
 /// signature in the configured signature header AND a fresh timestamp /
-/// single-use nonce. The signature proves the caller knows the shared
-/// secret; the timestamp bounds the replay window; the nonce ensures a
-/// captured signed request cannot be replayed even within that window.
-/// See ADR-0003 for the timestamp/nonce contract and ADR-0005 for the v3
-/// payload (role membership dropped — authorization is entirely the BFF's
-/// concern now).
+/// single-use nonce. The signature proves the caller knows the secret
+/// registered for the clientId it asserted (RA-345: each known caller has
+/// its own secret rather than one value shared by all callers); the
+/// timestamp bounds the replay window; the nonce ensures a captured signed
+/// request cannot be replayed even within that window. See ADR-0003 for
+/// the timestamp/nonce contract and ADR-0005 for the v3 payload (role
+/// membership dropped — authorization is entirely the BFF's concern now)
+/// and its "Follow-up: per-caller shared secrets" section for the
+/// rationale behind this per-clientId lookup.
 ///
-/// When the shared secret is NOT configured the handler fails CLOSED in
-/// any non-Development environment (the integrity contract is broken). In
+/// When no client secrets are configured the handler fails CLOSED in any
+/// non-Development environment (the integrity contract is broken). In
 /// Development it falls back to header-trust mode and logs a single
 /// warning per process to keep local/BFF-stub workflows ergonomic.
 /// </summary>
@@ -101,12 +104,12 @@ public class CognitoClientIdAuthenticationHandler(
             if (!string.IsNullOrWhiteSpace(v)) userName = v;
         }
 
-        // Integrity check: when a shared secret is configured the BFF must
-        // sign the trust headers with HMAC-SHA256, supply a fresh timestamp
-        // and a single-use nonce. This refuses requests that bypass the BFF
-        // and forge identity headers, AND requests that replay a previously
-        // captured signed request.
-        if (!string.IsNullOrEmpty(Options.SharedSecret))
+        // Integrity check: when per-caller secrets are configured the BFF
+        // must sign the trust headers with HMAC-SHA256, supply a fresh
+        // timestamp and a single-use nonce. This refuses requests that
+        // bypass the BFF and forge identity headers, AND requests that
+        // replay a previously captured signed request.
+        if (Options.ClientSecrets.Count > 0)
         {
             // --- Timestamp: present, parseable, within +/- MaxClockSkew. ---
             if (!Request.Headers.TryGetValue(Options.TimestampHeaderName, out var timestampValues))
@@ -184,12 +187,39 @@ public class CognitoClientIdAuthenticationHandler(
                     $"{Options.SignatureHeaderName} exceeds {Options.MaxSignatureLength} chars"));
             }
 
+            // --- Client secret lookup: the secret used to verify the
+            // signature is the one registered for the clientId the caller
+            // asserted (RA-345). An unrecognized clientId gets the same
+            // externally-visible failure MESSAGE as a bad signature, so the
+            // response body/WWW-Authenticate header alone can't be used to
+            // probe which client ids are known — but is logged distinctly
+            // so operators can tell the two failure modes apart. This does
+            // NOT close the lookup as a timing side-channel: an unrecognized
+            // clientId returns immediately, while a known one goes on to
+            // compute an HMAC before failing, so response latency alone
+            // could in principle distinguish the two. Accepted as
+            // negligible here because the only client ids that could ever
+            // be confirmed "known" this way are the two documented public
+            // defaults (frontend, epr-register-enrol-backend) — there is
+            // nothing secret left to enumerate.
+            if (!Options.ClientSecrets.TryGetValue(clientId, out var secret))
+            {
+                Logger.LogWarning(
+                    "CognitoClientIdAuthentication: no secret registered for asserted client id {ClientId}",
+                    clientId);
+                return Task.FromResult(AuthenticateResult.Fail(
+                    $"Invalid {Options.SignatureHeaderName} header"));
+            }
+
             var expectedSignature = ComputeSignature(
-                Options.SharedSecret!, clientId, userId, userName,
+                secret, clientId, userId, userName,
                 timestampHeader, nonce);
 
             if (!FixedTimeEquals(providedSignature, expectedSignature))
             {
+                Logger.LogWarning(
+                    "CognitoClientIdAuthentication: signature mismatch for asserted client id {ClientId}",
+                    clientId);
                 return Task.FromResult(AuthenticateResult.Fail(
                     $"Invalid {Options.SignatureHeaderName} header"));
             }
@@ -208,23 +238,23 @@ public class CognitoClientIdAuthenticationHandler(
         }
         else if (!hostEnvironment.IsDevelopment())
         {
-            // Fail CLOSED: a missing shared secret outside Development means
-            // the integrity contract with the BFF is broken (env var typo,
-            // secret rotation race, misconfigured prod). Trusting the
+            // Fail CLOSED: no configured client secrets outside Development
+            // means the integrity contract with the BFF is broken (env var
+            // typo, secret rotation race, misconfigured prod). Trusting the
             // headers in this state would let any caller forge identity.
             Logger.LogCritical(
-                "CognitoClientIdAuthentication misconfigured: SharedSecret is not set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
+                "CognitoClientIdAuthentication misconfigured: no ClientSecrets are set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
                 hostEnvironment.EnvironmentName);
             return Task.FromResult(AuthenticateResult.Fail(
-                "Authentication misconfigured: shared secret not set"));
+                "Authentication misconfigured: no client secrets set"));
         }
         else if (Interlocked.CompareExchange(ref s_devDowngradeWarned, 1, 0) == 0)
         {
-            // Development-only ergonomics: BFF stub mode runs without a
-            // shared secret. Emit a single warning per process so the
-            // downgrade is visible without spamming the log.
+            // Development-only ergonomics: BFF stub mode runs without any
+            // client secrets configured. Emit a single warning per process
+            // so the downgrade is visible without spamming the log.
             Logger.LogWarning(
-                "CognitoClientIdAuthentication: SharedSecret not configured — operating in header-trust mode. This is allowed only because the host environment is '{Environment}'. Set AUTH_SHARED_SECRET in any non-Development deployment.",
+                "CognitoClientIdAuthentication: no ClientSecrets configured — operating in header-trust mode. This is allowed only because the host environment is '{Environment}'. Set AUTH_SHARED_SECRET__MANAGEMENT_FE / AUTH_SHARED_SECRET__BACKEND in any non-Development deployment.",
                 hostEnvironment.EnvironmentName);
         }
 

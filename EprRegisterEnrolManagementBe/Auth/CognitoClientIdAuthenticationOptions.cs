@@ -18,7 +18,8 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// <summary>
     /// Name of the request header carrying the BFF-computed HMAC signature
     /// over the trust headers. Used to prove the headers originated from a
-    /// caller that holds the configured <see cref="SharedSecret"/>; defends
+    /// caller that holds the secret registered for its clientId in
+    /// <see cref="ClientSecrets"/>; defends
     /// against direct backend access bypassing the BFF.
     /// </summary>
     public string SignatureHeaderName { get; set; } = CognitoClientIdDefaults.DefaultSignatureHeaderName;
@@ -37,12 +38,20 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
     public string NonceHeaderName { get; set; } = CognitoClientIdDefaults.DefaultNonceHeaderName;
 
     /// <summary>
-    /// Shared secret used to validate the <see cref="SignatureHeaderName"/>
-    /// HMAC. When set, every authenticated request MUST present a valid
-    /// signature or the handler fails closed. When null/empty the handler
-    /// falls back to header-trust mode (development/local only).
+    /// Per-caller secrets used to validate the <see cref="SignatureHeaderName"/>
+    /// HMAC, keyed by the <c>clientId</c> each caller is expected to assert.
+    /// Signature verification looks up the secret registered for the
+    /// clientId in the request and verifies against that specific secret —
+    /// an unrecognized clientId is rejected exactly like a bad signature.
+    /// When non-empty, every authenticated request MUST present a valid
+    /// signature or the handler fails closed. When empty the handler falls
+    /// back to header-trust mode (development/local only). See RA-345 and
+    /// ADR-0005's "Follow-up: per-caller shared secrets" section — this
+    /// replaces the single <c>AUTH_SHARED_SECRET</c> that both callers
+    /// (management-fe and epr-register-enrol-backend) previously shared.
     /// </summary>
-    public string? SharedSecret { get; set; }
+    public IReadOnlyDictionary<string, string> ClientSecrets { get; set; } =
+        new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>
     /// Maximum permitted absolute difference between the BFF-supplied
