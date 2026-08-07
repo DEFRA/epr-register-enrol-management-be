@@ -7,8 +7,10 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// service presents itself as, and an optional HMAC shared secret.
 ///
 /// Bound from the <c>OperatorBackendApi</c> configuration section
-/// (<c>OperatorBackendApi__Enabled</c> / <c>__Url</c> / <c>__ClientId</c> /
-/// <c>__SharedSecret</c> env vars at deploy time). Validated on start by
+/// (<c>OperatorBackendApi__Enabled</c> / <c>__Url</c> / <c>__ClientId</c> env
+/// vars at deploy time), except <see cref="SharedSecret"/>, which — per
+/// CDP's secrets naming convention — is sourced from the flat
+/// <c>OPERATOR_BACKEND_SHARED_SECRET</c> env var instead. Validated on start by
 /// <see cref="OperatorBackendApiConfigValidator"/>: <see cref="Url"/>,
 /// <see cref="ClientId"/> and <see cref="SharedSecret"/> are only required
 /// when <see cref="Enabled"/> is <c>true</c>.
@@ -28,6 +30,10 @@ public sealed class OperatorBackendApiConfig
 
     public string ClientId { get; set; } = "epr-register-enrol-management-be";
 
+    /// <summary>
+    /// Sourced from the flat <c>OPERATOR_BACKEND_SHARED_SECRET</c> env var, not
+    /// a nested <c>OperatorBackendApi__*</c> key — see Program.cs's binding.
+    /// </summary>
     public string? SharedSecret { get; set; }
 
     /// <summary>

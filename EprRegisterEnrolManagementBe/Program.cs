@@ -420,8 +420,19 @@ static void ConfigureReEx(IServiceCollection services, IConfiguration configurat
 [ExcludeFromCodeCoverage]
 static void ConfigureOperatorBackendPush(IServiceCollection services, IConfiguration configuration)
 {
+    // SharedSecret is deliberately NOT part of the OperatorBackendApi__* section —
+    // CDP's secrets naming convention is a flat UPPER_SNAKE_CASE name, not the
+    // nested Section__Property form the rest of this config uses — so it's
+    // sourced from OPERATOR_BACKEND_SHARED_SECRET instead (same flat name the
+    // operator backend's CaseManagementAuth verifies inbound pushes against).
     services.AddOptions<OperatorBackendApiConfig>()
-        .Bind(configuration.GetSection("OperatorBackendApi"))
+        .Configure<IConfiguration>(
+            (options, config) =>
+            {
+                config.GetSection("OperatorBackendApi").Bind(options);
+                options.SharedSecret = config.GetValue<string>("OPERATOR_BACKEND_SHARED_SECRET");
+            }
+        )
         .ValidateOnStart();
     services.AddSingleton<IValidateOptions<OperatorBackendApiConfig>, OperatorBackendApiConfigValidator>();
 
