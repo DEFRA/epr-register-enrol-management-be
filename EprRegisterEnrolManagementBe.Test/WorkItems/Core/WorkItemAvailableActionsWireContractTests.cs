@@ -175,7 +175,7 @@ public class WorkItemAvailableActionsWireContractTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+            client.DefaultRequestHeaders.Add("x-cdp-client-id", "test-client");
             client.DefaultRequestHeaders.Add("x-cdp-user-id", "test-user");
         }
 
