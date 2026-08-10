@@ -471,6 +471,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         //   overseasSites.sites[0]  isNewSite = true   + interimSite isNewSite = true
         //   overseasSites.sites[1]  isNewSite = false  + interimSite isNewSite = false
         //   overseasSites.sites[2]  isNewSite absent   + no interimSite at all
+        //   overseasSites.sites[3]  isNewSite = false  + no interimSite; isEu/isOecd false
         //   prns.authorisers[0]     isNew = true
         //   prns.authorisers[1]     isNew = false
         //   prns.authorisers[2]     isNew absent
@@ -482,10 +483,19 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // covered by the "Belfast Fibres Co" item above, which mgmt-tests
         // already uses as its no-overseas-sites fixture.
         //
-        // Site 0 carries the full ORS detail field set for AC04. Sites 1 and 2
-        // deliberately omit fields (site 1 has no besEvidence, its interim site
-        // no addressLine2; site 2 is near-minimal) so a template that assumes
-        // every key is present fails here rather than in production.
+        // Site 0 carries the full ORS detail field set for AC04. The rest
+        // deliberately vary it so a template that assumes every key is present
+        // fails here rather than in production: site 1 has an EMPTY besEvidence
+        // file list and an interim site with no addressLine2, site 2 is a
+        // pre-RA-292 document missing the flags entirely, site 3 is non-EU /
+        // non-OECD with conditionsOfExport absent.
+        //
+        // Field TYPES below are taken from a captured operator-backend payload,
+        // not from its model definitions, and two of them are counter-intuitive:
+        // `repatriatedLoads` is a STRING and `conditionsOfExport` a nullable
+        // BOOLEAN. `coordinates` is a string, not a lat/long object. Optional
+        // fields are absent KEYS, never nulls — the producer serialises with
+        // WhenWritingNull.
         yield return Build(
             seedKey: OrsInterimAuthoritySeedKey,
             postcode: "EC2A 2BB",
@@ -560,9 +570,12 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["code1"] = "B3011",
                             ["code2"] = "GH013",
                             ["code3"] = "Y48",
-                            ["repatriatedLoads"] = 3,
-                            ["conditionsOfExport"] =
-                                "Baled material, moisture content below 5%, shipped under Annex VII controls.",
+                            // Confirmed against a captured operator-backend
+                            // payload (RA-292): repatriatedLoads is a STRING
+                            // and conditionsOfExport a nullable BOOLEAN, not
+                            // the number and free-text they read like.
+                            ["repatriatedLoads"] = "3",
+                            ["conditionsOfExport"] = true,
                             ["isEu"] = true,
                             ["isOecd"] = true,
                             ["isNewSite"] = true,
@@ -578,6 +591,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                         ["contentType"] = "application/pdf",
                                         ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
                                         ["scanStatus"] = "Clean",
+                                        ["besEvidenceValidFromDate"] = "2026-01-01T00:00:00Z",
+                                        ["besEvidenceExpiryDate"] = "2027-01-01T00:00:00Z",
                                         // Deliberately the same S3 object the
                                         // full-payload fixture uses: it is
                                         // already seeded into the mgmt-tests
@@ -610,8 +625,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             }
                         },
                         // AC01 + AC02 negative case: an established site and an
-                        // established interim site. No besEvidence, and the
-                        // interim site has no addressLine2.
+                        // established interim site. Empty besEvidence file
+                        // list, and the interim site has no addressLine2.
                         new BsonDocument
                         {
                             ["siteId"] = 2,
@@ -630,13 +645,23 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["code1"] = "B1010",
                             ["code2"] = "GA300",
                             ["code3"] = "Y23",
-                            ["repatriatedLoads"] = 0,
-                            ["conditionsOfExport"] =
-                                "Loose material, shipped under Annex VII controls.",
+                            // Falsy-but-present: must render as "0" and "No",
+                            // not be swallowed by a truthiness check.
+                            ["repatriatedLoads"] = "0",
+                            ["conditionsOfExport"] = false,
                             ["isEu"] = true,
                             ["isOecd"] = true,
                             ["isNewSite"] = false,
                             ["registeredNowAccredited"] = true,
+                            // The producer always emits besEvidence with a
+                            // files array; a site with no evidence yet sends an
+                            // EMPTY array rather than omitting the key. That is
+                            // its own rendering branch, distinct from both a
+                            // populated list and an absent key.
+                            ["besEvidence"] = new BsonDocument
+                            {
+                                ["files"] = new BsonArray()
+                            },
                             ["interimSite"] = new BsonDocument
                             {
                                 ["siteId"] = 21,
@@ -656,6 +681,18 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         // Pre-RA-292 shape: no isNewSite, no interimSite, no
                         // besEvidence. Proves absent flags render as "not new"
                         // rather than crashing or badging.
+                        //
+                        // The current producer never emits a site like this —
+                        // isNewSite/isEu/isOecd/registeredNowAccredited are
+                        // non-nullable there and besEvidence is always present.
+                        // This models a document PERSISTED BEFORE RA-292, which
+                        // is exactly the shape already sitting in the database
+                        // and the one the frontend must not choke on. It is
+                        // deliberately not a facsimile of a live submission.
+                        //
+                        // Optional fields are absent KEYS, never null values —
+                        // the producer serialises with WhenWritingNull, so a
+                        // null-valued key would misrepresent a real payload.
                         new BsonDocument
                         {
                             ["siteId"] = 3,
@@ -664,6 +701,46 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["siteAddress"] = "7 Muelle Tomas Olabarri, Bilbao",
                             ["townOrCity"] = "Bilbao",
                             ["country"] = "Spain"
+                        },
+                        // Non-EU, non-OECD site. Without this the fixture had
+                        // no `isEu: false` / `isOecd: false` anywhere, so a
+                        // frontend that renders those two field-by-field rather
+                        // than through a shared boolean helper could drop the
+                        // false case unnoticed. Malaysia is genuinely neither
+                        // EU nor OECD — the branch is reached with a factually
+                        // honest fixture rather than by mislabelling Germany.
+                        //
+                        // Also the one otherwise-complete site with
+                        // conditionsOfExport absent: that field is nullable at
+                        // the producer, unlike the other flags, so "absent on a
+                        // complete site" is a legitimate shape.
+                        new BsonDocument
+                        {
+                            ["siteId"] = 4,
+                            ["orsId"] = "ORS-2025-0113",
+                            ["siteName"] = "Port Klang Reprocessing Facility",
+                            ["siteAddress"] = "88 Jalan Pelabuhan, Port Klang",
+                            ["addressLine1"] = "88 Jalan Pelabuhan",
+                            ["addressLine2"] = "Zone 3",
+                            ["townOrCity"] = "Port Klang",
+                            ["country"] = "Malaysia",
+                            ["coordinates"] = "3.0044, 101.3928",
+                            ["contactName"] = "Aisyah Rahman",
+                            ["contactEmail"] = "aisyah.rahman@example.com",
+                            ["contactPhone"] = "+60 3 3168 8000",
+                            ["operationCode"] = "R3",
+                            ["code1"] = "B3011",
+                            ["code2"] = "GH013",
+                            ["code3"] = "Y48",
+                            ["repatriatedLoads"] = "2",
+                            ["isEu"] = false,
+                            ["isOecd"] = false,
+                            ["isNewSite"] = false,
+                            ["registeredNowAccredited"] = false,
+                            ["besEvidence"] = new BsonDocument
+                            {
+                                ["files"] = new BsonArray()
+                            }
                         }
                     }
                 }

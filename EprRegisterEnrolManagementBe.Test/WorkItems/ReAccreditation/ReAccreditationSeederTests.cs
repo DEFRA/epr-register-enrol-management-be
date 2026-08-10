@@ -406,11 +406,15 @@ public class ReAccreditationSeederTests
     }
 
     [Fact]
-    public void Build_ra292_fixture_flags_are_real_booleans_and_counts_are_real_numbers()
+    public void Build_ra292_fixture_field_types_match_the_operator_backend_wire_contract()
     {
-        // The frontend compares these with `=== true`, and mgmt-tests asserts on
-        // rendered numbers. Seeding "true"/"3" as strings would render plausibly
-        // in some templates and silently break the badge logic in others.
+        // Types are pinned against a captured operator-backend payload, not its
+        // model definitions, because two of them are counter-intuitive:
+        // `repatriatedLoads` is a STRING and `conditionsOfExport` a nullable
+        // BOOLEAN, while everything that reads like a flag really is boolean.
+        // Seeding the wrong primitive renders plausibly in some templates and
+        // silently breaks the badge logic in others, so the mismatch has to fail
+        // here rather than in a browser.
         var sites = OrsSites(BuildOrsFixture()).Select(s => s.AsBsonDocument).ToList();
 
         foreach (var site in sites.Where(s => s.Contains("isNewSite")))
@@ -420,7 +424,25 @@ public class ReAccreditationSeederTests
 
         foreach (var site in sites.Where(s => s.Contains("repatriatedLoads")))
         {
-            Assert.Equal(BsonType.Int32, site["repatriatedLoads"].BsonType);
+            Assert.Equal(BsonType.String, site["repatriatedLoads"].BsonType);
+        }
+
+        foreach (var site in sites.Where(s => s.Contains("conditionsOfExport")))
+        {
+            Assert.Equal(BsonType.Boolean, site["conditionsOfExport"].BsonType);
+        }
+
+        foreach (var site in sites.Where(s => s.Contains("coordinates")))
+        {
+            Assert.Equal(BsonType.String, site["coordinates"].BsonType);
+        }
+
+        foreach (var flag in new[] { "isEu", "isOecd", "registeredNowAccredited" })
+        {
+            foreach (var site in sites.Where(s => s.Contains(flag)))
+            {
+                Assert.Equal(BsonType.Boolean, site[flag].BsonType);
+            }
         }
 
         foreach (var interim in sites
@@ -454,6 +476,83 @@ public class ReAccreditationSeederTests
             Assert.False(string.IsNullOrWhiteSpace(a["fullName"].AsString));
             Assert.False(string.IsNullOrWhiteSpace(a["email"].AsString));
         });
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_exercises_both_polarities_of_isEu_and_isOecd()
+    {
+        // If the frontend renders these two field-by-field rather than through
+        // a shared boolean helper, a fixture where every site is EU and OECD
+        // lets the false case be dropped unnoticed. Reached with a genuinely
+        // non-EU, non-OECD country rather than by mislabelling a European site
+        // — a fixture that asserts something factually false to hit a code path
+        // is worse than the gap it closes.
+        var sites = OrsSites(BuildOrsFixture()).Select(s => s.AsBsonDocument).ToList();
+
+        foreach (var flag in new[] { "isEu", "isOecd" })
+        {
+            Assert.Contains(sites, s => s.Contains(flag) && s[flag].AsBoolean);
+            Assert.Contains(sites, s => s.Contains(flag) && !s[flag].AsBoolean);
+        }
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_carries_an_empty_and_a_populated_bes_evidence_file_list()
+    {
+        // The producer always emits besEvidence with a files array, sending an
+        // EMPTY array when there is no evidence rather than omitting the key.
+        // That is a third rendering branch, distinct from a populated list and
+        // from the key being absent altogether.
+        var sites = OrsSites(BuildOrsFixture()).Select(s => s.AsBsonDocument).ToList();
+        var fileLists = sites
+            .Where(s => s.Contains("besEvidence"))
+            .Select(s => s["besEvidence"]["files"].AsBsonArray)
+            .ToList();
+
+        Assert.Contains(fileLists, f => f.Count > 0);
+        Assert.Contains(fileLists, f => f.Count == 0);
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_omits_optional_fields_rather_than_nulling_them()
+    {
+        // The producer serialises with WhenWritingNull, so an optional field
+        // with no value is an ABSENT KEY. A null-valued key would misrepresent
+        // a real submission and would exercise a rendering branch that cannot
+        // occur in production.
+        var sites = OrsSites(BuildOrsFixture()).Select(s => s.AsBsonDocument).ToList();
+
+        Assert.All(sites, site =>
+        {
+            Assert.DoesNotContain(site.Elements, e => e.Value.IsBsonNull);
+            if (site.Contains("interimSite"))
+            {
+                Assert.DoesNotContain(
+                    site["interimSite"].AsBsonDocument.Elements, e => e.Value.IsBsonNull);
+            }
+        });
+
+        Assert.All(
+            BuildOrsFixture().Payload["prns"]["authorisers"].AsBsonArray
+                .Select(a => a.AsBsonDocument),
+            a => Assert.DoesNotContain(a.Elements, e => e.Value.IsBsonNull));
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_bes_evidence_file_keys_match_the_producer_casing()
+    {
+        // `filename` is all-lowercase at the producer. A `fileName` seed would
+        // render blank in a template keyed on the real name, and no type in
+        // this codebase would catch it.
+        var file = OrsSites(BuildOrsFixture())
+            .Select(s => s.AsBsonDocument)
+            .Where(s => s.Contains("besEvidence"))
+            .SelectMany(s => s["besEvidence"]["files"].AsBsonArray)
+            .Select(f => f.AsBsonDocument)
+            .First();
+
+        Assert.True(file.Contains("filename"));
+        Assert.False(file.Contains("fileName"));
     }
 
     [Fact]

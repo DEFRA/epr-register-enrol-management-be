@@ -94,7 +94,7 @@ public class WorkItemPayloadConverterTests
                   {
                     "siteId": 1,
                     "isNewSite": true,
-                    "repatriatedLoads": 3,
+                    "repatriatedLoads": "3",
                     "isEu": true,
                     "interimSite": { "siteNumber": "INT-001", "isNewSite": true }
                   },
@@ -126,7 +126,12 @@ public class WorkItemPayloadConverterTests
         var newSite = sites[0];
         Assert.Equal(JsonValueKind.True, newSite.GetProperty("isNewSite").ValueKind);
         Assert.Equal(JsonValueKind.True, newSite.GetProperty("isEu").ValueKind);
-        Assert.Equal(3, newSite.GetProperty("repatriatedLoads").GetInt32());
+        // Mixed primitives in one object: repatriatedLoads is a string at the
+        // producer while siteId is a number, and both must keep their kind.
+        Assert.Equal(JsonValueKind.String, newSite.GetProperty("repatriatedLoads").ValueKind);
+        Assert.Equal("3", newSite.GetProperty("repatriatedLoads").GetString());
+        Assert.Equal(JsonValueKind.Number, newSite.GetProperty("siteId").ValueKind);
+        Assert.Equal(1, newSite.GetProperty("siteId").GetInt32());
         Assert.Equal(
             JsonValueKind.True,
             newSite.GetProperty("interimSite").GetProperty("isNewSite").ValueKind);

@@ -338,8 +338,11 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
                             code1 = "B3011",
                             code2 = "GH013",
                             code3 = "Y48",
-                            repatriatedLoads = 3,
-                            conditionsOfExport = "Baled material, Annex VII controls.",
+                            // Producer types, verified against a captured
+                            // payload: repatriatedLoads is a string and
+                            // conditionsOfExport a nullable boolean.
+                            repatriatedLoads = "3",
+                            conditionsOfExport = true,
                             isEu = true,
                             isOecd = true,
                             isNewSite = true,
@@ -437,14 +440,17 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
             newSite.GetProperty("besEvidence").GetProperty("files")[0]
                 .GetProperty("filename").GetString());
 
-        // Booleans and numbers stay booleans and numbers — the frontend badge
-        // logic compares them by identity, not by string.
+        // Primitive types survive exactly as the producer sent them. The
+        // frontend badge logic compares booleans by identity, so a boolean
+        // arriving as a string (or vice versa) breaks it silently.
         Assert.Equal(JsonValueKind.True, newSite.GetProperty("isNewSite").ValueKind);
         Assert.Equal(JsonValueKind.True, newSite.GetProperty("isEu").ValueKind);
         Assert.Equal(JsonValueKind.True, newSite.GetProperty("isOecd").ValueKind);
         Assert.Equal(JsonValueKind.False, newSite.GetProperty("registeredNowAccredited").ValueKind);
-        Assert.Equal(JsonValueKind.Number, newSite.GetProperty("repatriatedLoads").ValueKind);
-        Assert.Equal(3, newSite.GetProperty("repatriatedLoads").GetInt32());
+        Assert.Equal(JsonValueKind.True, newSite.GetProperty("conditionsOfExport").ValueKind);
+        Assert.Equal(JsonValueKind.String, newSite.GetProperty("repatriatedLoads").ValueKind);
+        Assert.Equal("3", newSite.GetProperty("repatriatedLoads").GetString());
+        Assert.Equal(JsonValueKind.Number, newSite.GetProperty("siteId").ValueKind);
 
         // AC02: the nested interim site — the deepest field, and the one a
         // shallow re-serialisation would drop first.

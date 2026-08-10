@@ -449,7 +449,7 @@ public class ReAccreditationApprovalServiceTests
                         ["siteId"] = 1,
                         ["orsId"] = "ORS-2026-0292",
                         ["isNewSite"] = true,
-                        ["repatriatedLoads"] = 3,
+                        ["repatriatedLoads"] = "3",
                         ["interimSite"] = new BsonDocument
                         {
                             ["siteNumber"] = "INT-001",
@@ -496,7 +496,7 @@ public class ReAccreditationApprovalServiceTests
         var newSite = sites[0].AsBsonDocument;
         Assert.True(newSite["isNewSite"].AsBoolean);
         Assert.Equal("ORS-2026-0292", newSite["orsId"].AsString);
-        Assert.Equal(3, newSite["repatriatedLoads"].AsInt32);
+        Assert.Equal("3", newSite["repatriatedLoads"].AsString);
         Assert.True(newSite["interimSite"]["isNewSite"].AsBoolean);
         Assert.Equal("INT-001", newSite["interimSite"]["siteNumber"].AsString);
         Assert.Equal("Antwerp", newSite["interimSite"]["townOrCity"].AsString);
