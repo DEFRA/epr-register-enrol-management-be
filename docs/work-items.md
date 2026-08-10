@@ -347,6 +347,52 @@ a UI renders a natural top-to-bottom timeline without re-sorting.
 - **Snapshot identity at write time.** `CreatedBy` / `CreatedByName` are
   not live foreign keys — the audit narrative survives directory changes.
 
+## Seeding
+
+Modules may ship demo data by registering an `IWorkItemSeeder`.
+`WorkItemSeederHostedService` runs every registered seeder once at startup,
+gated on `WorkItems:SeedOnStartup` (default `false`, so tests never touch
+Mongo during host startup).
+
+### Insert-only, by deterministic id
+
+Each seeded item gets a deterministic `Id` from
+`WorkItemSeed.DeterministicId(typeId, seedKey)`, and is written through
+`IWorkItemPersistence.CreateIfAbsentAsync`. That makes seeding idempotent and
+safe against a multi-instance rollout: the first writer wins and every loser
+is swallowed as a duplicate-key no-op.
+
+**It inserts; it never updates.** This is the property to internalise, because
+it has one consequence that reliably costs someone an afternoon:
+
+> Changing the *contents* of an existing seed item is invisible to any
+> database that has already seeded it — local volumes, shared dev, and any
+> e2e stack with a persistent volume. Only a brand-new `seedKey` reaches
+> them.
+
+The failure mode is nasty because it doesn't look like a seed problem. The
+backend is correct, the frontend is correct, and the e2e suite fails
+asserting against fixture values that only exist in the new seed — so the
+evidence points at whichever repo the assertion lives in. RA-292 lost a run
+to exactly this.
+
+So, when changing seed data:
+
+- **Adding a new fixture?** Use a new `seedKey`. It lands everywhere on the
+  next boot regardless of what's already stored.
+- **Changing an existing fixture's contents?** Everyone with a warm volume
+  keeps the old one. Either use a new `seedKey` instead (preferred — it makes
+  the change reach real environments), or write an `IWorkItemMigration` if
+  the existing documents genuinely need rewriting.
+- **Running e2e locally against a seed change?** `docker compose down -v`
+  first. Without the `-v` the volume survives and you test the old fixture.
+
+This is deliberate, not a defect: seeds that silently mutated under a running
+environment would be far worse than seeds that only ever appear. The
+`ReAccreditationSeeder` RA-292 fixture is the worked example — it got its own
+`seedKey` rather than enriching `full-payload-verification` precisely so it
+would reach already-seeded environments.
+
 ## Example: re-accreditation module (RA-98)
 
 Reference implementation that demonstrates the framework's "one folder + one

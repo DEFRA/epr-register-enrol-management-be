@@ -89,6 +89,14 @@ Tear it down with:
 docker compose down -v
 ```
 
+> **Pulling a branch that changes seed data? Tear the volume down first.**
+> Work item seeding is insert-only (`CreateIfAbsentAsync` against a
+> deterministic id), so an existing MongoDB volume keeps whatever it seeded
+> the first time and edits to a seed item's contents never reach it. The
+> resulting e2e failures look like a broken frontend rather than stale
+> fixtures. `docker compose down -v` and start clean. See
+> [`docs/work-items.md`](docs/work-items.md#seeding) for the full rules.
+
 ## Endpoints
 
 | Method | Path                                         | Description                            |
