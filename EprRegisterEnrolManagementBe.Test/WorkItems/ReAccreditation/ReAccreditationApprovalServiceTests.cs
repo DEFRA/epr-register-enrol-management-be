@@ -420,6 +420,99 @@ public class ReAccreditationApprovalServiceTests
     }
 
     [Fact]
+    public async Task ApproveAsync_preserves_ra292_overseas_site_and_authoriser_flags()
+    {
+        // RA-292: the new-ORS / new-interim-site / authority-to-issue flags are
+        // payload data the operator backend produces and the case management
+        // frontend badges. They live two and three levels deep inside
+        // `overseasSites.sites[].interimSite` and `prns.authorisers[]`, and
+        // ReAccreditationPayload models neither top-level key.
+        //
+        // Approval is the ONLY place that round-trips the payload through that
+        // [BsonIgnoreExtraElements] model, so it is the one operation that could
+        // silently blank these fields. The merge is shallow: it survives today
+        // precisely because `overseasSites` and `prns` are unmodelled. Adding
+        // either to ReAccreditationPayload without deepening the merge would
+        // drop every undeclared key nested inside it — this test is the guard
+        // that turns that into a red build rather than a blank regulator page.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build("ACC-2025-A-12345678");
+        var workItem = BuildWorkItem(payload: new BsonDocument
+        {
+            ["organisationName"] = "Acme Ltd",
+            ["overseasSites"] = new BsonDocument
+            {
+                ["sites"] = new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        ["siteId"] = 1,
+                        ["orsId"] = "ORS-2026-0292",
+                        ["isNewSite"] = true,
+                        ["repatriatedLoads"] = 3,
+                        ["interimSite"] = new BsonDocument
+                        {
+                            ["siteNumber"] = "INT-001",
+                            ["isNewSite"] = true,
+                            ["townOrCity"] = "Antwerp"
+                        }
+                    },
+                    new BsonDocument
+                    {
+                        ["siteId"] = 2,
+                        ["isNewSite"] = false,
+                        ["interimSite"] = new BsonDocument { ["isNewSite"] = false }
+                    }
+                }
+            },
+            ["prns"] = new BsonDocument
+            {
+                ["authorisers"] = new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        ["fullName"] = "Grace Adeyemi",
+                        ["email"] = "grace.adeyemi@example.com",
+                        ["isNew"] = true
+                    },
+                    new BsonDocument
+                    {
+                        ["fullName"] = "Martin Cole",
+                        ["email"] = "martin.cole@example.com",
+                        ["isNew"] = false
+                    }
+                }
+            }
+        });
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess);
+
+        var sites = workItem.Payload["overseasSites"]["sites"].AsBsonArray;
+        Assert.Equal(2, sites.Count);
+
+        var newSite = sites[0].AsBsonDocument;
+        Assert.True(newSite["isNewSite"].AsBoolean);
+        Assert.Equal("ORS-2026-0292", newSite["orsId"].AsString);
+        Assert.Equal(3, newSite["repatriatedLoads"].AsInt32);
+        Assert.True(newSite["interimSite"]["isNewSite"].AsBoolean);
+        Assert.Equal("INT-001", newSite["interimSite"]["siteNumber"].AsString);
+        Assert.Equal("Antwerp", newSite["interimSite"]["townOrCity"].AsString);
+
+        var establishedSite = sites[1].AsBsonDocument;
+        Assert.False(establishedSite["isNewSite"].AsBoolean);
+        Assert.False(establishedSite["interimSite"]["isNewSite"].AsBoolean);
+
+        var authorisers = workItem.Payload["prns"]["authorisers"].AsBsonArray;
+        Assert.Equal(2, authorisers.Count);
+        Assert.True(authorisers[0]["isNew"].AsBoolean);
+        Assert.Equal("Grace Adeyemi", authorisers[0]["fullName"].AsString);
+        Assert.False(authorisers[1]["isNew"].AsBoolean);
+    }
+
+    [Fact]
     public async Task ApproveAsync_overwrites_a_stale_modelled_approval_field_on_merge()
     {
         // RA-249: merge must OVERWRITE existing elements, so a stale

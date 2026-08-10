@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -284,6 +285,200 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         Assert.Equal("12345", payload.OperatorOrganisationId);
         Assert.Equal("reg-001", payload.OperatorRegistrationId);
         Assert.Equal("jane@example.com", payload.OperatorEmail);
+    }
+
+    [Fact]
+    public async Task Submit_round_trips_ra292_ors_interim_and_authoriser_fields_to_the_get_response()
+    {
+        // RA-292: AC01-AC04 are rendered by the case management frontend from
+        // payload fields the operator backend produces. Nothing in this service
+        // declares them — not ReAccreditationPayload, not WorkItemResponse — so
+        // they survive only because the payload is schemaless from ingestion
+        // (BsonDocument.Parse of the raw request JSON) through persistence to
+        // the GET response (relaxed extended JSON).
+        //
+        // This is the end-to-end pin for that: submit a payload containing every
+        // RA-292 field, including several this codebase has no type for, then
+        // read it back over HTTP the way the BFF does. If a future typed model
+        // is introduced anywhere on this path, the fields it fails to declare
+        // stop reaching the regulator — and this test goes red instead.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var body = new
+        {
+            typeId = "re-accreditation",
+            payload = new
+            {
+                organisationName = "Overseas Reprocessing Verification Ltd",
+                registrationNumber = "EPR-100292",
+                material = "plastic",
+                operatorEmail = "ors.verification@example.com",
+                siteAddressPostcode = "EC2A 2BB",
+                overseasSites = new
+                {
+                    sites = new object[]
+                    {
+                        new
+                        {
+                            siteId = 1,
+                            orsId = "ORS-2026-0292",
+                            siteName = "Rotterdam New Reprocessing Site",
+                            siteAddress = "1 Havenstraat, Rotterdam",
+                            addressLine1 = "1 Havenstraat",
+                            addressLine2 = "Europoort Industrial Park",
+                            townOrCity = "Rotterdam",
+                            country = "Netherlands",
+                            coordinates = "51.9244, 4.4777",
+                            contactName = "Johan de Vries",
+                            contactEmail = "johan.devries@example.com",
+                            contactPhone = "+31 10 123 4567",
+                            operationCode = "R3",
+                            code1 = "B3011",
+                            code2 = "GH013",
+                            code3 = "Y48",
+                            repatriatedLoads = 3,
+                            conditionsOfExport = "Baled material, Annex VII controls.",
+                            isEu = true,
+                            isOecd = true,
+                            isNewSite = true,
+                            registeredNowAccredited = false,
+                            besEvidence = new
+                            {
+                                files = new[]
+                                {
+                                    new { fileId = "bes-1", filename = "bes-evidence.pdf" },
+                                },
+                            },
+                            interimSite = new
+                            {
+                                siteId = 11,
+                                siteNumber = "INT-001",
+                                isNewSite = true,
+                                country = "Belgium",
+                                siteName = "Antwerp Interim Holding Site",
+                                addressLine1 = "12 Scheldelaan",
+                                addressLine2 = "Unit 4",
+                                townOrCity = "Antwerp",
+                                stateOrRegion = "Flanders",
+                                postcode = "2030",
+                                contactName = "Elke Janssens",
+                                contactEmail = "elke.janssens@example.com",
+                                contactPhone = "+32 3 987 6543",
+                            },
+                        },
+                        new
+                        {
+                            siteId = 2,
+                            isNewSite = false,
+                            interimSite = new { siteNumber = "INT-002", isNewSite = false },
+                        },
+                        // No isNewSite, no interimSite — the pre-RA-292 shape.
+                        new { siteId = 3 },
+                    },
+                },
+                prns = new
+                {
+                    authorisers = new object[]
+                    {
+                        new
+                        {
+                            fullName = "Grace Adeyemi",
+                            email = "grace.adeyemi@example.com",
+                            isNew = true,
+                        },
+                        new
+                        {
+                            fullName = "Martin Cole",
+                            email = "martin.cole@example.com",
+                            isNew = false,
+                        },
+                        new { fullName = "Priya Nair", email = "priya.nair@example.com" },
+                    },
+                },
+            },
+        };
+
+        var created = await client.PostAsJsonAsync("/work-items", body, cancellationToken);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        var createdItem = await created.Content.ReadFromJsonAsync<WorkItemResponse>(
+            cancellationToken
+        );
+        Assert.NotNull(createdItem);
+
+        // Read it back the way the BFF does, rather than trusting the create
+        // response — persistence is the step a typed model would sit in.
+        var fetched = await client.GetAsync($"/work-items/{createdItem!.Id}", cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, fetched.StatusCode);
+        var item = await fetched.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(item);
+
+        var sites = item!.Payload.GetProperty("overseasSites").GetProperty("sites");
+        Assert.Equal(3, sites.GetArrayLength());
+
+        // AC04: every declared ORS detail field arrives intact.
+        var newSite = sites[0];
+        Assert.Equal("ORS-2026-0292", newSite.GetProperty("orsId").GetString());
+        Assert.Equal("Rotterdam New Reprocessing Site", newSite.GetProperty("siteName").GetString());
+        Assert.Equal("1 Havenstraat", newSite.GetProperty("addressLine1").GetString());
+        Assert.Equal("Europoort Industrial Park", newSite.GetProperty("addressLine2").GetString());
+        Assert.Equal("Rotterdam", newSite.GetProperty("townOrCity").GetString());
+        Assert.Equal("Netherlands", newSite.GetProperty("country").GetString());
+        Assert.Equal("51.9244, 4.4777", newSite.GetProperty("coordinates").GetString());
+        Assert.Equal("Johan de Vries", newSite.GetProperty("contactName").GetString());
+        Assert.Equal("johan.devries@example.com", newSite.GetProperty("contactEmail").GetString());
+        Assert.Equal("+31 10 123 4567", newSite.GetProperty("contactPhone").GetString());
+        Assert.Equal("R3", newSite.GetProperty("operationCode").GetString());
+        Assert.Equal("B3011", newSite.GetProperty("code1").GetString());
+        Assert.Equal("GH013", newSite.GetProperty("code2").GetString());
+        Assert.Equal("Y48", newSite.GetProperty("code3").GetString());
+        Assert.Equal("bes-evidence.pdf",
+            newSite.GetProperty("besEvidence").GetProperty("files")[0]
+                .GetProperty("filename").GetString());
+
+        // Booleans and numbers stay booleans and numbers — the frontend badge
+        // logic compares them by identity, not by string.
+        Assert.Equal(JsonValueKind.True, newSite.GetProperty("isNewSite").ValueKind);
+        Assert.Equal(JsonValueKind.True, newSite.GetProperty("isEu").ValueKind);
+        Assert.Equal(JsonValueKind.True, newSite.GetProperty("isOecd").ValueKind);
+        Assert.Equal(JsonValueKind.False, newSite.GetProperty("registeredNowAccredited").ValueKind);
+        Assert.Equal(JsonValueKind.Number, newSite.GetProperty("repatriatedLoads").ValueKind);
+        Assert.Equal(3, newSite.GetProperty("repatriatedLoads").GetInt32());
+
+        // AC02: the nested interim site — the deepest field, and the one a
+        // shallow re-serialisation would drop first.
+        var interim = newSite.GetProperty("interimSite");
+        Assert.Equal(JsonValueKind.True, interim.GetProperty("isNewSite").ValueKind);
+        Assert.Equal("INT-001", interim.GetProperty("siteNumber").GetString());
+        Assert.Equal("Belgium", interim.GetProperty("country").GetString());
+        Assert.Equal("Antwerp Interim Holding Site", interim.GetProperty("siteName").GetString());
+        Assert.Equal("12 Scheldelaan", interim.GetProperty("addressLine1").GetString());
+        Assert.Equal("Unit 4", interim.GetProperty("addressLine2").GetString());
+        Assert.Equal("Antwerp", interim.GetProperty("townOrCity").GetString());
+        Assert.Equal("Flanders", interim.GetProperty("stateOrRegion").GetString());
+        Assert.Equal("2030", interim.GetProperty("postcode").GetString());
+        Assert.Equal("Elke Janssens", interim.GetProperty("contactName").GetString());
+        Assert.Equal("elke.janssens@example.com", interim.GetProperty("contactEmail").GetString());
+        Assert.Equal("+32 3 987 6543", interim.GetProperty("contactPhone").GetString());
+
+        Assert.Equal(JsonValueKind.False, sites[1].GetProperty("isNewSite").ValueKind);
+        Assert.Equal(
+            JsonValueKind.False,
+            sites[1].GetProperty("interimSite").GetProperty("isNewSite").ValueKind
+        );
+
+        // Absent must stay absent, not be materialised as null or false.
+        Assert.False(sites[2].TryGetProperty("isNewSite", out _));
+        Assert.False(sites[2].TryGetProperty("interimSite", out _));
+
+        // AC03: authority-to-issue contacts.
+        var authorisers = item.Payload.GetProperty("prns").GetProperty("authorisers");
+        Assert.Equal(3, authorisers.GetArrayLength());
+        Assert.Equal("Grace Adeyemi", authorisers[0].GetProperty("fullName").GetString());
+        Assert.Equal(JsonValueKind.True, authorisers[0].GetProperty("isNew").ValueKind);
+        Assert.Equal(JsonValueKind.False, authorisers[1].GetProperty("isNew").ValueKind);
+        Assert.False(authorisers[2].TryGetProperty("isNew", out _));
     }
 
     // -------------------- RecordDecisionRationale (atomicity) --------------------

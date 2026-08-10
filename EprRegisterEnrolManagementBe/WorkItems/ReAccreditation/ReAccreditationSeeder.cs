@@ -40,6 +40,24 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// </summary>
     private const string SubmittedStateId = "submitted";
 
+    /// <summary>
+    /// RA-292 fixture seed key. Its own key rather than an enrichment of
+    /// <c>full-payload-verification</c> on purpose:
+    /// <see cref="IWorkItemPersistence.CreateIfAbsentAsync"/> inserts by
+    /// deterministic id and never updates, so enriching an existing seed item
+    /// would be invisible in every environment that has already seeded (dev,
+    /// and any e2e stack with a persistent volume). A new key is inserted on
+    /// the next boot regardless of what is already there.
+    /// </summary>
+    public const string OrsInterimAuthoritySeedKey = "ors-interim-authority";
+
+    /// <summary>
+    /// Organisation name of the RA-292 fixture. Unique across the seed set and
+    /// not created by any spec, so an mgmt-tests search by organisation name
+    /// resolves to exactly one row.
+    /// </summary>
+    public const string OrsInterimAuthorityOrganisationName = "Overseas Reprocessing Verification Ltd";
+
     public string TypeId => ReAccreditationType.Id;
 
     public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
@@ -435,6 +453,217 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // RA-292: the ORS / interim-site / authority-to-issue fixture.
+        //
+        // AC01-AC03 are "is this thing flagged as NEW?" assertions, and a
+        // fixture that only carries the positive case cannot tell a correct
+        // implementation from one that badges everything. So every flag appears
+        // here in all three of its observable forms — true, false, and absent —
+        // on a single work item:
+        //
+        //   overseasSites.sites[0]  isNewSite = true   + interimSite isNewSite = true
+        //   overseasSites.sites[1]  isNewSite = false  + interimSite isNewSite = false
+        //   overseasSites.sites[2]  isNewSite absent   + no interimSite at all
+        //   prns.authorisers[0]     isNew = true
+        //   prns.authorisers[1]     isNew = false
+        //   prns.authorisers[2]     isNew absent
+        //
+        // The absent variants are not padding: every RA-292 field is optional
+        // on the wire, so "absent renders no badge and does not throw" is a real
+        // branch of the frontend. The whole-item backwards-compatibility case
+        // (no overseasSites and no prns at all, i.e. a pre-RA-292 submission) is
+        // covered by the "Belfast Fibres Co" item above, which mgmt-tests
+        // already uses as its no-overseas-sites fixture.
+        //
+        // Site 0 carries the full ORS detail field set for AC04. Sites 1 and 2
+        // deliberately omit fields (site 1 has no besEvidence, its interim site
+        // no addressLine2; site 2 is near-minimal) so a template that assumes
+        // every key is present fails here rather than in production.
+        yield return Build(
+            seedKey: OrsInterimAuthoritySeedKey,
+            postcode: "EC2A 2BB",
+            submittedDaysAgo: 6,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = OrsInterimAuthorityOrganisationName,
+                ["registrationNumber"] = "EPR-100292",
+                ["operatorApplicationId"] = "app-ors-interim-authority-001",
+                ["operatorOrganisationId"] = "org-ors-interim-authority-001",
+                ["operatorRegistrationId"] = "reg-ors-interim-authority-001",
+                ["material"] = "plastic",
+                ["accreditationYear"] = 2026,
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "ors.verification@example.com",
+                ["siteAddress"] = "1 Verification Way, London",
+                ["siteAddressPostcode"] = "EC2A 2BB",
+                ["submittedBy"] = new BsonDocument
+                {
+                    ["fullName"] = "Grace Adeyemi",
+                    ["jobTitle"] = "Head of Compliance",
+                    ["email"] = "grace.adeyemi@example.com"
+                },
+                // AC03: authority-to-issue contacts, one of each flag state.
+                ["prns"] = new BsonDocument
+                {
+                    ["plannedTonnageBand"] = "UpTo1000",
+                    ["authorisers"] = new BsonArray
+                    {
+                        new BsonDocument
+                        {
+                            ["fullName"] = "Grace Adeyemi",
+                            ["email"] = "grace.adeyemi@example.com",
+                            ["isNew"] = true
+                        },
+                        new BsonDocument
+                        {
+                            ["fullName"] = "Martin Cole",
+                            ["email"] = "martin.cole@example.com",
+                            ["isNew"] = false
+                        },
+                        // No isNew key — a pre-RA-292 authoriser record.
+                        new BsonDocument
+                        {
+                            ["fullName"] = "Priya Nair",
+                            ["email"] = "priya.nair@example.com"
+                        }
+                    }
+                },
+                ["overseasSites"] = new BsonDocument
+                {
+                    ["sites"] = new BsonArray
+                    {
+                        // AC01 + AC02 positive case, and the AC04 detail set.
+                        new BsonDocument
+                        {
+                            ["siteId"] = 1,
+                            ["orsId"] = "ORS-2026-0292",
+                            ["siteName"] = "Rotterdam New Reprocessing Site",
+                            ["siteAddress"] = "1 Havenstraat, Rotterdam",
+                            ["addressLine1"] = "1 Havenstraat",
+                            ["addressLine2"] = "Europoort Industrial Park",
+                            ["townOrCity"] = "Rotterdam",
+                            ["country"] = "Netherlands",
+                            ["coordinates"] = "51.9244, 4.4777",
+                            ["contactName"] = "Johan de Vries",
+                            ["contactEmail"] = "johan.devries@example.com",
+                            ["contactPhone"] = "+31 10 123 4567",
+                            ["operationCode"] = "R3",
+                            ["code1"] = "B3011",
+                            ["code2"] = "GH013",
+                            ["code3"] = "Y48",
+                            ["repatriatedLoads"] = 3,
+                            ["conditionsOfExport"] =
+                                "Baled material, moisture content below 5%, shipped under Annex VII controls.",
+                            ["isEu"] = true,
+                            ["isOecd"] = true,
+                            ["isNewSite"] = true,
+                            ["registeredNowAccredited"] = false,
+                            ["besEvidence"] = new BsonDocument
+                            {
+                                ["files"] = new BsonArray
+                                {
+                                    new BsonDocument
+                                    {
+                                        ["fileId"] = "ra292-bes-evidence-001",
+                                        ["filename"] = "bes-evidence.pdf",
+                                        ["contentType"] = "application/pdf",
+                                        ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
+                                        ["scanStatus"] = "Clean",
+                                        // Deliberately the same S3 object the
+                                        // full-payload fixture uses: it is
+                                        // already seeded into the mgmt-tests
+                                        // localstack bucket, so this item's
+                                        // download link resolves end-to-end
+                                        // without a new fixture object. The
+                                        // fileId is distinct because
+                                        // download-file.controller.js resolves
+                                        // files by fileId within one work item.
+                                        ["s3Key"] = "bes-evidence/full-payload-verification/bes-evidence.pdf",
+                                        ["s3Bucket"] = "epr-register-enrol-bes-evidence"
+                                    }
+                                }
+                            },
+                            ["interimSite"] = new BsonDocument
+                            {
+                                ["siteId"] = 11,
+                                ["siteNumber"] = "INT-001",
+                                ["isNewSite"] = true,
+                                ["country"] = "Belgium",
+                                ["siteName"] = "Antwerp Interim Holding Site",
+                                ["addressLine1"] = "12 Scheldelaan",
+                                ["addressLine2"] = "Unit 4",
+                                ["townOrCity"] = "Antwerp",
+                                ["stateOrRegion"] = "Flanders",
+                                ["postcode"] = "2030",
+                                ["contactName"] = "Elke Janssens",
+                                ["contactEmail"] = "elke.janssens@example.com",
+                                ["contactPhone"] = "+32 3 987 6543"
+                            }
+                        },
+                        // AC01 + AC02 negative case: an established site and an
+                        // established interim site. No besEvidence, and the
+                        // interim site has no addressLine2.
+                        new BsonDocument
+                        {
+                            ["siteId"] = 2,
+                            ["orsId"] = "ORS-2024-0042",
+                            ["siteName"] = "Hamburg Established Reprocessing Site",
+                            ["siteAddress"] = "42 Hafenstrasse, Hamburg",
+                            ["addressLine1"] = "42 Hafenstrasse",
+                            ["addressLine2"] = "Building C",
+                            ["townOrCity"] = "Hamburg",
+                            ["country"] = "Germany",
+                            ["coordinates"] = "53.5511, 9.9937",
+                            ["contactName"] = "Anna Schmidt",
+                            ["contactEmail"] = "anna.schmidt@example.com",
+                            ["contactPhone"] = "+49 40 555 0142",
+                            ["operationCode"] = "R4",
+                            ["code1"] = "B1010",
+                            ["code2"] = "GA300",
+                            ["code3"] = "Y23",
+                            ["repatriatedLoads"] = 0,
+                            ["conditionsOfExport"] =
+                                "Loose material, shipped under Annex VII controls.",
+                            ["isEu"] = true,
+                            ["isOecd"] = true,
+                            ["isNewSite"] = false,
+                            ["registeredNowAccredited"] = true,
+                            ["interimSite"] = new BsonDocument
+                            {
+                                ["siteId"] = 21,
+                                ["siteNumber"] = "INT-002",
+                                ["isNewSite"] = false,
+                                ["country"] = "Germany",
+                                ["siteName"] = "Bremen Interim Storage",
+                                ["addressLine1"] = "8 Speicherstrasse",
+                                ["townOrCity"] = "Bremen",
+                                ["stateOrRegion"] = "Bremen",
+                                ["postcode"] = "28217",
+                                ["contactName"] = "Lukas Braun",
+                                ["contactEmail"] = "lukas.braun@example.com",
+                                ["contactPhone"] = "+49 421 555 0188"
+                            }
+                        },
+                        // Pre-RA-292 shape: no isNewSite, no interimSite, no
+                        // besEvidence. Proves absent flags render as "not new"
+                        // rather than crashing or badging.
+                        new BsonDocument
+                        {
+                            ["siteId"] = 3,
+                            ["orsId"] = "ORS-2023-0007",
+                            ["siteName"] = "Bilbao Legacy Reprocessing Site",
+                            ["siteAddress"] = "7 Muelle Tomas Olabarri, Bilbao",
+                            ["townOrCity"] = "Bilbao",
+                            ["country"] = "Spain"
                         }
                     }
                 }
