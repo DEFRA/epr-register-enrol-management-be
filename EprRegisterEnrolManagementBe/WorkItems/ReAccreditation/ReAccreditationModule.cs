@@ -65,6 +65,17 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IWorkItemMigration,
             ReAccreditationWithdrawUpdatedSnapshotMigration
         >();
+        // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
+        // provably-defaulted true. Unlike every migration above it is a no-op
+        // until deliberately enabled AND a spot-check is recorded AND apply
+        // mode is set — see the type docs for why the gating is this heavy
+        // (a bad correction hides a genuinely new site from the regulator,
+        // which is worse than the defect it fixes). Safe to register
+        // unconditionally: with no configuration it returns immediately.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationIsNewSiteCorrectionMigration
+        >();
         // RA-132: accreditation-id generator + module-scoped approval
         // service that owns the bespoke approval workflow (id issuance,
         // SLA clock stop, queued publishing). RA-133: the generator
