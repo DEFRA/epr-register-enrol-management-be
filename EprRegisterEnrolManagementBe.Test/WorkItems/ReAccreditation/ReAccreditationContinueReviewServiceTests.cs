@@ -49,7 +49,12 @@ public class ReAccreditationContinueReviewServiceTests
             Action = "action-applied",
             ActionDisplayName = "Action applied",
             CreatedAt = harness.WorkItem.AuditLog[0].CreatedAt.AddDays(-10),
-            Details = new Dictionary<string, string?> { ["actionId"] = "resume-during-decision" },
+            Details = new Dictionary<string, string?>
+            {
+                ["actionId"] = "resume-during-decision",
+                ["fromStateId"] = "queried",
+                ["toStateId"] = "updated",
+            },
         });
 
         var result = await harness.Service.ContinueReviewAsync(harness.WorkItem.Id, harness.User, ct);
@@ -198,7 +203,12 @@ public class ReAccreditationContinueReviewServiceTests
                     Action = "action-applied",
                     ActionDisplayName = "Action applied",
                     CreatedAt = DateTime.UtcNow.AddHours(-1),
-                    Details = new Dictionary<string, string?> { ["actionId"] = resumeActionId },
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["actionId"] = resumeActionId,
+                        ["fromStateId"] = "queried",
+                        ["toStateId"] = "updated",
+                    },
                 });
             }
 

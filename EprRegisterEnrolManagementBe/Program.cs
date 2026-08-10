@@ -69,6 +69,11 @@ static WebApplication BuildApp(string[] args)
 static void ConfigureHost(WebApplicationBuilder builder)
 {
     builder.Host.UseSerilog(CdpLogging.Configuration);
+
+    // Suppress the "Server: Kestrel" response header. It's a minor
+    // fingerprinting aid with no direct exploit path, but there's no
+    // reason to advertise the server stack (pentest 2026-08-08, L4).
+    builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 }
 
 [ExcludeFromCodeCoverage]
