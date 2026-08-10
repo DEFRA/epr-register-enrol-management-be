@@ -40,10 +40,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   "constructible" ≠ "safe to run unreviewed".</item>
 ///   <item><see cref="ApplyConfigKey"/> — DRY RUN unless explicitly true. The
 ///   default run reports precisely what it would change and writes nothing.</item>
-///   <item>Per site, <see cref="ReAccreditationIsNewSiteAudit.SiteVerdict.ProvablyCorrupt"/>
-///   and nothing else. A site whose <c>orsId</c> is missing but which carries
-///   operator-entered detail is <em>refused</em> in code, not left to a human to
-///   notice.</item>
+///   <item>Per site, only the two ReEx-sourced correctable verdicts
+///   (<see cref="ReAccreditationIsNewSiteAudit.SiteVerdict.ProvablyCorrupt"/> and
+///   <see cref="ReAccreditationIsNewSiteAudit.SiteVerdict.PromotedCorrectable"/>).
+///   A site with no <c>orsId</c> that was never promoted yet carries detail
+///   nothing accounts for is <em>refused</em> in code, not left to a human to
+///   notice — and the refusal names the fields that caused it.</item>
 /// </list>
 ///
 /// <para>
@@ -216,13 +218,21 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             page++;
         }
 
+        // Each placeholder name appears exactly once. A repeated name is a
+        // distinct positional slot to the structured-logging formatter, so
+        // reusing one throws FormatException when the message is rendered —
+        // and a test that logs through NullLogger never renders, so it would
+        // pass while the real run produced no summary at all.
         logger.LogInformation(
-            "epr-2uxy correction complete. Mode={Mode}. Items {Verb}: {ItemsChanged}. " +
-            "Sites {Verb}: {SitesCorrected}. Sites refused as ambiguous (need manual " +
+            "epr-2uxy correction complete. Mode={Mode}. Items {ItemsVerb}: {ItemsChanged}. " +
+            "Sites {SitesVerb}: {SitesCorrected}. Sites refused as ambiguous (need manual " +
             "adjudication): {SitesRefusedAmbiguous}.",
             apply ? "APPLY" : "DRY RUN",
             apply ? "corrected" : "that would be corrected",
-            itemsChanged, sitesCorrected, sitesRefusedAmbiguous);
+            itemsChanged,
+            apply ? "corrected" : "that would be corrected",
+            sitesCorrected,
+            sitesRefusedAmbiguous);
     }
 
     /// <summary>
@@ -269,12 +279,19 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
 
             switch (ReAccreditationIsNewSiteAudit.ClassifySite(site))
             {
+                // Both correctable verdicts are ReEx-sourced. PromotedCorrectable
+                // is not a weaker case than ProvablyCorrupt — a promoted site's
+                // operator detail is explained by ApplyPromotedFields, and
+                // promoted sites are the bulk of the affected population.
                 case ReAccreditationIsNewSiteAudit.SiteVerdict.ProvablyCorrupt:
+                case ReAccreditationIsNewSiteAudit.SiteVerdict.PromotedCorrectable:
                     planned.Add((site, $"[{index}] {name}"));
                     break;
 
-                case ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousOrsIdMissing:
-                    refused.Add(name);
+                case ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousRefused:
+                    refused.Add(
+                        $"{name} (refusedBecause: " +
+                        $"{string.Join(", ", ReAccreditationIsNewSiteAudit.RefusalTriggers(site))})");
                     break;
 
                 default:

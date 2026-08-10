@@ -1,6 +1,7 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -190,6 +191,90 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         Assert.True(IsNewSiteOf(item, 0));
         await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_corrects_a_promoted_reex_site_despite_its_operator_detail()
+    {
+        // THE regression, at migration level. Promoted registered sites are
+        // ReEx-sourced legacy sites — the bulk of the affected population — and
+        // ApplyPromotedFields gives them the full operator-detail set with no
+        // orsId. An implementation that reads "operator detail" as "operator
+        // created" refuses them, which fails safe but makes this migration close
+        // to a no-op while producing a large refused bucket that looks like
+        // appropriate caution.
+        var ct = TestContext.Current.CancellationToken;
+        var promoted = new BsonDocument
+        {
+            ["siteName"] = "Promoted Site",
+            ["siteAddress"] = "1 Promoted Way, Rotterdam, Netherlands",
+            ["addressLine1"] = "1 Promoted Way",
+            ["addressLine2"] = "Unit 2",
+            ["townOrCity"] = "Rotterdam",
+            ["country"] = "Netherlands",
+            ["coordinates"] = "51.9244, 4.4777",
+            ["contactName"] = "Johan de Vries",
+            ["contactEmail"] = "johan@example.com",
+            ["contactPhone"] = "+31 10 123 4567",
+            ["operationCode"] = "R3",
+            ["code1"] = "B3011",
+            ["code2"] = "GH013",
+            ["code3"] = "Y48",
+            ["repatriatedLoads"] = "3",
+            ["conditionsOfExport"] = true,
+            ["isEu"] = true,
+            ["isOecd"] = true,
+            ["selected"] = true,
+            ["registeredNowAccredited"] = true,
+            ["isNewSite"] = true
+        };
+        var item = BuildItem(sites: promoted);
+        var persistence = PersistenceWith(item);
+
+        await BuildSut(Config()).ApplyAsync(persistence, ct);
+
+        Assert.False(IsNewSiteOf(item, 0));
+        await persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_corrects_a_reex_site_the_operator_only_attached_evidence_to()
+    {
+        // AddBesEvidenceFile and AddInterimSite resolve by SiteId with no
+        // provenance guard, so attaching either to a carried-over ReEx site is
+        // ordinary rather than anomalous — uploading BES evidence against a
+        // prior-year overseas site is the purpose of that journey. Neither is
+        // evidence the operator CREATED the site.
+        var ct = TestContext.Current.CancellationToken;
+        var site = ReExSite(isNewSite: true);
+        site["besEvidence"] = new BsonDocument { ["files"] = new BsonArray() };
+        site["interimSite"] = new BsonDocument { ["isNewSite"] = true };
+        var item = BuildItem(sites: site);
+        var persistence = PersistenceWith(item);
+
+        await BuildSut(Config()).ApplyAsync(persistence, ct);
+
+        Assert.False(IsNewSiteOf(item, 0));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_does_not_touch_the_nested_interim_site_flag()
+    {
+        // Scope is ORS-level isNewSite only. Interim sites cannot carry the
+        // defect — InterimSiteModel and its flag were added in the same commit,
+        // and ReEx never creates them — so rewriting one would be fabricating a
+        // value rather than correcting one.
+        var ct = TestContext.Current.CancellationToken;
+        var site = ReExSite(isNewSite: true);
+        site["interimSite"] = new BsonDocument { ["isNewSite"] = true };
+        var item = BuildItem(sites: site);
+        var persistence = PersistenceWith(item);
+
+        await BuildSut(Config()).ApplyAsync(persistence, ct);
+
+        Assert.False(IsNewSiteOf(item, 0));
+        Assert.True(
+            item.Payload["overseasSites"]["sites"][0]["interimSite"]["isNewSite"].AsBoolean);
     }
 
     [Fact]
@@ -447,6 +532,81 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         await BuildSut(configuration).ApplyAsync(persistence, ct);
 
         Assert.False(IsNewSiteOf(item, 0));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ApplyAsync_renders_every_log_message_it_emits(bool apply)
+    {
+        // Every other test here logs through NullLogger, which never invokes the
+        // formatter — so a malformed message template (e.g. the same placeholder
+        // name reused, which the structured formatter treats as a second
+        // positional slot) passes silently and then throws FormatException on a
+        // real run. That would leave an operator with a migration that appears
+        // to do nothing and reports nothing. Forcing every message through a
+        // real formatter is what makes the templates load-bearing.
+        var ct = TestContext.Current.CancellationToken;
+        var ambiguous = ReExSite(isNewSite: true, siteName: "Stripped");
+        ambiguous["operationCode"] = "R3";
+
+        var item = BuildItem(
+            null,
+            ReExSite(isNewSite: true, siteName: "Corrupt"),
+            ambiguous);
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(apply: apply), logger, new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        // Both the per-record lines and the completion summary rendered.
+        Assert.Contains(logger.Messages, m => m.Contains("REFUSED", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, m => m.Contains("refusedBecause", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, m =>
+            m.Contains("correction complete", StringComparison.Ordinal)
+            && m.Contains(apply ? "APPLY" : "DRY RUN", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_renders_the_missing_spot_check_error()
+    {
+        // The refusal path has its own template, and it is the one an operator
+        // hits first when setting this up — so it must render too.
+        var ct = TestContext.Current.CancellationToken;
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(confirmedBy: null), logger, new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(PersistenceWith(BuildItem(sites: ReExSite(isNewSite: true))), ct);
+
+        Assert.Contains(logger.Messages, m =>
+            m.Contains(
+                ReAccreditationIsNewSiteCorrectionMigration.SpotCheckConfirmedByConfigKey,
+                StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Invokes the real message formatter, unlike <c>NullLogger</c>, so a
+    /// malformed template fails the test instead of a production run.
+    /// </summary>
+    private sealed class RenderingLogger : ILogger<ReAccreditationIsNewSiteCorrectionMigration>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 
     [Fact]

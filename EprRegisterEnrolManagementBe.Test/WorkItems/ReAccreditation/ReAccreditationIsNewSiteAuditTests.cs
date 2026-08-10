@@ -3,6 +3,7 @@ using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -120,15 +121,70 @@ public class ReAccreditationIsNewSiteAuditTests
         site[detailField] = "something";
 
         Assert.Equal(
-            ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousOrsIdMissing,
+            ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousRefused,
             ReAccreditationIsNewSiteAudit.ClassifySite(site));
     }
 
+    /// <summary>
+    /// A promoted ReEx site: no <c>orsId</c>, <c>registeredNowAccredited: true</c>,
+    /// and the complete field set <c>ApplyPromotedFields</c> writes.
+    /// </summary>
+    private static BsonDocument PromotedReExSite() => Site(
+        ("siteName", "Promoted Site"),
+        ("siteAddress", "1 Promoted Way, Rotterdam, Netherlands"),
+        ("addressLine1", "1 Promoted Way"),
+        ("addressLine2", "Unit 2"),
+        ("townOrCity", "Rotterdam"),
+        ("country", "Netherlands"),
+        ("coordinates", "51.9244, 4.4777"),
+        ("contactName", "Johan de Vries"),
+        ("contactEmail", "johan@example.com"),
+        ("contactPhone", "+31 10 123 4567"),
+        ("operationCode", "R3"),
+        ("code1", "B3011"),
+        ("code2", "GH013"),
+        ("code3", "Y48"),
+        ("repatriatedLoads", "3"),
+        ("conditionsOfExport", true),
+        ("isEu", true),
+        ("isOecd", true),
+        ("selected", true),
+        ("registeredNowAccredited", true),
+        ("isNewSite", true));
+
     [Fact]
-    public void ClassifySite_returns_ambiguous_for_nested_operator_detail_objects()
+    public void ClassifySite_treats_a_promoted_reex_site_as_correctable_despite_its_operator_detail()
     {
-        // besEvidence and interimSite are objects rather than scalars; both are
-        // things ReEx never produces.
+        // THE regression. PromoteOverseasSite has no ReEx-provenance guard and
+        // ApplyPromotedFields writes the full operator-detail set while never
+        // setting OrsId — so a promoted registered site has no orsId AND
+        // complete operator detail, tripping a naive "operator detail means
+        // operator-created" tell on ten fields at once.
+        //
+        // Promoted sites ARE ReEx-sourced legacy sites, i.e. precisely the
+        // population this remediation exists to fix. Misclassifying them as
+        // ambiguous fails in the safe direction but makes the migration close to
+        // a no-op, while producing a large "ambiguous" bucket that reads as
+        // appropriate caution rather than as a miscalibrated classifier.
+        //
+        // registeredNowAccredited works as a POSITIVE resolver here: it explains
+        // the detail rather than contradicting it. It is only ever consulted
+        // within a set that is already ReEx-sourced by construction, because an
+        // operator-added site always carries an orsId and never reaches here.
+        Assert.Equal(
+            ReAccreditationIsNewSiteAudit.SiteVerdict.PromotedCorrectable,
+            ReAccreditationIsNewSiteAudit.ClassifySite(PromotedReExSite()));
+    }
+
+    [Fact]
+    public void ClassifySite_does_not_treat_bes_evidence_or_an_interim_site_as_operator_creation()
+    {
+        // AddBesEvidenceFile and AddInterimSite both resolve the target site by
+        // SiteId alone with no provenance guard, so an operator routinely
+        // attaches either to a carried-over ReEx site — uploading
+        // broadly-equivalent-standards evidence against a prior-year overseas
+        // site is the purpose of that journey, not an anomaly. They evidence
+        // operator activity ON a site, not operator creation OF one.
         var withBes = ReExSite(isNewSite: true);
         withBes["besEvidence"] = new BsonDocument { ["files"] = new BsonArray() };
 
@@ -136,11 +192,42 @@ public class ReAccreditationIsNewSiteAuditTests
         withInterim["interimSite"] = new BsonDocument { ["isNewSite"] = true };
 
         Assert.Equal(
-            ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousOrsIdMissing,
+            ReAccreditationIsNewSiteAudit.SiteVerdict.ProvablyCorrupt,
             ReAccreditationIsNewSiteAudit.ClassifySite(withBes));
         Assert.Equal(
-            ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousOrsIdMissing,
+            ReAccreditationIsNewSiteAudit.SiteVerdict.ProvablyCorrupt,
             ReAccreditationIsNewSiteAudit.ClassifySite(withInterim));
+    }
+
+    [Fact]
+    public void ClassifySite_still_refuses_unexplained_operator_detail_on_an_unpromoted_site()
+    {
+        // The bucket the tell was actually reaching for: no orsId, never
+        // promoted, yet carrying detail nothing accounts for. A stripped orsId
+        // on an operator-added site is a live possibility here, so refuse.
+        var site = ReExSite(isNewSite: true);
+        site["operationCode"] = "R3";
+        site["contactName"] = "Someone";
+
+        Assert.Equal(
+            ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousRefused,
+            ReAccreditationIsNewSiteAudit.ClassifySite(site));
+    }
+
+    [Fact]
+    public void ClassifySite_reports_which_fields_triggered_a_refusal()
+    {
+        // The signal that would have caught this very defect from the dry-run
+        // report alone: a reader seeing "refused because contactName,
+        // operationCode" against a promoted site can tell a miscalibrated
+        // classifier from genuinely messy data, without reading the source.
+        var site = ReExSite(isNewSite: true);
+        site["operationCode"] = "R3";
+        site["contactName"] = "Someone";
+
+        var triggers = ReAccreditationIsNewSiteAudit.RefusalTriggers(site);
+
+        Assert.Equal(["contactName", "operationCode"], triggers.Order());
     }
 
     [Theory]
@@ -190,11 +277,75 @@ public class ReAccreditationIsNewSiteAuditTests
 
         Assert.Equal(4, result.ItemsScanned);
         Assert.Equal(1, result.SitesProvablyCorrupt);
-        Assert.Equal(1, result.SitesAmbiguous);
-        Assert.Equal(1, result.SitesOperatorAddedCorrect);
+        Assert.Equal(1, result.SitesAmbiguousRefused);
+        Assert.Equal(1, result.SitesAlreadyCorrect);
         Assert.Equal(1, result.SitesNotFlaggedNew);
-        Assert.Equal("corrupt", Assert.Single(result.ItemsWithProvablyCorrupt).Id);
+        Assert.Equal("corrupt", Assert.Single(result.ItemsWithCorrectable).Id);
         Assert.Equal("ambiguous", Assert.Single(result.ItemsWithAmbiguous).Id);
+    }
+
+    [Fact]
+    public void Classify_counts_every_bucket_separately()
+    {
+        // Per-bucket counts rather than one "at risk" total, because the buckets
+        // fail in different directions — and collapsing them would hide a
+        // miscalibrated tell inflating the refused bucket.
+        var now = new DateTime(2026, 7, 28, 0, 0, 0, DateTimeKind.Utc);
+        var ambiguousSite = ReExSite(isNewSite: true);
+        ambiguousSite["operationCode"] = "R3";
+
+        var result = ReAccreditationIsNewSiteAudit.Classify(
+        [
+            WorkItemDoc("corrupt", now, ReExSite(isNewSite: true)),
+            WorkItemDoc("promoted", now, PromotedReExSite()),
+            WorkItemDoc("ambiguous", now, ambiguousSite),
+            WorkItemDoc("ok", now,
+                Site(("orsId", "ORS-1"), ("siteName", "Op"), ("isNewSite", true))),
+            WorkItemDoc("clean", now, ReExSite(isNewSite: false))
+        ]);
+
+        Assert.Equal(1, result.SitesProvablyCorrupt);
+        Assert.Equal(1, result.SitesPromotedCorrectable);
+        Assert.Equal(1, result.SitesAmbiguousRefused);
+        Assert.Equal(1, result.SitesAlreadyCorrect);
+        Assert.Equal(1, result.SitesNotFlaggedNew);
+
+        // Both correctable verdicts roll into the migration's workload.
+        Assert.Equal(2, result.SitesCorrectable);
+        Assert.Equal(
+            ["corrupt", "promoted"],
+            result.ItemsWithCorrectable.Select(r => r.Id).Order());
+    }
+
+    [Fact]
+    public void Classify_names_the_fields_behind_each_refusal()
+    {
+        // The signal that distinguishes a miscalibrated tell from messy data,
+        // carried through aggregation rather than only available per-site.
+        var ambiguousSite = ReExSite(isNewSite: true);
+        ambiguousSite["contactName"] = "Someone";
+        ambiguousSite["code2"] = "GH013";
+
+        var result = ReAccreditationIsNewSiteAudit.Classify(
+        [
+            WorkItemDoc("ambiguous", new DateTime(2026, 7, 28, 0, 0, 0, DateTimeKind.Utc),
+                ambiguousSite)
+        ]);
+
+        var site = Assert.Single(Assert.Single(result.ItemsWithAmbiguous).Sites);
+        Assert.Equal(["code2", "contactName"], site.RefusedBecause.Order());
+    }
+
+    [Fact]
+    public void Classify_leaves_refused_because_empty_for_non_refused_sites()
+    {
+        var result = ReAccreditationIsNewSiteAudit.Classify(
+        [
+            WorkItemDoc("corrupt", new DateTime(2026, 7, 28, 0, 0, 0, DateTimeKind.Utc),
+                ReExSite(isNewSite: true))
+        ]);
+
+        Assert.Empty(Assert.Single(Assert.Single(result.ItemsWithCorrectable).Sites).RefusedBecause);
     }
 
     [Fact]
@@ -212,10 +363,10 @@ public class ReAccreditationIsNewSiteAuditTests
                 ReExSite(isNewSite: true), ambiguousSite)
         ]);
 
-        Assert.Single(result.ItemsWithProvablyCorrupt);
+        Assert.Single(result.ItemsWithCorrectable);
         Assert.Single(result.ItemsWithAmbiguous);
         Assert.Equal(1, result.SitesProvablyCorrupt);
-        Assert.Equal(1, result.SitesAmbiguous);
+        Assert.Equal(1, result.SitesAmbiguousRefused);
     }
 
     [Fact]
@@ -241,7 +392,7 @@ public class ReAccreditationIsNewSiteAuditTests
         ]);
 
         Assert.Equal(4, result.ItemsScanned);
-        Assert.Empty(result.ItemsWithProvablyCorrupt);
+        Assert.Empty(result.ItemsWithCorrectable);
         Assert.Empty(result.ItemsWithAmbiguous);
     }
 
@@ -279,7 +430,7 @@ public class ReAccreditationIsNewSiteAuditTests
             }
         ]);
 
-        var row = Assert.Single(result.ItemsWithProvablyCorrupt);
+        var row = Assert.Single(result.ItemsWithCorrectable);
         Assert.Equal("(none)", row.ApplicationReference);
         Assert.Equal("(none)", row.OrganisationName);
     }
@@ -339,7 +490,7 @@ public class ReAccreditationIsNewSiteAuditTests
             cancellationToken: ct);
 
         Assert.Equal(1, result.ItemsScanned);
-        Assert.Equal("in-window", Assert.Single(result.ItemsWithProvablyCorrupt).Id);
+        Assert.Equal("in-window", Assert.Single(result.ItemsWithCorrectable).Id);
 
         var after = await collection.Find(FilterDefinition<BsonDocument>.Empty)
             .SortBy(d => d["_id"]).ToListAsync(ct);
@@ -383,10 +534,79 @@ public class ReAccreditationIsNewSiteAuditTests
             windowEnd: new DateTime(2026, 8, 15, 0, 0, 0, DateTimeKind.Utc),
             cancellationToken: ct);
 
-        Assert.Equal("corrupt", Assert.Single(result.ItemsWithProvablyCorrupt).Id);
+        Assert.Equal("corrupt", Assert.Single(result.ItemsWithCorrectable).Id);
         Assert.Equal("ambiguous", Assert.Single(result.ItemsWithAmbiguous).Id);
 
         await client.DropDatabaseAsync(database.DatabaseNamespace.DatabaseName, ct);
+    }
+
+    [Fact]
+    public async Task RunAsync_warns_when_more_sites_are_refused_than_are_correctable()
+    {
+        // The tripwire for this classifier's only real failure mode. It fails
+        // silently and in the safe direction, so a miscalibrated tell shows up
+        // solely as a large refused bucket that reads as appropriate caution.
+        // Without this warning the natural conclusion is "the data is too messy
+        // to remediate", and epr-2uxy gets closed as intractable when it isn't.
+        var ct = TestContext.Current.CancellationToken;
+        await using var fixture = new MongoIntegrationFixture();
+        await fixture.InitializeAsync();
+
+        var client = new MongoClient(fixture.ConnectionString);
+        var database = client.GetDatabase(MongoIntegrationFixture.NewDatabaseName("audit-warn"));
+        var collection = database.GetCollection<BsonDocument>("workItems");
+
+        var ambiguousSite = ReExSite(isNewSite: true);
+        ambiguousSite["operationCode"] = "R3";
+        var secondAmbiguous = ReExSite(isNewSite: true);
+        secondAmbiguous["contactName"] = "Someone";
+
+        await collection.InsertManyAsync(
+            [
+                WorkItemDoc("ambiguous-1", new DateTime(2026, 7, 28, 0, 0, 0, DateTimeKind.Utc),
+                    ambiguousSite),
+                WorkItemDoc("ambiguous-2", new DateTime(2026, 7, 29, 0, 0, 0, DateTimeKind.Utc),
+                    secondAmbiguous)
+            ],
+            cancellationToken: ct);
+
+        var logger = new CollectingLogger();
+        var result = await ReAccreditationIsNewSiteAudit.RunAsync(
+            collection,
+            logger,
+            windowEnd: new DateTime(2026, 8, 15, 0, 0, 0, DateTimeKind.Utc),
+            cancellationToken: ct);
+
+        Assert.Equal(2, result.SitesAmbiguousRefused);
+        Assert.Equal(0, result.SitesCorrectable);
+        Assert.Contains(logger.Messages, m =>
+            m.Contains("question the classifier", StringComparison.OrdinalIgnoreCase));
+        // The refusal reasons must reach the report, not just the result object.
+        Assert.Contains(logger.Messages, m => m.Contains("refusedBecause", StringComparison.Ordinal));
+
+        await client.DropDatabaseAsync(database.DatabaseNamespace.DatabaseName, ct);
+    }
+
+    /// <summary>
+    /// Captures rendered log messages so the report's own wording — which is the
+    /// only thing a person running this in a deployed environment ever sees —
+    /// can be asserted on.
+    /// </summary>
+    private sealed class CollectingLogger : ILogger
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter) =>
+            Messages.Add(formatter(state, exception));
     }
 
     [Fact]
@@ -508,8 +728,8 @@ public class ReAccreditationIsNewSiteAuditTests
             cancellationToken: ct);
 
         Assert.Equal(0, result.SitesProvablyCorrupt);
-        Assert.Equal(0, result.SitesAmbiguous);
-        Assert.Empty(result.ItemsWithProvablyCorrupt);
+        Assert.Equal(0, result.SitesAmbiguousRefused);
+        Assert.Empty(result.ItemsWithCorrectable);
 
         await client.DropDatabaseAsync(database.DatabaseNamespace.DatabaseName, ct);
     }

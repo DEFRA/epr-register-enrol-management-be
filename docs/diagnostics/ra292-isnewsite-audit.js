@@ -64,7 +64,7 @@
  * year with no overseas sites).
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * THE AMBIGUITY GUARD
+ * THE AMBIGUITY GUARD, AND WHY PROMOTION RESOLVES IT
  *
  * `orsId` is itself client-clobberable: it is `string?` on the operator model
  * and `PatchOverseasSites` replaced the site list wholesale. If a client ever
@@ -73,11 +73,27 @@
  * from the regulator. That is worse than the defect, which errs toward
  * over-showing.
  *
- * So a site missing `orsId` is only called PROVABLY CORRUPT when it also carries
- * none of the detail fields a ReEx-mapped site never has (contact details,
- * operation code, waste codes, address lines, BES evidence, interim site). One
- * that does carry such detail is reported as AMBIGUOUS: adjudicate by hand,
- * never auto-correct.
+ * But "has operator detail" is the WRONG tell on its own, because
+ * `PromoteOverseasSite` has no ReEx-provenance guard and `ApplyPromotedFields`
+ * writes eighteen fields onto the site while never setting `OrsId`. A promoted
+ * registered site therefore has no `orsId` AND the complete operator-detail
+ * set — and promoted sites are ReEx-sourced legacy sites, i.e. exactly the
+ * population this exists to fix. So `registeredNowAccredited` is used as a
+ * POSITIVE resolver: it EXPLAINS the detail rather than contradicting it.
+ *
+ *   no orsId + registeredNowAccredited true  -> PROMOTED_CORRECTABLE
+ *   no orsId + unpromoted + no detail        -> PROVABLY_CORRUPT
+ *   no orsId + unpromoted + detail           -> AMBIGUOUS_REFUSED
+ *
+ * The asymmetry that makes this safe: an operator-ADDED site always has an
+ * `orsId`, so it never enters the no-`orsId` population at all.
+ * `registeredNowAccredited` only ever disambiguates WITHIN a set that is
+ * already ReEx-sourced by construction.
+ *
+ * Residual, accepted: an operator-added site that was BOTH promoted AND had its
+ * `orsId` stripped would be corrected wrongly. That requires promoting a site
+ * that was never registered; contrived, and it is what the human spot-check
+ * gate exists to catch.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * NOT AFFECTED, AND DELIBERATELY NOT SCANNED
@@ -144,25 +160,49 @@ const WINDOW_END =
     ? new Date(RA292_DEPLOYED_AT)
     : new Date()
 
-// Fields HttpReExApiAdapter.MapOverseasSite never populates. Presence on a site
-// with no orsId means operator-entered-with-orsId-stripped, not ReEx-sourced.
-const OPERATOR_ENTERED_DETAIL = [
+// Detail fields that neither MapOverseasSite nor promotion accounts for.
+//
+// Deliberately EXCLUDED, both verified against the operator endpoints:
+//   siteName, siteAddress, country, isEu, isOecd, selected — MapOverseasSite
+//     sets all of these, so they are on every ReEx site and tell us nothing.
+//   besEvidence, interimSite — AddBesEvidenceFile and AddInterimSite resolve
+//     the target by SiteId alone with NO provenance guard, so an operator can
+//     and routinely does attach either to a carried-over ReEx site. They
+//     evidence operator ACTIVITY ON a site, not operator CREATION OF one.
+const UNEXPLAINED_OPERATOR_DETAIL = [
   'contactName', 'contactEmail', 'contactPhone',
   'operationCode', 'code1', 'code2', 'code3',
   'addressLine1', 'addressLine2', 'townOrCity', 'coordinates',
-  'repatriatedLoads', 'conditionsOfExport', 'besEvidence', 'interimSite'
+  'repatriatedLoads', 'conditionsOfExport'
 ]
+
+function refusalTriggers(site) {
+  return UNEXPLAINED_OPERATOR_DETAIL.filter(
+    (f) => site[f] !== undefined && site[f] !== null
+  )
+}
 
 function classifySite(site) {
   if (site.isNewSite !== true) return 'NOT_FLAGGED_NEW'
+
+  // Everything past this point is ReEx-sourced BY CONSTRUCTION: an
+  // operator-added site always carries an orsId and never reaches it.
   const orsId = site.orsId
   if (orsId !== undefined && orsId !== null && String(orsId).trim() !== '') {
-    return 'OPERATOR_ADDED_CORRECT'
+    return 'ALREADY_CORRECT'
   }
-  const hasDetail = OPERATOR_ENTERED_DETAIL.some(
-    (f) => site[f] !== undefined && site[f] !== null
-  )
-  return hasDetail ? 'AMBIGUOUS_ORSID_MISSING' : 'PROVABLY_CORRUPT'
+
+  // registeredNowAccredited is set only by PromoteOverseasSite, which runs
+  // ApplyPromotedFields — and that writes the full operator-detail set while
+  // never setting OrsId. So on a promoted site the detail is EXPLAINED, not
+  // suspicious. Checking it BEFORE the detail check is what stops this
+  // refusing the very population the remediation exists to fix: a promoted
+  // site trips the detail tell on thirteen fields at once.
+  if (site.registeredNowAccredited === true) return 'PROMOTED_CORRECTABLE'
+
+  return refusalTriggers(site).length > 0
+    ? 'AMBIGUOUS_REFUSED'
+    : 'PROVABLY_CORRUPT'
 }
 
 function idOf(item) {
@@ -178,10 +218,11 @@ function sitesOf(item) {
   return Array.isArray(sites) ? sites : []
 }
 
-const provablyCorrupt = []
+const correctable = []
 const ambiguous = []
 let itemsScanned = 0
 let sitesCorrupt = 0
+let sitesPromoted = 0
 let sitesAmbiguous = 0
 let sitesCorrect = 0
 let sitesNotNew = 0
@@ -196,17 +237,25 @@ collection
   .forEach((item) => {
     itemsScanned++
     const sites = sitesOf(item)
-    const verdicts = sites.map((s, i) => ({
-      index: i,
-      siteName: s.siteName,
-      orsId: s.orsId === undefined ? '(absent)' : s.orsId,
-      verdict: classifySite(s)
-    }))
+    const verdicts = sites.map((s, i) => {
+      const verdict = classifySite(s)
+      return {
+        index: i,
+        siteName: s.siteName,
+        orsId: s.orsId === undefined ? '(absent)' : s.orsId,
+        verdict,
+        // Named per record so a reader can tell a genuinely ambiguous record
+        // from a miscalibrated tell WITHOUT reading this source.
+        refusedBecause:
+          verdict === 'AMBIGUOUS_REFUSED' ? refusalTriggers(s) : undefined
+      }
+    })
 
     for (const v of verdicts) {
       if (v.verdict === 'PROVABLY_CORRUPT') sitesCorrupt++
-      else if (v.verdict === 'AMBIGUOUS_ORSID_MISSING') sitesAmbiguous++
-      else if (v.verdict === 'OPERATOR_ADDED_CORRECT') sitesCorrect++
+      else if (v.verdict === 'PROMOTED_CORRECTABLE') sitesPromoted++
+      else if (v.verdict === 'AMBIGUOUS_REFUSED') sitesAmbiguous++
+      else if (v.verdict === 'ALREADY_CORRECT') sitesCorrect++
       else sitesNotNew++
     }
 
@@ -220,13 +269,17 @@ collection
       sites: verdicts
     }
 
-    if (verdicts.some((v) => v.verdict === 'PROVABLY_CORRUPT')) {
-      provablyCorrupt.push(row)
+    if (verdicts.some((v) =>
+      v.verdict === 'PROVABLY_CORRUPT' || v.verdict === 'PROMOTED_CORRECTABLE')
+    ) {
+      correctable.push(row)
     }
-    if (verdicts.some((v) => v.verdict === 'AMBIGUOUS_ORSID_MISSING')) {
+    if (verdicts.some((v) => v.verdict === 'AMBIGUOUS_REFUSED')) {
       ambiguous.push(row)
     }
   })
+
+const sitesCorrectable = sitesCorrupt + sitesPromoted
 
 print('')
 print('═══════════════════════════════════════════════════════════════════════')
@@ -242,29 +295,41 @@ print(` Window end   : ${WINDOW_END.toISOString()}${
 print('')
 print(` In-window re-accreditation items with overseas sites : ${itemsScanned}`)
 print('')
-print(` SITES provably corrupt  (true, no orsId, no detail)  : ${sitesCorrupt}`)
-print(`   across items                                       : ${provablyCorrupt.length}`)
-print(` SITES ambiguous (no orsId BUT operator detail)       : ${sitesAmbiguous}`)
-print(`   across items                                       : ${ambiguous.length}`)
-print(` SITES correctly new (operator-added, orsId present)  : ${sitesCorrect}`)
-print(` SITES not flagged new                                : ${sitesNotNew}`)
+print(' SITE BUCKETS')
+print(`  PROVABLY-CORRUPT     (no orsId, unpromoted, no detail) : ${sitesCorrupt}`)
+print(`  PROMOTED-CORRECTABLE (no orsId, registeredNowAccredited): ${sitesPromoted}`)
+print(`  AMBIGUOUS-REFUSED    (no orsId, unpromoted, detail)     : ${sitesAmbiguous}`)
+print(`  ALREADY-CORRECT      (operator-added, orsId present)    : ${sitesCorrect}`)
+print(`  not flagged new                                        : ${sitesNotNew}`)
+print('')
+print(` TOTAL CORRECTABLE : ${sitesCorrectable} sites across ${correctable.length} items`)
+print(` TOTAL REFUSED     : ${sitesAmbiguous} sites across ${ambiguous.length} items`)
 print('')
 
-if (sitesCorrupt === 0 && sitesAmbiguous === 0) {
+if (sitesCorrectable === 0 && sitesAmbiguous === 0) {
   print(' RESULT: nothing at risk in this environment.')
   print(' Record the environment and this figure on epr-2uxy.')
 } else {
-  if (provablyCorrupt.length > 0) {
-    print('─── PROVABLY CORRUPT: correctable by the gated migration ──────────────')
-    printjson(provablyCorrupt)
+  if (sitesAmbiguous > sitesCorrectable) {
+    print(' ⚠  MORE SITES WERE REFUSED THAN CLASSIFIED CORRECTABLE.')
+    print('    Treat this as a reason to QUESTION THE CLASSIFIER, not as')
+    print('    evidence the data cannot be remediated. If the same fields recur')
+    print('    in refusedBecause across many records, the tell is probably')
+    print('    over-broad. An earlier version of this script had exactly that')
+    print('    defect: it refused every promoted site, which is most of the')
+    print('    affected population, and looked like appropriate caution.')
+    print('')
+  }
+  if (correctable.length > 0) {
+    print('─── CORRECTABLE: actionable by the gated migration ────────────────────')
+    printjson(correctable)
     print('')
   }
   if (ambiguous.length > 0) {
-    print('─── ⚠  AMBIGUOUS: DO NOT auto-correct. Adjudicate by hand. ────────────')
-    print('    orsId is missing but operator-entered detail is present, so these')
-    print('    may be operator-added sites whose orsId was stripped rather than')
-    print('    ReEx-sourced ones. Correcting them would hide a genuinely new site')
-    print('    from the regulator. The migration refuses to touch these.')
+    print('─── ⚠  AMBIGUOUS-REFUSED: DO NOT auto-correct. Adjudicate by hand. ────')
+    print('    No orsId, never promoted, yet carrying detail nothing accounts')
+    print('    for. May be an operator-added site whose orsId was stripped.')
+    print('    Each record names the fields that triggered the refusal.')
     printjson(ambiguous)
     print('')
   }

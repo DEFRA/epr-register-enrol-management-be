@@ -115,46 +115,89 @@ internal static class ReAccreditationIsNewSiteAudit
     public static readonly DateTime WindowStart = new(2026, 7, 26, 0, 0, 0, DateTimeKind.Utc);
 
     /// <summary>
-    /// Detail fields that <c>HttpReExApiAdapter.MapOverseasSite</c> never
-    /// populates. Their presence on a site missing <c>orsId</c> means the site
-    /// was almost certainly operator-entered with its <c>orsId</c> stripped,
-    /// rather than ReEx-sourced — so it must not be auto-corrected.
+    /// Detail fields that neither <c>HttpReExApiAdapter.MapOverseasSite</c> nor
+    /// promotion accounts for. Their presence on a site that has no
+    /// <c>orsId</c> and was never promoted is unexplained, and the most likely
+    /// explanation is an operator-added site whose <c>orsId</c> was stripped —
+    /// so it must not be auto-corrected.
+    ///
+    /// <para>
+    /// Two categories are deliberately NOT here, both verified against the
+    /// operator endpoints rather than inferred:
+    /// </para>
+    /// <list type="bullet">
+    ///   <item><c>siteName</c>, <c>siteAddress</c>, <c>country</c>, <c>isEu</c>,
+    ///   <c>isOecd</c>, <c>selected</c> — <c>MapOverseasSite</c> sets all of
+    ///   these, so they are present on every ReEx site and tell us nothing.</item>
+    ///   <item><c>besEvidence</c> and <c>interimSite</c> — these indicate
+    ///   operator <em>activity on</em> a site, not operator <em>creation of</em>
+    ///   one. <c>AddBesEvidenceFile</c> and <c>AddInterimSite</c> both resolve
+    ///   the target by <c>SiteId</c> alone with no provenance guard, so an
+    ///   operator can and routinely does attach both to a carried-over
+    ///   ReEx site — uploading broadly-equivalent-standards evidence against a
+    ///   prior-year site is the point of that journey. Including them would have
+    ///   refused most of the population this exists to fix.</item>
+    /// </list>
     /// </summary>
-    private static readonly string[] s_operatorEnteredDetailFields =
+    private static readonly string[] s_unexplainedOperatorDetailFields =
     [
         "contactName", "contactEmail", "contactPhone",
         "operationCode", "code1", "code2", "code3",
         "addressLine1", "addressLine2", "townOrCity", "coordinates",
-        "repatriatedLoads", "conditionsOfExport", "besEvidence", "interimSite"
+        "repatriatedLoads", "conditionsOfExport"
     ];
 
-    /// <summary>How one site's <c>isNewSite</c> value classifies.</summary>
+    /// <summary>
+    /// How one site's <c>isNewSite</c> value classifies. The names are the
+    /// bucket names used in the dry-run report, the runbook and epr-2uxy, so
+    /// they stay in step.
+    /// </summary>
     internal enum SiteVerdict
     {
         /// <summary><c>isNewSite</c> is false or absent — nothing to do.</summary>
         NotFlaggedNew,
 
         /// <summary>
-        /// <c>isNewSite: true</c> with an <c>orsId</c> — operator-added, so the
-        /// flag is correct.
+        /// ALREADY-CORRECT. <c>isNewSite: true</c> with an <c>orsId</c> —
+        /// operator-added, so the flag is genuine.
         /// </summary>
         OperatorAddedCorrect,
 
         /// <summary>
-        /// <c>isNewSite: true</c>, no <c>orsId</c>, and no operator-entered
-        /// detail — ReEx-sourced, so the flag is provably wrong.
+        /// PROVABLY-CORRUPT. <c>isNewSite: true</c>, no <c>orsId</c>, never
+        /// promoted, and no unexplained detail — a clean ReEx-sourced site, so
+        /// the flag is a defaulted value.
         /// </summary>
         ProvablyCorrupt,
 
         /// <summary>
-        /// <c>isNewSite: true</c>, no <c>orsId</c>, but carrying
-        /// operator-entered detail — <c>orsId</c> may have been stripped.
+        /// PROMOTED-CORRECTABLE. <c>isNewSite: true</c>, no <c>orsId</c>, and
+        /// <c>registeredNowAccredited: true</c> — a promoted registered site.
+        /// Its operator-detail fields were written by <c>ApplyPromotedFields</c>
+        /// and are therefore explained, not evidence of operator creation.
+        /// Correctable.
+        /// </summary>
+        PromotedCorrectable,
+
+        /// <summary>
+        /// AMBIGUOUS-REFUSED. <c>isNewSite: true</c>, no <c>orsId</c>, never
+        /// promoted, yet carrying detail nothing accounts for — a stripped
+        /// <c>orsId</c> on an operator-added site is a live possibility.
         /// Adjudicate by hand; never auto-correct.
         /// </summary>
-        AmbiguousOrsIdMissing
+        AmbiguousRefused
     }
 
-    internal sealed record SiteRow(int Index, string SiteName, SiteVerdict Verdict);
+    /// <summary>
+    /// One site's verdict. <see cref="RefusedBecause"/> is populated only for
+    /// <see cref="SiteVerdict.AmbiguousRefused"/> and names the fields that
+    /// caused the refusal.
+    /// </summary>
+    internal sealed record SiteRow(
+        int Index,
+        string SiteName,
+        SiteVerdict Verdict,
+        IReadOnlyList<string> RefusedBecause);
 
     internal sealed record AuditRow(
         string Id,
@@ -162,21 +205,34 @@ internal static class ReAccreditationIsNewSiteAudit
         string OrganisationName,
         IReadOnlyList<SiteRow> Sites)
     {
-        public int ProvablyCorruptCount =>
-            Sites.Count(s => s.Verdict == SiteVerdict.ProvablyCorrupt);
+        /// <summary>Sites this item contributes to the correctable buckets.</summary>
+        public int CorrectableCount => Sites.Count(s =>
+            s.Verdict is SiteVerdict.ProvablyCorrupt or SiteVerdict.PromotedCorrectable);
 
         public int AmbiguousCount =>
-            Sites.Count(s => s.Verdict == SiteVerdict.AmbiguousOrsIdMissing);
+            Sites.Count(s => s.Verdict == SiteVerdict.AmbiguousRefused);
     }
 
+    /// <summary>
+    /// Tiered result. Counts are broken out per bucket rather than rolled into a
+    /// single total: the buckets fail in different directions, and collapsing
+    /// them would hide the one failure mode this classifier actually has — a
+    /// miscalibrated tell inflating <see cref="SitesAmbiguousRefused"/> while
+    /// looking like appropriate caution.
+    /// </summary>
     internal sealed record AuditResult(
         int ItemsScanned,
-        IReadOnlyList<AuditRow> ItemsWithProvablyCorrupt,
+        IReadOnlyList<AuditRow> ItemsWithCorrectable,
         IReadOnlyList<AuditRow> ItemsWithAmbiguous,
         int SitesProvablyCorrupt,
-        int SitesAmbiguous,
-        int SitesOperatorAddedCorrect,
-        int SitesNotFlaggedNew);
+        int SitesPromotedCorrectable,
+        int SitesAmbiguousRefused,
+        int SitesAlreadyCorrect,
+        int SitesNotFlaggedNew)
+    {
+        /// <summary>Everything the migration would act on.</summary>
+        public int SitesCorrectable => SitesProvablyCorrupt + SitesPromotedCorrectable;
+    }
 
     /// <summary>
     /// Classify one site. Split out so the discriminator — the only part of this
@@ -196,7 +252,11 @@ internal static class ReAccreditationIsNewSiteAudit
         }
 
         // WhenWritingNull on the operator side means a null orsId is omitted,
-        // so "present and non-empty" is the operator-added signal.
+        // so "present and non-empty" is the operator-added signal. Everything
+        // past this point is ReEx-sourced BY CONSTRUCTION: an operator-added
+        // site always carries an orsId and never reaches it. That is what makes
+        // the promotion check below a safe positive resolver rather than a
+        // second guess at provenance.
         var hasOrsId = site.TryGetValue("orsId", out var orsId)
             && !orsId.IsBsonNull
             && !string.IsNullOrWhiteSpace(orsId.ToString());
@@ -205,12 +265,51 @@ internal static class ReAccreditationIsNewSiteAudit
             return SiteVerdict.OperatorAddedCorrect;
         }
 
-        var hasOperatorDetail = s_operatorEnteredDetailFields.Any(field =>
-            site.TryGetValue(field, out var value) && !value.IsBsonNull);
+        // registeredNowAccredited is set only by PromoteOverseasSite, which runs
+        // ApplyPromotedFields — and that writes the full operator-detail set
+        // while never setting OrsId. So on a promoted site the detail is
+        // EXPLAINED, not suspicious. Checking this before the detail check is
+        // what stops the migration refusing the very population it exists to
+        // fix: promoted sites are ReEx-sourced legacy sites, and a promoted one
+        // trips the detail tell on thirteen fields at once.
+        var promoted = site.TryGetValue("registeredNowAccredited", out var registered)
+            && registered.IsBoolean
+            && registered.AsBoolean;
+        if (promoted)
+        {
+            return SiteVerdict.PromotedCorrectable;
+        }
 
-        return hasOperatorDetail
-            ? SiteVerdict.AmbiguousOrsIdMissing
+        return RefusalTriggers(site).Count > 0
+            ? SiteVerdict.AmbiguousRefused
             : SiteVerdict.ProvablyCorrupt;
+    }
+
+    /// <summary>
+    /// The unexplained detail fields present on a site — the reason a refusal
+    /// happened.
+    ///
+    /// <para>
+    /// Surfaced per record in the report on purpose. This classifier's failure
+    /// mode is silent and in the safe direction: a miscalibration refuses
+    /// records rather than corrupting them, so it shows up only as a large
+    /// ambiguous bucket that reads as appropriate caution — and the natural
+    /// conclusion, "the data is too messy to remediate", would close epr-2uxy as
+    /// intractable when it is not. A reader who can see "refused because
+    /// contactName, operationCode" against a promoted site can tell a
+    /// miscalibrated classifier from genuinely messy data without reading any
+    /// source. The first version of this classifier had exactly that defect.
+    /// </para>
+    /// </summary>
+    internal static IReadOnlyList<string> RefusalTriggers(BsonDocument site)
+    {
+        ArgumentNullException.ThrowIfNull(site);
+
+        return
+        [
+            .. s_unexplainedOperatorDetailFields.Where(field =>
+                site.TryGetValue(field, out var value) && !value.IsBsonNull)
+        ];
     }
 
     /// <summary>
@@ -221,10 +320,11 @@ internal static class ReAccreditationIsNewSiteAudit
     {
         ArgumentNullException.ThrowIfNull(items);
 
-        var withCorrupt = new List<AuditRow>();
+        var withCorrectable = new List<AuditRow>();
         var withAmbiguous = new List<AuditRow>();
         var scanned = 0;
-        int corruptSites = 0, ambiguousSites = 0, correctSites = 0, notNewSites = 0;
+        int corruptSites = 0, promotedSites = 0, ambiguousSites = 0;
+        int correctSites = 0, notNewSites = 0;
 
         foreach (var item in items)
         {
@@ -238,12 +338,19 @@ internal static class ReAccreditationIsNewSiteAudit
                 switch (verdict)
                 {
                     case SiteVerdict.ProvablyCorrupt: corruptSites++; break;
-                    case SiteVerdict.AmbiguousOrsIdMissing: ambiguousSites++; break;
+                    case SiteVerdict.PromotedCorrectable: promotedSites++; break;
+                    case SiteVerdict.AmbiguousRefused: ambiguousSites++; break;
                     case SiteVerdict.OperatorAddedCorrect: correctSites++; break;
                     default: notNewSites++; break;
                 }
 
-                rows.Add(new SiteRow(i, ReadString(sites[i], "siteName"), verdict));
+                rows.Add(new SiteRow(
+                    i,
+                    ReadString(sites[i], "siteName"),
+                    verdict,
+                    verdict == SiteVerdict.AmbiguousRefused
+                        ? RefusalTriggers(sites[i])
+                        : []));
             }
 
             var row = new AuditRow(
@@ -252,9 +359,9 @@ internal static class ReAccreditationIsNewSiteAudit
                 OrganisationName: ReadString(item, "payload", "organisationName"),
                 Sites: rows);
 
-            if (row.ProvablyCorruptCount > 0)
+            if (row.CorrectableCount > 0)
             {
-                withCorrupt.Add(row);
+                withCorrectable.Add(row);
             }
 
             if (row.AmbiguousCount > 0)
@@ -264,8 +371,8 @@ internal static class ReAccreditationIsNewSiteAudit
         }
 
         return new AuditResult(
-            scanned, withCorrupt, withAmbiguous,
-            corruptSites, ambiguousSites, correctSites, notNewSites);
+            scanned, withCorrectable, withAmbiguous,
+            corruptSites, promotedSites, ambiguousSites, correctSites, notNewSites);
     }
 
     /// <summary>
@@ -320,21 +427,32 @@ internal static class ReAccreditationIsNewSiteAudit
         var items = await collection.Find(filter).ToListAsync(cancellationToken);
         var result = Classify(items);
 
+        // Explicit per-bucket counts rather than one total plus a list. The
+        // buckets fail in different directions, and a single "at risk" number
+        // would hide the failure this classifier actually has: a miscalibrated
+        // tell inflating AMBIGUOUS-REFUSED while looking like caution.
         logger.LogInformation(
             "epr-2uxy isNewSite audit (READ-ONLY, nothing written). Window {WindowStart:o} to " +
             "{WindowEnd:o}. Scanned {ItemsScanned} in-window re-accreditation work items " +
-            "carrying overseas sites. Sites PROVABLY CORRUPT (isNewSite=true, no orsId, no " +
-            "operator detail): {SitesProvablyCorrupt} across {ItemsWithProvablyCorrupt} items. " +
-            "Sites AMBIGUOUS (no orsId but operator detail present — DO NOT auto-correct): " +
-            "{SitesAmbiguous} across {ItemsWithAmbiguous} items. Sites correctly new " +
-            "(operator-added, orsId present): {SitesOperatorAddedCorrect}. Sites not flagged " +
-            "new: {SitesNotFlaggedNew}.",
+            "carrying overseas sites. Buckets — " +
+            "PROVABLY-CORRUPT (no orsId, unpromoted, no unexplained detail): {SitesProvablyCorrupt}; " +
+            "PROMOTED-CORRECTABLE (no orsId, registeredNowAccredited=true): {SitesPromotedCorrectable}; " +
+            "AMBIGUOUS-REFUSED (no orsId, unpromoted, unexplained detail): {SitesAmbiguousRefused}; " +
+            "ALREADY-CORRECT (operator-added, orsId present): {SitesAlreadyCorrect}; " +
+            "not flagged new: {SitesNotFlaggedNew}. " +
+            // Each placeholder name appears exactly once: a repeated name is a
+            // distinct positional slot to the structured-logging formatter, so
+            // reusing one throws FormatException at render time — invisible to a
+            // test that logs through NullLogger, which never formats.
+            "Total correctable: {SitesCorrectable} sites across {ItemsWithCorrectable} items; " +
+            "refused across {ItemsWithAmbiguous} items.",
             WindowStart, windowEnd, result.ItemsScanned,
-            result.SitesProvablyCorrupt, result.ItemsWithProvablyCorrupt.Count,
-            result.SitesAmbiguous, result.ItemsWithAmbiguous.Count,
-            result.SitesOperatorAddedCorrect, result.SitesNotFlaggedNew);
+            result.SitesProvablyCorrupt, result.SitesPromotedCorrectable,
+            result.SitesAmbiguousRefused, result.SitesAlreadyCorrect, result.SitesNotFlaggedNew,
+            result.SitesCorrectable, result.ItemsWithCorrectable.Count,
+            result.ItemsWithAmbiguous.Count);
 
-        if (result.SitesProvablyCorrupt == 0 && result.SitesAmbiguous == 0)
+        if (result.SitesCorrectable == 0 && result.SitesAmbiguousRefused == 0)
         {
             logger.LogInformation(
                 "epr-2uxy isNewSite audit: nothing at risk in this environment; record the " +
@@ -342,10 +460,27 @@ internal static class ReAccreditationIsNewSiteAudit
             return result;
         }
 
-        foreach (var row in result.ItemsWithProvablyCorrupt)
+        // A refused bucket that dwarfs the correctable one is far more likely to
+        // mean the tell is miscalibrated than that the data is unremediable —
+        // that is exactly how the first version of this classifier failed, by
+        // refusing every promoted site. Say so at the point of observation
+        // rather than leaving the reader to infer "too messy to fix".
+        if (result.SitesAmbiguousRefused > result.SitesCorrectable)
+        {
+            logger.LogWarning(
+                "epr-2uxy isNewSite audit: MORE sites were refused ({SitesAmbiguousRefused}) " +
+                "than were classified correctable ({SitesCorrectable}). Treat this as a reason " +
+                "to question the classifier before concluding the data cannot be remediated. " +
+                "Check the refusedBecause fields below: if the same fields recur across many " +
+                "records, the tell is probably over-broad rather than the data messy. See " +
+                "docs/diagnostics/ra292-isnewsite-audit.md.",
+                result.SitesAmbiguousRefused, result.SitesCorrectable);
+        }
+
+        foreach (var row in result.ItemsWithCorrectable)
         {
             logger.LogInformation(
-                "epr-2uxy PROVABLY CORRUPT {WorkItemId} ref={ApplicationReference} " +
+                "epr-2uxy CORRECTABLE {WorkItemId} ref={ApplicationReference} " +
                 "org={OrganisationName} sites={SiteDetail}",
                 row.Id, row.ApplicationReference, row.OrganisationName, Describe(row));
         }
@@ -355,9 +490,9 @@ internal static class ReAccreditationIsNewSiteAudit
             // Warning rather than Information: this is the set where a careless
             // correction would hide a genuinely new site from the regulator.
             logger.LogWarning(
-                "epr-2uxy AMBIGUOUS — orsId missing but operator-entered detail present, so " +
-                "this may be an operator-added site whose orsId was stripped rather than a " +
-                "ReEx-sourced one. Adjudicate by hand against the operator database; do NOT " +
+                "epr-2uxy AMBIGUOUS-REFUSED — no orsId, never promoted, yet carrying detail " +
+                "nothing accounts for, so this may be an operator-added site whose orsId was " +
+                "stripped. Adjudicate by hand against the operator database; do NOT " +
                 "auto-correct. {WorkItemId} ref={ApplicationReference} org={OrganisationName} " +
                 "sites={SiteDetail}",
                 row.Id, row.ApplicationReference, row.OrganisationName, Describe(row));
@@ -366,8 +501,15 @@ internal static class ReAccreditationIsNewSiteAudit
         return result;
     }
 
+    /// <summary>
+    /// Render a row's per-site verdicts, naming the fields behind any refusal so
+    /// a reader can distinguish a genuinely ambiguous record from a
+    /// miscalibrated tell without reading the source.
+    /// </summary>
     private static string Describe(AuditRow row) =>
-        string.Join(" | ", row.Sites.Select(s => $"[{s.Index}] {s.SiteName} => {s.Verdict}"));
+        string.Join(" | ", row.Sites.Select(s => s.RefusedBecause.Count > 0
+            ? $"[{s.Index}] {s.SiteName} => {s.Verdict} (refusedBecause: {string.Join(", ", s.RefusedBecause)})"
+            : $"[{s.Index}] {s.SiteName} => {s.Verdict}"));
 
     private static List<BsonDocument> ReadSites(BsonDocument item)
     {

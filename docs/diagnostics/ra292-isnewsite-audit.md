@@ -64,6 +64,46 @@ Those are the only creation paths. So, within the window:
 `isNewSite`, so there is no sub-window carrying the bad flag without the signal
 beside it.
 
+## The four buckets
+
+These names are used identically in the log output, the mongosh script, this
+runbook and `epr-2uxy`.
+
+| Bucket | Shape | Action |
+| --- | --- | --- |
+| **PROVABLY-CORRUPT** | no `orsId`, unpromoted, no unexplained detail | correctable |
+| **PROMOTED-CORRECTABLE** | no `orsId`, `registeredNowAccredited: true` | correctable |
+| **AMBIGUOUS-REFUSED** | no `orsId`, unpromoted, unexplained detail present | refused; adjudicate by hand |
+| **ALREADY-CORRECT** | `orsId` present | leave alone |
+
+Counts are reported **per bucket**, never as a single "at risk" total — the
+buckets fail in different directions, and collapsing them hides the one failure
+mode this classifier actually has.
+
+### A large refused bucket means question the classifier
+
+> If **AMBIGUOUS-REFUSED exceeds TOTAL CORRECTABLE**, treat that as a reason to
+> **question the classifier**, not as evidence the data cannot be remediated.
+
+This classifier's failure mode is silent and in the *safe* direction: a
+miscalibrated tell refuses records rather than corrupting them. So it surfaces
+only as a large refused bucket that reads as appropriate caution — and the
+natural conclusion, *"the data is too messy to remediate"*, would close
+`epr-2uxy` as intractable when it is not. Both the in-app diagnostic and the
+script warn explicitly when the refused bucket is the larger one.
+
+**Worked example — this actually happened during this change.** The first
+version of this classifier counted `besEvidence` and `interimSite` as evidence
+of operator creation and had no promotion resolver. Against a promoted ReEx site
+it tripped on **thirteen fields at once** and refused it. Since promoted sites
+are the bulk of the affected population, the migration would have been close to
+a no-op while reporting a large, entirely plausible-looking ambiguous bucket.
+It was caught by a teammate reading the operator endpoints, not by the report.
+
+The diagnostic against that recurrence: every refused record names the fields
+that caused the refusal, in a `refusedBecause` list. **If the same fields recur
+across many records, the tell is over-broad rather than the data messy.**
+
 ### There is deliberately no "every site is true" heuristic
 
 An earlier revision of this diagnostic narrowed on "every ORS on the item is
@@ -79,23 +119,46 @@ The rule it would have violated still governs everything here:
 > **Render faithfully; fix the data where it lives.** A wrong value rendered
 > honestly is traceable. A second-guessed one is not.
 
-## The ambiguity guard
+## The ambiguity guard, and why promotion resolves it
 
 `orsId` was itself client-clobberable during the window: `string?` on the
 operator model, with `PatchOverseasSites` replacing the site list wholesale. If
 a client ever stripped it, an operator-added site would masquerade as
-ReEx-sourced.
+ReEx-sourced. Hence a guard.
 
-So a site missing `orsId` is only classed **provably corrupt** when it *also*
-carries none of the detail fields a ReEx-mapped site never has — contact
-details, operation code, waste codes, address lines, coordinates, repatriated
-loads, conditions of export, BES evidence, interim site. (`MapOverseasSite`
-populates only `SiteId`, `SiteName`, `SiteAddress`, `Country`, `IsEu`, `IsOecd`,
-`Selected`, `IsNewSite`.)
+But **"carries operator detail" is the wrong tell on its own.**
+`PromoteOverseasSite` has no ReEx-provenance guard, and `ApplyPromotedFields`
+writes eighteen fields onto the site while never setting `OrsId`. So a promoted
+registered site has **no `orsId` and the complete operator-detail set** — and
+promoted sites *are* ReEx-sourced legacy sites, i.e. exactly the population this
+exists to fix.
 
-A site missing `orsId` that *does* carry such detail is reported **ambiguous**.
-The migration **refuses** to touch it — in code, not by relying on a human
-noticing.
+`registeredNowAccredited` (set only by promotion) is therefore used as a
+**positive resolver**: it *explains* the detail rather than contradicting it.
+
+Two field groups are deliberately **not** in the tell, both verified against the
+operator endpoints:
+
+- `siteName`, `siteAddress`, `country`, `isEu`, `isOecd`, `selected` —
+  `MapOverseasSite` sets all of these, so they are on every ReEx site.
+- **`besEvidence` and `interimSite`** — `AddBesEvidenceFile` and `AddInterimSite`
+  both resolve the target by `SiteId` alone with **no provenance guard**, so an
+  operator can and routinely does attach either to a carried-over ReEx site;
+  uploading broadly-equivalent-standards evidence against a prior-year overseas
+  site is the *purpose* of that journey. They evidence operator **activity on** a
+  site, not operator **creation of** one. "ReEx never produces either" is true
+  and is the wrong test.
+
+### The safety asymmetry
+
+An operator-**added** site always carries an `orsId`, so it never enters the
+no-`orsId` population at all. `registeredNowAccredited` only ever disambiguates
+*within* a set that is already ReEx-sourced by construction.
+
+**Residual, accepted:** an operator-added site that was *both* promoted *and* had
+its `orsId` stripped would be corrected wrongly. That requires promoting a site
+that was never registered — contrived, and it is precisely what the human
+spot-check gate exists to catch.
 
 `OrsId` is now server-derived in `OverseasSiteMerge` (`8c4021e`), so from the
 RA-292 deploy onward the discriminator is a guarantee rather than a happy
@@ -159,7 +222,7 @@ analysis alone — someone has to have looked at real records first.
 | 1 | `Diagnostics:Ra292CorrectIsNewSite` | Off by default — no-op in every environment until deliberately enabled |
 | 2 | `Diagnostics:Ra292SpotCheckConfirmedBy` | Must name the human who spot-checked the classification against the operator DB. Recorded in the audit entry |
 | 3 | `Diagnostics:Ra292CorrectIsNewSiteApply` | **Dry run unless explicitly true** — reports exactly what it would change and writes nothing |
-| 4 | per-site verdict | Only `ProvablyCorrupt`. Ambiguous sites are refused in code |
+| 4 | per-site verdict | Only the two correctable buckets. AMBIGUOUS-REFUSED sites are refused **in code**, with the triggering fields named |
 
 Gate 2 is what makes *constructible* ≠ *safe to run unreviewed*. It is deliberately
 a name rather than a boolean, so the authorisation is auditable rather than a
