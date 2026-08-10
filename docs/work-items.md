@@ -29,7 +29,7 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | `IWorkItemTaskStateResolver` | Optional, module-supplied. Lets a type say "the tasks that apply to this item belong to some *other* state" — see [Effective task state](#effective-task-state-ra-372). |
 | `IWorkItemRegistry` | DI-resolvable lookup of every registered type. |
 | `IWorkItemService` | Framework service object that drives task completion and state transitions. Resolves the work item, validates the request against the type, persists the change and writes an audit log. |
-| `WorkItem` | The persisted work item envelope: id, type id, state id, submitted-at, last-modified-at, submitted-by (CDP Cognito client id), per-state completed task ids, free-form payload. |
+| `WorkItem` | The persisted work item envelope: id, type id, state id, submitted-at, last-modified-at, submitted-by (CDP client id), per-state completed task ids, free-form payload. |
 | `IWorkItemPersistence` | Framework-owned MongoDB persistence for `WorkItem`s. |
 | `WorkItemModuleExtensions` | `AddWorkItemFramework()`, `AddWorkItemModule<T>()`, `MapWorkItemModules()`, `MapWorkItemFrameworkEndpoints()`. |
 
@@ -46,15 +46,15 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 
 | Method | Route | Description |
 | --- | --- | --- |
-| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP Cognito client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
+| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
 | `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with current task progress and the actions the engine will currently allow. |
 | `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
 | `POST` | `/work-items/{id}/tasks/{taskId}/complete` | Mark a task complete on the work item's current state. Idempotent. `400` if the task does not apply to the current state, `404` if the work item is unknown. Equivalent to `PUT /tasks/{taskId}/status` with `{"status":"Completed"}` for callers that only care about the binary view. |
 | `PUT` | `/work-items/{id}/tasks/{taskId}/status` | Set a task's `WorkItemTaskStatus` (epr-gl6). Body: `{ "status": "NotStarted" \| "InProgress" \| "Blocked" \| "Completed" }`. Status name binding is case-insensitive. Idempotent (no-ops do not write audit). On change appends a `task-status-changed` entry with `fromStatus` / `toStatus` in `Details` — no extra `task-completed` is written when transitioning to `Completed` via this endpoint. `400` for unknown tasks or unrecognised status values. |
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state or has outstanding tasks; `400` for unknown actions or transitions whose from-state does not match. |
 
-All three endpoints require authentication via the CDP Cognito client id
-header (`x-cdp-cognito-client-id`) per RA-89/RA-85b.
+All three endpoints require authentication via the CDP client id
+header (`x-cdp-client-id`) per RA-89/RA-85b.
 
 The persisted envelope is owned by the framework; modules describe the shape
 of their payload via their `IWorkItemType` and operate on it via their own
@@ -238,7 +238,7 @@ responsibility, not this backend's.
 
 ### Identity from the BFF
 
-The Cognito auth handler (`CognitoClientIdAuthenticationHandler`)
+The client id auth handler (`ClientIdAuthenticationHandler`)
 optionally reads two headers forwarded by the BFF and turns them into
 `ClaimsPrincipal` claims:
 
@@ -308,7 +308,7 @@ item document. A `WorkItemNote` carries:
 | `Id` | Server-generated GUID. |
 | `Text` | Note body. Trimmed at write; rendered verbatim by clients (templates must escape). |
 | `CreatedAt` | UTC timestamp set by `WorkItemService` from the injected `TimeProvider`. |
-| `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, falling back to the Cognito client id). |
+| `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, falling back to the client id). |
 | `CreatedByName` | Snapshot of the actor's display name (`user:name` claim) at write time, so the audit narrative survives directory changes. |
 
 Notes are stored in insertion order. The wire projection in

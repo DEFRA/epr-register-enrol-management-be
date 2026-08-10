@@ -59,7 +59,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
         var ctx = new DefaultHttpContext();
         ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "tl-user"),
             new Claim(ClaimTypes.Role, "standard")
         ], "test"));
@@ -530,7 +530,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+            client.DefaultRequestHeaders.Add("x-cdp-client-id", "test-client");
             if (_userId is not null)
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);
         }

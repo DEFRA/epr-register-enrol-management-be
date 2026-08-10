@@ -5,7 +5,7 @@
 
 ## Context
 
-ADR-0001 established the `CognitoClientIdAuthenticationHandler` and
+ADR-0001 established the `ClientIdAuthenticationHandler` and
 introduced a `Auth:SharedSecret` HMAC signature path so the backend can
 verify that trust headers were assembled by the BFF rather than forged
 by a caller bypassing CDP ingress. The original (`v1`) canonical payload
@@ -42,7 +42,7 @@ Two new request headers (defaults):
 - `x-cdp-auth-nonce` — opaque per-request token minted by the BFF
   (e.g. base64url of 16 random bytes).
 
-Server-side enforcement, in `CognitoClientIdAuthenticationHandler`:
+Server-side enforcement, in `ClientIdAuthenticationHandler`:
 
 - **Freshness:** the absolute difference between the supplied
   `timestamp` and the backend's `TimeProvider.GetUtcNow()` must be no
@@ -101,12 +101,12 @@ or replay the nonce out of band. A regression test in
 ### Neutral
 
 - `MaxClockSkew` and `ReplayCacheTtl` are configurable via
-  `CognitoClientIdAuthenticationOptions`. The defaults match this ADR
+  `ClientIdAuthenticationOptions`. The defaults match this ADR
   and should not be relaxed without revisiting it.
 
 ## Verification
 
-- `EprRegisterEnrolManagementBe.Test/Auth/CognitoClientIdAuthenticationTests.cs`
+- `EprRegisterEnrolManagementBe.Test/Auth/ClientIdAuthenticationTests.cs`
   exercises every failure mode and the happy path:
   `Signature_required_missing_timestamp_is_401`,
   `Signature_required_stale_timestamp_is_401`,

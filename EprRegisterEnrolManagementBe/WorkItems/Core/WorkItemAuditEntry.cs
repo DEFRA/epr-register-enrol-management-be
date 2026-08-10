@@ -53,7 +53,7 @@ public sealed class WorkItemAuditEntry
 
     /// <summary>
     /// Identifier of the actor that performed the action. Snapshotted from
-    /// the <c>user:id</c> claim, falling back to the Cognito client id when
+    /// the <c>user:id</c> claim, falling back to the client id when
     /// the call carries no end-user identity.
     /// </summary>
     public string? CreatedBy { get; init; }

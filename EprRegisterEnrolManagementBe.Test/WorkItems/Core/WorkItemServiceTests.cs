@@ -116,19 +116,19 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
     private static ClaimsPrincipal User() =>
         new(
             new ClaimsIdentity(
-                [new Claim("cognito:client_id", "test-client"), new Claim("user:id", "test-user")],
+                [new Claim("client_id", "test-client"), new Claim("user:id", "test-user")],
                 "test"
             )
         );
 
     private static ClaimsPrincipal UserWithoutActorId() =>
-        new(new ClaimsIdentity([new Claim("cognito:client_id", "test-client")], "test"));
+        new(new ClaimsIdentity([new Claim("client_id", "test-client")], "test"));
 
     private static ClaimsPrincipal UserWithRoles(string userId, params string[] roles)
     {
         var claims = new List<Claim>
         {
-            new("cognito:client_id", "test-client"),
+            new("client_id", "test-client"),
             new("user:id", userId),
         };
         foreach (var role in roles)
@@ -1405,7 +1405,7 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         var actor = new ClaimsPrincipal(
             new ClaimsIdentity(
                 [
-                    new Claim("cognito:client_id", "test-client"),
+                    new Claim("client_id", "test-client"),
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
                 ],
@@ -1518,7 +1518,7 @@ public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsy
         new(
             new ClaimsIdentity(
                 [
-                    new Claim("cognito:client_id", "test-client"),
+                    new Claim("client_id", "test-client"),
                     new Claim("user:id", userId),
                     new Claim("user:name", userName),
                 ],

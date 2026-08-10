@@ -104,7 +104,7 @@ public class HttpOperatorBackendPushAdapterTests
 
         Assert.Equal(
             "epr-register-enrol-management-be",
-            handler.LastRequest!.Headers.GetValues("x-cdp-cognito-client-id").Single());
+            handler.LastRequest!.Headers.GetValues("x-cdp-client-id").Single());
     }
 
     [Fact]
@@ -309,7 +309,7 @@ public class HttpOperatorBackendPushAdapterTests
 
         Assert.Equal(
             "epr-register-enrol-management-be",
-            handler.LastRequest!.Headers.GetValues("x-cdp-cognito-client-id").Single());
+            handler.LastRequest!.Headers.GetValues("x-cdp-client-id").Single());
         Assert.Equal(
             correlationId.ToString(),
             handler.LastRequest.Headers.GetValues("X-Correlation-Id").Single());

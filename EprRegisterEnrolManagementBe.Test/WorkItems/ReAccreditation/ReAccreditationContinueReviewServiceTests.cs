@@ -228,7 +228,7 @@ public class ReAccreditationContinueReviewServiceTests
                 [
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
-                    new Claim("cognito:client_id", TenantClientId),
+                    new Claim("client_id", TenantClientId),
                 ],
                 "test"));
 

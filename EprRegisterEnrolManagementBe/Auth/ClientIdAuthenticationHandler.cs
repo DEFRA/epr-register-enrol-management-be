@@ -12,12 +12,13 @@ using Microsoft.Extensions.Options;
 namespace EprRegisterEnrolManagementBe.Auth;
 
 /// <summary>
-/// Authentication handler that accepts a CDP Cognito client ID supplied in a
-/// request header. CDP validates the upstream service's JWT before forwarding
-/// the request, so the presence of the header is sufficient — no further
-/// authorisation is performed.
+/// Authentication handler that accepts a CDP client ID supplied in a
+/// request header. Despite the header's original name, this is NOT a CDP-
+/// verified identity — CDP does not validate a JWT or inject this header
+/// itself; the caller (management-fe or epr-register-enrol-backend) asserts
+/// its own client ID and proves it via the HMAC signature described below.
 ///
-/// When <see cref="CognitoClientIdAuthenticationOptions.ClientSecrets"/> is
+/// When <see cref="ClientIdAuthenticationOptions.ClientSecrets"/> is
 /// non-empty, requests must additionally carry a valid HMAC-SHA256
 /// signature in the configured signature header AND a fresh timestamp /
 /// single-use nonce. The signature proves the caller knows the secret
@@ -35,14 +36,14 @@ namespace EprRegisterEnrolManagementBe.Auth;
 /// Development it falls back to header-trust mode and logs a single
 /// warning per process to keep local/BFF-stub workflows ergonomic.
 /// </summary>
-public class CognitoClientIdAuthenticationHandler(
-    IOptionsMonitor<CognitoClientIdAuthenticationOptions> options,
+public class ClientIdAuthenticationHandler(
+    IOptionsMonitor<ClientIdAuthenticationOptions> options,
     ILoggerFactory logger,
     UrlEncoder encoder,
     IHostEnvironment hostEnvironment,
     TimeProvider timeProvider,
     IMemoryCache replayCache)
-    : AuthenticationHandler<CognitoClientIdAuthenticationOptions>(options, logger, encoder)
+    : AuthenticationHandler<ClientIdAuthenticationOptions>(options, logger, encoder)
 {
     // Tracks whether the Development header-trust downgrade warning has
     // already been emitted in this process. Atomic CAS keeps it to a single
@@ -51,7 +52,7 @@ public class CognitoClientIdAuthenticationHandler(
 
     // Cache-key prefix so nonce entries cannot collide with anything else
     // a future caller might park in the shared IMemoryCache instance.
-    private const string ReplayCacheKeyPrefix = "cognito-client-id:nonce:";
+    private const string ReplayCacheKeyPrefix = "client-id:nonce:";
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -205,7 +206,7 @@ public class CognitoClientIdAuthenticationHandler(
             if (!Options.ClientSecrets.TryGetValue(clientId, out var secret))
             {
                 Logger.LogWarning(
-                    "CognitoClientIdAuthentication: no secret registered for asserted client id {ClientId}",
+                    "ClientIdAuthentication: no secret registered for asserted client id {ClientId}",
                     clientId);
                 return Task.FromResult(AuthenticateResult.Fail(
                     $"Invalid {Options.SignatureHeaderName} header"));
@@ -218,7 +219,7 @@ public class CognitoClientIdAuthenticationHandler(
             if (!FixedTimeEquals(providedSignature, expectedSignature))
             {
                 Logger.LogWarning(
-                    "CognitoClientIdAuthentication: signature mismatch for asserted client id {ClientId}",
+                    "ClientIdAuthentication: signature mismatch for asserted client id {ClientId}",
                     clientId);
                 return Task.FromResult(AuthenticateResult.Fail(
                     $"Invalid {Options.SignatureHeaderName} header"));
@@ -243,7 +244,7 @@ public class CognitoClientIdAuthenticationHandler(
             // typo, secret rotation race, misconfigured prod). Trusting the
             // headers in this state would let any caller forge identity.
             Logger.LogCritical(
-                "CognitoClientIdAuthentication misconfigured: no ClientSecrets are set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
+                "ClientIdAuthentication misconfigured: no ClientSecrets are set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
                 hostEnvironment.EnvironmentName);
             return Task.FromResult(AuthenticateResult.Fail(
                 "Authentication misconfigured: no client secrets set"));
@@ -254,21 +255,21 @@ public class CognitoClientIdAuthenticationHandler(
             // client secrets configured. Emit a single warning per process
             // so the downgrade is visible without spamming the log.
             Logger.LogWarning(
-                "CognitoClientIdAuthentication: no ClientSecrets configured — operating in header-trust mode. This is allowed only because the host environment is '{Environment}'. Set AUTH_SHARED_SECRET__MANAGEMENT_FE / AUTH_SHARED_SECRET__BACKEND in any non-Development deployment.",
+                "ClientIdAuthentication: no ClientSecrets configured — operating in header-trust mode. This is allowed only because the host environment is '{Environment}'. Set AUTH_SHARED_SECRET__MANAGEMENT_FE / AUTH_SHARED_SECRET__BACKEND in any non-Development deployment.",
                 hostEnvironment.EnvironmentName);
         }
 
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, clientId),
-            new("cognito:client_id", clientId)
+            new("client_id", clientId)
         };
 
         // The BFF (frontend) forwards the acting user's identity in optional
-        // headers. They are not authenticators in their own right — CDP has
-        // already validated the upstream JWT and placed the trusted client
-        // id in the primary header — but they let backend endpoints produce
-        // more useful audit log lines without a separate user lookup.
+        // headers. They are not authenticators in their own right — the HMAC
+        // signature above is what establishes trust in the primary client id
+        // header — but they let backend endpoints produce more useful audit
+        // log lines without a separate user lookup.
         if (userId is not null) claims.Add(new Claim("user:id", userId));
         if (userName is not null) claims.Add(new Claim("user:name", userName));
 
@@ -298,7 +299,7 @@ public class CognitoClientIdAuthenticationHandler(
         // The signature value is intentionally omitted — it is an HMAC
         // digest, not a secret, but there is no diagnostic value in logging it.
         Logger.LogWarning(
-            "CognitoClientId auth challenge on {Method} {Path}: {FailureReason}. " +
+            "ClientId auth challenge on {Method} {Path}: {FailureReason}. " +
             "Headers — {ClientIdHeader}: {ClientId}, " +
             "{TimestampHeader}: {Timestamp}, " +
             "{NonceHeader}: {Nonce}, " +

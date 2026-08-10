@@ -117,7 +117,7 @@ public static class WorkItemEndpoints
                 ["url.path"] = req.Path.Value,
                 ["http.request.body"] = loggedBody,
                 ["caller.client_id"] = req.Headers.TryGetValue(
-                    "x-cdp-cognito-client-id",
+                    "x-cdp-client-id",
                     out var cid
                 )
                     ? cid.ToString()
@@ -203,7 +203,7 @@ public static class WorkItemEndpoints
         }
 
         var submittedBy =
-            httpContext.User.FindFirstValue("cognito:client_id")
+            httpContext.User.FindFirstValue("client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
         // RA-126: optional caller-supplied audit context. 'source' is a

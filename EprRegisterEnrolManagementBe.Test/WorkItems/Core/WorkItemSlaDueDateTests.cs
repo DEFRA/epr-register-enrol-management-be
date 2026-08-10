@@ -230,7 +230,7 @@ public class WorkItemSlaDueDateTests
     private static ClaimsPrincipal Caseworker() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "cw-1"),
             new Claim("user:name", "Case Worker")
         ], "test"));

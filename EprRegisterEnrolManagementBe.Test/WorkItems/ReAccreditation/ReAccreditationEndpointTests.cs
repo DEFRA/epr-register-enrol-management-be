@@ -2545,7 +2545,7 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", _clientId);
+            client.DefaultRequestHeaders.Add("x-cdp-client-id", _clientId);
             if (_userId is not null)
             {
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);

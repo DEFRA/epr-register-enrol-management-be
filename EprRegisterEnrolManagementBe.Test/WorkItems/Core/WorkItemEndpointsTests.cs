@@ -41,7 +41,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     ) => new(_fixture, includeAuthHeader, userId, userName, tasksByState, states);
 
     [Fact]
-    public async Task Post_returns_unauthorized_without_cognito_client_id()
+    public async Task Post_returns_unauthorized_without_client_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory(includeAuthHeader: false);
@@ -1224,7 +1224,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     [Fact]
-    public async Task AddNote_returns_unauthorized_without_cognito_client_id()
+    public async Task AddNote_returns_unauthorized_without_client_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory(includeAuthHeader: false);
@@ -1571,7 +1571,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             base.ConfigureClient(client);
             if (_includeAuthHeader)
             {
-                client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+                client.DefaultRequestHeaders.Add("x-cdp-client-id", "test-client");
             }
             if (_userId is not null)
             {

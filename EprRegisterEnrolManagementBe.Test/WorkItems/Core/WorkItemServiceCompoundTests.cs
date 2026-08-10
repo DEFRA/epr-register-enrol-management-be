@@ -101,7 +101,7 @@ public class WorkItemServiceCompoundTests
     private static ClaimsPrincipal User() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "alice-1"),
             new Claim("user:name", "Alice Example")
         ], "test"));
@@ -272,7 +272,7 @@ public class WorkItemServiceCompoundTests
     public async Task Missing_actor_identity_is_rejected_before_loading_the_document()
     {
         var anonymous = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim("cognito:client_id", "test-client")], "test"));
+            [new Claim("client_id", "test-client")], "test"));
 
         var result = await BuildService(BuildType()).AddNoteAndCompleteTaskAsync(
             Guid.NewGuid(), "record-rationale", "Some valid note text.",

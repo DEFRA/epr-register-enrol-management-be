@@ -53,11 +53,11 @@ public class WorkItemServiceTaskStatusTests
         };
 
     private static ClaimsPrincipal User() => new(new ClaimsIdentity(
-        [new Claim("cognito:client_id", "test-client"), new Claim("user:id", "test-user")],
+        [new Claim("client_id", "test-client"), new Claim("user:id", "test-user")],
         "test"));
 
     private static ClaimsPrincipal UserWithoutActorId() =>
-        new(new ClaimsIdentity([new Claim("cognito:client_id", "test-client")], "test"));
+        new(new ClaimsIdentity([new Claim("client_id", "test-client")], "test"));
 
     [Fact]
     public async Task Sets_status_to_in_progress_and_writes_audit()

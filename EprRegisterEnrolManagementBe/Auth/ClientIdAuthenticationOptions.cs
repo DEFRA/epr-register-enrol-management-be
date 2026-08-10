@@ -2,18 +2,18 @@ using Microsoft.AspNetCore.Authentication;
 
 namespace EprRegisterEnrolManagementBe.Auth;
 
-public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
+public class ClientIdAuthenticationOptions : AuthenticationSchemeOptions
 {
     /// <summary>
-    /// Name of the request header carrying the Cognito client ID.
+    /// Name of the request header carrying the client ID.
     /// </summary>
-    public string HeaderName { get; set; } = CognitoClientIdDefaults.DefaultHeaderName;
+    public string HeaderName { get; set; } = ClientIdDefaults.DefaultHeaderName;
 
     /// <summary>Optional header carrying the end user's identifier.</summary>
-    public string UserIdHeaderName { get; set; } = CognitoClientIdDefaults.DefaultUserIdHeaderName;
+    public string UserIdHeaderName { get; set; } = ClientIdDefaults.DefaultUserIdHeaderName;
 
     /// <summary>Optional header carrying the end user's display name.</summary>
-    public string UserNameHeaderName { get; set; } = CognitoClientIdDefaults.DefaultUserNameHeaderName;
+    public string UserNameHeaderName { get; set; } = ClientIdDefaults.DefaultUserNameHeaderName;
 
     /// <summary>
     /// Name of the request header carrying the BFF-computed HMAC signature
@@ -22,20 +22,20 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// <see cref="ClientSecrets"/>; defends
     /// against direct backend access bypassing the BFF.
     /// </summary>
-    public string SignatureHeaderName { get; set; } = CognitoClientIdDefaults.DefaultSignatureHeaderName;
+    public string SignatureHeaderName { get; set; } = ClientIdDefaults.DefaultSignatureHeaderName;
 
     /// <summary>
     /// Header carrying the BFF's ISO-8601 UTC instant for the request. Part
     /// of the v3 canonical signing payload — bounds replay windows.
     /// </summary>
-    public string TimestampHeaderName { get; set; } = CognitoClientIdDefaults.DefaultTimestampHeaderName;
+    public string TimestampHeaderName { get; set; } = ClientIdDefaults.DefaultTimestampHeaderName;
 
     /// <summary>
     /// Header carrying a per-request opaque nonce minted by the BFF (e.g.
     /// base64url of 16 random bytes). Part of the v3 canonical signing
     /// payload — single-use within the replay cache TTL.
     /// </summary>
-    public string NonceHeaderName { get; set; } = CognitoClientIdDefaults.DefaultNonceHeaderName;
+    public string NonceHeaderName { get; set; } = ClientIdDefaults.DefaultNonceHeaderName;
 
     /// <summary>
     /// Per-caller secrets used to validate the <see cref="SignatureHeaderName"/>
@@ -71,7 +71,7 @@ public class CognitoClientIdAuthenticationOptions : AuthenticationSchemeOptions
     public TimeSpan ReplayCacheTtl { get; set; } = TimeSpan.FromMinutes(10);
 
     /// <summary>
-    /// Maximum permitted length (in UTF-16 chars) of the Cognito client id
+    /// Maximum permitted length (in UTF-16 chars) of the client id
     /// header. Oversize values are rejected with 401 BEFORE any further
     /// processing — avoids attacker-controlled header bytes feeding into
     /// downstream allocations or HMAC computation.

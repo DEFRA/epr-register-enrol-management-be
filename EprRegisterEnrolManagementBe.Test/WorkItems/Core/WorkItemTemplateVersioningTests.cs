@@ -21,7 +21,7 @@ public class WorkItemTemplateVersioningTests
     private static ClaimsPrincipal User() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "test-user")
         ], "test"));
 

@@ -14,7 +14,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <summary>
 /// epr-dt2: negative-path coverage for the auth and assignment role
 /// boundaries documented in AGENTS.md. Every test exercises the real
-/// pipeline (CognitoClientIdAuthenticationHandler, routing,
+/// pipeline (ClientIdAuthenticationHandler, routing,
 /// ProblemDetails) against ephemeral MongoDB so it can also assert the
 /// fail-closed property — that no audit entry is written and no on-disk
 /// version is bumped when the request is denied.
@@ -59,7 +59,7 @@ public class WorkItemAuthBoundaryTests
         // The handler ignores whitespace user-id headers; the engine then
         // sees no 'user:id' claim and refuses the mutation. This is the
         // "claim present-ish but resolves to null/empty" path
-        // (CognitoClientIdAuthenticationHandler whitespace filter +
+        // (ClientIdAuthenticationHandler whitespace filter +
         // WorkItemService.ResolveActorUserId).
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BoundaryFactory(_fixture, userId: "   ");
@@ -201,7 +201,7 @@ public class WorkItemAuthBoundaryTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", TenantClientId);
+            client.DefaultRequestHeaders.Add("x-cdp-client-id", TenantClientId);
             if (_userId is not null)
             {
                 // Use TryAddWithoutValidation so the test can deliberately

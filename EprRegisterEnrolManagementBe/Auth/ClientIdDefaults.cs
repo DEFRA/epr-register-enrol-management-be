@@ -1,16 +1,16 @@
 namespace EprRegisterEnrolManagementBe.Auth;
 
-public static class CognitoClientIdDefaults
+public static class ClientIdDefaults
 {
-    public const string AuthenticationScheme = "CognitoClientId";
+    public const string AuthenticationScheme = "ClientId";
 
     /// <summary>
-    /// Header carrying the calling service's CDP Cognito client ID.
-    /// CDP places this header on every service-to-service request after
-    /// validating the upstream JWT, so the backend can trust its presence
-    /// without re-validating the token itself.
+    /// Header carrying the calling service's self-asserted client ID.
+    /// Not verified by CDP itself — trust comes from the HMAC signature
+    /// (see <see cref="DefaultSignatureHeaderName"/>), not from this header
+    /// alone.
     /// </summary>
-    public const string DefaultHeaderName = "x-cdp-cognito-client-id";
+    public const string DefaultHeaderName = "x-cdp-client-id";
 
     /// <summary>
     /// Optional header carrying the end user's identifier as the BFF sees it

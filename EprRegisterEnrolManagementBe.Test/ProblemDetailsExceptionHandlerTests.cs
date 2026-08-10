@@ -39,7 +39,7 @@ public class ProblemDetailsExceptionHandlerTests
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new ThrowingFactory(_fixture);
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+        client.DefaultRequestHeaders.Add("x-cdp-client-id", "test-client");
 
         var response = await client.GetAsync("/work-items", ct);
 

@@ -47,7 +47,7 @@ The explorer ships with a dev-only **"Authenticate as:"** dropdown in the
 topbar that mirrors the BFF's stub login fixtures
 (`stub-caseworker-1`, `stub-caseworker-2`, `stub-caseworker-3`). Pick a
 user and every "Try it out" call will be sent with the three CDP trust
-headers (`x-cdp-cognito-client-id`, `x-cdp-user-id`, `x-cdp-user-name`)
+headers (`x-cdp-client-id`, `x-cdp-user-id`, `x-cdp-user-name`)
 for that user. The selection persists in the browser's `localStorage`.
 Picking "— anonymous —" clears it.
 
@@ -115,13 +115,13 @@ docker compose down -v
 
 ## Authentication
 
-All non-health endpoints require a CDP Cognito client ID supplied in the
-`x-cdp-cognito-client-id` request header. CDP validates the upstream
+All non-health endpoints require a CDP client ID supplied in the
+`x-cdp-client-id` request header. CDP validates the upstream
 service's JWT before forwarding the call, so the backend trusts the header's
 presence and performs no further authorisation:
 
 ```bash
-curl -H 'x-cdp-cognito-client-id: my-upstream-service' \
+curl -H 'x-cdp-client-id: my-upstream-service' \
   http://localhost:8085/work-items
 ```
 
