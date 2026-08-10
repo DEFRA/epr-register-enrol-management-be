@@ -37,7 +37,7 @@ public class ClientIdAuthenticationTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory();
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", string.Empty);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, string.Empty);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -54,7 +54,7 @@ public class ClientIdAuthenticationTests
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -83,7 +83,7 @@ public class ClientIdAuthenticationTests
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, factory.FakeTime.GetUtcNow().ToString("O"), "nonce-1");
 
         var response = await client.GetAsync("/work-items", cancellationToken);
@@ -98,7 +98,7 @@ public class ClientIdAuthenticationTests
         await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, factory.FakeTime.GetUtcNow().ToString("O"), "nonce-2");
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", "AAAAtampered==");
 
@@ -122,7 +122,7 @@ public class ClientIdAuthenticationTests
             Secret, ClientId, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, timestamp, nonce);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -152,7 +152,7 @@ public class ClientIdAuthenticationTests
             OtherSecret, ClientId, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, timestamp, nonce);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -178,7 +178,7 @@ public class ClientIdAuthenticationTests
             Secret, OtherClientId, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", OtherClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, OtherClientId);
         AddTimestampAndNonce(client, timestamp, nonce);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -219,7 +219,7 @@ public class ClientIdAuthenticationTests
         });
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", "frontend");
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "frontend");
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -253,7 +253,7 @@ public class ClientIdAuthenticationTests
         var nonceA = "nonce-caller-a";
         var signatureA = ClientIdAuthenticationHandler.ComputeSignature(
             Secret, ClientId, null, null, timestamp, nonceA);
-        clientA.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        clientA.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(clientA, timestamp, nonceA);
         clientA.DefaultRequestHeaders.Add("x-cdp-auth-signature", signatureA);
 
@@ -261,7 +261,7 @@ public class ClientIdAuthenticationTests
         var nonceB = "nonce-caller-b";
         var signatureB = ClientIdAuthenticationHandler.ComputeSignature(
             OtherSecret, OtherClientId, null, null, timestamp, nonceB);
-        clientB.DefaultRequestHeaders.Add("x-cdp-client-id", OtherClientId);
+        clientB.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, OtherClientId);
         AddTimestampAndNonce(clientB, timestamp, nonceB);
         clientB.DefaultRequestHeaders.Add("x-cdp-auth-signature", signatureB);
 
@@ -283,7 +283,7 @@ public class ClientIdAuthenticationTests
             factory.FakeTime.GetUtcNow().ToString("O"), "nonce-no-ts");
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", "nonce-no-ts");
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -305,7 +305,7 @@ public class ClientIdAuthenticationTests
             Secret, ClientId, null, null, staleTimestamp, nonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, staleTimestamp, nonce);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -327,7 +327,7 @@ public class ClientIdAuthenticationTests
             Secret, ClientId, null, null, futureTimestamp, nonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, futureTimestamp, nonce);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -347,7 +347,7 @@ public class ClientIdAuthenticationTests
             Secret, ClientId, null, null, timestamp, "would-have-been-nonce");
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         client.DefaultRequestHeaders.Add("x-cdp-auth-timestamp", timestamp);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -371,7 +371,7 @@ public class ClientIdAuthenticationTests
             Secret, ClientId, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, timestamp, nonce);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -391,7 +391,7 @@ public class ClientIdAuthenticationTests
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory(environment: "Production");
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -410,7 +410,7 @@ public class ClientIdAuthenticationTests
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -424,7 +424,7 @@ public class ClientIdAuthenticationTests
     }
 
     [Theory]
-    [InlineData("x-cdp-client-id", 256)]
+    [InlineData(ClientIdDefaults.DefaultHeaderName, 256)]
     [InlineData("x-cdp-user-id", 128)]
     [InlineData("x-cdp-user-name", 256)]
     public async Task Identity_header_exceeding_cap_is_401_with_descriptive_reason(
@@ -435,13 +435,13 @@ public class ClientIdAuthenticationTests
         using var client = factory.CreateClient();
 
         var oversize = new string('a', cap + 1);
-        if (header == "x-cdp-client-id")
+        if (header == ClientIdDefaults.DefaultHeaderName)
         {
-            client.DefaultRequestHeaders.Add("x-cdp-client-id", oversize);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, oversize);
         }
         else
         {
-            client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
             client.DefaultRequestHeaders.Add(header, oversize);
         }
 
@@ -468,7 +468,7 @@ public class ClientIdAuthenticationTests
             Secret, ClientId, null, null, goodTimestamp, goodNonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
 
         var oversize = new string('a', cap + 1);
         client.DefaultRequestHeaders.Add(
@@ -499,7 +499,7 @@ public class ClientIdAuthenticationTests
         await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, factory.FakeTime.GetUtcNow().ToString("O"), "nonce-big-sig");
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", new string('a', 257));
 
@@ -512,7 +512,7 @@ public class ClientIdAuthenticationTests
     }
 
     [Theory]
-    [InlineData("x-cdp-client-id", 256)]
+    [InlineData(ClientIdDefaults.DefaultHeaderName, 256)]
     [InlineData("x-cdp-user-id", 128)]
     [InlineData("x-cdp-user-name", 256)]
     public async Task Identity_header_at_exactly_cap_is_accepted(string header, int cap)
@@ -525,13 +525,13 @@ public class ClientIdAuthenticationTests
 
         using var client = factory.CreateClient();
         var atCap = new string('a', cap);
-        if (header == "x-cdp-client-id")
+        if (header == ClientIdDefaults.DefaultHeaderName)
         {
-            client.DefaultRequestHeaders.Add("x-cdp-client-id", atCap);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, atCap);
         }
         else
         {
-            client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
             client.DefaultRequestHeaders.Add(header, atCap);
         }
 
@@ -555,7 +555,7 @@ public class ClientIdAuthenticationTests
             Secret, ClientId, null, null, timestamp, nonce);
 
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-client-id", ClientId);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(client, timestamp, nonce);
         client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
@@ -621,7 +621,7 @@ public class ClientIdAuthenticationEnvVarTests
                 ManagementFeSecret, clientId, null, null, timestamp, nonce);
 
             using var client = factory.CreateClient();
-            client.DefaultRequestHeaders.Add("x-cdp-client-id", clientId);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, clientId);
             client.DefaultRequestHeaders.Add("x-cdp-auth-timestamp", timestamp);
             client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", nonce);
             client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);

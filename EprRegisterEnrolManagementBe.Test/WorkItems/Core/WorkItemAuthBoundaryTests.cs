@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -201,7 +202,7 @@ public class WorkItemAuthBoundaryTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-client-id", TenantClientId);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, TenantClientId);
             if (_userId is not null)
             {
                 // Use TryAddWithoutValidation so the test can deliberately

@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -1571,7 +1572,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             base.ConfigureClient(client);
             if (_includeAuthHeader)
             {
-                client.DefaultRequestHeaders.Add("x-cdp-client-id", "test-client");
+                client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
             }
             if (_userId is not null)
             {

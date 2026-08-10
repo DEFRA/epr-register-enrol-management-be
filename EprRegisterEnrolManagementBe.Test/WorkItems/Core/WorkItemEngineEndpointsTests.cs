@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -286,7 +287,7 @@ public class WorkItemEngineEndpointsTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-client-id", "test-client");
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
             client.DefaultRequestHeaders.Add("x-cdp-user-id", "test-user");
         }
 

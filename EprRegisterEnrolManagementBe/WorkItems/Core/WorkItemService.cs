@@ -320,10 +320,10 @@ public sealed class WorkItemService : IWorkItemService
             // application context so audit consumers can reconstruct who
             // submitted from where without joining back to request logs.
             // 'source' is caller-supplied (BFF / operator FE forward it);
-            // 'clientId' is the client id forwarded by the CDP
-            // gateway; 'userId' is the end-user identity claim required for
-            // any mutation. RA-219: 'applicationReference' is the
-            // server-generated value.
+            // 'clientId' is the caller-asserted, HMAC-verified client id
+            // (see ClientIdAuthenticationHandler); 'userId' is the end-user
+            // identity claim required for any mutation. RA-219:
+            // 'applicationReference' is the server-generated value.
             AppendAudit(
                 workItem,
                 "work-item-submitted",

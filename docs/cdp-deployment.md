@@ -62,7 +62,7 @@ signature, are rejected with `401`.
 
 | Header                    | Description                                                                                      |
 | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| `x-cdp-client-id` | The clientId the caller asserts (each caller sets this from its own config — see RA-345 above; despite the name this is *not* actually injected/verified by CDP itself, which is exactly why the HMAC signature below exists). |
+| `x-cdp-client-id` | The clientId the caller asserts (each caller sets this from its own config — see RA-345 above). The `x-cdp-` prefix matches this scheme's other trust headers by convention only — this value is *not* injected or verified by CDP itself, which is exactly why the HMAC signature below exists. |
 | `x-cdp-auth-timestamp`    | ISO-8601 UTC instant the BFF assembled the request (e.g. `2026-05-18T10:00:00Z`). Must be within 5 minutes of the backend clock. |
 | `x-cdp-auth-nonce`        | Per-request opaque random token minted by the BFF (e.g. base64url of 16 random bytes). Single-use — a replayed nonce is rejected for 10 minutes. |
 | `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below), keyed with the secret registered for the asserted `x-cdp-client-id` (`AUTH_SHARED_SECRET__MANAGEMENT_FE` or `AUTH_SHARED_SECRET__BACKEND` — see RA-345 above). |

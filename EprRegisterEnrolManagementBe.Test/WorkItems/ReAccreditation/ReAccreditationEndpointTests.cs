@@ -18,6 +18,7 @@ using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using NSubstitute;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
@@ -2545,7 +2546,7 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-client-id", _clientId);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, _clientId);
             if (_userId is not null)
             {
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);

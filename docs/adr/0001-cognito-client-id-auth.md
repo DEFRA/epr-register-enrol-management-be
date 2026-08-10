@@ -19,13 +19,13 @@
 The backend is fronted by the CDP platform, which was believed at the time
 to terminate inbound traffic and validate the upstream service's AWS
 Cognito JWT before forwarding the request, injecting the validated client
-id into the `x-cdp-client-id` request header. This assumption was later
+id into the `x-cdp-cognito-client-id` request header. This assumption was later
 found to be incorrect — see the amendment above.
 
 There is no standard `.NET` equivalent of `@defra/hapi-secure-context`
 published by CDP. Two options were considered for backend authentication:
 
-1. **Trust the CDP-injected header** (`x-cdp-client-id`) and rely
+1. **Trust the CDP-injected header** (`x-cdp-cognito-client-id`) and rely
    on CDP to enforce JWT validation at the edge. This requires that the
    service is only reachable through CDP — direct internet exposure would
    make the header trivial to spoof.
@@ -35,10 +35,10 @@ published by CDP. Two options were considered for backend authentication:
 
 ## Decision
 
-Use a hand-rolled `ClientIdAuthenticationHandler` that trusts the
+Use a hand-rolled `CognitoClientIdAuthenticationHandler` (since renamed to `ClientIdAuthenticationHandler` — see amendment above) that trusts the
 CDP-injected header (option 1). The handler:
 
-- requires the `x-cdp-client-id` header to be present and
+- requires the `x-cdp-cognito-client-id` header to be present and
   non-empty (otherwise `401`),
 - promotes the value to `ClaimTypes.NameIdentifier` and a
   `client_id` claim,
@@ -59,7 +59,7 @@ The header is treated as authoritative because:
 ### Positive
 
 - Minimal code surface; no JWT library or JWKS cache to maintain.
-- Aligns with how other CDP backends consume the `x-cdp-client-id`
+- Aligns with how other CDP backends consume the `x-cdp-cognito-client-id`
   contract.
 - Forwarded user context (`user:id`, `user:name`, roles) is available to
   endpoints and audit logging without a second round-trip.
