@@ -107,11 +107,6 @@ public interface IWorkItemPersistence
 
 public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersistence
 {
-    // Computed once: the distinct terminal state ids across every registered
-    // type (RA-224). Used to hide finished work (approved/rejected/withdrawn)
-    // from the active worklist by default.
-    private readonly IReadOnlySet<string> _terminalStateIds;
-
     // Computed once: state id → workflow rank (RA-324), used by the Status sort.
     private readonly IReadOnlyDictionary<string, int> _statusRank;
 
@@ -121,17 +116,16 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         IWorkItemRegistry registry)
         : base(connectionFactory, "workItems", loggerFactory)
     {
-        _terminalStateIds = TerminalStates.Ids(registry);
         _statusRank = WorkItemSort.StatusRank(registry);
     }
 
     /// <summary>
-    /// Test-only convenience overload that derives the terminal-state set from
-    /// the shipping module set (currently re-accreditation). Production wiring
+    /// Test-only convenience overload that derives the registry from the
+    /// shipping module set (currently re-accreditation). Production wiring
     /// always uses the registry-injecting constructor above; this keeps the
-    /// many persistence-layer integration tests that predate RA-224 from
-    /// having to thread a registry through, while still exercising the real
-    /// terminal-state behaviour.
+    /// many persistence-layer integration tests that predate it from having to
+    /// thread a registry through, while still exercising the real Status sort
+    /// ordering.
     /// </summary>
     [ExcludeFromCodeCoverage]
     internal WorkItemPersistence(
@@ -195,7 +189,7 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var filter = BuildFilter(query, _terminalStateIds);
+        var filter = BuildFilter(query);
 
         var totalCount = await Collection.CountDocumentsAsync(filter, cancellationToken: cancellationToken);
 
@@ -264,8 +258,7 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         return new WorkItemPage(items, totalCount, page, pageSize);
     }
 
-    internal static FilterDefinition<WorkItem> BuildFilter(
-        WorkItemQuery query, IReadOnlySet<string> terminalStateIds)
+    internal static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
     {
         var builder = Builders<WorkItem>.Filter;
         var clauses = new List<FilterDefinition<WorkItem>>();
@@ -385,25 +378,28 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             clauses.Add(builder.In("payload.nation", nations));
         }
 
-        // Archive exclusion: hide finished work in any terminal state
-        // (approved/rejected/withdrawn) by default so the active worklist stays
-        // focused on in-flight work (RA-224). Pass IncludeArchived=true to reveal
-        // them (e.g. for the "Show archived" filter or background jobs).
+        // RA-313: there is deliberately NO terminal-state exclusion here.
         //
-        // Any terminal state the caller explicitly requested via StateIds is
-        // left in place — combining $in:[X] with $nin:[X,...] on the same field
-        // would make the query unsatisfiable (matches nothing). So we only
-        // exclude terminal states that were NOT explicitly requested.
-        if (!query.IncludeArchived && terminalStateIds.Count > 0)
-        {
-            var toExclude = terminalStateIds
-                .Where(id => !(query.StateIds?.Contains(id, StringComparer.OrdinalIgnoreCase) ?? false))
-                .ToList();
-            if (toExclude.Count > 0)
-            {
-                clauses.Add(builder.Nin(w => w.StateId, toExclude));
-            }
-        }
+        // RA-224 used to hide every terminal state (approved/rejected/withdrawn)
+        // from the list unless IncludeArchived was set, so that the worklist
+        // showed only in-flight work. That ticket was closed as incorrectly
+        // filed and should never have been built: RA-313 AC01 requires a
+        // withdrawn application to be visible in the regulator's worklist with
+        // its "Withdrawn" status, and the same reasoning applies to the other
+        // two terminal states — a regulator looking for a decided application
+        // should find it where every other application is.
+        //
+        // WorkItemQuery.IncludeArchived is retained and still bound from the
+        // query string: management-fe continues to send it and the snapshot /
+        // backfill migrations pass IncludeArchived: true. It now selects
+        // nothing, because nothing is excluded. See epr-kenf for retiring the
+        // parameter and its "Show archived items" checkbox — deliberately NOT
+        // done here, because the Applications page UI was signed off against a
+        // prototype that no story captures.
+        //
+        // payload.archivedAt is untouched: ArchiveBackgroundService still
+        // stamps it after ArchiveAfterDays, and the list still renders it as
+        // "Archived: <date>" on the card. It is now purely informational.
 
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
