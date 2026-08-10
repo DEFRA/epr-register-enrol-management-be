@@ -61,13 +61,28 @@ internal static class WorkItemEngineRules
     }
 
     /// <summary>
-    /// True when the work item's current state still has at least one task
-    /// that is not <see cref="WorkItemTaskStatus.Completed"/>. A state with
-    /// no declared tasks is never blocking.
+    /// True when the state being assessed still has at least one task that is
+    /// not <see cref="WorkItemTaskStatus.Completed"/>. A state with no declared
+    /// tasks is never blocking.
+    ///
+    /// RA-372: <paramref name="taskStateId"/> is the state whose checklist to
+    /// assess, defaulting to the state the work item is in. It differs only
+    /// when a module redirects an item's tasks to another state via
+    /// <see cref="IWorkItemTaskStateResolver"/> — re-accreditation's
+    /// <c>updated</c> waypoint being the motivating case. Callers that have
+    /// resolved an effective task state MUST pass it: assessing the literal
+    /// state instead would ask a different question from the one the task list
+    /// the caseworker is looking at was built from, and because a state with
+    /// no tasks is never blocking, the mismatch fails open.
     /// </summary>
-    internal static bool HasIncompleteTasks(IWorkItemTemplate template, WorkItem workItem)
+    internal static bool HasIncompleteTasks(
+        IWorkItemTemplate template,
+        WorkItem workItem,
+        string? taskStateId = null
+    )
     {
-        var required = template.GetTasksForState(workItem.StateId);
+        var stateId = taskStateId ?? workItem.StateId;
+        var required = template.GetTasksForState(stateId);
         if (required.Count == 0)
         {
             return false;
@@ -79,7 +94,7 @@ internal static class WorkItemEngineRules
         // bucket would let a v2 module that writes only to the canonical
         // map silently transition past incomplete tasks.
         return required.Any(t =>
-            GetCurrentTaskStatus(workItem, workItem.StateId, t.Id) != WorkItemTaskStatus.Completed
+            GetCurrentTaskStatus(workItem, stateId, t.Id) != WorkItemTaskStatus.Completed
         );
     }
 
@@ -97,12 +112,17 @@ internal static class WorkItemEngineRules
     internal static WorkItemActionResult? RequireAllTasksComplete(
         IWorkItemTemplate template,
         WorkItem workItem,
-        string actionId
+        string actionId,
+        string? taskStateId = null
     ) =>
-        HasIncompleteTasks(template, workItem)
+        HasIncompleteTasks(template, workItem, taskStateId)
+            // RA-372: name the state whose checklist was actually assessed.
+            // Normally the item's own state; where a module has redirected the
+            // task list, reporting the literal state would send a caseworker
+            // looking for outstanding tasks on a state that may declare none.
             ? WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.IncompleteTasks,
-                $"Action '{actionId}' requires every task for state '{workItem.StateId}' to be complete first."
+                $"Action '{actionId}' requires every task for state '{taskStateId ?? workItem.StateId}' to be complete first."
             )
             : null;
 }

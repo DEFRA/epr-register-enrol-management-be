@@ -42,7 +42,15 @@ public sealed record WorkItemResponse(
     DateTime? SlaDueDate = null,
     // RA-318: surfaced as a top-level field (mirroring payload.applicationReference)
     // so callers don't need to parse the payload JSON to obtain it.
-    string? ApplicationReference = null
+    string? ApplicationReference = null,
+    // RA-372: the id of the state whose checklist Tasks actually contains.
+    // Normally equal to StateId, but a work item type may declare that another
+    // state's tasks apply while an item passes through a waypoint state
+    // (re-accreditation's 'updated' is the motivating case). Without this,
+    // Tasks quietly stops describing StateId with no way for a client to
+    // detect it — which pushes clients into hardcoding module state ids.
+    // Additive + nullable, so the DTO stays backward-compatible.
+    string? TaskStateId = null
 );
 
 /// <summary>

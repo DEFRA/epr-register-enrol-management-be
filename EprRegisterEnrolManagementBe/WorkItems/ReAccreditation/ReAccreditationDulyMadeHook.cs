@@ -57,8 +57,54 @@ internal sealed class ReAccreditationDulyMadeHook(
             return;
         }
 
-        var fromStateId = workItem.StateId;
         var now = timeProvider.GetUtcNow().UtcDateTime;
+
+        // RA-372: stateId is the *effective* task state and may differ from
+        // workItem.StateId. The submitted-state checklist can be worked while
+        // the application is parked in the 'updated' waypoint — an operator
+        // has answered a query that was raised during duly-making. Discharge
+        // the waypoint through its declared continue-review edge before
+        // marking the application duly made, rather than jumping straight
+        // from 'updated' to 'duly-made'.
+        //
+        // Jumping would traverse an edge ReAccreditationType does not declare:
+        // the only declared exits from 'updated' are continue-review-during-*
+        // and withdraw-during-updated. Nothing would validate it, and the
+        // resulting fromStateId ('updated') would land in the audit trail and
+        // go on the wire to the operator backend via
+        // ReAccreditationStatusPushHook — a from/to pair neither management-fe
+        // nor the journey tests model, because it is not in the template both
+        // of them mirror.
+        //
+        // Going through the declared edge keeps the state machine closed and
+        // leaves every consumer seeing only transitions it already knows:
+        //   updated →(continue-review-during-duly-making) submitted
+        //           →(duly-make) duly-made
+        //
+        // Recorded in memory and committed by the single ReplaceAsync below,
+        // NOT as its own persisted step. That is a hard constraint, not a
+        // style choice: this method already holds a loaded WorkItem and
+        // ReplaceAsync is guarded by an optimistic-concurrency check on
+        // WorkItem.Version. Any out-of-band write between our load and our
+        // save moves the stored version on and makes our save throw
+        // WorkItemConcurrencyException — and the status push below writes one,
+        // because IWorkItemAuditAppender.AppendAsync re-reads and replaces the
+        // document to record the push outcome. Persisting the discharge
+        // separately so it could be pushed separately therefore left the
+        // application stranded in 'submitted' with every task complete and the
+        // caseworker looking at a 500. Everything that mutates this instance
+        // must land in one write, before any push.
+        var dischargedWaypoint = string.Equals(
+            workItem.StateId,
+            ReAccreditationUpdatedOrigin.StateId,
+            StringComparison.OrdinalIgnoreCase
+        );
+        if (dischargedWaypoint)
+        {
+            DischargeUpdatedWaypoint(workItem, user, now);
+        }
+
+        var fromStateId = workItem.StateId;
         workItem.StateId = "duly-made";
         workItem.LastModifiedAt = now;
         workItem.SlaClock = new WorkItemSlaClock { StartedAt = now };
@@ -105,12 +151,84 @@ internal sealed class ReAccreditationDulyMadeHook(
 
         logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) auto-transitioned submitted→duly-made "
-                + "after all submitted-state tasks were completed.",
+                + "after all submitted-state tasks were completed"
+                + "{WaypointDischarge}.",
             workItem.Id,
-            workItem.TypeId
+            workItem.TypeId,
+            dischargedWaypoint
+                ? ", having first left the 'updated' waypoint via continue-review-during-duly-making"
+                : string.Empty
         );
 
         await SendDulyMadeNotificationAsync(workItem, user, cancellationToken);
+    }
+
+    /// <summary>
+    /// RA-372: carry a work item out of the <c>updated</c> waypoint via its
+    /// declared <c>continue-review-during-duly-making</c> transition, so the
+    /// duly-made transition that follows starts from <c>submitted</c> — a
+    /// from-state every downstream consumer already models.
+    ///
+    /// The action id is fixed rather than derived because only one value is
+    /// reachable here: this runs when the effective task state is
+    /// <c>submitted</c> (so the query was raised during duly-making) and the
+    /// item is in <c>updated</c>, which is precisely the pairing
+    /// <c>continue-review-during-duly-making</c> describes. A snapshot old
+    /// enough to lack that transition could not have produced the effective
+    /// state in the first place — <see cref="ReAccreditationTaskStateResolver"/>
+    /// resolves the origin through the very same transition and abstains when
+    /// it is absent — so this cannot invent an edge the template lacks.
+    ///
+    /// Mutates in memory only. The caller commits this together with the
+    /// duly-made transition in a single <see cref="IWorkItemPersistence.ReplaceAsync"/>
+    /// — see the concurrency note at the call site for why a separate write
+    /// here is not an option.
+    ///
+    /// A consequence worth naming: this transition is therefore not pushed to
+    /// the operator backend on its own.
+    /// <see cref="ReAccreditationStatusPushHook"/> reads the destination state
+    /// off <see cref="WorkItem.StateId"/> at push time, and the push must
+    /// happen after the save, by which point the item is already
+    /// <c>duly-made</c> — so pushing this separately could only report it as
+    /// ending somewhere it did not. The operator backend instead sees the one
+    /// push it can act on, <c>duly-make (submitted → duly-made)</c>, which is
+    /// a declared pair. Nothing is lost that it could use: <c>submitted</c>
+    /// here is a transient waypoint discharge that exists for the duration of
+    /// this method, not a stage of the application anyone can observe. The
+    /// full two-step path stays visible in the audit log, which is the
+    /// regulator-facing record.
+    /// </summary>
+    private static void DischargeUpdatedWaypoint(
+        WorkItem workItem,
+        ClaimsPrincipal user,
+        DateTime now
+    )
+    {
+        const string ContinueReviewActionId = "continue-review-during-duly-making";
+
+        var fromStateId = workItem.StateId;
+        workItem.StateId = "submitted";
+        workItem.LastModifiedAt = now;
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
+            {
+                Action = "action-applied",
+                ActionDisplayName = "Action applied",
+                Details = new Dictionary<string, string?>
+                {
+                    ["actionId"] = ContinueReviewActionId,
+                    // Mirrors the DisplayName ReAccreditationType declares for
+                    // this transition, matching how the duly-make entry below
+                    // states its own display name inline.
+                    ["actionDisplayName"] = "Continue review",
+                    ["fromStateId"] = fromStateId,
+                    ["toStateId"] = workItem.StateId,
+                },
+                CreatedAt = now,
+                CreatedBy = user.FindFirstValue("user:id"),
+                CreatedByName = user.FindFirstValue("user:name"),
+            }
+        );
     }
 
     private async Task SendDulyMadeNotificationAsync(
