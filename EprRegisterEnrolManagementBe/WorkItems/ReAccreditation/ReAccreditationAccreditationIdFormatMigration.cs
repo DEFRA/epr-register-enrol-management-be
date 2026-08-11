@@ -1,5 +1,6 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -29,10 +30,21 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// width) is skipped without a fresh lookup, so re-running after a partial
 /// apply only touches what is left.
 /// </para>
+///
+/// <para>
+/// Takes <see cref="IServiceProvider"/> rather than
+/// <see cref="IAccreditationIdGenerator"/> directly and resolves it lazily
+/// inside <see cref="ApplyAsync"/>, after the <see cref="EnabledConfigKey"/>
+/// check: <see cref="WorkItemMigrationHostedService"/> constructs every
+/// registered <see cref="IWorkItemMigration"/> up front to run them, and a
+/// constructor-injected generator would pull in
+/// <see cref="AccreditationIdLookup"/>'s live Mongo connection at every host
+/// startup regardless of whether the backfill is enabled.
+/// </para>
 /// </summary>
 internal sealed class ReAccreditationAccreditationIdFormatMigration(
     IConfiguration configuration,
-    IAccreditationIdGenerator generator,
+    IServiceProvider serviceProvider,
     ILogger<ReAccreditationAccreditationIdFormatMigration> logger,
     TimeProvider? timeProvider = null) : IWorkItemMigration
 {
@@ -59,6 +71,7 @@ internal sealed class ReAccreditationAccreditationIdFormatMigration(
             return;
         }
 
+        var generator = serviceProvider.GetRequiredService<IAccreditationIdGenerator>();
         var apply = configuration.GetValue(ApplyConfigKey, false);
         var backfilled = 0;
         var skipped = 0;

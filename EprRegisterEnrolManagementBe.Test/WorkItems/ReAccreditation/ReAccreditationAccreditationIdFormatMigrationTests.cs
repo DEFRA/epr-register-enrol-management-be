@@ -59,11 +59,18 @@ public class ReAccreditationAccreditationIdFormatMigrationTests
         return generator;
     }
 
+    private static IServiceProvider ServiceProviderWith(IAccreditationIdGenerator generator)
+    {
+        var provider = Substitute.For<IServiceProvider>();
+        provider.GetService(typeof(IAccreditationIdGenerator)).Returns(generator);
+        return provider;
+    }
+
     private static ReAccreditationAccreditationIdFormatMigration BuildSut(
         IConfiguration configuration, IAccreditationIdGenerator? generator = null) =>
         new(
             configuration,
-            generator ?? NewFormatGenerator(),
+            ServiceProviderWith(generator ?? NewFormatGenerator()),
             NullLogger<ReAccreditationAccreditationIdFormatMigration>.Instance,
             new FakeTimeProvider(s_now));
 
