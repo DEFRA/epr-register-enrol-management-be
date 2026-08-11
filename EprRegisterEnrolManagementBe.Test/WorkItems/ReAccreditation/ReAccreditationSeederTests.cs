@@ -616,6 +616,30 @@ public class ReAccreditationSeederTests
             // Pence, not pounds. A three-figure value where four are expected is
             // the tell that someone stored 3276 instead of 327600.
             Assert.True(charge.ToInt64() > 0, "chargeAmountPence must be positive.");
+
+            // RA-316: keep every seeded charge above £500 in pence. This looks
+            // arbitrary and is not — it protects an assertion in another repo.
+            //
+            // The mgmt-tests journey suite catches a missing /100 in the
+            // frontend by bounding the RENDERED charge below £50,000: correct
+            // rendering of our smallest seed is £546.00, the same value rendered
+            // undivided is £54,600.00, and the ceiling sits in that gap. That
+            // check only discriminates while every seeded value, rendered
+            // undivided, lands ABOVE the ceiling. Seed anything under 50000
+            // pence — 32800 for a single overseas site's £328 increment is the
+            // plausible mistake — and it renders undivided as £32,800, under the
+            // ceiling, so a pounds/pence bug passes silently for that item.
+            //
+            // The coupling is real but invisible from the other repo, so it is
+            // enforced here, where the values live. If a genuine sub-£500 fee
+            // band ever exists, coordinate with mgmt-tests before seeding it
+            // rather than deleting this assertion.
+            Assert.True(
+                charge.ToInt64() >= 50_000,
+                $"Seeded chargeAmountPence {charge.ToInt64()} is below 50000 pence (£500). "
+                    + "This silently weakens the mgmt-tests pounds/pence magnitude check — "
+                    + "see the comment above before changing it."
+            );
         }
     }
 
