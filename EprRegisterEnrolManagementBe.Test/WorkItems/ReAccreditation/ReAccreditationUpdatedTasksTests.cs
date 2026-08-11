@@ -35,7 +35,7 @@ public class ReAccreditationUpdatedTasksTests
 
     /// <summary>
     /// A re-accreditation work item as it exists after resume-from-query: in
-    /// <c>updated</c>, carrying the frozen v10 snapshot every live item has,
+    /// <c>updated</c>, carrying the frozen v11 snapshot every live item has,
     /// with the resume-during-* entry that records where it came from.
     /// </summary>
     private static WorkItem BuildUpdatedWorkItem(
@@ -99,10 +99,11 @@ public class ReAccreditationUpdatedTasksTests
     /// state's, not empty.
     /// </summary>
     [Theory]
-    [InlineData(
-        "resume-during-duly-making",
-        new[] { "verify-organisation-details", "confirm-application-completeness" }
-    )]
+    // RA-316: duly-making now has no checklist, so an item queried during it
+    // projects an empty list. The resolver still redirects to the originating
+    // state — it just finds nothing there — which is the behaviour that keeps
+    // the other three rows meaningful.
+    [InlineData("resume-during-duly-making", new string[0])]
     [InlineData("resume-during-duly-made", new[] { "confirm-registration-fee-paid" })]
     [InlineData(
         "resume-during-assessment",
@@ -247,105 +248,6 @@ public class ReAccreditationUpdatedTasksTests
     }
 
     // --------------------------- auto-transition ---------------------------
-
-    /// <summary>
-    /// The duly-made hook is the only way an application leaves
-    /// <c>submitted</c> — <c>duly-make</c> is not a caller-invocable action.
-    /// So when the query was raised during duly-making, completing the last
-    /// submitted-state task while in <c>updated</c> must still fire it.
-    /// Suppressing it would drop the item into <c>submitted</c> with every box
-    /// already ticked and nothing left that could ever advance it.
-    /// </summary>
-    [Fact]
-    public async Task Finishing_the_duly_making_checklist_while_updated_still_marks_it_duly_made()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var workItem = BuildUpdatedWorkItem(
-            "resume-during-duly-making",
-            completed: new() { ["submitted"] = ["verify-organisation-details"] }
-        );
-        var harness = new DulyMadeHarness(workItem);
-        var (engine, persistence) = BuildEngine(workItem, harness.Hook);
-
-        await engine.CompleteTaskAsync(workItem.Id, "confirm-application-completeness", s_user, ct);
-
-        // The real ReAccreditationDulyMadeHook ran end to end, not a stand-in:
-        // the application is duly made and its SLA clock has started.
-        Assert.Equal("duly-made", workItem.StateId);
-        Assert.NotNull(workItem.SlaClock);
-
-        // Every edge the item traversed is one the template declares. The
-        // waypoint was discharged via continue-review-during-duly-making
-        // rather than jumping updated → duly-made — an edge
-        // ReAccreditationType does not declare and which neither
-        // management-fe nor the journey tests model.
-        var applied = workItem
-            .AuditLog.Where(e => e.Action == "action-applied")
-            .Select(e =>
-                (
-                    ActionId: e.Details["actionId"],
-                    From: e.Details["fromStateId"],
-                    To: e.Details["toStateId"]
-                )
-            )
-            .ToList();
-
-        Assert.Equal(
-            [
-                ("resume-during-duly-making", "queried", "updated"),
-                ("continue-review-during-duly-making", "updated", "submitted"),
-                ("duly-make", "submitted", "duly-made"),
-            ],
-            applied
-        );
-        Assert.DoesNotContain(applied, e => e.From == "updated" && e.To == "duly-made");
-
-        // The from-state that goes on the wire to the operator backend is
-        // 'submitted', never the unmodelled 'updated'. Exactly one push: the
-        // waypoint discharge shares the duly-made save — it cannot have a save
-        // of its own, see ReAccreditationUpdatedWaypointPersistenceTests — and
-        // the push necessarily runs after that save, by which point the item is
-        // already duly-made, so a separate discharge push could only misreport
-        // where it ended.
-        Assert.Equal([("duly-make", "submitted")], harness.Pushes);
-
-        // A caseworker who presses Continue review after the auto-advance is
-        // not punished for it: the item has already reached a valid continue
-        // target, so this is an idempotent replay rather than an error.
-        var continueReview = new ReAccreditationContinueReviewService(
-            persistence,
-            engine,
-            NullLogger<ReAccreditationContinueReviewService>.Instance
-        );
-        var replay = await continueReview.ContinueReviewAsync(workItem.Id, s_user, ct);
-
-        Assert.True(replay.IsSuccess);
-        Assert.True(replay.IsIdempotentReplay);
-        Assert.Equal("duly-made", workItem.StateId);
-    }
-
-    /// <summary>
-    /// The other three originating states have no post-task hook, so the item
-    /// stays in <c>updated</c> until a caseworker explicitly continues the
-    /// review. Nothing auto-fires and nothing is skipped.
-    /// </summary>
-    [Theory]
-    [InlineData("resume-during-duly-made", "confirm-registration-fee-paid")]
-    [InlineData("resume-during-decision", "record-decision-rationale")]
-    public async Task Finishing_the_checklist_for_other_origins_leaves_the_item_in_updated(
-        string resumeActionId,
-        string finalTaskId
-    )
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var workItem = BuildUpdatedWorkItem(resumeActionId);
-        var (engine, _) = BuildEngine(workItem, new ReAccreditationDulyMadeHookStandIn());
-
-        await engine.CompleteTaskAsync(workItem.Id, finalTaskId, s_user, ct);
-
-        Assert.Equal("updated", workItem.StateId);
-    }
-
     // ------------------------------ AC4 ------------------------------
 
     /// <summary>
@@ -413,7 +315,7 @@ public class ReAccreditationUpdatedTasksTests
     [Fact]
     public void The_template_version_is_unchanged()
     {
-        Assert.Equal("v10", new ReAccreditationType().TemplateVersion);
+        Assert.Equal("v11", new ReAccreditationType().TemplateVersion);
         Assert.Empty(new ReAccreditationType().GetTasksForState("updated"));
     }
 
@@ -523,72 +425,6 @@ public class ReAccreditationUpdatedTasksTests
 
     // ------------------------------- doubles -------------------------------
 
-    /// <summary>
-    /// Wires up the genuine <see cref="ReAccreditationDulyMadeHook"/> — real
-    /// status-push hook included — so the auto-advance is proved by the code
-    /// that actually runs in production rather than by a stand-in. Records
-    /// what reached the operator-backend push adapter, since the from-state on
-    /// that wire is the thing the undeclared edge would have corrupted.
-    /// </summary>
-    private sealed class DulyMadeHarness
-    {
-        public List<(string ActionId, string FromStateId)> Pushes { get; } = [];
-
-        public ReAccreditationDulyMadeHook Hook { get; }
-
-        public DulyMadeHarness(WorkItem workItem)
-        {
-            var persistence = Substitute.For<IWorkItemPersistence>();
-            persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
-
-            var notifyClient = Substitute.For<INotifyClient>();
-            notifyClient
-                .SendEmailAsync(
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<Dictionary<string, string>>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<CancellationToken>()
-                )
-                .Returns(NotifySendResult.Success("msg-id"));
-
-            var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
-            pushAdapter
-                .PushStatusChangedAsync(
-                    Arg.Any<Guid>(),
-                    Arg.Any<Guid>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<DateTime>(),
-                    Arg.Any<CancellationToken>()
-                )
-                .Returns(call =>
-                {
-                    Pushes.Add((call.ArgAt<string>(5), call.ArgAt<string>(2)));
-                    return OperatorBackendPushResult.Skipped("test");
-                });
-
-            var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-
-            Hook = new ReAccreditationDulyMadeHook(
-                persistence,
-                notifyClient,
-                auditAppender,
-                new ReAccreditationStatusPushHook(
-                    pushAdapter,
-                    auditAppender,
-                    NullLogger<ReAccreditationStatusPushHook>.Instance
-                ),
-                TimeProvider.System,
-                NullLogger<ReAccreditationDulyMadeHook>.Instance
-            );
-        }
-    }
-
     private sealed class RecordingPostTaskHook : IWorkItemPostTaskHook
     {
         public List<string> StateIds { get; } = [];
@@ -601,28 +437,6 @@ public class ReAccreditationUpdatedTasksTests
         )
         {
             StateIds.Add(stateId);
-            return Task.CompletedTask;
-        }
-    }
-
-    /// <summary>
-    /// Mirrors the real <see cref="ReAccreditationDulyMadeHook"/>'s guard
-    /// (only acts on <c>submitted</c>) without its notification/persistence
-    /// dependencies, so a test can prove nothing fires for the other origins.
-    /// </summary>
-    private sealed class ReAccreditationDulyMadeHookStandIn : IWorkItemPostTaskHook
-    {
-        public Task OnAllTasksCompletedAsync(
-            WorkItem workItem,
-            string stateId,
-            ClaimsPrincipal user,
-            CancellationToken cancellationToken
-        )
-        {
-            if (string.Equals(stateId, "submitted", StringComparison.OrdinalIgnoreCase))
-            {
-                workItem.StateId = "duly-made";
-            }
             return Task.CompletedTask;
         }
     }

@@ -12,16 +12,38 @@ public class ReAccreditationDulyMadeSnapshotMigrationTests
     {
         var type = new ReAccreditationType();
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
-        // Re-inject the duly-make transition to simulate a v4 snapshot.
+
+        // Re-inject the duly-make transition AND the two submitted-state tasks
+        // to simulate a v4 snapshot.
+        //
+        // RA-316: the tasks have to be stated explicitly now. This fixture used
+        // to inherit them from the live type via Capture, but the live type no
+        // longer declares any tasks for 'submitted' — duly making is a button,
+        // not a checklist. Deriving a historical snapshot from the current type
+        // was always the wrong shape; it silently stopped representing v4 the
+        // moment v4's tasks were deleted, which is exactly what happened.
+        var tasksByState = new Dictionary<string, List<WorkItemTask>>(
+            snapshot.TasksByState,
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["submitted"] =
+            [
+                new WorkItemTask("verify-organisation-details", "Verify organisation details"),
+                new WorkItemTask(
+                    "confirm-application-completeness", "Confirm application is duly made")
+            ]
+        };
+
         return new WorkItemTemplateSnapshot
         {
             TemplateVersion = "v4",
             States = snapshot.States,
             Transitions = snapshot.Transitions
+                .Where(t => t.ActionId != "duly-make")
                 .Append(new WorkItemTransition(
                     "duly-make", "Mark as duly made", "submitted", "duly-made"))
                 .ToList(),
-            TasksByState = snapshot.TasksByState
+            TasksByState = tasksByState
         };
     }
 

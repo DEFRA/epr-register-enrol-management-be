@@ -21,22 +21,24 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<INationResolver, NationResolver>();
         services.AddSingleton<IRegulatorMailboxResolver, RegulatorMailboxResolver>();
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
-        services.AddSingleton<IReAccreditationPaymentService, ReAccreditationPaymentService>();
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
-        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationSlaStampHook>();
+        // RA-316: ReAccreditationSlaStampHook is deliberately gone. It restarted
+        // the SLA clock at `now` whenever payment-received was applied, which
+        // would have wiped the payment-date anchoring duly making now
+        // establishes. The clock is started once, by
+        // ReAccreditationDulyMakingService, and payment-received no longer
+        // touches it.
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
         // RA-311/MBE-1: pushes the query note + sections to the operator
         // backend whenever a query is raised.
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
-        // RA-368: pushes every other state transition to the operator
-        // backend. Registered both as itself and as an IWorkItemPostActionHook
-        // (same singleton instance) so ReAccreditationDulyMadeHook can inject
-        // it directly to call it explicitly for the submitted→duly-made
-        // transition, which bypasses the generic engine's hook fan-out.
-        services.AddSingleton<ReAccreditationStatusPushHook>();
-        services.AddSingleton<IWorkItemPostActionHook>(sp => sp.GetRequiredService<ReAccreditationStatusPushHook>());
-        services.AddSingleton<IWorkItemPostTaskHook, ReAccreditationDulyMadeHook>();
+        // RA-368: pushes every other state transition to the operator backend.
+        // RA-316: no longer needs the extra self-registration it once had —
+        // ReAccreditationDulyMakingService reaches it through the ordinary
+        // IWorkItemPostActionHook fan-out like every other caller, rather than
+        // injecting the concrete type to call it directly.
+        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationStatusPushHook>();
         // RA-372: while an item sits in the 'updated' waypoint, the tasks
         // that apply are the tasks of the state the query was raised from.
         // Without this the regulator sees an empty checklist and cannot
@@ -71,6 +73,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IWorkItemMigration,
             ReAccreditationWithdrawUpdatedSnapshotMigration
         >();
+        // RA-316: reinstates the duly-make transition and clears the deleted
+        // submitted-state tasks on every existing snapshot (v10 → v11). Runs
+        // last of the snapshot migrations so an older item has picked up every
+        // intervening transition first. Critically, it also partially reverses
+        // ReAccreditationDulyMadeSnapshotMigration above — which is why that
+        // migration is now version-gated to pre-v5 items, so the two cannot
+        // undo each other on every boot.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMakeSnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply
@@ -89,6 +99,13 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IAccreditationIdLookup, AccreditationIdLookup>();
         services.AddSingleton<IAccreditationIdGenerator, AccreditationIdGenerator>();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
+        // RA-316: bespoke duly-making workflow. Owns the submitted → duly-made
+        // transition and the side effect the generic engine cannot perform —
+        // anchoring the 12-week SLA clock to the regulator-entered payment date.
+        services.AddSingleton<
+            IReAccreditationDulyMakingService,
+            ReAccreditationDulyMakingService
+        >();
         // RA-291: bespoke query workflow (state-derived query-during-* action
         // + query-detail audit entry).
         services.AddSingleton<IReAccreditationQueryService, ReAccreditationQueryService>();

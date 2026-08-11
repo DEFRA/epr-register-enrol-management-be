@@ -78,6 +78,13 @@ internal sealed class ReAccreditationNotificationHook(
         (string TemplateKey, string Description)
     > s_actionTemplates = new(StringComparer.OrdinalIgnoreCase)
     {
+        // RA-316: the DulyMade email used to be sent by the now-deleted
+        // ReAccreditationDulyMadeHook, which hand-rolled its own copy of the
+        // send/audit logic. Duly making is a transition like any other now, so
+        // it routes through this hook's generic path — one code path, and the
+        // audit descriptions ("Application marked duly made email sent/failed")
+        // come out identical to the ones it replaces.
+        ["duly-make"] = ("DulyMade", "Application marked duly made"),
         ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
         ["sla-extend"] = ("SlaExtended", "SLA extended"),
         ["approve"] = ("Decision", "Decision recorded: approved"),

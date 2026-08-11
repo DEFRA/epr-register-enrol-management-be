@@ -126,9 +126,39 @@ internal sealed class ReAccreditationDulyMadeSnapshotMigration(
             Name, migrated, autoTransitioned, skipped);
     }
 
+    /// <summary>
+    /// RA-316: the presence of <c>duly-make</c> is no longer sufficient on its
+    /// own. <see cref="ReAccreditationDulyMakeSnapshotMigration"/> deliberately
+    /// re-adds that transition at v11, so this migration must additionally
+    /// establish that the item really is a pre-v5 straggler. Without the version
+    /// gate the two migrations would fight on every boot — this one stripping
+    /// what the other had just restored, two pointless writes per item per
+    /// start-up, and a window in which nothing could be duly made.
+    ///
+    /// Versions are compared numerically rather than by string equality so a
+    /// v1/v2/v3 item (should any survive) is still caught.
+    /// </summary>
     private static bool NeedsMigration(WorkItem workItem) =>
         workItem.TemplateSnapshot is not null &&
-        workItem.TemplateSnapshot.Transitions.Any(t => t.ActionId == "duly-make");
+        workItem.TemplateSnapshot.Transitions.Any(t => t.ActionId == "duly-make") &&
+        IsPreV5(workItem.TemplateSnapshot.TemplateVersion);
+
+    /// <summary>
+    /// True when <paramref name="templateVersion"/> is a "v&lt;n&gt;" string with
+    /// n &lt; 5. An unrecognised or absent version is treated as pre-v5: the only
+    /// snapshots that never carried a parseable version predate versioning
+    /// altogether, and they are exactly the ones this migration exists for.
+    /// </summary>
+    private static bool IsPreV5(string? templateVersion)
+    {
+        if (string.IsNullOrWhiteSpace(templateVersion))
+        {
+            return true;
+        }
+
+        var digits = templateVersion.TrimStart('v', 'V');
+        return !int.TryParse(digits, out var version) || version < 5;
+    }
 
     private static void PatchSnapshot(WorkItem workItem)
     {

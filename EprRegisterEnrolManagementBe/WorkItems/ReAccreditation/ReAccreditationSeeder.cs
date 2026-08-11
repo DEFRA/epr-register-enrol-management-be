@@ -135,11 +135,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             now: now,
             completedTasks: new()
             {
-                ["submitted"] =
-                [
-                    "verify-organisation-details",
-                    "confirm-application-completeness"
-                ],
                 ["duly-made"] =
                 [
                     "confirm-registration-fee-paid"
@@ -175,11 +170,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             now: now,
             completedTasks: new()
             {
-                ["submitted"] =
-                [
-                    "verify-organisation-details",
-                    "confirm-application-completeness"
-                ],
                 ["duly-made"] =
                 [
                     "confirm-registration-fee-paid"
@@ -216,11 +206,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             now: now,
             completedTasks: new()
             {
-                ["submitted"] =
-                [
-                    "verify-organisation-details",
-                    "confirm-application-completeness"
-                ],
                 ["duly-made"] =
                 [
                     "confirm-registration-fee-paid"
@@ -280,11 +265,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             now: now,
             completedTasks: new()
             {
-                ["submitted"] =
-                [
-                    "verify-organisation-details",
-                    "confirm-application-completeness"
-                ],
                 ["duly-made"] =
                 [
                     "confirm-registration-fee-paid"

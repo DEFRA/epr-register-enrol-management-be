@@ -2141,6 +2141,207 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
         };
     }
 
+    // -------------------- RA-316: Duly make endpoint --------------------
+
+    /// <summary>
+    /// The error vocabulary management-fe and the mgmt-tests e2e suite bind to.
+    /// The frontend renders a GOV.UK error summary against the date input for
+    /// any 400 whose errorCode starts "payment-date-", and treats everything
+    /// else as a page-level failure — so these codes and statuses are a wire
+    /// contract, not an implementation detail. They are asserted through the
+    /// real HTTP pipeline because the ProblemDetails extension members are the
+    /// thing under test, and those only exist once serialised.
+    /// </summary>
+    [Theory]
+    [InlineData(null, "payment-date-required")]
+    [InlineData("", "payment-date-required")]
+    [InlineData("   ", "payment-date-required")]
+    [InlineData("not-a-date", "payment-date-invalid")]
+    [InlineData("2026-02-30", "payment-date-invalid")]
+    [InlineData("15/07/2026", "payment-date-invalid")]
+    [InlineData("2026-07-15T00:00:00Z", "payment-date-invalid")]
+    [InlineData("2099-01-01", "payment-date-in-future")]
+    [InlineData("1999-01-01", "payment-date-too-old")]
+    public async Task DulyMake_rejects_a_bad_payment_date_with_a_bindable_error_code(
+        string? paymentDate,
+        string expectedErrorCode
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMakeCandidate(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/duly-make",
+            new { paymentDate },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal(expectedErrorCode, problem.GetProperty("errorCode").GetString());
+        Assert.Equal("paymentDate", problem.GetProperty("field").GetString());
+        Assert.Equal(
+            "Could not complete duly making",
+            problem.GetProperty("title").GetString()
+        );
+
+        // A rejected date changes nothing.
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+        Assert.Null(persisted.SlaClock);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Fact]
+    public async Task DulyMake_returns_ok_and_anchors_the_sla_to_the_payment_date()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMakeCandidate(id, TenantClientId), cancellationToken);
+        var paymentDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-10);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/duly-make",
+            new { paymentDate = paymentDate.ToString("yyyy-MM-dd") },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("duly-made", persisted!.StateId);
+        Assert.Equal(
+            paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            persisted.SlaClock!.StartedAt
+        );
+
+        var payload = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<ReAccreditationPayload>(
+            persisted.Payload
+        );
+        Assert.Equal(paymentDate, payload.PaymentDate);
+    }
+
+    [Fact]
+    public async Task DulyMake_returns_not_found_for_missing_work_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/duly-make",
+            new { paymentDate = "2026-07-15" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    /// <summary>
+    /// A wrong-state failure is a 409, never a 400 — the frontend must show
+    /// "this application has changed, reload" rather than a field error against
+    /// the date the regulator typed, which was perfectly valid.
+    /// </summary>
+    [Fact]
+    public async Task DulyMake_returns_conflict_for_an_item_in_the_wrong_state()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/duly-make",
+            new { paymentDate = "2026-07-15" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    /// <summary>
+    /// duly-make is declared CallerInvocable: false, so the generic engine
+    /// route must refuse it. Otherwise a caller could reach duly-made without a
+    /// payment date and therefore without an SLA clock, silently defeating the
+    /// 12-week SLA.
+    /// </summary>
+    [Fact]
+    public async Task The_generic_action_route_cannot_be_used_to_duly_make()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMakeCandidate(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/actions/duly-make",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.NotEqual(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+        Assert.Null(persisted.SlaClock);
+    }
+
+    /// <summary>
+    /// The dormant payment-completed endpoint was removed in RA-316 (no caller
+    /// anywhere in the monorepo). Pinned so it is not resurrected by accident.
+    /// </summary>
+    [Fact]
+    public async Task The_payment_completed_endpoint_no_longer_exists()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMakeCandidate(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/payment-completed",
+            new { paidAt = DateTime.UtcNow },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    private static WorkItem BuildDulyMakeCandidate(Guid id, string submittedBy)
+    {
+        var type = new ReAccreditationType();
+        return new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            SubmittedBy = submittedBy,
+            Payload = new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["registrationNumber"] = "EX-001",
+                ["applicationReference"] = "RA-123456789",
+                ["chargeAmountPence"] = 327600,
+            },
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+    }
+
     // -------------------- RA-132: Approve endpoint --------------------
 
     [Fact]
