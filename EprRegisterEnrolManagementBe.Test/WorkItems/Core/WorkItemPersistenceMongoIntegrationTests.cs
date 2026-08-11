@@ -394,7 +394,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     public async Task QueryAsync_sort_status_orders_by_workflow_rank()
     {
         var ct = TestContext.Current.CancellationToken;
-        // Seeded out of workflow order; all non-terminal so none are archived.
+        // Seeded out of workflow order. All non-terminal, but since RA-313 that
+        // is incidental — a bare query no longer filters terminal states out.
         await SeedAsync("q", stateId: "queried");
         await SeedAsync("aw", stateId: "awaiting-decision");
         await SeedAsync("s", stateId: "submitted");
