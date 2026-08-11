@@ -586,5 +586,61 @@ public class ReAccreditationSeederTests
         Assert.Contains(items, i =>
             !i.Payload.Contains("overseasSites") && !i.Payload.Contains("prns"));
     }
+
+    /// <summary>
+    /// RA-316 regression guard. Seeded items are what every non-production
+    /// environment renders, the journey-test stack included, and the
+    /// duly-making page shows chargeAmountPence as the charge the regulator
+    /// confirms before recording payment. A seed without it renders "Not
+    /// provided" on the one screen whose entire purpose is confirming a
+    /// payment — and because the payload model is [BsonIgnoreExtraElements]
+    /// nothing throws, so the only signal is an e2e failure against a backend
+    /// that is working perfectly. Assert it here, where the cause is obvious.
+    /// </summary>
+    [Fact]
+    public void Every_seeded_item_carries_a_positive_charge_amount_in_pence()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.NotEmpty(items);
+
+        foreach (var item in items)
+        {
+            Assert.True(
+                item.Payload.Contains("chargeAmountPence"),
+                $"Seed '{item.Payload.GetValue("applicationReference", "?")}' has no "
+                    + "chargeAmountPence; the duly-making page would render no charge."
+            );
+            var charge = item.Payload["chargeAmountPence"];
+            Assert.True(charge.IsInt32 || charge.IsInt64, "chargeAmountPence must be an integer.");
+            // Pence, not pounds. A three-figure value where four are expected is
+            // the tell that someone stored 3276 instead of 327600.
+            Assert.True(charge.ToInt64() > 0, "chargeAmountPence must be positive.");
+        }
+    }
+
+    /// <summary>
+    /// paymentReference is an OVERRIDE, absent on real submissions because the
+    /// operator backend has no payment reference at submission time — the
+    /// frontend falls back to the application reference. Exactly one seed sets
+    /// it, so both the override and the far more common fallback path are
+    /// exercised in a seeded environment. Seeding it everywhere would leave the
+    /// fallback untested.
+    /// </summary>
+    [Fact]
+    public void Exactly_one_seeded_item_overrides_the_payment_reference()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var withOverride = items.Where(i => i.Payload.Contains("paymentReference")).ToList();
+
+        Assert.Single(withOverride);
+        Assert.False(
+            string.IsNullOrWhiteSpace(withOverride[0].Payload["paymentReference"].AsString)
+        );
+        // Every other seed relies on the applicationReference fallback, which
+        // the framework stamps on all of them.
+        Assert.All(items, i => Assert.True(i.Payload.Contains("applicationReference")));
+    }
 }
 

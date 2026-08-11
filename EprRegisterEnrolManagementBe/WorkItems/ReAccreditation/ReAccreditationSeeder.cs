@@ -67,6 +67,27 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
         var now = time.GetUtcNow().UtcDateTime;
 
+        // RA-316: every payload below carries chargeAmountPence (integer pence,
+        // matching the operator backend's fee bands: £546 / £2,184 / £3,276 /
+        // £3,965, plus £328 per overseas reprocessing site). The operator
+        // backend supplies it on real submissions, but seeded items are what
+        // every non-production environment — including the journey-test stack —
+        // actually renders, and the duly-making page shows this value as the
+        // charge the regulator confirms before recording payment. Without it
+        // that page renders "Not provided" on the one screen whose entire
+        // purpose is confirming a payment, and the e2e assertions that the
+        // charge is real money would fail against a backend that is working
+        // correctly. Same reasoning as the RA-295 SLA-clock stamp further down:
+        // seed the field the real pipeline supplies, so the UI is exercised
+        // outside production.
+        //
+        // paymentReference is deliberately set on ONE seed only
+        // (full-payload-verification). It is an override, absent on real
+        // submissions because the operator backend has no payment reference at
+        // submission time, and the frontend falls back to the application
+        // reference. Seeding it everywhere would leave that fallback — the path
+        // almost every real work item takes — completely unexercised.
+
         // Newly submitted, no one has picked it up yet.
         yield return Build(
             seedKey: "acme-recycling",
@@ -82,7 +103,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "acme.recycling@example.com",
-                ["siteAddressPostcode"] = "SW1A 1AA"
+                ["siteAddressPostcode"] = "SW1A 1AA",
+                ["chargeAmountPence"] = 54600,
             },
             submittedBy: "stub-portal-client",
             now: now);
@@ -103,7 +125,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 1,
                 ["operatorEmail"] = "northern.plastics@example.com",
-                ["siteAddressPostcode"] = "EH1 3BN"
+                ["siteAddressPostcode"] = "EH1 3BN",
+                ["chargeAmountPence"] = 218400,
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-standard-1",
@@ -127,7 +150,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 2,
                 ["operatorEmail"] = "riverside.glass@example.com",
-                ["siteAddressPostcode"] = "CF10 1AA"
+                ["siteAddressPostcode"] = "CF10 1AA",
+                ["chargeAmountPence"] = 327600,
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -162,7 +186,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "coastal.materials@example.com",
-                ["siteAddressPostcode"] = "BT1 1AA"
+                ["siteAddressPostcode"] = "BT1 1AA",
+                ["chargeAmountPence"] = 396500,
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -198,7 +223,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "heritage.paper@example.com",
-                ["siteAddressPostcode"] = "BS1 4DJ"
+                ["siteAddressPostcode"] = "BS1 4DJ",
+                ["chargeAmountPence"] = 360400,
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -237,7 +263,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "clyde.composites@example.com",
-                ["siteAddressPostcode"] = "G1 1AA"
+                ["siteAddressPostcode"] = "G1 1AA",
+                ["chargeAmountPence"] = 54600,
             },
             submittedBy: "stub-portal-client",
             now: now);
@@ -257,7 +284,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 1,
                 ["operatorEmail"] = "swansea.textiles@example.com",
-                ["siteAddressPostcode"] = "SA1 1AA"
+                ["siteAddressPostcode"] = "SA1 1AA",
+                ["chargeAmountPence"] = 218400,
             },
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
@@ -290,7 +318,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "belfast.fibres@example.com",
-                ["siteAddressPostcode"] = "BT7 1AA"
+                ["siteAddressPostcode"] = "BT7 1AA",
+                ["chargeAmountPence"] = 396500,
             },
             submittedBy: "stub-portal-client",
             now: now);
@@ -319,6 +348,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorEmail"] = "full.payload@example.com",
                 ["siteAddress"] = "1 Full Payload Lane, London",
                 ["siteAddressPostcode"] = "EC1A 1BB",
+                ["chargeAmountPence"] = 327600,
+                ["paymentReference"] = "PAY-FULL-PAYLOAD-001",
                 ["submittedBy"] = new BsonDocument
                 {
                     ["fullName"] = "Priya Sharma",
@@ -495,6 +526,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorEmail"] = "ors.verification@example.com",
                 ["siteAddress"] = "1 Verification Way, London",
                 ["siteAddressPostcode"] = "EC2A 2BB",
+                ["chargeAmountPence"] = 218400,
                 ["submittedBy"] = new BsonDocument
                 {
                     ["fullName"] = "Grace Adeyemi",
