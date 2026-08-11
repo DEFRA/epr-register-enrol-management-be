@@ -69,6 +69,29 @@ internal sealed class ReAccreditationResumeService(
             ["query-during-decision"] = "resume-during-decision",
         };
 
+    /// <summary>
+    /// RA-291/RA-311: the canonical top-level payload field each resubmittable
+    /// section's value must also be merged into, so readers of the payload
+    /// (e.g. the case management summary page) see the resubmitted values
+    /// without having to know about <see cref="LatestSectionsPayloadField"/>.
+    ///
+    /// Only covers the sections a resubmit can actually change on this
+    /// field set: <c>authority-to-issue</c> is deliberately absent — a
+    /// separate, unrelated code path already merges it into its canonical
+    /// field, so re-merging it here would be redundant. <c>broadly-equivalent-standards</c>
+    /// and <c>overseas-reprocessing-sites</c> are also absent: neither has a
+    /// documented stale-read bug, and ORS data lives nested per-site under
+    /// <c>payload.overseasSites.sites[]</c> rather than as a flat section
+    /// value, so a blind top-level overwrite here would be wrong.
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> s_canonicalPayloadFieldBySectionKey =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["business-plan"] = "businessPlan",
+            ["prn-tonnage"] = "prns",
+            ["sampling-and-inspection-plan"] = "samplingPlan",
+        };
+
     public async Task<WorkItemActionResult> ResumeFromQueryAsync(
         Guid workItemId,
         ResumeFromQueryRequest request,
@@ -189,6 +212,14 @@ internal sealed class ReAccreditationResumeService(
     /// <see cref="ReAccreditationQueryService"/>'s <c>currentQuery</c> stamp,
     /// for the same reason (a full-payload replace would materialise
     /// modelled-but-absent fields as explicit nulls).
+    ///
+    /// RA-291 regression fix: also merges each resubmitted section that has a
+    /// canonical top-level field (<see cref="s_canonicalPayloadFieldBySectionKey"/>)
+    /// back onto that field, e.g. <c>sections["business-plan"]</c> onto
+    /// <c>payload.businessPlan</c>. Without this, only <c>latestSections</c>
+    /// was ever updated, which nothing — including the case management
+    /// summary page — reads back, so a resubmitted business plan / PRN
+    /// tonnage / sampling plan never displayed after a query.
     /// </summary>
     private async Task<WorkItemActionResult?> StampLatestSectionsAsync(
         Guid workItemId,
@@ -201,7 +232,20 @@ internal sealed class ReAccreditationResumeService(
         {
             foreach (var (sectionKey, value) in request.Sections)
             {
-                sectionsDoc[sectionKey] = WorkItemPayloadConverter.ToBson(value);
+                var sectionValue = WorkItemPayloadConverter.ToBson(value);
+                sectionsDoc[sectionKey] = sectionValue;
+
+                if (s_canonicalPayloadFieldBySectionKey.TryGetValue(sectionKey, out var canonicalField))
+                {
+                    var canonicalMatched = await persistence.SetPayloadFieldAsync(
+                        workItemId, canonicalField, sectionValue.DeepClone(), cancellationToken);
+                    if (!canonicalMatched)
+                    {
+                        return WorkItemActionResult.Failure(
+                            WorkItemActionFailureCode.WorkItemNotFound,
+                            $"No work item exists with id '{workItemId}'.");
+                    }
+                }
             }
         }
 

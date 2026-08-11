@@ -64,7 +64,7 @@ public class ReAccreditationLifecycleTests
         );
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
         idGenerator
-            .GenerateAsync(Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .GenerateAsync(Arg.Any<BsonDocument>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns("ACC-2027-X-TEST0000");
         var approvalService = new ReAccreditationApprovalService(
             persistence,

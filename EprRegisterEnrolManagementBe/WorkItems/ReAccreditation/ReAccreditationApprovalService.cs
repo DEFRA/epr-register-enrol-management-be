@@ -176,13 +176,12 @@ internal sealed class ReAccreditationApprovalService(
             var now = _timeProvider.GetUtcNow();
             var nowUtc = now.UtcDateTime;
             var accreditationYear = _accreditationConfig.CurrentYear;
-            var material = ResolveMaterial(workItem.Payload);
 
             string accreditationId;
             try
             {
                 accreditationId = await accreditationIdGenerator.GenerateAsync(
-                    material, accreditationYear, cancellationToken);
+                    workItem.Payload, accreditationYear, cancellationToken);
             }
             catch (InvalidOperationException ex)
             {
@@ -315,9 +314,6 @@ internal sealed class ReAccreditationApprovalService(
         workItem.ReplacePayload(merged);
         return true;
     }
-
-    private static string? ResolveMaterial(BsonDocument? payload) =>
-        TryReadString(payload, "material");
 
     private async Task EnqueuePublishingAuditAsync(
         WorkItem workItem,

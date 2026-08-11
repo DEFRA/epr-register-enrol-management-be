@@ -88,6 +88,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // now consults a Mongo-backed lookup for uniqueness.
         services.AddSingleton<IAccreditationIdLookup, AccreditationIdLookup>();
         services.AddSingleton<IAccreditationIdGenerator, AccreditationIdGenerator>();
+        // epr-accreditation-id-format AC02: backfills payload.accreditationId
+        // on already-approved items to the new fixed-width format. Like
+        // ReAccreditationIsNewSiteCorrectionMigration, safe to register
+        // unconditionally: with no configuration it returns immediately.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationAccreditationIdFormatMigration
+        >();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
         // RA-291: bespoke query workflow (state-derived query-during-* action
         // + query-detail audit entry).
