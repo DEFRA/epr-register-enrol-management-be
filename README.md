@@ -89,6 +89,14 @@ Tear it down with:
 docker compose down -v
 ```
 
+> **Pulling a branch that changes seed data? Tear the volume down first.**
+> Work item seeding is insert-only (`CreateIfAbsentAsync` against a
+> deterministic id), so an existing MongoDB volume keeps whatever it seeded
+> the first time and edits to a seed item's contents never reach it. The
+> resulting e2e failures look like a broken frontend rather than stale
+> fixtures. `docker compose down -v` and start clean. See
+> [`docs/work-items.md`](docs/work-items.md#seeding) for the full rules.
+
 ## Endpoints
 
 | Method | Path                                         | Description                            |
@@ -132,6 +140,29 @@ so they run end-to-end against a real (in-memory) Mongo instance:
 ```bash
 dotnet test
 ```
+
+### Checks that don't check
+
+One failure shape turned up four times in a single story (RA-292 / epr-2uxy),
+found by four different people, and it is worth recognising on sight:
+
+> **A check that appears to exercise a path it never touches.**
+
+Each one failed *quietly*, and in the direction the author was hoping for —
+which is why none of them surfaced as a red test.
+
+| Instance | What went wrong | Remedy |
+| --- | --- | --- |
+| **A dry run that mutates isn't dry** | The migration's dry run flipped values in memory before checking its apply flag, so its "what I would change" report described a state it had already partly created | Run the dry run, then **re-read** the document and assert it is unchanged |
+| **`NullLogger` doesn't format** | Tests asserted that logging *happened*. `NullLogger` never invokes the formatter, so two malformed message templates (a duplicate placeholder name is a second positional slot) passed every test and would have thrown `FormatException` on a real run — producing no report at all | Assert on **rendered** output through a logger that actually formats |
+| **An unvalidated scan doesn't scan** | A scan for the above reported "0 duplicates". A scan reporting zero is indistinguishable from a scan that is broken | Validate the scanner against a **known positive** first, then report what it examined ("105 templates, 190 placeholders, 0 skipped"), not just the zero |
+| **A reproduction with a different failure isn't a reproduction** | A local repro of a CI failure died on `TypeError: fetch failed` where CI failed on assertions. Treating it as the same failure would have meant reporting a merged story as broken when it wasn't | Confirm the repro fails the **same way**, not merely that it fails |
+
+The common remedy, and the thing to carry away:
+
+**Make the check prove itself before you trust its result.** A green check that
+never ran is worse than a red one — it spends the credibility of a test without
+doing the work of one.
 
 ### Git hooks
 

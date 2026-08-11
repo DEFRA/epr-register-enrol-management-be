@@ -77,4 +77,81 @@ public class WorkItemPayloadConverterTests
         Assert.Equal(JsonValueKind.Number, element.GetProperty("doubleValue").ValueKind);
         Assert.Equal(3.5, element.GetProperty("doubleValue").GetDouble());
     }
+
+    [Fact]
+    public void ToBson_then_ToJson_preserves_deeply_nested_keys_no_model_declares()
+    {
+        // RA-292: the new-ORS, new-interim-site and authority-to-issue flags
+        // reach the case management frontend as ordinary payload keys. No C#
+        // type declares them — they must survive on the strength of the payload
+        // being schemaless all the way through. This pins the converter half of
+        // that guarantee at its deepest point: a boolean three levels down
+        // inside an array element's nested object.
+        const string sourceJson = """
+            {
+              "overseasSites": {
+                "sites": [
+                  {
+                    "siteId": 1,
+                    "isNewSite": true,
+                    "repatriatedLoads": "3",
+                    "isEu": true,
+                    "interimSite": { "siteNumber": "INT-001", "isNewSite": true }
+                  },
+                  {
+                    "siteId": 2,
+                    "isNewSite": false,
+                    "interimSite": { "siteNumber": "INT-002", "isNewSite": false }
+                  },
+                  { "siteId": 3 }
+                ]
+              },
+              "prns": {
+                "authorisers": [
+                  { "fullName": "Grace Adeyemi", "isNew": true },
+                  { "fullName": "Martin Cole", "isNew": false },
+                  { "fullName": "Priya Nair" }
+                ]
+              }
+            }
+            """;
+
+        using var inputDoc = JsonDocument.Parse(sourceJson);
+        var element = WorkItemPayloadConverter.ToJson(
+            WorkItemPayloadConverter.ToBson(inputDoc.RootElement));
+
+        var sites = element.GetProperty("overseasSites").GetProperty("sites");
+        Assert.Equal(3, sites.GetArrayLength());
+
+        var newSite = sites[0];
+        Assert.Equal(JsonValueKind.True, newSite.GetProperty("isNewSite").ValueKind);
+        Assert.Equal(JsonValueKind.True, newSite.GetProperty("isEu").ValueKind);
+        // Mixed primitives in one object: repatriatedLoads is a string at the
+        // producer while siteId is a number, and both must keep their kind.
+        Assert.Equal(JsonValueKind.String, newSite.GetProperty("repatriatedLoads").ValueKind);
+        Assert.Equal("3", newSite.GetProperty("repatriatedLoads").GetString());
+        Assert.Equal(JsonValueKind.Number, newSite.GetProperty("siteId").ValueKind);
+        Assert.Equal(1, newSite.GetProperty("siteId").GetInt32());
+        Assert.Equal(
+            JsonValueKind.True,
+            newSite.GetProperty("interimSite").GetProperty("isNewSite").ValueKind);
+        Assert.Equal(
+            "INT-001",
+            newSite.GetProperty("interimSite").GetProperty("siteNumber").GetString());
+
+        Assert.Equal(JsonValueKind.False, sites[1].GetProperty("isNewSite").ValueKind);
+        Assert.Equal(
+            JsonValueKind.False,
+            sites[1].GetProperty("interimSite").GetProperty("isNewSite").ValueKind);
+
+        // Absent stays absent — it must not be materialised as null or false.
+        Assert.False(sites[2].TryGetProperty("isNewSite", out _));
+        Assert.False(sites[2].TryGetProperty("interimSite", out _));
+
+        var authorisers = element.GetProperty("prns").GetProperty("authorisers");
+        Assert.Equal(3, authorisers.GetArrayLength());
+        Assert.Equal(JsonValueKind.True, authorisers[0].GetProperty("isNew").ValueKind);
+        Assert.Equal(JsonValueKind.False, authorisers[1].GetProperty("isNew").ValueKind);
+        Assert.False(authorisers[2].TryGetProperty("isNew", out _));
+    }
 }

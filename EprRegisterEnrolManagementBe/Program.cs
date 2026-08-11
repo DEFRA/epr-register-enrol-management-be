@@ -33,7 +33,19 @@ await app.RunAsync();
 // "Startup migrations" section of the README.
 [ExcludeFromCodeCoverage]
 static Task RunStartupMigrations(WebApplication app) =>
-    StartupMigrationRunner.RunAsync(app.Services, app.Logger, migrations: []);
+    StartupMigrationRunner.RunAsync(
+        app.Services,
+        app.Logger,
+        migrations:
+        [
+            // epr-2uxy: READ-ONLY diagnostic — writes nothing, and is a no-op
+            // unless Diagnostics:Ra292IsNewSiteAudit is set. Registered on this
+            // harness because CDP offers no way to run ad-hoc mongosh against a
+            // deployed database, and the open question is precisely whether a
+            // deployed environment retained affected data.
+            ("epr-2uxy-isnewsite-audit (read-only)",
+                ReAccreditationIsNewSiteAudit.RunAsync),
+        ]);
 
 [ExcludeFromCodeCoverage]
 static WebApplication BuildApp(string[] args)
