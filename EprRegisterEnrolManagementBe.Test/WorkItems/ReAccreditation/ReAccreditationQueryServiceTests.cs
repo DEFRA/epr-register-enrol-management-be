@@ -176,7 +176,7 @@ public class ReAccreditationQueryServiceTests
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("submitted", user: new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim("cognito:client_id", TenantClientId)], "test")));
+            [new Claim("client_id", TenantClientId)], "test")));
 
         var result = await harness.Service.QueryAsync(
             harness.WorkItem.Id, s_sections, "Please clarify", harness.User, ct);
@@ -463,7 +463,7 @@ public class ReAccreditationQueryServiceTests
                 [
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
-                    new Claim("cognito:client_id", TenantClientId),
+                    new Claim("client_id", TenantClientId),
                 ],
                 "test"));
 

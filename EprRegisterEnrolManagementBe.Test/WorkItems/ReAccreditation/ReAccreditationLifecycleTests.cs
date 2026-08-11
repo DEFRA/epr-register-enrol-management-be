@@ -92,7 +92,7 @@ public class ReAccreditationLifecycleTests
                 [
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
-                    new Claim("cognito:client_id", tenantClientId),
+                    new Claim("client_id", tenantClientId),
                     new Claim(ClaimTypes.Role, "reaccreditation-decision-maker"),
                 ],
                 "test"
@@ -452,7 +452,7 @@ public class ReAccreditationLifecycleTests
 
         var user = new ClaimsPrincipal(
             new ClaimsIdentity(
-                [new Claim("user:id", "alice-1"), new Claim("cognito:client_id", tenantClientId)],
+                [new Claim("user:id", "alice-1"), new Claim("client_id", tenantClientId)],
                 "test"
             )
         );

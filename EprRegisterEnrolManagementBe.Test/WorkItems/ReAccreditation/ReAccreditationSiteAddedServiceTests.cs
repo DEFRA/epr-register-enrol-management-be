@@ -71,7 +71,7 @@ public class ReAccreditationSiteAddedServiceTests
     }
 
     private static ClaimsPrincipal SystemUser() =>
-        new(new ClaimsIdentity([new Claim("cognito:client_id", "operator-backend")], "test"));
+        new(new ClaimsIdentity([new Claim("client_id", "operator-backend")], "test"));
 
     // ------------------------------ not found ------------------------------
 

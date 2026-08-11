@@ -139,7 +139,7 @@ static void ConfigureServices(WebApplicationBuilder builder)
 
     services.AddHttpContextAccessor();
     // In-memory cache backs the HMAC nonce replay defence in
-    // CognitoClientIdAuthenticationHandler. Singleton by default.
+    // ClientIdAuthenticationHandler. Singleton by default.
     services.AddMemoryCache();
 
     ConfigureAuth(services, configuration);
@@ -224,16 +224,14 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
 [ExcludeFromCodeCoverage]
 static void ConfigureAuth(IServiceCollection services, IConfiguration configuration)
 {
-    services.AddAuthentication(CognitoClientIdDefaults.AuthenticationScheme).AddCognitoClientId();
+    services.AddAuthentication(ClientIdDefaults.AuthenticationScheme).AddClientId();
 
     // Bind options lazily via PostConfigure so test fixtures that add
     // config via WebApplicationFactory.ConfigureAppConfiguration (which
     // fires during builder.Build(), after this method runs) can still
     // override the value.
     services
-        .AddOptions<CognitoClientIdAuthenticationOptions>(
-            CognitoClientIdDefaults.AuthenticationScheme
-        )
+        .AddOptions<ClientIdAuthenticationOptions>(ClientIdDefaults.AuthenticationScheme)
         .Configure<IConfiguration>(
             (options, config) =>
             {
@@ -332,7 +330,7 @@ static void AddCallerSecret(
     if (map.ContainsKey(clientId))
     {
         throw new InvalidOperationException(
-            $"CognitoClientIdAuthentication misconfigured: caller '{callerName}' asserts "
+            $"ClientIdAuthentication misconfigured: caller '{callerName}' asserts "
                 + $"clientId '{clientId}' (via {clientIdKey}), which is already registered to "
                 + "another caller. Each caller must have a distinct clientId — check for a "
                 + "copy-pasted or missing override."
@@ -366,7 +364,7 @@ static void ConfigureHeaderPropagation(IServiceCollection services, IConfigurati
         //     downstream would either leak the integrity proof to another
         //     service or replay the nonce out of band.
         //   * x-cdp-user-id, x-cdp-user-name,
-        //     x-cdp-cognito-client-id — identity headers from the BFF are
+        //     x-cdp-client-id — identity headers from the BFF are
         //     for THIS service to consume; downstream services that need
         //     them must mint their own.
         //
@@ -598,7 +596,7 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
                         //     the primary defence; excluding them here ensures a
                         //     browser preflight cannot even smuggle them.
                         //   * x-cdp-user-id, x-cdp-user-name,
-                        //     x-cdp-cognito-client-id — identity headers are
+                        //     x-cdp-client-id — identity headers are
                         //     BFF-injected and must not be browser-supplied.
                         //
                         // To advertise a new header, add it here AND document why

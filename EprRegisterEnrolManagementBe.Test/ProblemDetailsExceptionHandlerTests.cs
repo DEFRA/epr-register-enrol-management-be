@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test;
 
@@ -39,7 +40,7 @@ public class ProblemDetailsExceptionHandlerTests
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new ThrowingFactory(_fixture);
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
 
         var response = await client.GetAsync("/work-items", ct);
 

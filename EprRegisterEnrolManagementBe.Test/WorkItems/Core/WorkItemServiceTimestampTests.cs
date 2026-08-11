@@ -63,7 +63,7 @@ public class WorkItemServiceTimestampTests
     private static ClaimsPrincipal User() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "alice-1"),
             new Claim("user:name", "Alice Example")
         ], "test"));

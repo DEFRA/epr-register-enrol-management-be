@@ -6,7 +6,7 @@
 
 ## Context
 
-`CognitoClientIdAuthenticationHandler` verifies HMAC-signed trust headers
+`ClientIdAuthenticationHandler` verifies HMAC-signed trust headers
 from this backend's two callers — `management-fe` (the internal caseworker
 portal BFF) and `epr-register-enrol-backend` (the public applicant-facing
 portal) — before trusting the `clientId`/`user:id`/`user:name` headers they
@@ -39,7 +39,7 @@ backend, which raised the priority of fixing it.
 Replace the single `AUTH_SHARED_SECRET` with a secret **per known caller**,
 keyed by the `clientId` that caller is expected to assert:
 
-- `CognitoClientIdAuthenticationOptions.SharedSecret` (`string?`) becomes
+- `ClientIdAuthenticationOptions.SharedSecret` (`string?`) becomes
   `ClientSecrets` (`IReadOnlyDictionary<string, string>`), keyed by
   `clientId`.
 - Signature verification looks up the secret registered for the `clientId`
@@ -61,7 +61,7 @@ keyed by the `clientId` that caller is expected to assert:
   is independently overridable via `Auth:ManagementFeClientId` /
   `Auth:BackendClientId` (defaulting to `frontend` and
   `epr-register-enrol-backend`, matching each caller's own current
-  config default), mirroring the `ExpectedCognitoClientId` +
+  config default), mirroring the `ExpectedClientId` +
   `SharedSecret` pairing `epr-register-enrol-backend`'s
   `CaseManagementAuthConfig` already uses for the reverse-direction
   integration (`management-be` → `epr-register-enrol-backend` push).
@@ -120,7 +120,7 @@ service, in place of the one value both previously shared.
 
 ## Verification
 
-- `EprRegisterEnrolManagementBe.Test/Auth/CognitoClientIdAuthenticationTests.cs`
+- `EprRegisterEnrolManagementBe.Test/Auth/ClientIdAuthenticationTests.cs`
   — existing cases updated to configure `ClientSecrets` instead of the
   single `SharedSecret`; new cases cover signing with a different known
   caller's secret while asserting another caller's `clientId` (fails),

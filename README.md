@@ -47,7 +47,7 @@ The explorer ships with a dev-only **"Authenticate as:"** dropdown in the
 topbar that mirrors the BFF's stub login fixtures
 (`stub-caseworker-1`, `stub-caseworker-2`, `stub-caseworker-3`). Pick a
 user and every "Try it out" call will be sent with the three CDP trust
-headers (`x-cdp-cognito-client-id`, `x-cdp-user-id`, `x-cdp-user-name`)
+headers (`x-cdp-client-id`, `x-cdp-user-id`, `x-cdp-user-name`)
 for that user. The selection persists in the browser's `localStorage`.
 Picking "— anonymous —" clears it.
 
@@ -115,17 +115,21 @@ docker compose down -v
 
 ## Authentication
 
-All non-health endpoints require a CDP Cognito client ID supplied in the
-`x-cdp-cognito-client-id` request header. CDP validates the upstream
-service's JWT before forwarding the call, so the backend trusts the header's
-presence and performs no further authorisation:
+All non-health endpoints require a client ID supplied in the
+`x-cdp-client-id` request header. This is NOT verified by CDP itself —
+outside Development, the caller must also sign the request with an
+HMAC-SHA256 signature over a canonical payload, using a secret registered
+for that client ID (see [BFF signing contract](docs/cdp-deployment.md#bff-signing-contract)
+and RA-345/ADR-0006). In Development only, with no client secrets
+configured, the handler falls back to trusting the header's presence alone:
 
 ```bash
-curl -H 'x-cdp-cognito-client-id: my-upstream-service' \
+curl -H 'x-cdp-client-id: my-upstream-service' \
   http://localhost:8085/work-items
 ```
 
-Requests without the header receive `401 Unauthorized`. The `/health`
+Requests without the header (or, outside Development, without a valid
+signature) receive `401 Unauthorized`. The `/health`
 endpoint is anonymous and remains reachable without authentication.
 
 For local exploration without crafting cURL commands by hand, use the

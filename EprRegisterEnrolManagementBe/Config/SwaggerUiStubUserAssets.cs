@@ -24,7 +24,7 @@ internal static class SwaggerUiStubUserAssets
     ///    persisted in <c>localStorage</c>.
     /// 2. Monkey-patch <c>window.fetch</c> so every same-origin Try it out
     ///    call carries the three CDP trust headers that
-    ///    <c>CognitoClientIdAuthenticationHandler</c> consumes in
+    ///    <c>ClientIdAuthenticationHandler</c> consumes in
     ///    header-trust (no-shared-secret) mode. Patching <c>fetch</c>
     ///    directly rather than going through Swashbuckle's
     ///    <c>UseRequestInterceptor</c> avoids that helper's brittle
@@ -84,7 +84,7 @@ internal static class SwaggerUiStubUserAssets
 
             init = init || {};
             const headers = new Headers(init.headers || (input instanceof Request ? input.headers : undefined));
-            headers.set('x-cdp-cognito-client-id', 'local-swagger-ui');
+            headers.set('x-cdp-client-id', 'local-swagger-ui');
             headers.set('x-cdp-user-id', user.id);
             headers.set('x-cdp-user-name', user.name);
             init.headers = headers;

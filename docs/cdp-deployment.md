@@ -29,9 +29,9 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 | `TRUSTSTORE_*`             | CDP platform          | Loaded by `LoadCustomTrustStoreFromEnvironment`.            |
 | `OperatorBackendApi__Enabled` | Service config     | Master switch for the RA-311/MBE-1 outbound query push (see [Operator backend push](#operator-backend-push-ra-311mbe-1) below). Defaults to `false` — deploying this code is behaviour-neutral until this is explicitly set. |
 | `OperatorBackendApi__Url`  | Service config        | Internal base URL of `epr-register-enrol-backend` (CDP service-discovery name, not a public ingress hostname). Required (non-blank) when `OperatorBackendApi__Enabled=true` — startup fails otherwise. |
-| `OperatorBackendApi__ClientId` | Service config    | Defaults to `epr-register-enrol-management-be`. Only override if `epr-register-enrol-backend`'s `CaseManagementAuth:ExpectedCognitoClientId` expects a different value — prefer leaving both at their defaults. |
-| `Auth__ManagementFeClientId` | Service config  | The `clientId` (`x-cdp-cognito-client-id` value) that `management-fe` is expected to assert. Defaults to `frontend` — override only if `management-fe`'s own `BACKEND_API_COGNITO_CLIENT_ID` is set to something else. Must be distinct from `Auth__BackendClientId` (see RA-345 below). |
-| `Auth__BackendClientId` | Service config      | The `clientId` that `epr-register-enrol-backend` is expected to assert. Defaults to `epr-register-enrol-backend` — override only if that service's own `CaseWorking__CognitoClientId` is set to something else. Must be distinct from `Auth__ManagementFeClientId`; the service throws at first request if the two collide. |
+| `OperatorBackendApi__ClientId` | Service config    | Defaults to `epr-register-enrol-management-be`. Only override if `epr-register-enrol-backend`'s `CaseManagementAuth:ExpectedClientId` expects a different value — prefer leaving both at their defaults. |
+| `Auth__ManagementFeClientId` | Service config  | The `clientId` (`x-cdp-client-id` value) that `management-fe` is expected to assert. Defaults to `frontend` — override only if `management-fe`'s own `BACKEND_API_CLIENT_ID` is set to something else. Must be distinct from `Auth__BackendClientId` (see RA-345 below). |
+| `Auth__BackendClientId` | Service config      | The `clientId` that `epr-register-enrol-backend` is expected to assert. Defaults to `epr-register-enrol-backend` — override only if that service's own `CaseWorking__ClientId` is set to something else. Must be distinct from `Auth__ManagementFeClientId`; the service throws at first request if the two collide. |
 
 ## Required secrets (cdp-portal)
 
@@ -62,10 +62,10 @@ signature, are rejected with `401`.
 
 | Header                    | Description                                                                                      |
 | ------------------------- | ------------------------------------------------------------------------------------------------ |
-| `x-cdp-cognito-client-id` | The clientId the caller asserts (each caller sets this from its own config — see RA-345 above; despite the name this is *not* actually injected/verified by CDP itself, which is exactly why the HMAC signature below exists). |
+| `x-cdp-client-id` | The clientId the caller asserts (each caller sets this from its own config — see RA-345 above). The `x-cdp-` prefix matches this scheme's other trust headers by convention only — this value is *not* injected or verified by CDP itself, which is exactly why the HMAC signature below exists. |
 | `x-cdp-auth-timestamp`    | ISO-8601 UTC instant the BFF assembled the request (e.g. `2026-05-18T10:00:00Z`). Must be within 5 minutes of the backend clock. |
 | `x-cdp-auth-nonce`        | Per-request opaque random token minted by the BFF (e.g. base64url of 16 random bytes). Single-use — a replayed nonce is rejected for 10 minutes. |
-| `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below), keyed with the secret registered for the asserted `x-cdp-cognito-client-id` (`AUTH_SHARED_SECRET__MANAGEMENT_FE` or `AUTH_SHARED_SECRET__BACKEND` — see RA-345 above). |
+| `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below), keyed with the secret registered for the asserted `x-cdp-client-id` (`AUTH_SHARED_SECRET__MANAGEMENT_FE` or `AUTH_SHARED_SECRET__BACKEND` — see RA-345 above). |
 
 ### Canonical payload (v3)
 
@@ -74,7 +74,7 @@ Join the following fields with a newline (`\n`), in this order, then compute
 
 ```
 v3
-{x-cdp-cognito-client-id}
+{x-cdp-client-id}
 {x-cdp-user-id or ""}
 {x-cdp-user-name or ""}
 {x-cdp-auth-timestamp}
@@ -85,7 +85,7 @@ Empty-string placeholders must be included for absent optional fields — the
 field count and separator positions are fixed. Role membership is not part
 of the payload — authorization is entirely the BFF's concern (see
 `docs/adr/0005-rbac-in-frontend-drop-roles-from-payload.md`). See
-`CognitoClientIdAuthenticationHandler.ComputeSignature` for the authoritative
+`ClientIdAuthenticationHandler.ComputeSignature` for the authoritative
 implementation and `docs/adr/0003-hmac-canonical-v2-timestamp-nonce.md` for
 the timestamp/nonce rationale.
 

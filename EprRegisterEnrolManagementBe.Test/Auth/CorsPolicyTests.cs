@@ -27,7 +27,7 @@ public class CorsPolicyTests
     }
 
     [Theory]
-    [InlineData("x-cdp-cognito-client-id")]
+    [InlineData("x-cdp-client-id")]
     [InlineData("x-cdp-user-id")]
     [InlineData("x-cdp-user-name")]
     [InlineData("x-cdp-auth-signature")]

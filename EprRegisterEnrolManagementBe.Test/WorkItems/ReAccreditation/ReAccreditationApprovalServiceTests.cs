@@ -34,14 +34,14 @@ public class ReAccreditationApprovalServiceTests
         [
             new Claim("user:id", DecisionMakerId),
             new Claim("user:name", "Alice Example"),
-            new Claim("cognito:client_id", clientId ?? OwnerClientId),
+            new Claim("client_id", clientId ?? OwnerClientId),
             new Claim(ClaimTypes.Role, "reaccreditation-decision-maker")
         ], "test"));
 
     private static ClaimsPrincipal AnonymousUser() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", OwnerClientId),
+            new Claim("client_id", OwnerClientId),
             new Claim(ClaimTypes.Role, "reaccreditation-decision-maker")
         ], "test"));
 

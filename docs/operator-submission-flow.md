@@ -84,7 +84,7 @@ Auth headers are added by `BuildRequest`:
 
 ```
 # always present
-x-cdp-cognito-client-id:  epr-register-enrol-backend
+x-cdp-client-id:  epr-register-enrol-backend
 x-cdp-user-id:            {submitter email}
 x-cdp-user-name:          {submitter full name}
 
@@ -95,7 +95,7 @@ x-cdp-auth-nonce:         {16-byte random, base64}
 ```
 
 The v3 canonical string is `v3\nclientId\nuserId\nuserName\ntimestamp\nnonce`.
-This is identical to the formula in this repo's `CognitoClientIdAuthenticationHandler.ComputeSignature`.
+This is identical to the formula in this repo's `ClientIdAuthenticationHandler.ComputeSignature`.
 Any change to this contract is a breaking change and requires a coordinated deploy.
 
 ---
@@ -110,8 +110,8 @@ POST http://case-management-backend:8085/work-items
 
 ### 6. Authentication (Management BE)
 
-`CognitoClientIdAuthenticationHandler`
-(`Auth/CognitoClientIdAuthenticationHandler.cs`) runs as ASP.NET middleware
+`ClientIdAuthenticationHandler`
+(`Auth/ClientIdAuthenticationHandler.cs`) runs as ASP.NET middleware
 before any endpoint code. When `AUTH_SHARED_SECRET__BACKEND` is set (the
 per-caller secret registered for `epr-register-enrol-backend`'s clientId —
 see RA-345 in `docs/cdp-deployment.md`) it enforces three checks in order:
@@ -289,7 +289,7 @@ the separate secret management-fe's requests are verified against (RA-345).
 
 `CASE_MANAGEMENT_API_SHARED_SECRET` is a flat env var name on the Operator
 BE side, following CDP's secrets naming convention — unlike `Url`/`UseStub`/
-`CognitoClientId` on that same config, which remain under the nested
+`ClientId` on that same config, which remain under the nested
 `CaseWorking__*` form (`CaseWorking:SharedSecret` was retired by RA-345;
 see `epr-register-enrol-backend`'s `CaseWorkingApiConfig`).
 
