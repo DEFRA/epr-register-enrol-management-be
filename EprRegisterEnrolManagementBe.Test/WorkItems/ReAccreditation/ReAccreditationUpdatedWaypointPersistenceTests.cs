@@ -11,24 +11,30 @@ using NSubstitute;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-372 regression cover for the duly-making waypoint discharge, run against
-/// a real ephemeral MongoDB with the real <see cref="WorkItemPersistence"/> and
-/// the real <see cref="WorkItemAuditAppender"/>.
+/// RA-372 / RA-316 regression cover for the duly-making waypoint discharge, run
+/// against a real ephemeral MongoDB with the real
+/// <see cref="WorkItemPersistence"/> and the real
+/// <see cref="WorkItemAuditAppender"/>.
 ///
 /// This suite exists because an in-process test cannot see the defect it
 /// guards. The first attempt at the discharge persisted it as its own step and
 /// then saved again for the duly-made transition. Between those two saves the
 /// status push writes an audit entry, and
-/// <see cref="WorkItemAuditAppender"/> does that by re-reading and replacing
-/// the whole document — which moves <see cref="WorkItem.Version"/> on and makes
-/// the second save fail its optimistic-concurrency check. In production that
-/// surfaced as HTTP 500 with the application stranded in <c>submitted</c>,
-/// every task complete and no way forward. Against a substituted
-/// <see cref="IWorkItemPersistence"/> there is no version protocol and no
-/// out-of-band write, so the same code passed.
+/// <see cref="WorkItemAuditAppender"/> does that by re-reading and replacing the
+/// whole document — which moves <see cref="WorkItem.Version"/> on and makes the
+/// second save fail its optimistic-concurrency check. In production that
+/// surfaced as HTTP 500 with the application stranded, no way forward. Against a
+/// substituted <see cref="IWorkItemPersistence"/> there is no version protocol
+/// and no out-of-band write, so the same code passed.
 ///
-/// The rule these tests pin: everything the hook mutates lands in ONE save,
-/// and the save happens before any push.
+/// The rule these tests pin: everything the duly-making service mutates lands in
+/// ONE save, and the save happens before any push.
+///
+/// RA-316 moved this contract from the deleted <c>ReAccreditationDulyMadeHook</c>
+/// to <see cref="ReAccreditationDulyMakingService"/>. The trigger changed from
+/// "the last submitted-state task was ticked" to "the regulator pressed Duly
+/// make and gave a payment date", but the persistence hazard is identical and so
+/// is the declared path through the state machine.
 /// </summary>
 public class ReAccreditationUpdatedWaypointPersistenceTests
     : IClassFixture<MongoIntegrationFixture>,
@@ -44,6 +50,8 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
             "test"
         )
     );
+
+    private static readonly DateOnly s_paymentDate = new(2026, 7, 15);
 
     private readonly TestMongoDbClientFactory _clientFactory;
     private readonly string _databaseName;
@@ -61,22 +69,26 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
 
     /// <summary>
     /// The full journey RA-372 is about, end to end through real persistence:
-    /// queried during duly-making, operator responds, regulator finishes the
-    /// checklist while the item sits in <c>updated</c>.
+    /// queried during duly-making, operator responds, regulator completes duly
+    /// making while the item still sits in <c>updated</c>.
+    ///
+    /// The lead flagged this as a real production path that must keep working
+    /// even though management-fe is shipping the call to action for
+    /// <c>submitted</c> only in RA-316, so it is pinned here at the API level.
     /// </summary>
     [Fact]
-    public async Task Completing_the_last_duly_making_task_while_updated_reaches_duly_made()
+    public async Task Completing_duly_making_while_updated_reaches_duly_made()
     {
         var ct = TestContext.Current.CancellationToken;
-        var workItem = await SeedUpdatedWorkItemAsync(ct);
+        var workItem = await SeedWorkItemAsync(ct);
         var pushes = new List<(string ActionId, string FromStateId)>();
-        var engine = BuildEngine(pushes);
+        var service = BuildService(pushes);
 
         // The defect surfaced here as an unhandled WorkItemConcurrencyException
-        // that the engine's hook fan-out rethrows, so the request 500s.
-        var result = await engine.CompleteTaskAsync(
+        // bubbling out as a 500.
+        var result = await service.CompleteDulyMakingAsync(
             workItem.Id,
-            "confirm-application-completeness",
+            s_paymentDate,
             s_user,
             ct
         );
@@ -90,13 +102,14 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         Assert.Equal("duly-made", stored!.StateId);
         Assert.NotNull(stored.SlaClock);
 
-        // Both tasks are complete under the originating state, and the whole
-        // declared path is on the record.
+        // AC06: anchored to the entered payment date, not to now.
         Assert.Equal(
-            ["confirm-application-completeness", "verify-organisation-details"],
-            stored.CompletedTaskIdsByState["submitted"].OrderBy(t => t, StringComparer.Ordinal)
+            s_paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            stored.SlaClock!.StartedAt
         );
 
+        // The whole declared path is on the record, and the undeclared
+        // updated → duly-made shortcut is not.
         var applied = AppliedTransitions(stored);
         Assert.Equal(
             [
@@ -108,9 +121,9 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         );
         Assert.DoesNotContain(applied, e => e.From == "updated" && e.To == "duly-made");
 
-        // The status push landed, and its audit entry survived — proof the
-        // out-of-band append and the hook's own save did not clobber one
-        // another.
+        // The status push landed with the modelled from-state, and its audit
+        // entry survived — proof the out-of-band append and the service's own
+        // save did not clobber one another.
         Assert.Equal([("duly-make", "submitted")], pushes);
         Assert.Contains(stored.AuditLog, e => e.Action.StartsWith("status-push-"));
         Assert.Contains(stored.AuditLog, e => e.Action == "sla-clock-started");
@@ -121,16 +134,16 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
     /// unchanged by the discharge logic.
     /// </summary>
     [Fact]
-    public async Task Completing_the_last_duly_making_task_from_submitted_is_unchanged()
+    public async Task Completing_duly_making_from_submitted_is_unchanged()
     {
         var ct = TestContext.Current.CancellationToken;
-        var workItem = await SeedUpdatedWorkItemAsync(ct, stateId: "submitted", withResume: false);
+        var workItem = await SeedWorkItemAsync(ct, stateId: "submitted", withResume: false);
         var pushes = new List<(string ActionId, string FromStateId)>();
-        var engine = BuildEngine(pushes);
+        var service = BuildService(pushes);
 
-        var result = await engine.CompleteTaskAsync(
+        var result = await service.CompleteDulyMakingAsync(
             workItem.Id,
-            "confirm-application-completeness",
+            s_paymentDate,
             s_user,
             ct
         );
@@ -143,6 +156,37 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         // No waypoint to discharge, so no continue-review entry is invented.
         Assert.Equal([("duly-make", "submitted", "duly-made")], AppliedTransitions(stored));
         Assert.Equal([("duly-make", "submitted")], pushes);
+    }
+
+    /// <summary>
+    /// An item in <c>updated</c> whose query was raised somewhere OTHER than
+    /// duly-making is mid-review. Duly making it would skip whole stages, so it
+    /// is refused — and refused without writing anything.
+    /// </summary>
+    [Fact]
+    public async Task An_updated_item_queried_from_assessment_cannot_be_duly_made()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = await SeedWorkItemAsync(ct, resumeActionId: "resume-during-assessment");
+        var pushes = new List<(string ActionId, string FromStateId)>();
+        var service = BuildService(pushes);
+
+        var result = await service.CompleteDulyMakingAsync(
+            workItem.Id,
+            s_paymentDate,
+            s_user,
+            ct
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+
+        var stored = await _persistence.GetByIdAsync(workItem.Id, ct);
+        Assert.Equal("updated", stored!.StateId);
+        Assert.Null(stored.SlaClock);
+        Assert.Empty(pushes);
+        // A refusal writes no audit entry — only the seeded resume survives.
+        Assert.Single(AppliedTransitions(stored));
     }
 
     private static List<(string? ActionId, string? From, string? To)> AppliedTransitions(
@@ -159,10 +203,11 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
             )
             .ToList();
 
-    private async Task<WorkItem> SeedUpdatedWorkItemAsync(
+    private async Task<WorkItem> SeedWorkItemAsync(
         CancellationToken cancellationToken,
         string stateId = "updated",
-        bool withResume = true
+        bool withResume = true,
+        string resumeActionId = "resume-during-duly-making"
     )
     {
         var workItem = new WorkItem
@@ -192,7 +237,7 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
                     CreatedAt = new DateTime(2026, 8, 1, 9, 0, 0, DateTimeKind.Utc),
                     Details = new Dictionary<string, string?>
                     {
-                        ["actionId"] = "resume-during-duly-making",
+                        ["actionId"] = resumeActionId,
                         ["actionDisplayName"] = "Resume",
                         ["fromStateId"] = "queried",
                         ["toStateId"] = "updated",
@@ -201,17 +246,6 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
             );
         }
 
-        // One duly-making task already ticked, so completing the second is the
-        // one that triggers the hook.
-        workItem.CompletedTaskIdsByState["submitted"] = new(
-            ["verify-organisation-details"],
-            StringComparer.OrdinalIgnoreCase
-        );
-        workItem.TaskStatusesByState["submitted"] = new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["verify-organisation-details"] = WorkItemTaskStatus.Completed,
-        };
-
         await _persistence.CreateAsync(workItem, cancellationToken);
         return workItem;
     }
@@ -219,10 +253,12 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
     /// <summary>
     /// Everything real except the two outbound integrations (Notify and the
     /// operator-backend push adapter). In particular the audit appender is the
-    /// genuine <see cref="WorkItemAuditAppender"/>, because its re-read-and-
-    /// replace is the write that broke the hook's optimistic concurrency.
+    /// genuine <see cref="WorkItemAuditAppender"/>, because its
+    /// re-read-and-replace is the write that broke optimistic concurrency.
     /// </summary>
-    private WorkItemService BuildEngine(List<(string ActionId, string FromStateId)> pushes)
+    private ReAccreditationDulyMakingService BuildService(
+        List<(string ActionId, string FromStateId)> pushes
+    )
     {
         var auditAppender = new WorkItemAuditAppender(
             _persistence,
@@ -263,25 +299,26 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
                 return OperatorBackendPushResult.Skipped("disabled in test");
             });
 
-        var dulyMadeHook = new ReAccreditationDulyMadeHook(
-            _persistence,
+        var notificationHook = new ReAccreditationNotificationHook(
             notifyClient,
             auditAppender,
-            new ReAccreditationStatusPushHook(
-                pushAdapter,
-                auditAppender,
-                NullLogger<ReAccreditationStatusPushHook>.Instance
-            ),
-            TimeProvider.System,
-            NullLogger<ReAccreditationDulyMadeHook>.Instance
+            Substitute.For<IRegulatorMailboxResolver>(),
+            _persistence,
+            NullLogger<ReAccreditationNotificationHook>.Instance
         );
 
-        return new WorkItemService(
-            new WorkItemRegistry([new ReAccreditationType()]),
+        var statusPushHook = new ReAccreditationStatusPushHook(
+            pushAdapter,
+            auditAppender,
+            NullLogger<ReAccreditationStatusPushHook>.Instance
+        );
+
+        return new ReAccreditationDulyMakingService(
             _persistence,
-            NullLogger<WorkItemService>.Instance,
-            postTaskHooks: [dulyMadeHook],
-            taskStateResolvers: [new ReAccreditationTaskStateResolver()]
+            new WorkItemRegistry([new ReAccreditationType()]),
+            [notificationHook, statusPushHook],
+            TimeProvider.System,
+            NullLogger<ReAccreditationDulyMakingService>.Instance
         );
     }
 }

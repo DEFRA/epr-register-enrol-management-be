@@ -63,14 +63,13 @@ internal sealed class ReAccreditationType : IWorkItemType
     private static readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>> s_tasksByState =
         new(StringComparer.OrdinalIgnoreCase)
         {
-            [s_submitted.Id] =
-            [
-                new WorkItemTask("verify-organisation-details", "Verify organisation details"),
-                new WorkItemTask(
-                    "confirm-application-completeness",
-                    "Confirm application is duly made"
-                ),
-            ],
+            // RA-316: 'submitted' deliberately has NO tasks. Duly making is
+            // driven by an explicit "Duly make" call to action that captures a
+            // payment date, not by ticking a checklist — see the duly-make
+            // transition below. The two former tasks
+            // ('verify-organisation-details', 'confirm-application-completeness')
+            // existed only to trigger the auto-transition hook that the button
+            // replaces, so they are gone rather than merely unused.
             [s_dulyMade.Id] =
             [
                 new WorkItemTask("confirm-registration-fee-paid", "Confirm registration fee paid"),
@@ -132,7 +131,17 @@ internal sealed class ReAccreditationType : IWorkItemType
     // before v10 have no way to reach 'withdrawn' from 'updated' until
     // ReAccreditationWithdrawUpdatedSnapshotMigration patches their frozen
     // snapshot.
-    public string TemplateVersion => "v10";
+    // v11 (RA-316): duly making is an explicit regulator action again. The
+    // duly-make transition is REINSTATED (it was removed at v5 in favour of an
+    // auto-transition hook), the two 'submitted' tasks that drove that hook are
+    // removed, and the hook itself is deleted. Unlike v5's version, this one is
+    // CallerInvocable: false — it is reachable only through
+    // POST /work-items/re-accreditation/{id}/duly-make, which captures the
+    // payment date the SLA clock is anchored to. Items snapshotted before v11
+    // still carry the submitted-state tasks and no duly-make transition, so
+    // they have no way to be duly made until
+    // ReAccreditationDulyMakeSnapshotMigration patches their frozen snapshot.
+    public string TemplateVersion => "v11";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -150,6 +159,30 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     public IReadOnlyCollection<WorkItemTransition> Transitions { get; } =
     [
+        // RA-316: duly making. Handled exclusively by
+        // ReAccreditationDulyMakingService via
+        // POST /work-items/re-accreditation/{id}/duly-make.
+        //
+        // CallerInvocable is false for the same reason approve is not
+        // registered at all: the bespoke endpoint carries side effects the
+        // generic engine cannot perform — it anchors the 12-week SLA clock to
+        // the regulator-entered payment date (RA-316 AC06), not to now. A
+        // caller reaching this through /work-items/{id}/actions/duly-make would
+        // move the item to duly-made with no payment date and therefore no
+        // clock, silently defeating the SLA.
+        //
+        // RequiresAllTasksComplete is false because 'submitted' has no tasks
+        // (see s_tasksByState above); the gate would be vacuous either way, and
+        // stating it explicitly keeps the reason visible if tasks are ever
+        // reintroduced there.
+        new WorkItemTransition(
+            "duly-make",
+            "Duly make",
+            s_submitted.Id,
+            s_dulyMade.Id,
+            RequiresAllTasksComplete: false,
+            CallerInvocable: false
+        ),
         new WorkItemTransition(
             "payment-received",
             "Payment received",

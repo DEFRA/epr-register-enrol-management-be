@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v10", _type.TemplateVersion);
+        Assert.Equal("v11", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -103,10 +103,10 @@ public class ReAccreditationTypeTests
     }
 
     [Theory]
-    [InlineData(
-        "submitted",
-        new[] { "verify-organisation-details", "confirm-application-completeness" }
-    )]
+    // RA-316: 'submitted' declares no tasks. Duly making is an explicit call to
+    // action carrying a payment date, so the two tasks that used to drive the
+    // auto-transition out of this state were deleted with the hook.
+    [InlineData("submitted", new string[0])]
     [InlineData("duly-made", new[] { "confirm-registration-fee-paid" })]
     [InlineData(
         "assessment-in-progress",

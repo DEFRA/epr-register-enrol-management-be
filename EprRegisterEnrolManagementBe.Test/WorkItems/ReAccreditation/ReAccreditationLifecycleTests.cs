@@ -48,19 +48,20 @@ public class ReAccreditationLifecycleTests
             auditAppender,
             NullLogger<ReAccreditationStatusPushHook>.Instance
         );
-        var dulyMadeHook = new ReAccreditationDulyMadeHook(
+        // RA-316: duly making is an explicit regulator action carrying a payment
+        // date, not a side effect of ticking a checklist, so it is driven here
+        // by its own service exactly as the walk-through would drive it.
+        var dulyMakingService = new ReAccreditationDulyMakingService(
             persistence,
-            notifyClient,
-            auditAppender,
-            statusPushHook,
+            new WorkItemRegistry([type]),
+            [statusPushHook],
             TimeProvider.System,
-            NullLogger<ReAccreditationDulyMadeHook>.Instance
+            NullLogger<ReAccreditationDulyMakingService>.Instance
         );
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance,
-            postTaskHooks: [dulyMadeHook]
+            NullLogger<WorkItemService>.Instance
         );
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
         idGenerator
@@ -99,10 +100,21 @@ public class ReAccreditationLifecycleTests
             )
         );
 
-        // Completing all submitted-state tasks auto-triggers the hook which
-        // transitions the item to duly-made (no separate action call needed).
-        await CompleteAll(engine, workItem.Id, type, "submitted", user, ct);
+        // RA-316: 'submitted' has no tasks at all now. The regulator presses
+        // "Duly make" and supplies the payment date the SLA clock is anchored
+        // to, which is the only way out of 'submitted'.
+        Assert.Empty(type.GetTasksForState("submitted"));
+        var paymentDate = new DateOnly(2027, 1, 20);
+        Assert.True(
+            (
+                await dulyMakingService.CompleteDulyMakingAsync(workItem.Id, paymentDate, user, ct)
+            ).IsSuccess
+        );
         Assert.Equal("duly-made", workItem.StateId);
+        Assert.Equal(
+            paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            workItem.SlaClock!.StartedAt
+        );
 
         await CompleteAll(engine, workItem.Id, type, "duly-made", user, ct);
         Assert.True(
@@ -123,11 +135,13 @@ public class ReAccreditationLifecycleTests
 
         Assert.Equal("approved", workItem.StateId);
 
-        // 2 task-completed (submitted) + 1 action-applied:duly-make + 1 sla-clock-started (hook)
+        // RA-316: 'submitted' contributes no task-completed entries any more
+        // (it has no tasks), so the walk is two entries shorter than before.
+        // 1 action-applied:duly-make + 1 sla-clock-started
         // + 1 task-completed (duly-made) + 1 action-applied:payment-received
         // + 3 task-completed (assessment-in-progress) + 1 action-applied:submit-for-decision
-        // + 1 task-completed (awaiting-decision) + 3 approval entries = 14 total.
-        Assert.Equal(14, workItem.AuditLog.Count);
+        // + 1 task-completed (awaiting-decision) + 3 approval entries = 12 total.
+        Assert.Equal(12, workItem.AuditLog.Count);
         Assert.Contains(
             workItem.AuditLog,
             e =>
