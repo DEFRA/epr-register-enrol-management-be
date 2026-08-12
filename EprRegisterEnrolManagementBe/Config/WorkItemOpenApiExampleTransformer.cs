@@ -34,8 +34,8 @@ internal sealed class WorkItemOpenApiExampleTransformer : IOpenApiDocumentTransf
                 }
                 """),
 
-            ["SetWorkItemTaskStatus"] = JsonNode.Parse(
-                """{ "status": "InProgress" }"""),
+            ["LogReAccreditationDecision"] = JsonNode.Parse(
+                """{ "outcome": "approved" }"""),
 
             ["AssignWorkItem"] = JsonNode.Parse(
                 """{ "assigneeId": "caseworker-abc123", "assigneeName": "Jane Smith" }"""),
@@ -45,7 +45,7 @@ internal sealed class WorkItemOpenApiExampleTransformer : IOpenApiDocumentTransf
 
             ["RecordReAccreditationDecisionRationale"] = JsonNode.Parse("""
                 {
-                    "rationale": "All assessment tasks completed satisfactorily. Organisation demonstrates adequate technical and financial capacity for re-accreditation."
+                    "rationale": "Assessment completed satisfactorily. Organisation demonstrates adequate technical and financial capacity for re-accreditation."
                 }
                 """),
         };

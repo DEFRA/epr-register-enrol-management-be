@@ -37,9 +37,8 @@ public class WorkItemEndpointsTests
         bool includeAuthHeader = true,
         string? userId = "test-user",
         string? userName = null,
-        Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null,
         IReadOnlyCollection<WorkItemState>? states = null
-    ) => new(_fixture, includeAuthHeader, userId, userName, tasksByState, states);
+    ) => new(_fixture, includeAuthHeader, userId, userName, states);
 
     [Fact]
     public async Task Post_returns_unauthorized_without_client_id()
@@ -1378,14 +1377,6 @@ public class WorkItemEndpointsTests
     public static IEnumerable<TheoryDataRow<string, string, object?>> MutationCases() =>
         new TheoryDataRow<string, string, object?>[]
         {
-            new("POST", "/work-items/{id}/tasks/some-task/complete", null)
-            {
-                TestDisplayName = "CompleteTask",
-            },
-            new("PUT", "/work-items/{id}/tasks/some-task/status", new { status = "Completed" })
-            {
-                TestDisplayName = "SetTaskStatus",
-            },
             new("POST", "/work-items/{id}/actions/approve", null)
             {
                 TestDisplayName = "ApplyAction",
@@ -1468,7 +1459,6 @@ public class WorkItemEndpointsTests
         private readonly bool _includeAuthHeader;
         private readonly string? _userId;
         private readonly string? _userName;
-        private readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>>? _tasksByState;
         private readonly IReadOnlyCollection<WorkItemState>? _states;
 
         public TestApplicationFactory(
@@ -1476,7 +1466,6 @@ public class WorkItemEndpointsTests
             bool includeAuthHeader,
             string? userId,
             string? userName,
-            Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null,
             IReadOnlyCollection<WorkItemState>? states = null
         )
         {
@@ -1484,7 +1473,6 @@ public class WorkItemEndpointsTests
             _includeAuthHeader = includeAuthHeader;
             _userId = userId;
             _userName = userName;
-            _tasksByState = tasksByState;
             _states = states;
         }
 
@@ -1535,8 +1523,7 @@ public class WorkItemEndpointsTests
                     new TestWorkItemType(
                         TypeId,
                         "Test type",
-                        states: _states,
-                        tasksByState: _tasksByState
+                        states: _states
                     )
                 );
 

@@ -25,7 +25,6 @@ public class ReAccreditationWithdrawUpdatedSnapshotMigrationTests
             Transitions = snapshot
                 .Transitions.Where(t => t.ActionId != "withdraw-during-updated")
                 .ToList(),
-            TasksByState = snapshot.TasksByState,
         };
     }
 

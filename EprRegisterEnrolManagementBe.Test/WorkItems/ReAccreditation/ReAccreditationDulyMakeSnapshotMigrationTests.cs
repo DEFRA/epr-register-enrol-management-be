@@ -14,9 +14,15 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// against a work item's OWN frozen snapshot, so if this migration misses an
 /// item that item is stranded: it has no <c>duly-make</c> transition to honour
 /// the new call to action, and — with the auto-transition hook deleted — nothing
-/// else can move it out of <c>submitted</c> either. The two properties pinned
-/// here are therefore "no in-flight item keeps the deleted tasks" and "no
-/// in-flight item lacks duly-make".
+/// else can move it out of <c>submitted</c> either. The property pinned here is
+/// therefore "no in-flight item lacks duly-make".
+///
+/// RA-410: this migration used to also clear two now-deleted <c>submitted</c>
+/// tasks from the snapshot as its second responsibility. The task framework —
+/// and <c>WorkItemTemplateSnapshot.TasksByState</c> itself — is gone, so there
+/// is nothing left to clear; a v10 snapshot's stray <c>tasksByState</c> BSON is
+/// silently ignored on read like any other retired field (see
+/// WorkItem's/WorkItemTemplateSnapshot's <c>[BsonIgnoreExtraElements]</c>).
 /// </summary>
 public class ReAccreditationDulyMakeSnapshotMigrationTests
 {
@@ -24,44 +30,26 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         new(NullLogger<ReAccreditationDulyMakeSnapshotMigration>.Instance);
 
     /// <summary>
-    /// A faithful pre-RA-316 snapshot: <c>duly-make</c> absent (stripped at v5)
-    /// and the two <c>submitted</c> tasks present. Built by hand rather than
-    /// from the live type, which no longer declares either.
+    /// A faithful pre-RA-316 snapshot: <c>duly-make</c> absent (stripped at v5).
+    /// Built by hand rather than from the live type, which declares it under a
+    /// later version.
     /// </summary>
     private static WorkItemTemplateSnapshot BuildV10Snapshot()
     {
         var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
-        var tasksByState = new Dictionary<string, List<WorkItemTask>>(
-            live.TasksByState,
-            StringComparer.OrdinalIgnoreCase
-        )
-        {
-            ["submitted"] =
-            [
-                new WorkItemTask("verify-organisation-details", "Verify organisation details"),
-                new WorkItemTask(
-                    "confirm-application-completeness",
-                    "Confirm application is duly made"
-                ),
-            ],
-        };
-
         return new WorkItemTemplateSnapshot
         {
             TemplateVersion = "v10",
             States = live.States,
             Transitions = live.Transitions.Where(t => t.ActionId != "duly-make").ToList(),
-            TasksByState = tasksByState,
         };
     }
 
     private static WorkItem BuildItem(
         string stateId = "submitted",
-        WorkItemTemplateSnapshot? snapshot = null,
-        bool tasksTicked = false
-    )
-    {
-        var item = new WorkItem
+        WorkItemTemplateSnapshot? snapshot = null
+    ) =>
+        new()
         {
             Id = Guid.NewGuid(),
             TypeId = ReAccreditationType.Id,
@@ -73,22 +61,6 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
             TemplateVersion = "v10",
             Payload = new BsonDocument { ["organisationName"] = "Acme Ltd" },
         };
-
-        if (tasksTicked)
-        {
-            item.CompletedTaskIdsByState["submitted"] = new(
-                ["verify-organisation-details", "confirm-application-completeness"],
-                StringComparer.OrdinalIgnoreCase
-            );
-            item.TaskStatusesByState["submitted"] = new(StringComparer.OrdinalIgnoreCase)
-            {
-                ["verify-organisation-details"] = WorkItemTaskStatus.Completed,
-                ["confirm-application-completeness"] = WorkItemTaskStatus.Completed,
-            };
-        }
-
-        return item;
-    }
 
     private static IWorkItemPersistence BuildPersistence(params WorkItem[] items)
     {
@@ -153,10 +125,11 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
 
         Assert.Contains(poisoned.TemplateSnapshot!.Transitions, t => t.ActionId == "duly-make");
         Assert.Equal("v11", poisoned.TemplateVersion);
-        // And the null it carried is replaced by a real (empty) task list, so a
-        // later read cannot trip the same NRE.
-        Assert.NotNull(poisoned.TemplateSnapshot.TasksByState);
-        Assert.Empty(poisoned.TemplateSnapshot.GetTasksForState("submitted"));
+        // RA-410 removed TasksByState, so the epr-dtkw assertions that followed
+        // (task list rebuilt, GetTasksForState no longer throwing) have nothing
+        // left to check. What still matters — and is what this case was really
+        // guarding — is that a snapshot missing the element migrates at all
+        // rather than throwing and stalling the batch on every boot.
     }
 
     /// <summary>
@@ -232,7 +205,6 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         // Must match the live declaration exactly, or a migrated item would be
         // judged by different rules than a freshly submitted one.
         Assert.False(transition.CallerInvocable);
-        Assert.False(transition.RequiresAllTasksComplete);
 
         // management-fe resolves its detail template by this version and falls
         // back to a generic template — silently — if it is unrecognised. Both
@@ -243,23 +215,12 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         await persistence.Received(1).ReplaceAsync(item, ct);
     }
 
-    [Fact]
-    public async Task It_clears_the_deleted_submitted_state_tasks()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem();
-        var persistence = BuildPersistence(item);
-
-        await BuildMigration().ApplyAsync(persistence, ct);
-
-        Assert.Empty(item.TemplateSnapshot!.GetTasksForState("submitted"));
-        // The key is kept (empty) rather than removed — 'submitted' is still a
-        // declared state, it just has no tasks.
-        Assert.True(item.TemplateSnapshot.TasksByState.ContainsKey("submitted"));
-    }
+    // RA-410: It_clears_the_deleted_submitted_state_tasks is gone —
+    // WorkItemTemplateSnapshot.TasksByState no longer exists, so there is
+    // nothing left for this migration to clear (see the class doc).
 
     [Fact]
-    public async Task It_leaves_every_other_states_tasks_and_transitions_alone()
+    public async Task It_leaves_every_other_transition_alone()
     {
         var ct = TestContext.Current.CancellationToken;
         var item = BuildItem();
@@ -267,12 +228,6 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         var persistence = BuildPersistence(item);
 
         await BuildMigration().ApplyAsync(persistence, ct);
-
-        Assert.Equal(
-            ["confirm-registration-fee-paid"],
-            item.TemplateSnapshot!.GetTasksForState("duly-made").Select(t => t.Id)
-        );
-        Assert.Equal(3, item.TemplateSnapshot.GetTasksForState("assessment-in-progress").Count);
 
         // Nothing removed: the new set is the old set plus duly-make.
         var after = item.TemplateSnapshot.Transitions.Select(t => t.ActionId).ToHashSet();
@@ -285,16 +240,16 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
     // ------------------------------- safety rails -------------------------------
 
     /// <summary>
-    /// An item sitting in <c>submitted</c> with both former tasks ticked is NOT
-    /// auto-advanced. Duly making needs a payment date only the regulator can
-    /// supply, and inventing one would anchor the 12-week SLA to a fiction. Such
-    /// items get the call to action like any other, which is where they belong.
+    /// An item sitting in <c>submitted</c> is NOT auto-advanced. Duly making
+    /// needs a payment date only the regulator can supply, and inventing one
+    /// would anchor the 12-week SLA to a fiction. Such items get the call to
+    /// action like any other, which is where they belong.
     /// </summary>
     [Fact]
-    public async Task It_does_not_auto_advance_an_item_whose_old_tasks_were_all_ticked()
+    public async Task It_does_not_auto_advance_a_submitted_item()
     {
         var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem(tasksTicked: true);
+        var item = BuildItem();
         var persistence = BuildPersistence(item);
 
         await BuildMigration().ApplyAsync(persistence, ct);
@@ -304,26 +259,9 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         Assert.Empty(item.AuditLog);
     }
 
-    /// <summary>
-    /// Recorded completions of the deleted tasks are history — a record of work
-    /// a regulator actually did. They are inert once the snapshot declares no
-    /// tasks for the state, so there is nothing to gain by destroying them.
-    /// </summary>
-    [Fact]
-    public async Task It_preserves_recorded_completions_of_the_deleted_tasks()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem(tasksTicked: true);
-        var persistence = BuildPersistence(item);
-
-        await BuildMigration().ApplyAsync(persistence, ct);
-
-        Assert.Contains("verify-organisation-details", item.CompletedTaskIdsByState["submitted"]);
-        Assert.Equal(
-            WorkItemTaskStatus.Completed,
-            item.TaskStatusesByState["submitted"]["verify-organisation-details"]
-        );
-    }
+    // RA-410: It_preserves_recorded_completions_of_the_deleted_tasks is gone —
+    // WorkItem.CompletedTaskIdsByState / TaskStatusesByState no longer exist,
+    // so there is nothing left for a recorded completion to live in.
 
     [Fact]
     public async Task It_migrates_items_in_every_state_including_terminal_ones()
@@ -348,7 +286,6 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
             {
                 Assert.Equal("v11", item.TemplateVersion);
                 Assert.Contains(item.TemplateSnapshot!.Transitions, t => t.ActionId == "duly-make");
-                Assert.Empty(item.TemplateSnapshot.GetTasksForState("submitted"));
             }
         );
     }
@@ -369,39 +306,12 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         Assert.Single(item.TemplateSnapshot!.Transitions, t => t.ActionId == "duly-make");
     }
 
-    /// <summary>
-    /// A half-applied item — one property already true, the other not — is still
-    /// picked up and finished off, because the two conditions are tested
-    /// independently rather than by trusting the stored version string.
-    /// </summary>
-    [Fact]
-    public async Task It_finishes_a_half_applied_item()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
-        // duly-make present (so a version check alone would call this done) but
-        // the deleted tasks still there.
-        var halfApplied = new WorkItemTemplateSnapshot
-        {
-            TemplateVersion = "v11",
-            States = live.States,
-            Transitions = live.Transitions,
-            TasksByState = new Dictionary<string, List<WorkItemTask>>(
-                live.TasksByState,
-                StringComparer.OrdinalIgnoreCase
-            )
-            {
-                ["submitted"] = [new WorkItemTask("verify-organisation-details", "Verify")],
-            },
-        };
-        var item = BuildItem(snapshot: halfApplied);
-        var persistence = BuildPersistence(item);
-
-        await BuildMigration().ApplyAsync(persistence, ct);
-
-        Assert.Empty(item.TemplateSnapshot!.GetTasksForState("submitted"));
-        await persistence.Received(1).ReplaceAsync(item, ct);
-    }
+    // RA-410: It_finishes_a_half_applied_item is gone. Its "half applied"
+    // scenario depended on two independent conditions — duly-make presence
+    // and the deleted tasks' presence — that NeedsMigration used to check
+    // separately. With TasksByState gone there is only one condition left
+    // (duly-make presence), so a "half applied" state is no longer
+    // constructible; It_is_idempotent already covers the one-condition case.
 
     /// <summary>
     /// An item with no snapshot at all resolves its template from the live

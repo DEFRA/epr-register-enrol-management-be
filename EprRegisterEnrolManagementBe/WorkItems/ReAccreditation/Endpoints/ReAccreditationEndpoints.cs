@@ -62,6 +62,20 @@ internal static class ReAccreditationEndpoints
     // yyyy-MM-dd string, so 4 KiB is already absurdly generous.
     public const long MaxDulyMakeBodyBytes = 4 * 1024;
 
+    // RA-410: same rationale as MaxDulyMakeBodyBytes — the decision endpoint
+    // calls .DisableValidation() (it owns its own outcome validation so it can
+    // attach a machine-readable errorCode the frontend switches on), so it must
+    // carry its own explicit size guard. A legitimate body is a single
+    // "approved"/"rejected" string, so 4 KiB is already absurdly generous.
+    public const long MaxDecisionBodyBytes = 4 * 1024;
+
+    /// <summary>
+    /// ProblemDetails title for every log-decision failure. Constant across all
+    /// of them on purpose: the frontend switches on <c>errorCode</c> or the
+    /// status code, never on the title or the human-readable detail.
+    /// </summary>
+    public const string LogDecisionProblemTitle = "Could not record re-accreditation decision";
+
     /// <summary>
     /// ProblemDetails title for every duly-make failure. Constant across all of
     /// them on purpose: the frontend switches on <c>errorCode</c>, never on the
@@ -108,6 +122,20 @@ internal static class ReAccreditationEndpoints
         group
             .MapPost("/{id:guid}/approve", Approve)
             .WithName("ApproveReAccreditation")
+            .RequireAuthorization();
+
+        // RA-410: bespoke log-decision endpoint. Both hops of a determination
+        // (submit-for-decision, then approve/reject) run server-side on this
+        // one call — submit-for-decision and reject are registered
+        // CallerInvocable: false precisely so this is the only way in. Two
+        // calls from the frontend would leave a window in which a failure
+        // between them stranded the application in 'awaiting-decision' with no
+        // call to action to discharge it.
+        group
+            .MapPost("/{id:guid}/decision", LogDecision)
+            .WithName("LogReAccreditationDecision")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxDecisionBodyBytes))
             .RequireAuthorization();
 
         // RA-291: bespoke query endpoint. The caller never names an action —
@@ -245,12 +273,15 @@ internal static class ReAccreditationEndpoints
     }
 
     /// <summary>
-    /// Record the decision rationale for a re-accreditation work item.
-    /// Persists the rationale as a note (so it is captured in the standard
-    /// audit log) and marks the <c>record-decision-rationale</c> task
-    /// complete so the work item satisfies
-    /// <see cref="WorkItemTransition.RequiresAllTasksComplete"/> on approve
-    /// / reject.
+    /// Record the decision rationale for a re-accreditation work item,
+    /// persisting it as a note so it is captured in the standard audit log.
+    ///
+    /// RA-410: this used to also tick the <c>record-decision-rationale</c>
+    /// task, which gated approve/reject. The gate is gone with the rest of the
+    /// task framework, so the endpoint is now purely a note write. It is kept
+    /// — rather than folded into the decision endpoint — because a caseworker
+    /// may record a rationale at any point during assessment, independently of
+    /// reaching a determination.
     /// </summary>
     public static async Task<
         Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
@@ -264,10 +295,7 @@ internal static class ReAccreditationEndpoints
     )
     {
         // RA-323: every caseworker holds the same role, so recording the
-        // decision rationale (which completes the record-decision-rationale
-        // prerequisite task and appends the justification note the
-        // approve/reject transition is built upon) is open to any
-        // authenticated caseworker.
+        // decision rationale is open to any authenticated caseworker.
         var rationale = request?.Rationale?.Trim();
         if (string.IsNullOrWhiteSpace(rationale))
         {
@@ -307,18 +335,7 @@ internal static class ReAccreditationEndpoints
         }
 
         var noteText = $"[decision-rationale] {rationale}";
-        // Atomic compound mutation (see IWorkItemService.AddNoteAndCompleteTaskAsync):
-        // both the note and the task completion are persisted in a single
-        // ReplaceAsync, so a concurrency conflict or other persistence
-        // failure cannot leave the work item with an orphan rationale note
-        // and an incomplete record-decision-rationale task.
-        var result = await engine.AddNoteAndCompleteTaskAsync(
-            id,
-            "record-decision-rationale",
-            noteText,
-            httpContext.User,
-            cancellationToken
-        );
+        var result = await engine.AddNoteAsync(id, noteText, httpContext.User, cancellationToken);
         if (!result.IsSuccess)
         {
             return TypedResults.Problem(
@@ -521,11 +538,7 @@ internal static class ReAccreditationEndpoints
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
             WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
-            // RA-346: an approval refused because the awaiting-decision tasks
-            // are still outstanding is a conflict with the resource's current
-            // state, not a malformed request — the same 409 the framework's
-            // /actions/{actionId} endpoint returns for IncompleteTasks.
-            WorkItemActionFailureCode.IncompleteTasks
+            WorkItemActionFailureCode.TerminalState
             or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status400BadRequest,
         };
@@ -535,6 +548,126 @@ internal static class ReAccreditationEndpoints
             detail: result.Message,
             statusCode: status
         );
+    }
+
+    /// <summary>
+    /// RA-410: record the final determination on a re-accreditation
+    /// application. One call carries it from <c>assessment-in-progress</c>
+    /// through <c>awaiting-decision</c> to <c>approved</c> / <c>rejected</c>,
+    /// with both hops applied server-side by
+    /// <see cref="IReAccreditationLogDecisionService"/>.
+    ///
+    /// The body names an outcome, never a state or an action id, so a caller
+    /// cannot pick a destination the workflow does not allow. Validation
+    /// failures carry a machine-readable <c>errorCode</c> and <c>field</c>
+    /// (mirroring <see cref="DulyMake"/>) so the frontend can bind them to a
+    /// GOV.UK error summary against the radio group rather than parsing prose.
+    ///
+    /// A repeat call once the application is already in the requested terminal
+    /// state succeeds as an idempotent replay, so a double-click or a retried
+    /// request does not fail the caller. An application already closed the
+    /// OTHER way is a 409, not a replay: reporting success would tell a
+    /// caseworker their refusal landed on an application that is in fact
+    /// approved and carrying an issued accreditation id.
+    /// </summary>
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > LogDecision(
+        [FromRoute] Guid id,
+        [FromBody] LogDecisionRequest? request,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationLogDecisionService logDecisionService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!TryParseOutcome(request?.Outcome, out var outcome))
+        {
+            return TypedResults.Problem(
+                title: LogDecisionProblemTitle,
+                detail: "'outcome' is required and must be either 'approved' or 'rejected'.",
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["errorCode"] = "invalid-outcome",
+                    ["field"] = "outcome",
+                }
+            );
+        }
+
+        var result = await logDecisionService.LogDecisionAsync(
+            id,
+            outcome,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[WorkItemEndpoints.IdempotentReplayHeader] = "true";
+        }
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var decisionStatus = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
+            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
+            // All three are conflicts with the resource's current state rather
+            // than malformed requests: the frontend's correct response is "this
+            // application has changed, reload it", never a field-level error.
+            WorkItemActionFailureCode.InvalidTransition
+            or WorkItemActionFailureCode.TerminalState
+            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
+        };
+
+        // The only 400 the service itself can produce is a type mismatch. Give
+        // it an errorCode too so the frontend never has to parse prose to work
+        // out whether a 400 belongs against the outcome input.
+        var decisionExtensions =
+            result.FailureCode == WorkItemActionFailureCode.UnknownAction
+                ? new Dictionary<string, object?> { ["errorCode"] = "wrong-work-item-type" }
+                : null;
+
+        return TypedResults.Problem(
+            title: LogDecisionProblemTitle,
+            detail: result.Message,
+            statusCode: decisionStatus,
+            extensions: decisionExtensions
+        );
+    }
+
+    /// <summary>
+    /// Bind the wire <c>outcome</c> string onto
+    /// <see cref="ReAccreditationDecisionOutcome"/>. Case-insensitive, matching
+    /// the JSON enum convention used elsewhere on the wire, but strictly
+    /// two-valued: <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/>
+    /// alone would also accept "0"/"1" and any future member, which would let a
+    /// caller reach an outcome the frontend never offers.
+    /// </summary>
+    private static bool TryParseOutcome(string? value, out ReAccreditationDecisionOutcome outcome)
+    {
+        switch (value?.Trim().ToLowerInvariant())
+        {
+            case "approved":
+                outcome = ReAccreditationDecisionOutcome.Approved;
+                return true;
+            case "rejected":
+                outcome = ReAccreditationDecisionOutcome.Rejected;
+                return true;
+            default:
+                outcome = default;
+                return false;
+        }
     }
 
     /// <summary>
@@ -872,6 +1005,14 @@ internal sealed record ReAccreditationRecommendationResponse(
 
 /// <summary>Request body for <see cref="ReAccreditationEndpoints.RecordDecisionRationale"/>.</summary>
 internal sealed record DecisionRationaleRequest(string Rationale);
+
+/// <summary>
+/// RA-410 request body for <see cref="ReAccreditationEndpoints.LogDecision"/>.
+/// Nullable so a missing or malformed body reaches the endpoint's own
+/// validation (and its machine-readable <c>errorCode</c>) rather than being
+/// rejected upstream as an unbindable model.
+/// </summary>
+internal sealed record LogDecisionRequest(string? Outcome);
 
 internal static partial class ReAccreditationEndpointsRationale
 {

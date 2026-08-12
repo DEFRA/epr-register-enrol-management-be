@@ -8,10 +8,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 public enum WorkItemActionFailureCode
 {
     WorkItemNotFound,
-    TaskNotApplicable,
     UnknownAction,
     InvalidTransition,
-    IncompleteTasks,
     TerminalState,
     /// <summary>
     /// The caller is not allowed to perform this assignment (e.g. a standard
@@ -51,7 +49,7 @@ public enum WorkItemActionFailureCode
 }
 
 /// <summary>
-/// Result of a state- or task-changing operation. Either succeeds with the
+/// Result of a state-changing operation. Either succeeds with the
 /// updated <see cref="WorkItem"/>, or fails with a <see cref="WorkItemActionFailureCode"/>
 /// and human-readable message.
 /// </summary>

@@ -2,7 +2,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
 /// Declarative description of a work item type. Modules implement this to expose
-/// their states and the tasks required while in each state. Implementations should
+/// their states and the transitions between them. Implementations should
 /// be pure, deterministic and side-effect free; they are queried by the framework
 /// to advertise what a type can do, not to perform behaviour. Behaviour belongs in
 /// the module's service objects.
@@ -20,8 +20,7 @@ public interface IWorkItemType : IWorkItemTemplate
 
     /// <summary>
     /// Stable identifier for the current shape of this type's templates and
-    /// task definitions. Bump this whenever a change to <see cref="States"/>,
-    /// <see cref="IWorkItemTemplate.GetTasksForState"/> or
+    /// Bump this whenever a change to <see cref="States"/> or
     /// <see cref="Transitions"/> would render historical work items
     /// inconsistently. Frontends use the same identifier to pick a matching
     /// detail template, so historical items keep their original look.
@@ -34,7 +33,7 @@ public interface IWorkItemType : IWorkItemTemplate
     /// Allowed state transitions, exposed as named actions (e.g. "approve",
     /// "reject"). The engine consults this list to decide whether an action
     /// invoked by a caller is permitted given the work item's current state
-    /// and outstanding tasks. Defaults to an empty list so types delivered
+    /// Defaults to an empty list so types delivered
     /// before the engine existed continue to compile.
     /// </summary>
     IReadOnlyCollection<WorkItemTransition> IWorkItemTemplate.Transitions => Array.Empty<WorkItemTransition>();
