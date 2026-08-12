@@ -104,7 +104,7 @@ public class ReAccreditationApprovalServiceTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
         idGenerator.GenerateAsync(
-                Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                Arg.Any<BsonDocument>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(accreditationId));
         var queue = Substitute.For<IBackgroundTaskQueue>();
         var hooks = new List<IWorkItemPostActionHook> { Substitute.For<IWorkItemPostActionHook>() };
@@ -793,7 +793,7 @@ public class ReAccreditationApprovalServiceTests
     // ─────────────────────────── RA-133 ────────────────────────────────
 
     [Fact]
-    public async Task ApproveAsync_passes_material_and_configured_year_to_generator()
+    public async Task ApproveAsync_passes_payload_and_configured_year_to_generator()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build(currentYear: 2028);
@@ -807,11 +807,11 @@ public class ReAccreditationApprovalServiceTests
         await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         await sut.IdGenerator.Received(1).GenerateAsync(
-            "plastic", 2028, Arg.Any<CancellationToken>());
+            Arg.Is<BsonDocument>(p => p["material"] == "plastic"), 2028, Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ApproveAsync_passes_null_material_when_material_is_missing()
+    public async Task ApproveAsync_passes_the_payload_unchanged_when_material_is_missing()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
@@ -824,11 +824,11 @@ public class ReAccreditationApprovalServiceTests
         await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         await sut.IdGenerator.Received(1).GenerateAsync(
-            null, Arg.Any<int>(), Arg.Any<CancellationToken>());
+            Arg.Is<BsonDocument>(p => !p.Contains("material")), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ApproveAsync_passes_null_material_when_material_is_bson_null()
+    public async Task ApproveAsync_passes_the_payload_unchanged_when_material_is_bson_null()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
@@ -842,7 +842,8 @@ public class ReAccreditationApprovalServiceTests
         await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         await sut.IdGenerator.Received(1).GenerateAsync(
-            null, Arg.Any<int>(), Arg.Any<CancellationToken>());
+            Arg.Is<BsonDocument>(p => p["material"] == BsonNull.Value),
+            Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -941,7 +942,7 @@ public class ReAccreditationApprovalServiceTests
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
         sut.IdGenerator.GenerateAsync(
-                Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                Arg.Any<BsonDocument>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns<Task<string>>(_ => throw new InvalidOperationException("no unique id"));
         var workItem = BuildWorkItem();
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);

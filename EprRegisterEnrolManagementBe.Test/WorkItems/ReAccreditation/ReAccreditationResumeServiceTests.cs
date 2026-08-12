@@ -185,6 +185,50 @@ public class ReAccreditationResumeServiceTests
         Assert.Equal("alice-1", doc["respondedBy"].AsString);
     }
 
+    [Fact]
+    public async Task ResumeFromQueryAsync_merges_resubmitted_sections_onto_their_canonical_payload_fields()
+    {
+        // RA-XXX regression test: the operator backend keys `sections` by its
+        // own OperatorSection enum name (HttpCaseWorkingApiAdapter.BuildSectionsPayload),
+        // e.g. "BusinessPlan"/"Prns"/"SamplingPlan" — NOT the kebab-case
+        // ReAccreditationQuerySections keys used for sectionKeys. A prior fix
+        // mis-keyed the canonical merge map with the kebab-case keys, so the
+        // merge always missed and the case management summary page kept
+        // showing stale business plan / PRN / sampling plan values after a
+        // resubmission.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-duly-making");
+
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["business-plan", "prn-tonnage", "sampling-and-inspection-plan"],
+            new Dictionary<string, JsonElement>
+            {
+                ["BusinessPlan"] = JsonDocument.Parse("""{"newInfrastructurePercent":20}""").RootElement,
+                ["Prns"] = JsonDocument.Parse("""{"tonnage":123}""").RootElement,
+                ["SamplingPlan"] = JsonDocument.Parse("""{"files":[]}""").RootElement,
+            },
+            []);
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "businessPlan",
+            Arg.Is<BsonValue>(v => v["newInfrastructurePercent"].AsInt32 == 20),
+            ct);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "prns",
+            Arg.Is<BsonValue>(v => v["tonnage"].AsInt32 == 123),
+            ct);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "samplingPlan",
+            Arg.Any<BsonValue>(),
+            ct);
+    }
+
     // ------------------------------- idempotency -------------------------------
 
     [Fact]

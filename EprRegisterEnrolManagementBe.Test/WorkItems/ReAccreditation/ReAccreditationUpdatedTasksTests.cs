@@ -7,6 +7,7 @@ using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -409,7 +410,7 @@ public class ReAccreditationUpdatedTasksTests
     {
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
         idGenerator
-            .GenerateAsync(Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .GenerateAsync(Arg.Any<BsonDocument>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns("ACC-2027-X-TEST0000");
 
         return new ReAccreditationApprovalService(

@@ -98,6 +98,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // now consults a Mongo-backed lookup for uniqueness.
         services.AddSingleton<IAccreditationIdLookup, AccreditationIdLookup>();
         services.AddSingleton<IAccreditationIdGenerator, AccreditationIdGenerator>();
+        // epr-accreditation-id-format AC02: backfills payload.accreditationId
+        // on already-approved items to the new fixed-width format. Like
+        // ReAccreditationIsNewSiteCorrectionMigration, safe to register
+        // unconditionally: with no configuration it returns immediately.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationAccreditationIdFormatMigration
+        >();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
         // RA-316: bespoke duly-making workflow. Owns the submitted → duly-made
         // transition and the side effect the generic engine cannot perform —
