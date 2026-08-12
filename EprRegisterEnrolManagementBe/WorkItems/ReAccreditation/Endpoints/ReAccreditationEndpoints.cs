@@ -55,6 +55,20 @@ internal static class ReAccreditationEndpoints
     // pointless.
     public const long MaxSiteAddedBodyBytes = 16 * 1024;
 
+    // RA-316: same rationale as MaxQueryBodyBytes — the duly-make endpoint calls
+    // .DisableValidation() (it owns its own payment-date validation so it can
+    // attach a machine-readable errorCode the frontend switches on), so it must
+    // carry its own explicit size guard. A legitimate body is a single
+    // yyyy-MM-dd string, so 4 KiB is already absurdly generous.
+    public const long MaxDulyMakeBodyBytes = 4 * 1024;
+
+    /// <summary>
+    /// ProblemDetails title for every duly-make failure. Constant across all of
+    /// them on purpose: the frontend switches on <c>errorCode</c>, never on the
+    /// title or the human-readable detail.
+    /// </summary>
+    public const string DulyMakeProblemTitle = "Could not complete duly making";
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
     {
@@ -72,12 +86,17 @@ internal static class ReAccreditationEndpoints
             .WithMetadata(new RequestSizeLimitAttribute(MaxRationaleBodyBytes))
             .RequireAuthorization();
 
-        // Operator-backend endpoint for when payment is confirmed programmatically.
-        // Not yet wired to the caseworker UI — caseworkers use the payment-received
-        // engine action instead. Reserved for future operator backend integration.
+        // RA-316: bespoke duly-make endpoint. The duly-make transition is
+        // registered CallerInvocable: false precisely so this is the only way
+        // in — routing through the framework's generic action handler would
+        // move the item to duly-made with no payment date and therefore no SLA
+        // clock, silently defeating the 12-week SLA the regulator is measured
+        // against.
         group
-            .MapPost("/{id:guid}/payment-completed", RecordPaymentCompleted)
-            .WithName("RecordReAccreditationPaymentCompleted")
+            .MapPost("/{id:guid}/duly-make", DulyMake)
+            .WithName("DulyMakeReAccreditation")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxDulyMakeBodyBytes))
             .RequireAuthorization();
 
         // RA-132: bespoke approve endpoint. The generic
@@ -313,36 +332,92 @@ internal static class ReAccreditationEndpoints
     }
 
     /// <summary>
-    /// Operator-backend endpoint for programmatic payment confirmation.
-    /// Stamps the SLA clock from the operator-supplied <c>paidAt</c> timestamp,
-    /// transitions directly to <c>assessment-in-progress</c>, and records
-    /// four operator-attributed audit entries. Not yet wired to the caseworker
-    /// UI — caseworkers use the <c>payment-received</c> engine action instead.
-    /// Reserved for future operator backend integration.
+    /// RA-316: complete duly making for a re-accreditation work item.
+    ///
+    /// Delegates to the module-scoped <see cref="IReAccreditationDulyMakingService"/>
+    /// so the bespoke workflow — anchoring the 12-week SLA clock to the entered
+    /// payment date, stamping that date on the payload, notifying the operator
+    /// and pushing the new status — runs atomically with the state transition.
+    ///
+    /// Payment-date validation happens HERE rather than in the service, because
+    /// only the endpoint can shape the response the case management frontend
+    /// needs: a 400 ProblemDetails carrying a stable machine-readable
+    /// <c>errorCode</c> and <c>field</c>, which it binds to a GOV.UK error
+    /// summary against the date input. Everything else is a page-level failure
+    /// on that side, so the two must stay clearly distinguishable — see
+    /// <see cref="ReAccreditationDulyMakingValidator"/> for the code vocabulary,
+    /// which is part of the wire contract with management-fe and mgmt-tests.
     /// </summary>
-    public static async Task<
-        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
-    > RecordPaymentCompleted(
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> DulyMake(
         [FromRoute] Guid id,
-        [FromBody] PaymentCompletedRequest request,
-        [FromServices] IReAccreditationPaymentService paymentService,
+        HttpContext httpContext,
+        [FromBody] DulyMakeRequest? request,
+        [FromServices] IReAccreditationDulyMakingService dulyMakingService,
         [FromServices] IWorkItemService engine,
+        [FromServices] TimeProvider timeProvider,
         CancellationToken cancellationToken
     )
     {
-        var result = await paymentService.RecordPaymentAsync(id, request, cancellationToken);
-        if (!result.IsSuccess)
+        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        var validation = ReAccreditationDulyMakingValidator.Validate(request?.PaymentDate, today);
+
+        if (!validation.IsValid)
         {
-            return result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound
-                ? TypedResults.NotFound()
-                : TypedResults.Problem(
-                    title: "Could not record payment",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status400BadRequest
-                );
+            return TypedResults.Problem(
+                title: DulyMakeProblemTitle,
+                detail: validation.Detail,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["errorCode"] = validation.ErrorCode,
+                    ["field"] = ReAccreditationDulyMakingValidator.Field,
+                }
+            );
         }
 
-        return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        var result = await dulyMakingService.CompleteDulyMakingAsync(
+            id,
+            validation.PaymentDate!.Value,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var status = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
+            // All three are conflicts with the resource's current state rather
+            // than malformed requests: the frontend's correct response is "this
+            // application has changed, reload it", never a field-level error.
+            WorkItemActionFailureCode.InvalidTransition
+            or WorkItemActionFailureCode.TerminalState
+            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
+        };
+
+        // The only 400 the service itself can produce is a type mismatch. Give
+        // it an errorCode too so the frontend never has to parse prose to work
+        // out whether a 400 belongs against the date input.
+        var extensions =
+            result.FailureCode == WorkItemActionFailureCode.UnknownAction
+                ? new Dictionary<string, object?> { ["errorCode"] = "wrong-work-item-type" }
+                : null;
+
+        return TypedResults.Problem(
+            title: DulyMakeProblemTitle,
+            detail: result.Message,
+            statusCode: status,
+            extensions: extensions
+        );
     }
 
     /// <summary>

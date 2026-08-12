@@ -103,6 +103,51 @@ internal sealed record ReAccreditationPayload
     public SlaClock? SlaClock { get; init; }
 
     /// <summary>
+    /// RA-316: the registration charge for this application, in PENCE (minor
+    /// units) — £3,276 is 327600. Supplied by the operator backend in the
+    /// submission payload and displayed, read-only, on the duly-making page so
+    /// the regulator can confirm the charge before recording the payment date.
+    ///
+    /// Nullable and never written by this service. Absent on every work item
+    /// submitted before RA-316, so readers must degrade rather than assume a
+    /// value; note that <c>0</c> is a legitimate charge and must not be
+    /// conflated with "missing".
+    /// </summary>
+    public int? ChargeAmountPence { get; init; }
+
+    /// <summary>
+    /// RA-316: the operator's payment reference, displayed read-only alongside
+    /// <see cref="ChargeAmountPence"/> on the duly-making page.
+    ///
+    /// Optional and structurally absent on every initial submission: the
+    /// operator backend builds its payload before this service has generated the
+    /// application reference, so it has nothing to send.
+    ///
+    /// When absent, the correct value to display is
+    /// <see cref="ApplicationReference"/>. That is not a loose approximation —
+    /// the operator's own "Payment details" page renders
+    /// <c>accreditationReference</c> under the literal label "Payment reference"
+    /// alongside the sort code and account number, so it is the reference the
+    /// operator actually quotes on the bank transfer. This field is therefore an
+    /// OVERRIDE: use it when present, fall back to the application reference
+    /// otherwise. It exists as a slot for a genuinely distinct payment reference
+    /// in a later story.
+    /// </summary>
+    public string? PaymentReference { get; init; }
+
+    /// <summary>
+    /// RA-316: the payment date the regulator entered when completing duly
+    /// making. Stamped by <c>ReAccreditationDulyMakingService</c> at that
+    /// moment, and the value <see cref="Core.WorkItemSlaClock.StartedAt"/> is
+    /// anchored to — the 12-week SLA runs from when payment was made, not from
+    /// when the regulator got round to recording it.
+    ///
+    /// Null until duly making completes. Written by the server only; callers
+    /// must not include it in the submission payload.
+    /// </summary>
+    public DateOnly? PaymentDate { get; init; }
+
+    /// <summary>
     /// RA-291: the query currently open against this application, stamped by
     /// <c>ReAccreditationQueryService</c> just before the query transition so
     /// the notification hook can include the reason in the operator's email.

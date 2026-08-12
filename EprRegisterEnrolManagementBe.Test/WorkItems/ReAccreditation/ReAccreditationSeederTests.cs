@@ -586,5 +586,85 @@ public class ReAccreditationSeederTests
         Assert.Contains(items, i =>
             !i.Payload.Contains("overseasSites") && !i.Payload.Contains("prns"));
     }
+
+    /// <summary>
+    /// RA-316 regression guard. Seeded items are what every non-production
+    /// environment renders, the journey-test stack included, and the
+    /// duly-making page shows chargeAmountPence as the charge the regulator
+    /// confirms before recording payment. A seed without it renders "Not
+    /// provided" on the one screen whose entire purpose is confirming a
+    /// payment — and because the payload model is [BsonIgnoreExtraElements]
+    /// nothing throws, so the only signal is an e2e failure against a backend
+    /// that is working perfectly. Assert it here, where the cause is obvious.
+    /// </summary>
+    [Fact]
+    public void Every_seeded_item_carries_a_positive_charge_amount_in_pence()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.NotEmpty(items);
+
+        foreach (var item in items)
+        {
+            Assert.True(
+                item.Payload.Contains("chargeAmountPence"),
+                $"Seed '{item.Payload.GetValue("applicationReference", "?")}' has no "
+                    + "chargeAmountPence; the duly-making page would render no charge."
+            );
+            var charge = item.Payload["chargeAmountPence"];
+            Assert.True(charge.IsInt32 || charge.IsInt64, "chargeAmountPence must be an integer.");
+            // Pence, not pounds. A three-figure value where four are expected is
+            // the tell that someone stored 3276 instead of 327600.
+            Assert.True(charge.ToInt64() > 0, "chargeAmountPence must be positive.");
+
+            // RA-316: keep every seeded charge above £500 in pence. This looks
+            // arbitrary and is not — it protects an assertion in another repo.
+            //
+            // The mgmt-tests journey suite catches a missing /100 in the
+            // frontend by bounding the RENDERED charge below £50,000: correct
+            // rendering of our smallest seed is £546.00, the same value rendered
+            // undivided is £54,600.00, and the ceiling sits in that gap. That
+            // check only discriminates while every seeded value, rendered
+            // undivided, lands ABOVE the ceiling. Seed anything under 50000
+            // pence — 32800 for a single overseas site's £328 increment is the
+            // plausible mistake — and it renders undivided as £32,800, under the
+            // ceiling, so a pounds/pence bug passes silently for that item.
+            //
+            // The coupling is real but invisible from the other repo, so it is
+            // enforced here, where the values live. If a genuine sub-£500 fee
+            // band ever exists, coordinate with mgmt-tests before seeding it
+            // rather than deleting this assertion.
+            Assert.True(
+                charge.ToInt64() >= 50_000,
+                $"Seeded chargeAmountPence {charge.ToInt64()} is below 50000 pence (£500). "
+                    + "This silently weakens the mgmt-tests pounds/pence magnitude check — "
+                    + "see the comment above before changing it."
+            );
+        }
+    }
+
+    /// <summary>
+    /// paymentReference is an OVERRIDE, absent on real submissions because the
+    /// operator backend has no payment reference at submission time — the
+    /// frontend falls back to the application reference. Exactly one seed sets
+    /// it, so both the override and the far more common fallback path are
+    /// exercised in a seeded environment. Seeding it everywhere would leave the
+    /// fallback untested.
+    /// </summary>
+    [Fact]
+    public void Exactly_one_seeded_item_overrides_the_payment_reference()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var withOverride = items.Where(i => i.Payload.Contains("paymentReference")).ToList();
+
+        Assert.Single(withOverride);
+        Assert.False(
+            string.IsNullOrWhiteSpace(withOverride[0].Payload["paymentReference"].AsString)
+        );
+        // Every other seed relies on the applicationReference fallback, which
+        // the framework stamps on all of them.
+        Assert.All(items, i => Assert.True(i.Payload.Contains("applicationReference")));
+    }
 }
 
