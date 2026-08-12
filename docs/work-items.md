@@ -26,9 +26,10 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | `WorkItemTaskProgress` | A task's id + display name + its `WorkItemTaskStatus` (`NotStarted` / `InProgress` / `Blocked` / `Completed`) for the work item's current state. The legacy `IsComplete` boolean is retained for back-compat and equals `Status == Completed`. |
 | `IWorkItemType` | Declares a type's `TypeId`, `DisplayName`, `InitialState`, `States`, `GetTasksForState(stateId)` and `Transitions`. Pure & side-effect free. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
+| `IWorkItemTaskStateResolver` | Optional, module-supplied. Lets a type say "the tasks that apply to this item belong to some *other* state" — see [Effective task state](#effective-task-state-ra-372). |
 | `IWorkItemRegistry` | DI-resolvable lookup of every registered type. |
 | `IWorkItemService` | Framework service object that drives task completion and state transitions. Resolves the work item, validates the request against the type, persists the change and writes an audit log. |
-| `WorkItem` | The persisted work item envelope: id, type id, state id, submitted-at, last-modified-at, submitted-by (CDP Cognito client id), per-state completed task ids, free-form payload. |
+| `WorkItem` | The persisted work item envelope: id, type id, state id, submitted-at, last-modified-at, submitted-by (CDP client id), per-state completed task ids, free-form payload. |
 | `IWorkItemPersistence` | Framework-owned MongoDB persistence for `WorkItem`s. |
 | `WorkItemModuleExtensions` | `AddWorkItemFramework()`, `AddWorkItemModule<T>()`, `MapWorkItemModules()`, `MapWorkItemFrameworkEndpoints()`. |
 
@@ -45,15 +46,15 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 
 | Method | Route | Description |
 | --- | --- | --- |
-| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP Cognito client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
+| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
 | `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with current task progress and the actions the engine will currently allow. |
 | `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
 | `POST` | `/work-items/{id}/tasks/{taskId}/complete` | Mark a task complete on the work item's current state. Idempotent. `400` if the task does not apply to the current state, `404` if the work item is unknown. Equivalent to `PUT /tasks/{taskId}/status` with `{"status":"Completed"}` for callers that only care about the binary view. |
 | `PUT` | `/work-items/{id}/tasks/{taskId}/status` | Set a task's `WorkItemTaskStatus` (epr-gl6). Body: `{ "status": "NotStarted" \| "InProgress" \| "Blocked" \| "Completed" }`. Status name binding is case-insensitive. Idempotent (no-ops do not write audit). On change appends a `task-status-changed` entry with `fromStatus` / `toStatus` in `Details` — no extra `task-completed` is written when transitioning to `Completed` via this endpoint. `400` for unknown tasks or unrecognised status values. |
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state or has outstanding tasks; `400` for unknown actions or transitions whose from-state does not match. |
 
-All three endpoints require authentication via the CDP Cognito client id
-header (`x-cdp-cognito-client-id`) per RA-89/RA-85b.
+All three endpoints require authentication via the CDP client id
+header (`x-cdp-client-id`) per RA-89/RA-85b.
 
 The persisted envelope is owned by the framework; modules describe the shape
 of their payload via their `IWorkItemType` and operate on it via their own
@@ -112,6 +113,18 @@ That is the complete list of changes required outside the new module folder.
   `IWorkItemService` covers task completion and transitions; module-scoped
   services should follow the same pattern (intent-named methods, return
   result objects rather than raw exceptions).
+- A bespoke module endpoint that performs a state change **outside** a
+  registered `WorkItemTransition` does not inherit the engine's gates — most
+  importantly `RequiresAllTasksComplete`. Such a service **must** apply them
+  itself via `WorkItemEngineRules` (`ResolveTemplate`,
+  `RequireAllTasksComplete`) so it agrees with the engine on which template
+  applies, what "task complete" means, and what a refusal looks like. Put the
+  check before any side effect, and return the shared failure rather than a
+  bespoke one — the frontend maps a single message per failure reason.
+  RA-346 fixed exactly this: `POST /work-items/re-accreditation/{id}/approve`
+  runs through `ReAccreditationApprovalService` rather than a registered
+  transition, so it silently bypassed the task gate and let a caseworker
+  approve a determination with `record-decision-rationale` still outstanding.
 
 ## Template versioning (RA-94)
 
@@ -160,34 +173,83 @@ v1 work item was being progressed.
 `WorkItemResponse` includes `templateVersion`. Clients use it (together
 with `typeId`) to pick the correct detail template for the work item.
 
+## Effective task state (RA-372)
+
+The engine normally treats a work item's `StateId` as answering two
+questions at once: *where is this item?* and *whose task list applies?*
+For most types those are the same thing. They come apart for a **waypoint
+state** — a state an item passes through that has no task list of its own,
+where the work still outstanding belongs to the state the item came from
+and will return to.
+
+`IWorkItemTaskStateResolver` is the seam. A module registers one as a
+singleton; the engine consults every registered resolver and takes the
+first that returns a non-null state id, falling back to `workItem.StateId`
+when they all abstain.
+
+The resolved state id governs **both halves consistently**:
+
+- the task list projected by `WorkItemService.Project`,
+- the task lookup performed by `CompleteTaskAsync` / `SetTaskStatusAsync` /
+  `AddNoteAndCompleteTaskAsync`,
+- the per-state bucket (`CompletedTaskIdsByState` / `TaskStatusesByState`)
+  those completions are read from and written to,
+- the `RequiresAllTasksComplete` gate in `ApplyActionAsync`,
+- the `stateId` handed to `IWorkItemPostTaskHook.OnAllTasksCompletedAsync`.
+
+Because completion has always been stored per state id, redirecting the
+state id makes prior progress visible during the detour and makes progress
+recorded during the detour survive the return — with no new storage and no
+template bump.
+
+What it deliberately does **not** govern is anything about where the item
+actually *is*: available actions, terminality and transition from-state
+matching all keep using `workItem.StateId`. Redirecting those would let a
+caller invoke an action from a state the item is not in.
+
+Rules for implementations:
+
+- **Return null to abstain**, including for every work item whose `TypeId`
+  is not your own. An abstaining resolver is invisible.
+- **Be pure.** This runs on every read projection and every task mutation;
+  no I/O.
+- **Resolve against the supplied template**, not the live type, so an
+  in-flight item is judged by the rules it was submitted under.
+- Core must never learn the module's state names. A resolver that throws,
+  abstains, or names a state the template does not declare is ignored and
+  the engine falls back to `workItem.StateId`.
+
+Reference implementation: `ReAccreditationTaskStateResolver`, which maps
+re-accreditation's `updated` waypoint back to the state a query was raised
+from (derived from audit history via `ReAccreditationUpdatedOrigin`, shared
+with `ReAccreditationContinueReviewService` so the checklist a caseworker
+works through and the state `continue-review` lands in cannot disagree).
+
 ## Assignment (RA-95)
 
-Work items can be assigned to a user. Two roles drive what a caller can do:
-
-- `assign` — can assign or re-assign any work item to any user, and can
-  unassign.
-- `standard` — can only **self-assign** an unassigned work item to itself.
-  Cannot re-assign other people's work, cannot take an item that is already
-  owned, cannot unassign.
-
-Both rules are enforced by `WorkItemService.AssignAsync` /
-`UnassignAsync`. The frontend BFF exposes both UI affordances and the role
-gates, but the backend is the source of truth: a hand-crafted POST from a
-standard user that targets someone else's id returns `403`.
+Work items can be assigned to a user. RA-323 unified caseworker
+permissions — every authenticated caseworker can assign or re-assign any
+work item to any user, and can unassign; there is no role tier that
+restricts assignment to self-assign-only any more. This is enforced (or
+rather, not restricted) by `WorkItemService.AssignAsync` / `UnassignAsync`,
+which no longer check role membership at all — see ADR-0005: authorization
+(including any future assignment-permission tiering) is the frontend BFF's
+responsibility, not this backend's.
 
 ### Identity from the BFF
 
-The Cognito auth handler (`CognitoClientIdAuthenticationHandler`)
-optionally reads three headers forwarded by the BFF and turns them into
+The client id auth handler (`ClientIdAuthenticationHandler`)
+optionally reads two headers forwarded by the BFF and turns them into
 `ClaimsPrincipal` claims:
 
 | Header | Claim |
 | --- | --- |
 | `x-cdp-user-id` | `user:id` (used by `ResolveActorUserId`) |
 | `x-cdp-user-name` | `user:name` |
-| `x-cdp-user-roles` | one `ClaimTypes.Role` per comma-separated value |
 
-`User.IsInRole("assign")` therefore works as expected on every endpoint.
+These are used for audit attribution only (`WorkItem.AuditLog.CreatedBy` /
+`CreatedByName` and similar). Role membership is not part of the trust
+contract — see ADR-0005.
 
 ### Storage
 
@@ -246,7 +308,7 @@ item document. A `WorkItemNote` carries:
 | `Id` | Server-generated GUID. |
 | `Text` | Note body. Trimmed at write; rendered verbatim by clients (templates must escape). |
 | `CreatedAt` | UTC timestamp set by `WorkItemService` from the injected `TimeProvider`. |
-| `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, falling back to the Cognito client id). |
+| `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, falling back to the client id). |
 | `CreatedByName` | Snapshot of the actor's display name (`user:name` claim) at write time, so the audit narrative survives directory changes. |
 
 Notes are stored in insertion order. The wire projection in
@@ -337,6 +399,52 @@ a UI renders a natural top-to-bottom timeline without re-sorting.
   audit channel.
 - **Snapshot identity at write time.** `CreatedBy` / `CreatedByName` are
   not live foreign keys — the audit narrative survives directory changes.
+
+## Seeding
+
+Modules may ship demo data by registering an `IWorkItemSeeder`.
+`WorkItemSeederHostedService` runs every registered seeder once at startup,
+gated on `WorkItems:SeedOnStartup` (default `false`, so tests never touch
+Mongo during host startup).
+
+### Insert-only, by deterministic id
+
+Each seeded item gets a deterministic `Id` from
+`WorkItemSeed.DeterministicId(typeId, seedKey)`, and is written through
+`IWorkItemPersistence.CreateIfAbsentAsync`. That makes seeding idempotent and
+safe against a multi-instance rollout: the first writer wins and every loser
+is swallowed as a duplicate-key no-op.
+
+**It inserts; it never updates.** This is the property to internalise, because
+it has one consequence that reliably costs someone an afternoon:
+
+> Changing the *contents* of an existing seed item is invisible to any
+> database that has already seeded it — local volumes, shared dev, and any
+> e2e stack with a persistent volume. Only a brand-new `seedKey` reaches
+> them.
+
+The failure mode is nasty because it doesn't look like a seed problem. The
+backend is correct, the frontend is correct, and the e2e suite fails
+asserting against fixture values that only exist in the new seed — so the
+evidence points at whichever repo the assertion lives in. RA-292 lost a run
+to exactly this.
+
+So, when changing seed data:
+
+- **Adding a new fixture?** Use a new `seedKey`. It lands everywhere on the
+  next boot regardless of what's already stored.
+- **Changing an existing fixture's contents?** Everyone with a warm volume
+  keeps the old one. Either use a new `seedKey` instead (preferred — it makes
+  the change reach real environments), or write an `IWorkItemMigration` if
+  the existing documents genuinely need rewriting.
+- **Running e2e locally against a seed change?** `docker compose down -v`
+  first. Without the `-v` the volume survives and you test the old fixture.
+
+This is deliberate, not a defect: seeds that silently mutated under a running
+environment would be far worse than seeds that only ever appear. The
+`ReAccreditationSeeder` RA-292 fixture is the worked example — it got its own
+`seedKey` rather than enriching `full-payload-verification` precisely so it
+would reach already-seeded environments.
 
 ## Example: re-accreditation module (RA-98)
 

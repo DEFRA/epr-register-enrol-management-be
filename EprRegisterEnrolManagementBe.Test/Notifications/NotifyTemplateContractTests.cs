@@ -1,9 +1,12 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Config;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using NSubstitute;
@@ -16,11 +19,11 @@ namespace EprRegisterEnrolManagementBe.Test.Notifications;
 /// asserts the captured keys SATISFY (are a superset of) the required
 /// placeholders declared in <see cref="NotifyTemplateContract"/>.
 ///
-/// The DulyMade notification is sent by <see cref="ReAccreditationDulyMadeHook"/>
-/// (auto-transition on task completion) rather than
-/// <see cref="ReAccreditationNotificationHook"/> (explicit action), so
-/// <see cref="DulyMade_personalisation_satisfies_template_contract"/> drives
-/// it through that hook separately.
+/// RA-316: every lifecycle event now goes through
+/// <see cref="ReAccreditationNotificationHook"/>, DulyMade included. It
+/// previously had a second sender — an auto-transition hook with its own copy of
+/// the send logic — which needed a separate contract test; folding it into the
+/// table below is what removed that duplication.
 /// </summary>
 public class NotifyTemplateContractTests
 {
@@ -35,8 +38,11 @@ public class NotifyTemplateContractTests
     /// Each lifecycle event handled by <c>ReAccreditationNotificationHook</c>:
     /// the action id (null = submission), the template key it maps to, and
     /// whether it needs an SLA clock stamped on the item.
-    /// Note: duly-make is handled by <c>ReAccreditationDulyMadeHook</c> and
-    /// tested separately in <see cref="DulyMade_personalisation_satisfies_template_contract"/>.
+    /// RA-316: duly-make is now in this table rather than tested separately.
+    /// It used to be sent by the deleted <c>ReAccreditationDulyMadeHook</c>,
+    /// which hand-rolled its own copy of the send logic and so needed its own
+    /// contract test; it now routes through the same generic hook path as every
+    /// other lifecycle event, which is the point of the change.
     /// RA-211: reject is deliberately absent — it no longer sends any
     /// notification (see ReAccreditationNotificationHookTests.
     /// OnActionAppliedAsync_reject_does_not_call_notify_client).
@@ -45,6 +51,7 @@ public class NotifyTemplateContractTests
         new()
         {
             { null, "SubmissionConfirmation", false },
+            { "duly-make", "DulyMade", true },
             { "payment-received", "AssessmentInProgress", false },
             { "query-during-assessment", "Queried", false },
             { "sla-extend", "SlaExtended", true },
@@ -81,12 +88,21 @@ public class NotifyTemplateContractTests
         var regulatorMailboxResolver = Substitute.For<IRegulatorMailboxResolver>();
         regulatorMailboxResolver.Resolve(Arg.Any<Nation?>()).Returns((string?)null);
         var persistence = Substitute.For<IWorkItemPersistence>();
+        // RA-291: a configured operator-service URL, because this contract
+        // asserts required placeholders are non-empty — i.e. it describes a
+        // correctly-configured environment. The unset/blank degradation to an
+        // empty operator_service_link is covered by
+        // ReAccreditationNotificationHookTests.
         var sut = new ReAccreditationNotificationHook(
             notifyClient,
             auditAppender,
             regulatorMailboxResolver,
             persistence,
-            NullLogger<ReAccreditationNotificationHook>.Instance
+            NullLogger<ReAccreditationNotificationHook>.Instance,
+            Options.Create(new OperatorServiceConfig
+            {
+                BaseUrl = "https://operator.example.gov.uk"
+            })
         );
 
         if (actionId is null)
@@ -134,68 +150,6 @@ public class NotifyTemplateContractTests
         }
     }
 
-    [Fact]
-    public async Task DulyMade_personalisation_satisfies_template_contract()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var persistence = Substitute.For<IWorkItemPersistence>();
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg"));
-
-        var workItem = BuildRepresentativeWorkItem(false);
-        var sut = new ReAccreditationDulyMadeHook(
-            persistence,
-            notifyClient,
-            auditAppender,
-            new FakeTimeProvider(),
-            NullLogger<ReAccreditationDulyMadeHook>.Instance
-        );
-
-        await sut.OnAllTasksCompletedAsync(workItem, "submitted", s_user, ct);
-
-        Assert.NotNull(captured);
-
-        const string templateKey = "DulyMade";
-        var required = NotifyTemplateContract.RequiredPlaceholders[templateKey];
-        var missing = required.Where(key => !captured!.ContainsKey(key)).ToList();
-
-        Assert.True(
-            missing.Count == 0,
-            $"Template '{templateKey}' (duly-make auto-transition) is missing required "
-                + $"personalisation placeholder(s): {string.Join(", ", missing)}. "
-                + $"Supplied keys: {string.Join(", ", captured!.Keys.OrderBy(k => k))}."
-        );
-
-        var allowed = NotifyTemplateContract.AllowedPlaceholders[templateKey];
-        var surplus = captured!.Keys.Where(key => !allowed.Contains(key)).ToList();
-
-        Assert.True(
-            surplus.Count == 0,
-            $"Template '{templateKey}' (duly-make auto-transition) supplies "
-                + $"surplus personalisation placeholder(s) Notify would reject: "
-                + $"{string.Join(", ", surplus)}. "
-                + $"Allowed keys: {string.Join(", ", allowed.OrderBy(k => k))}."
-        );
-
-        foreach (var key in required)
-        {
-            Assert.False(
-                string.IsNullOrEmpty(captured![key]),
-                $"Required placeholder '{key}' for template '{templateKey}' was empty."
-            );
-        }
-    }
-
     private static WorkItem BuildRepresentativeWorkItem(bool needsSlaClock)
     {
         var payload = new BsonDocument
@@ -203,6 +157,15 @@ public class NotifyTemplateContractTests
             ["organisationName"] = "Acme Recycling Ltd",
             ["registrationNumber"] = "EX-2024-001",
             ["operatorEmail"] = "operator@example.com",
+            // RA-291: the Queried template requires a non-empty query_reason,
+            // read from the current query the query service stamps on the
+            // payload. Supply one so the queried contract rows exercise the
+            // non-empty path, mirroring the Decision/decision_notes note above.
+            ["currentQuery"] = new BsonDocument
+            {
+                ["reason"] = "Please confirm the tonnage figures.",
+                ["sections"] = new BsonArray { "prn-tonnage" },
+            },
         };
 
         return new WorkItem

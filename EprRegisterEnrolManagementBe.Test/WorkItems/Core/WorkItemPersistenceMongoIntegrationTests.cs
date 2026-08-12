@@ -122,7 +122,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_seven_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_eight_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -138,7 +138,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(7, keyDocs.Count);
+        Assert.Equal(8, keyDocs.Count);
         Assert.Contains(keyDocs, k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"stateId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"assignedToId\" : 1") && k.Contains("\"submittedAt\" : -1"));
@@ -150,6 +150,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Contains(keyDocs, k => k.Contains("\"_fts\" : \"text\""));
         // Ascending index for applicationReference prefix search.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.applicationReference\" : 1"));
+        // RA-311/MBE-3: ascending index backing the operatorApplicationId
+        // idempotent-submit lookup.
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorApplicationId\" : 1"));
 
         // RA-219: that index must be UNIQUE (enforce one ref per work item /
         // give the engine a collision signal) and SPARSE (legacy docs without
@@ -158,6 +161,14 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             i["key"].AsBsonDocument.Contains("payload.applicationReference"));
         Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
         Assert.True(appRefIndex.GetValue("sparse", false).ToBoolean());
+
+        // RA-311/MBE-3: same UNIQUE + SPARSE contract for operatorApplicationId
+        // — one work item per operator application id, but legacy/manual
+        // items without the field are never constrained.
+        var operatorApplicationIdIndex = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("payload.operatorApplicationId"));
+        Assert.True(operatorApplicationIdIndex.GetValue("unique", false).ToBoolean());
+        Assert.True(operatorApplicationIdIndex.GetValue("sparse", false).ToBoolean());
     }
 
     [Fact]
@@ -305,6 +316,255 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Empty(item.AuditLog);
     }
 
+    // ─────────────────────── RA-324 filter + sort (real Mongo) ───────────────────────
+
+    private async Task SeedAsync(
+        string organisationName,
+        string? operatorOrganisationId = null,
+        string? material = null,
+        string stateId = "submitted",
+        int submittedMinutesAgo = 0,
+        WorkItemSlaClock? slaClock = null)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var payload = new BsonDocument { ["organisationName"] = organisationName };
+        if (operatorOrganisationId is not null)
+        {
+            payload["operatorOrganisationId"] = operatorOrganisationId;
+        }
+        if (material is not null)
+        {
+            payload["material"] = material;
+        }
+        var item = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = stateId,
+            SubmittedAt = now.AddMinutes(-submittedMinutesAgo),
+            LastModifiedAt = now,
+            Payload = payload,
+            SlaClock = slaClock
+        };
+        await _persistence.CreateAsync(item, TestContext.Current.CancellationToken);
+    }
+
+    private static string[] OrgOrder(WorkItemPage page) =>
+        page.Items.Select(i => i.Payload["organisationName"].AsString).ToArray();
+
+    [Fact]
+    public async Task QueryAsync_default_sort_is_newest_submitted_first()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("older", submittedMinutesAgo: 60);
+        await SeedAsync("newer", submittedMinutesAgo: 0);
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(), ct);
+
+        Assert.Equal(new[] { "newer", "older" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_organisation_orders_case_insensitively_ascending()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("banana");
+        await SeedAsync("Apple");
+        await SeedAsync("Cherry");
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "organisation"), ct);
+
+        Assert.Equal(new[] { "Apple", "banana", "Cherry" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_organisation_descending_reverses()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("banana");
+        await SeedAsync("Apple");
+        await SeedAsync("Cherry");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "organisation", SortDescending: true), ct);
+
+        Assert.Equal(new[] { "Cherry", "banana", "Apple" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_status_orders_by_workflow_rank()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Seeded out of workflow order. All non-terminal, but since RA-313 that
+        // is incidental — a bare query no longer filters terminal states out.
+        await SeedAsync("q", stateId: "queried");
+        await SeedAsync("aw", stateId: "awaiting-decision");
+        await SeedAsync("s", stateId: "submitted");
+        await SeedAsync("a", stateId: "assessment-in-progress");
+        await SeedAsync("d", stateId: "duly-made");
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "status"), ct);
+
+        Assert.Equal(
+            new[] { "submitted", "duly-made", "assessment-in-progress", "awaiting-decision", "queried" },
+            page.Items.Select(i => i.StateId).ToArray());
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_status_descending_reverses_rank_with_submitted_tiebreak()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Two items share the 'submitted' rank so the submittedAt-desc tiebreak
+        // is exercised end-to-end, not just at the BSON level.
+        await SeedAsync("q", stateId: "queried");
+        await SeedAsync("a", stateId: "assessment-in-progress");
+        await SeedAsync("s-old", stateId: "submitted", submittedMinutesAgo: 60);
+        await SeedAsync("s-new", stateId: "submitted", submittedMinutesAgo: 0);
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "status", SortDescending: true), ct);
+
+        // Descending workflow rank: queried(4), assessment-in-progress(2), then
+        // the two submitted(0) items broken newest-first by the tiebreak.
+        Assert.Equal(new[] { "q", "a", "s-new", "s-old" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sorted_path_paginates_and_reports_full_total()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // Five items, page size 2, sorted A→Z: exercises the aggregation
+        // $sort → $unset → $skip → $limit across more than one page and checks
+        // TotalCount reflects the full filtered count, not the page size — so a
+        // swapped $sort/$limit order or off-by-one $skip cannot stay green.
+        foreach (var name in new[] { "e", "a", "d", "b", "c" })
+        {
+            await SeedAsync(name);
+        }
+
+        var page1 = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "organisation", Page: 1, PageSize: 2), ct);
+        var page2 = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "organisation", Page: 2, PageSize: 2), ct);
+        var page3 = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "organisation", Page: 3, PageSize: 2), ct);
+
+        Assert.Equal(new[] { "a", "b" }, OrgOrder(page1));
+        Assert.Equal(new[] { "c", "d" }, OrgOrder(page2));
+        Assert.Equal(new[] { "e" }, OrgOrder(page3));
+        Assert.Equal(5, page1.TotalCount);
+        Assert.Equal(5, page2.TotalCount);
+        Assert.Equal(2, page1.PageSize);
+        Assert.Equal(2, page2.Page);
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_due_date_soonest_first_and_no_clock_last()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        // Same start, longer target => later deadline: proves the sort reflects
+        // targetDuration (SLA extensions), not just startedAt.
+        await SeedAsync("B", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(30) });
+        await SeedAsync("A", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(10) });
+        await SeedAsync("NoClock", stateId: "submitted", slaClock: null);
+        await SeedAsync("C", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now.AddDays(-5), TargetDuration = TimeSpan.FromDays(84) });
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "due-date"), ct);
+
+        // A (now+10), B (now+30), C (now+79), then the clock-less item last.
+        Assert.Equal(new[] { "A", "B", "C", "NoClock" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sort_due_date_descending_keeps_no_clock_item_last()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        await SeedAsync("B", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(30) });
+        await SeedAsync("A", stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(10) });
+        await SeedAsync("NoClock", stateId: "submitted", slaClock: null);
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "due-date", SortDescending: true), ct);
+
+        // Latest deadline first, but the clock-less item still sorts last.
+        Assert.Equal(new[] { "B", "A", "NoClock" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_sorted_path_still_strips_notes_and_audit_log()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        var item = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            Payload = new BsonDocument { ["organisationName"] = "Acme" },
+            Notes = { new WorkItemNote { Text = "secret", CreatedAt = now, CreatedBy = "u", CreatedByName = "U" } },
+            AuditLog = { new WorkItemAuditEntry { Action = "submitted", ActionDisplayName = "Submitted", CreatedAt = now, CreatedBy = "u", CreatedByName = "U" } }
+        };
+        await _persistence.CreateAsync(item, ct);
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "organisation"), ct);
+
+        var got = Assert.Single(page.Items);
+        // Projection preserved on the aggregation path, and the computed sort
+        // fields were $unset so the document still deserialises cleanly.
+        Assert.Empty(got.Notes);
+        Assert.Empty(got.AuditLog);
+        Assert.Equal("Acme", got.Payload["organisationName"].AsString);
+    }
+
+    [Fact]
+    public async Task QueryAsync_material_filter_matches_case_insensitively()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("p", material: "plastic");
+        await SeedAsync("g", material: "glass");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Materials: new[] { "PLASTIC" }), ct);
+
+        var got = Assert.Single(page.Items);
+        Assert.Equal("plastic", got.Payload["material"].AsString);
+    }
+
+    [Fact]
+    public async Task QueryAsync_material_filter_matches_any_of_multiple_selections()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("p", material: "plastic");
+        await SeedAsync("g", material: "glass");
+        await SeedAsync("w", material: "wood");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Materials: new[] { "plastic", "glass" }, Sort: "organisation"), ct);
+
+        Assert.Equal(new[] { "g", "p" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_organisation_filter_matches_name_or_operator_org_id()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("Acme Recycling", operatorOrganisationId: "ORG-111-001");
+        await SeedAsync("Beta Metals", operatorOrganisationId: "ORG-222-002");
+
+        var byName = await _persistence.QueryAsync(new WorkItemQuery(Organisation: "acme"), ct);
+        Assert.Equal("Acme Recycling", Assert.Single(byName.Items).Payload["organisationName"].AsString);
+
+        var byOrgId = await _persistence.QueryAsync(new WorkItemQuery(Organisation: "ORG-222"), ct);
+        Assert.Equal("Beta Metals", Assert.Single(byOrgId.Items).Payload["organisationName"].AsString);
+    }
+
     [Fact]
     public async Task ReplaceAsync_throws_concurrency_exception_when_version_does_not_match()
     {
@@ -388,5 +648,203 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         var page = await _persistence.QueryAsync(
             new WorkItemQuery(), TestContext.Current.CancellationToken);
         Assert.Equal(1, page.TotalCount);
+    }
+    // ---------------------- RA-291 SetPayloadFieldAsync ----------------------
+
+    [Fact]
+    public async Task SetPayloadFieldAsync_sets_only_the_named_field_and_leaves_the_rest_intact()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = s_seedNow.UtcDateTime;
+        var workItem = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            SubmittedBy = "client-1",
+        };
+        workItem.ReplacePayload(new BsonDocument
+        {
+            ["organisationName"] = "Acme Recycling Ltd",
+            ["applicationReference"] = "RA-000000123",
+        });
+        await _persistence.CreateAsync(workItem, ct);
+        var versionBefore = workItem.Version;
+
+        var matched = await _persistence.SetPayloadFieldAsync(
+            workItem.Id, "currentQuery", new BsonDocument { ["reason"] = "why" }, ct);
+
+        Assert.True(matched);
+        var fetched = await _persistence.GetByIdAsync(workItem.Id, ct);
+        Assert.Equal("why", fetched!.Payload["currentQuery"]["reason"].AsString);
+        // Existing keys untouched, absent keys still absent — the guarantee
+        // the whole method exists for (RA-291).
+        Assert.Equal("Acme Recycling Ltd", fetched.Payload["organisationName"].AsString);
+        Assert.Equal("RA-000000123", fetched.Payload["applicationReference"].AsString);
+        Assert.False(fetched.Payload.Contains("accreditationId"));
+        // Deliberately outside the optimistic-concurrency protocol.
+        Assert.Equal(versionBefore, fetched.Version);
+    }
+
+    [Fact]
+    public async Task SetPayloadFieldAsync_returns_false_when_no_work_item_matches()
+    {
+        var matched = await _persistence.SetPayloadFieldAsync(
+            Guid.NewGuid(), "currentQuery", BsonNull.Value, TestContext.Current.CancellationToken);
+
+        Assert.False(matched);
+    }
+
+    [Theory]
+    // Dotted paths would reach into a nested document ...
+    [InlineData("a.b")]
+    // ... and a $-prefixed name would be read as an update operator, letting a
+    // caller rewrite a different part of the envelope entirely.
+    [InlineData("$set")]
+    public async Task SetPayloadFieldAsync_rejects_field_names_that_escape_the_payload(
+        string fieldName)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _persistence.SetPayloadFieldAsync(
+                Guid.NewGuid(), fieldName, BsonNull.Value, TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SetPayloadFieldAsync_rejects_a_blank_field_name(string fieldName)
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _persistence.SetPayloadFieldAsync(
+                Guid.NewGuid(), fieldName, BsonNull.Value, TestContext.Current.CancellationToken));
+    }
+
+    // A C# null is rejected outright so it can't be written as an explicit
+    // BSON null by accident; a deliberate null must be BsonNull.Value.
+    [Fact]
+    public async Task SetPayloadFieldAsync_rejects_a_null_value()
+    {
+        await Assert.ThrowsAsync<ArgumentNullException>(() =>
+            _persistence.SetPayloadFieldAsync(
+                Guid.NewGuid(), "currentQuery", null!, TestContext.Current.CancellationToken));
+    }
+    // ------------------- RA-342 legacy snapshot tolerance -------------------
+
+    /// <summary>
+    /// RA-342: a work item whose frozen <c>templateSnapshot</c> was persisted
+    /// under an older template carries a since-removed <c>requiredRoles</c>
+    /// element on a transition (role tiering was dropped in RA-323). Before the
+    /// fix, the default <c>BsonClassMapSerializer</c> rejected that unknown
+    /// element with a <see cref="FormatException"/>, failing the whole worklist
+    /// batch with a 500. Both the projected worklist query and the single-item
+    /// fetch must now silently ignore the stray elements and return the item.
+    ///
+    /// The raw BSON is inserted directly (bypassing the typed serializer) so
+    /// the stray elements land exactly as a legacy document holds them. Stray
+    /// elements are seeded on every annotated snapshot type — the transition
+    /// (the class in the reported stack trace), a state, a task and the
+    /// snapshot root — so this single case exercises all four
+    /// <c>[BsonIgnoreExtraElements]</c> annotations at once: if any were
+    /// missing, deserialization would still throw.
+    /// </summary>
+    [Fact]
+    public async Task QueryAsync_and_GetById_tolerate_a_legacy_snapshot_with_removed_fields()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        var id = Guid.NewGuid();
+
+        // Camel-cased element names to match the CamelCaseElementNameConvention
+        // the production serializers register (MongoConversions).
+        var legacyDoc = new BsonDocument
+        {
+            ["_id"] = id.ToString(),
+            ["typeId"] = "re-accreditation",
+            ["stateId"] = "submitted",
+            ["submittedAt"] = new BsonDateTime(now),
+            ["lastModifiedAt"] = new BsonDateTime(now),
+            ["templateVersion"] = "1",
+            ["version"] = 0,
+            ["templateSnapshot"] = new BsonDocument
+            {
+                ["templateVersion"] = "1",
+                // Snapshot-root stray element (WorkItemTemplateSnapshot).
+                ["retiredSnapshotField"] = "legacy",
+                ["states"] = new BsonArray
+                {
+                    // WorkItemState.Id / WorkItemTask.Id map to the "_id" element
+                    // (default NamedIdMemberConvention), not "id".
+                    new BsonDocument
+                    {
+                        ["_id"] = "submitted",
+                        ["displayName"] = "Submitted",
+                        ["isTerminal"] = false,
+                        // State stray element (WorkItemState).
+                        ["colour"] = "amber"
+                    },
+                    new BsonDocument
+                    {
+                        ["_id"] = "approved",
+                        ["displayName"] = "Approved",
+                        ["isTerminal"] = true
+                    }
+                },
+                ["transitions"] = new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        ["actionId"] = "approve",
+                        ["displayName"] = "Approve",
+                        ["fromStateId"] = "submitted",
+                        ["toStateId"] = "approved",
+                        ["requiresAllTasksComplete"] = true,
+                        // The exact element from the reported stack trace: an
+                        // array of role names on a transition (WorkItemTransition).
+                        ["requiredRoles"] = new BsonArray { "regulator-admin", "regulator-approver" }
+                    }
+                },
+                ["tasksByState"] = new BsonDocument
+                {
+                    ["submitted"] = new BsonArray
+                    {
+                        new BsonDocument
+                        {
+                            ["_id"] = "task-one",
+                            ["displayName"] = "Task One",
+                            // Task stray element (WorkItemTask).
+                            ["mandatory"] = true
+                        }
+                    }
+                }
+            }
+        };
+
+        // Insert the raw document so the stray elements are stored verbatim,
+        // exactly as a legacy work item holds them.
+        await _clientFactory.GetCollection<BsonDocument>("workItems")
+            .InsertOneAsync(legacyDoc, cancellationToken: ct);
+
+        // Projected worklist path (WorkItemPersistence.QueryAsync) — the code
+        // path in the reported 500. Must not throw and must return the item.
+        var page = await _persistence.QueryAsync(new WorkItemQuery(), ct);
+        var listed = Assert.Single(page.Items);
+        Assert.Equal(id, listed.Id);
+        Assert.NotNull(listed.TemplateSnapshot);
+        // Everything else deserialized normally, the stray fields simply ignored.
+        var transition = Assert.Single(listed.TemplateSnapshot!.Transitions);
+        Assert.Equal("approve", transition.ActionId);
+        Assert.Equal("submitted", transition.FromStateId);
+
+        // Single-item fetch path (WorkItemPersistence.GetByIdAsync) must be
+        // equally tolerant.
+        var fetched = await _persistence.GetByIdAsync(id, ct);
+        Assert.NotNull(fetched);
+        Assert.Equal(id, fetched!.Id);
+        Assert.NotNull(fetched.TemplateSnapshot);
+        Assert.Equal("Submitted", Assert.Single(
+            fetched.TemplateSnapshot!.States, s => s.Id == "submitted").DisplayName);
+        Assert.Equal("task-one",
+            Assert.Single(fetched.TemplateSnapshot.GetTasksForState("submitted")).Id);
     }
 }

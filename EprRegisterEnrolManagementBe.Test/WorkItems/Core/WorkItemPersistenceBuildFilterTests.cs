@@ -16,43 +16,55 @@ public class WorkItemPersistenceBuildFilterTests
     private static readonly IBsonSerializer<WorkItem> s_workItemSerializer =
         BsonSerializer.SerializerRegistry.GetSerializer<WorkItem>();
 
-    // The terminal-state set the production registry would expose for the
-    // shipping module (re-accreditation): approved/rejected/withdrawn.
-    private static readonly IReadOnlySet<string> s_terminalStateIds =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "approved", "rejected", "withdrawn"
-        };
-
     private static BsonDocument Render(WorkItemQuery query)
     {
-        var filter = WorkItemPersistence.BuildFilter(query, s_terminalStateIds);
+        var filter = WorkItemPersistence.BuildFilter(query);
         return filter.Render(new RenderArgs<WorkItem>(s_workItemSerializer, BsonSerializer.SerializerRegistry));
     }
 
     [Fact]
-    public void DefaultQueryExcludesAllTerminalStates()
+    public void DefaultQueryFiltersNothing()
     {
-        // IncludeArchived defaults to false — every terminal state is hidden.
+        // RA-313: a bare query renders an EMPTY filter. Before RA-313 this
+        // emitted a $nin excluding every terminal state, which is exactly what
+        // kept withdrawn applications off the regulator's worklist.
         var doc = Render(new WorkItemQuery());
-
-        var excluded = doc["stateId"]["$nin"].AsBsonArray.Select(v => v.AsString).ToHashSet();
-        Assert.Equal(s_terminalStateIds, excluded);
-    }
-
-    [Fact]
-    public void IncludeArchivedTrueRendersEmptyFilter()
-    {
-        var doc = Render(new WorkItemQuery(IncludeArchived: true));
 
         Assert.Equal(new BsonDocument(), doc);
     }
 
     [Fact]
+    public void IncludeArchivedMakesNoDifferenceToTheFilter()
+    {
+        // RA-313 retains IncludeArchived on the query (management-fe still
+        // sends it, and the migrations pass true) but it no longer selects
+        // anything. Both values must render identically — if this ever fails,
+        // an archive exclusion has crept back in.
+        Assert.Equal(
+            Render(new WorkItemQuery(IncludeArchived: true)),
+            Render(new WorkItemQuery(IncludeArchived: false)));
+    }
+
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    public void TerminalStateIsNeverExcluded(string terminalStateId)
+    {
+        // RA-313 AC01, at the filter level: nothing anywhere in the rendered
+        // filter may exclude a terminal state, with or without IncludeArchived.
+        foreach (var includeArchived in new[] { true, false })
+        {
+            var doc = Render(new WorkItemQuery(IncludeArchived: includeArchived));
+
+            Assert.DoesNotContain(terminalStateId, doc.ToJson());
+        }
+    }
+
+    [Fact]
     public void TypeIdsRenderAsInClause()
     {
-        // Use IncludeArchived: true to isolate the typeId assertion.
-        var doc = Render(new WorkItemQuery(TypeIds: new[] { "re-accreditation", "registration" }, IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(TypeIds: new[] { "re-accreditation", "registration" }));
 
         var expected = new BsonDocument("typeId", new BsonDocument("$in",
             new BsonArray { "re-accreditation", "registration" }));
@@ -62,87 +74,48 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void StateIdsRenderAsInClause()
     {
-        // Use IncludeArchived: true to isolate the stateId assertion.
-        var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted", "in-review" }, IncludeArchived: true));
+        // RA-313: filtering to non-terminal states used to ALSO emit a $nin of
+        // every terminal state, so this could only assert the whole document
+        // once IncludeArchived: true had suppressed it. The caller's selection
+        // is now the entire stateId clause — what you ask for is what you get.
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted", "in-review" }));
 
         var expected = new BsonDocument("stateId", new BsonDocument("$in",
             new BsonArray { "submitted", "in-review" }));
         Assert.Equal(expected, doc);
     }
 
-    [Fact]
-    public void StateIdsWithArchiveExclusionCombinesBothConditionsOnStateId()
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    public void FilteringToASingleTerminalStateRendersThatStateAlone(string terminalStateId)
     {
-        // The MongoDB C# driver merges $in and $nin on the same field into a
-        // single sub-document when combining them with And(), so the rendered
-        // filter does NOT use an explicit $and wrapper. Requesting a
-        // non-terminal state ("submitted") still excludes all terminal states.
-        var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted" }));
+        // The "Withdrawn" status checkbox on the Applications page lands here.
+        // It worked before RA-313 only because of a special case that spared
+        // explicitly-requested terminal states from the $nin; with the
+        // exclusion gone it is now just an ordinary $in.
+        var doc = Render(new WorkItemQuery(StateIds: new[] { terminalStateId }));
 
         var stateDoc = doc["stateId"].AsBsonDocument;
-        Assert.Equal("submitted", stateDoc["$in"].AsBsonArray[0].AsString);
-        var excluded = stateDoc["$nin"].AsBsonArray.Select(v => v.AsString).ToHashSet();
-        Assert.Equal(s_terminalStateIds, excluded);
+        Assert.Equal(terminalStateId, stateDoc["$in"].AsBsonArray[0].AsString);
+        Assert.False(stateDoc.Contains("$nin"), "RA-313: no terminal-state exclusion.");
     }
 
     [Fact]
-    public void ExplicitlyRequestedTerminalStateIsNotExcluded()
+    public void MixedTerminalAndActiveStateIdsRenderAsOneInClause()
     {
-        // When the caller explicitly filters to StateIds=["approved"], adding
-        // approved to $nin would make the query unsatisfiable. Approved must NOT
-        // be excluded; the other terminal states still are.
-        var doc = Render(new WorkItemQuery(StateIds: new[] { "approved" }));
+        var doc = Render(new WorkItemQuery(StateIds: new[] { "withdrawn", "submitted" }));
 
-        var stateDoc = doc["stateId"].AsBsonDocument;
-        Assert.True(stateDoc.Contains("$in"), "Expected $in clause for approved.");
-        var excluded = stateDoc["$nin"].AsBsonArray.Select(v => v.AsString).ToHashSet();
-        Assert.DoesNotContain("approved", excluded);
-        Assert.Contains("rejected", excluded);
-        Assert.Contains("withdrawn", excluded);
-    }
-
-    [Fact]
-    public void RequestingEveryTerminalStateOmitsExclusionEntirely()
-    {
-        // If the caller asks for all terminal states, there is nothing left to
-        // exclude, so no $nin clause is emitted (an empty $nin is pointless and
-        // would let the driver fail to collapse the filter).
-        var doc = Render(new WorkItemQuery(StateIds: new[] { "approved", "rejected", "withdrawn" }));
-
-        var stateDoc = doc["stateId"].AsBsonDocument;
-        Assert.True(stateDoc.Contains("$in"), "Expected $in clause.");
-        Assert.False(stateDoc.Contains("$nin"), "No $nin when every terminal state is explicitly requested.");
-    }
-
-    [Fact]
-    public void ExplicitlyRequestedTerminalStateAmongOthersIsNotExcluded()
-    {
-        var doc = Render(new WorkItemQuery(StateIds: new[] { "approved", "submitted" }));
-
-        var stateDoc = doc["stateId"].AsBsonDocument;
-        var excluded = stateDoc["$nin"].AsBsonArray.Select(v => v.AsString).ToHashSet();
-        Assert.DoesNotContain("approved", excluded);
-        Assert.Contains("rejected", excluded);
-        Assert.Contains("withdrawn", excluded);
-    }
-
-    [Fact]
-    public void EmptyTerminalSetOmitsExclusion()
-    {
-        // Defensive: a registry with no terminal states must not emit a filter
-        // clause (an empty $nin would match everything but is wasteful).
-        var filter = WorkItemPersistence.BuildFilter(
-            new WorkItemQuery(),
-            new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-        var doc = filter.Render(new RenderArgs<WorkItem>(s_workItemSerializer, BsonSerializer.SerializerRegistry));
-
-        Assert.Equal(new BsonDocument(), doc);
+        var selected = doc["stateId"]["$in"].AsBsonArray.Select(v => v.AsString).ToList();
+        Assert.Equal(new[] { "withdrawn", "submitted" }, selected);
+        Assert.False(doc["stateId"].AsBsonDocument.Contains("$nin"), "RA-313: no terminal-state exclusion.");
     }
 
     [Fact]
     public void SearchRendersCaseInsensitiveOrAcrossIdAndSubmittedBy()
     {
-        var doc = Render(new WorkItemQuery(Search: "  alice  ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(Search: "  alice  "));
 
         // Trimmed search needle.
         var pattern = new BsonRegularExpression("alice", "i");
@@ -155,7 +128,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void SearchEscapesRegexMetacharacters()
     {
-        var doc = Render(new WorkItemQuery(Search: "a.b*c", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(Search: "a.b*c"));
 
         var or = doc["$or"].AsBsonArray;
         var rendered = or[0]["_id"].AsBsonRegularExpression.Pattern;
@@ -168,7 +141,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankSearchIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(Search: "   ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(Search: "   "));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -176,7 +149,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void AssigneeIdAloneRendersAsEquality()
     {
-        var doc = Render(new WorkItemQuery(AssigneeId: " user-1 ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(AssigneeId: " user-1 "));
 
         Assert.Equal("user-1", doc["assignedToId"].AsString);
     }
@@ -184,7 +157,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void UnassignedOnlyAloneRendersAsNullEquality()
     {
-        var doc = Render(new WorkItemQuery(UnassignedOnly: true, IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(UnassignedOnly: true));
 
         Assert.Equal(BsonNull.Value, doc["assignedToId"]);
     }
@@ -192,7 +165,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void AssigneeIdWithUnassignedOnlyRendersAsOr()
     {
-        var doc = Render(new WorkItemQuery(AssigneeId: "user-1", UnassignedOnly: true, IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(AssigneeId: "user-1", UnassignedOnly: true));
 
         var or = doc["$or"].AsBsonArray;
         Assert.Equal(2, or.Count);
@@ -203,7 +176,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankAssigneeIdIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(AssigneeId: "   ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(AssigneeId: "   "));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -211,7 +184,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void SubmittedByRendersAsEquality()
     {
-        var doc = Render(new WorkItemQuery(SubmittedBy: " bob ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(SubmittedBy: " bob "));
 
         Assert.Equal("bob", doc["submittedBy"].AsString);
     }
@@ -219,7 +192,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankSubmittedByIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(SubmittedBy: "   ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(SubmittedBy: "   "));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -227,14 +200,11 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void MultipleClausesAreCombined()
     {
-        // Use IncludeArchived: true so the only stateId clause is the $in from
-        // StateIds, which lets the driver collapse everything into a flat doc.
         var doc = Render(new WorkItemQuery(
             TypeIds: new[] { "re-accreditation" },
             StateIds: new[] { "submitted" },
             AssigneeId: "user-1",
-            SubmittedBy: "bob",
-            IncludeArchived: true));
+            SubmittedBy: "bob"));
 
         Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
         Assert.Equal("submitted", doc["stateId"]["$in"].AsBsonArray[0].AsString);
@@ -247,7 +217,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void NationsRendersAsInClauseOnPayloadNation()
     {
-        var doc = Render(new WorkItemQuery(Nations: new[] { "England", "Scotland" }, IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(Nations: new[] { "England", "Scotland" }));
 
         var inArr = doc["payload.nation"]["$in"].AsBsonArray;
         Assert.Equal(2, inArr.Count);
@@ -258,7 +228,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void SingleNationRendersAsInClause()
     {
-        var doc = Render(new WorkItemQuery(Nations: new[] { "Wales" }, IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(Nations: new[] { "Wales" }));
 
         Assert.Equal("Wales", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
     }
@@ -266,7 +236,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void EmptyNationsIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(Nations: Array.Empty<string>(), IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(Nations: Array.Empty<string>()));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -274,7 +244,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void NullNationsIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(Nations: null, IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(Nations: null));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -284,8 +254,7 @@ public class WorkItemPersistenceBuildFilterTests
     {
         var doc = Render(new WorkItemQuery(
             TypeIds: new[] { "re-accreditation" },
-            Nations: new[] { "England" },
-            IncludeArchived: true));
+            Nations: new[] { "England" }));
 
         Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
         Assert.Equal("England", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
@@ -296,7 +265,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void OrgIdRendersAsCaseInsensitiveRegexOnApplicationReference()
     {
-        var doc = Render(new WorkItemQuery(OrgId: "  EPR-123  ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(OrgId: "  EPR-123  "));
 
         var regex = doc["payload.applicationReference"].AsBsonRegularExpression;
         Assert.Contains("EPR-123", regex.Pattern);
@@ -306,7 +275,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void OrgIdEscapesRegexMetacharacters()
     {
-        var doc = Render(new WorkItemQuery(OrgId: "a.b*", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(OrgId: "a.b*"));
 
         var pattern = doc["payload.applicationReference"].AsBsonRegularExpression.Pattern;
         Assert.Contains(@"\.", pattern);
@@ -316,7 +285,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankOrgIdIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(OrgId: "   ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(OrgId: "   "));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -324,7 +293,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void RegistrationIdRendersAsCaseInsensitiveRegexOnId()
     {
-        var doc = Render(new WorkItemQuery(RegistrationId: "  abc-123  ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(RegistrationId: "  abc-123  "));
 
         var regex = doc["_id"].AsBsonRegularExpression;
         Assert.Contains("abc-123", regex.Pattern);
@@ -334,7 +303,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankRegistrationIdIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(RegistrationId: "   ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(RegistrationId: "   "));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -342,7 +311,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void OrgNameRendersAsTextSearchPhrase()
     {
-        var doc = Render(new WorkItemQuery(OrgName: "  Acme Ltd  ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(OrgName: "  Acme Ltd  "));
 
         // Quoted phrase prevents OR word-matching against common words.
         Assert.Equal("\"Acme Ltd\"", doc["$text"]["$search"].AsString);
@@ -351,7 +320,104 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void BlankOrgNameIsIgnored()
     {
-        var doc = Render(new WorkItemQuery(OrgName: "   ", IncludeArchived: true));
+        var doc = Render(new WorkItemQuery(OrgName: "   "));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    // ──────────────────────────── Organisation (name or ID) ─────────────────────────────
+
+    [Fact]
+    public void OrganisationRendersAsCaseInsensitiveOrAcrossNameAndOperatorOrgId()
+    {
+        var doc = Render(new WorkItemQuery(Organisation: "  Acme  "));
+
+        var or = doc["$or"].AsBsonArray;
+        Assert.Equal(2, or.Count);
+        var nameRegex = or[0]["payload.organisationName"].AsBsonRegularExpression;
+        var idRegex = or[1]["payload.operatorOrganisationId"].AsBsonRegularExpression;
+        // Trimmed, case-insensitive substring (not anchored) on both fields.
+        Assert.Equal("Acme", nameRegex.Pattern);
+        Assert.Equal("i", nameRegex.Options);
+        Assert.Equal("Acme", idRegex.Pattern);
+        Assert.Equal("i", idRegex.Options);
+    }
+
+    [Fact]
+    public void OrganisationDoesNotMatchRegistrationIdOrWorkItemId()
+    {
+        // RA-324: reg-id is dropped from the combined box — it must not add an
+        // _id clause (that would resurrect registration-id findability).
+        var doc = Render(new WorkItemQuery(Organisation: "ORG-123"));
+
+        var or = doc["$or"].AsBsonArray;
+        Assert.All(or, clause => Assert.False(clause.AsBsonDocument.Contains("_id")));
+    }
+
+    [Fact]
+    public void OrganisationEscapesRegexMetacharacters()
+    {
+        var doc = Render(new WorkItemQuery(Organisation: "a.b*"));
+
+        var pattern = doc["$or"][0]["payload.organisationName"].AsBsonRegularExpression.Pattern;
+        Assert.Contains(@"\.", pattern);
+        Assert.Contains(@"\*", pattern);
+    }
+
+    [Fact]
+    public void BlankOrganisationIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(Organisation: "   "));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    // ──────────────────────────────── Materials ─────────────────────────────
+
+    [Fact]
+    public void SingleMaterialRendersAsAnchoredCaseInsensitiveRegex()
+    {
+        var doc = Render(new WorkItemQuery(Materials: new[] { "plastic" }));
+
+        var regex = doc["payload.material"].AsBsonRegularExpression;
+        // Anchored so it is an exact-token match, "i" so casing never hides it.
+        Assert.Equal("^plastic$", regex.Pattern);
+        Assert.Equal("i", regex.Options);
+    }
+
+    [Fact]
+    public void MultipleMaterialsRenderAsOrOfAnchoredRegexes()
+    {
+        var doc = Render(new WorkItemQuery(
+            Materials: new[] { "plastic", "glass" }));
+
+        var or = doc["$or"].AsBsonArray;
+        Assert.Equal(2, or.Count);
+        Assert.Equal("^plastic$", or[0]["payload.material"].AsBsonRegularExpression.Pattern);
+        Assert.Equal("^glass$", or[1]["payload.material"].AsBsonRegularExpression.Pattern);
+    }
+
+    [Fact]
+    public void MaterialEscapesRegexMetacharacters()
+    {
+        var doc = Render(new WorkItemQuery(Materials: new[] { "a.b" }));
+
+        var pattern = doc["payload.material"].AsBsonRegularExpression.Pattern;
+        Assert.Equal(@"^a\.b$", pattern);
+    }
+
+    [Fact]
+    public void EmptyMaterialsIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(Materials: Array.Empty<string>()));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void NullMaterialsIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(Materials: null));
 
         Assert.Equal(new BsonDocument(), doc);
     }

@@ -96,4 +96,55 @@ public sealed class MongoIndexReconcilerTests
         Assert.True(appRef.GetValue("unique", false).ToBoolean());
         Assert.True(appRef.GetValue("sparse", false).ToBoolean());
     }
+
+    /// <summary>
+    /// PR #72 review (RA-311): building a unique index over a field that
+    /// already carries duplicate values fails with a duplicate-key error
+    /// (code 11000) rather than the options-conflict codes handled above.
+    /// Left unhandled this propagates out of <c>EnsureIndexes</c> and, since
+    /// it runs from the <see cref="MongoService{T}"/> constructor, crashes
+    /// service startup for any environment that already has the duplicates
+    /// the new constraint is meant to prevent. This asserts the fallback
+    /// instead: the dirty index is skipped (with an error logged), while an
+    /// unrelated clean index in the same batch is still created.
+    /// </summary>
+    [Fact]
+    public async Task EnsureIndexes_skips_a_unique_index_that_existing_duplicates_violate()
+    {
+        var duplicateDocs = new[]
+        {
+            new WorkItem
+            {
+                TypeId = "test-type",
+                StateId = "state-1",
+                Payload = new BsonDocument { ["operatorApplicationId"] = "dup-1" },
+            },
+            new WorkItem
+            {
+                TypeId = "test-type",
+                StateId = "state-1",
+                Payload = new BsonDocument { ["operatorApplicationId"] = "dup-1" },
+            },
+        };
+        await _collection.InsertManyAsync(duplicateDocs, cancellationToken: TestContext.Current.CancellationToken);
+
+        var desired = new List<CreateIndexModel<WorkItem>>
+        {
+            new(Builders<WorkItem>.IndexKeys.Ascending(w => w.SubmittedBy)),
+            new(
+                Builders<WorkItem>.IndexKeys.Ascending("payload.operatorApplicationId"),
+                new CreateIndexOptions { Unique = true, Sparse = true }),
+        };
+
+        var dropped = MongoIndexReconciler.EnsureIndexes(
+            _collection, desired, NullLogger.Instance);
+
+        Assert.Empty(dropped);
+
+        var indexes = await (await _collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
+            .ToListAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains(indexes, i => i["key"].AsBsonDocument.Contains("submittedBy"));
+        Assert.DoesNotContain(indexes, i => i["key"].AsBsonDocument.Contains("payload.operatorApplicationId"));
+    }
 }

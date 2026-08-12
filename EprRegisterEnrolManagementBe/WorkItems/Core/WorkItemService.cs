@@ -161,7 +161,14 @@ public sealed record WorkItemEngineProjection(
     WorkItem WorkItem,
     string TemplateVersion,
     IReadOnlyCollection<WorkItemTaskProgress> Tasks,
-    IReadOnlyCollection<WorkItemTransition> AvailableActions
+    IReadOnlyCollection<WorkItemTransition> AvailableActions,
+    // RA-372: the state whose checklist Tasks actually contains. Almost always
+    // WorkItem.StateId, but a module may redirect it (see
+    // IWorkItemTaskStateResolver), and without this a consumer cannot tell
+    // that Tasks has stopped describing StateId. Defaults to null so callers
+    // constructing a projection directly are unaffected; Project always
+    // populates it.
+    string? TaskStateId = null
 );
 
 public sealed class WorkItemService : IWorkItemService
@@ -182,6 +189,7 @@ public sealed class WorkItemService : IWorkItemService
     private readonly IReadOnlyCollection<IWorkItemPostTaskHook> _postTaskHooks;
     private readonly TimeProvider _timeProvider;
     private readonly IApplicationReferenceGenerator _referenceGenerator;
+    private readonly IReadOnlyCollection<IWorkItemTaskStateResolver> _taskStateResolvers;
 
     public WorkItemService(
         IWorkItemRegistry registry,
@@ -190,7 +198,8 @@ public sealed class WorkItemService : IWorkItemService
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostTaskHook>? postTaskHooks = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
-        IApplicationReferenceGenerator? referenceGenerator = null
+        IApplicationReferenceGenerator? referenceGenerator = null,
+        IEnumerable<IWorkItemTaskStateResolver>? taskStateResolvers = null
     )
     {
         this._registry = registry;
@@ -200,6 +209,8 @@ public sealed class WorkItemService : IWorkItemService
         _postTaskHooks = postTaskHooks?.ToArray() ?? Array.Empty<IWorkItemPostTaskHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
         _referenceGenerator = referenceGenerator ?? new ApplicationReferenceGenerator();
+        _taskStateResolvers =
+            taskStateResolvers?.ToArray() ?? Array.Empty<IWorkItemTaskStateResolver>();
     }
 
     public async Task<WorkItemActionResult> SubmitAsync(
@@ -235,6 +246,42 @@ public sealed class WorkItemService : IWorkItemService
         )
         {
             payload["source"] = sourceVal;
+        }
+
+        // RA-311/MBE-3: idempotent submit. The operator backend forwards the
+        // operator's original "submit application" call and may retry it
+        // after OJ FE's client-side timeout even though the first attempt
+        // already succeeded here (CDP logs show a 5s client timeout against
+        // a round-trip that can take up to 100s). When the payload carries
+        // an operatorApplicationId, a submit for one already on file is
+        // treated as a replay: hand back the SAME work item rather than
+        // minting a second one. This up-front lookup handles the common
+        // case (a genuinely sequential retry) cheaply; the unique + sparse
+        // payload.operatorApplicationId index (see WorkItemPersistence)
+        // is the backstop for a true concurrent race between two
+        // simultaneous requests, handled in the catch clause below.
+        var operatorApplicationId =
+            payload.TryGetValue("operatorApplicationId", out var operatorApplicationIdValue)
+            && operatorApplicationIdValue.IsString
+            && !string.IsNullOrWhiteSpace(operatorApplicationIdValue.AsString)
+                ? operatorApplicationIdValue.AsString
+                : null;
+
+        if (operatorApplicationId is not null)
+        {
+            var existingByOperatorApplicationId = await _persistence.FindByOperatorApplicationIdAsync(
+                type.TypeId, operatorApplicationId, cancellationToken);
+            if (existingByOperatorApplicationId is not null)
+            {
+                _logger.LogInformation(
+                    "Submit for operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) is a replay; " +
+                        "returning existing work item {WorkItemId} instead of creating a duplicate.",
+                    operatorApplicationId,
+                    type.TypeId,
+                    existingByOperatorApplicationId.Id
+                );
+                return WorkItemActionResult.IdempotentReplay(existingByOperatorApplicationId);
+            }
         }
 
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
@@ -273,10 +320,10 @@ public sealed class WorkItemService : IWorkItemService
             // application context so audit consumers can reconstruct who
             // submitted from where without joining back to request logs.
             // 'source' is caller-supplied (BFF / operator FE forward it);
-            // 'clientId' is the Cognito client id forwarded by the CDP
-            // gateway; 'userId' is the end-user identity claim required for
-            // any mutation. RA-219: 'applicationReference' is the
-            // server-generated value.
+            // 'clientId' is the caller-asserted, HMAC-verified client id
+            // (see ClientIdAuthenticationHandler); 'userId' is the end-user
+            // identity claim required for any mutation. RA-219:
+            // 'applicationReference' is the server-generated value.
             AppendAudit(
                 workItem,
                 "work-item-submitted",
@@ -293,7 +340,7 @@ public sealed class WorkItemService : IWorkItemService
                         && submissionMetadata.TryGetValue("source", out var src)
                             ? src
                             : null,
-                    ["clientId"] = user.FindFirstValue("cognito:client_id"),
+                    ["clientId"] = user.FindFirstValue("client_id"),
                     ["userId"] = ResolveActorUserId(user),
                     ["applicationReference"] = applicationReference,
                 }
@@ -312,6 +359,39 @@ public sealed class WorkItemService : IWorkItemService
             {
                 await _persistence.CreateAsync(workItem, cancellationToken);
                 break;
+            }
+            // RA-311/MBE-3: a genuine race — another request carrying the
+            // same operatorApplicationId won the insert between the
+            // up-front lookup above and this write. Regenerating a fresh
+            // applicationReference and retrying would not help: the
+            // collision is on the caller-supplied operatorApplicationId,
+            // which never changes between attempts. Look up whatever the
+            // winner persisted and hand that back as a replay instead.
+            catch (MongoWriteException ex)
+                when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey
+                    && IsOperatorApplicationIdDuplicate(ex)
+                )
+            {
+                var winner = operatorApplicationId is null
+                    ? null
+                    : await _persistence.FindByOperatorApplicationIdAsync(
+                        type.TypeId, operatorApplicationId, cancellationToken);
+                if (winner is not null)
+                {
+                    _logger.LogInformation(
+                        "operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) collided on insert; " +
+                            "treating as a submit replay and returning the existing work item {WorkItemId}.",
+                        operatorApplicationId,
+                        type.TypeId,
+                        winner.Id
+                    );
+                    return WorkItemActionResult.IdempotentReplay(winner);
+                }
+                // Extremely unlikely: the winning document is gone by the
+                // time we look for it. Nothing about retrying with a new
+                // applicationReference fixes an operatorApplicationId
+                // collision, so propagate rather than loop forever.
+                throw;
             }
             // Only retry on a duplicate-key error that is actually the
             // applicationReference unique index. Keying on the DuplicateKey
@@ -397,6 +477,21 @@ public sealed class WorkItemService : IWorkItemService
             StringComparison.OrdinalIgnoreCase
         ) == true;
 
+    /// <summary>
+    /// True when a duplicate-key write error was raised by the
+    /// <c>payload.operatorApplicationId</c> unique index specifically
+    /// (RA-311/MBE-3) — the same substring-match approach as
+    /// <see cref="IsApplicationReferenceDuplicate"/>, just against a
+    /// different index name.
+    /// </summary>
+    private const string OperatorApplicationIdField = "operatorApplicationId";
+
+    private static bool IsOperatorApplicationIdDuplicate(MongoWriteException ex) =>
+        ex.WriteError?.Message?.Contains(
+            OperatorApplicationIdField,
+            StringComparison.OrdinalIgnoreCase
+        ) == true;
+
     public async Task<WorkItemActionResult> CompleteTaskAsync(
         Guid workItemId,
         string taskId,
@@ -409,13 +504,23 @@ public sealed class WorkItemService : IWorkItemService
             return identityFailure;
         }
 
-        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
+        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
             return failure;
         }
 
-        var tasks = template!.GetTasksForState(workItem!.StateId);
+        // LoadAsync yields a non-null work item and template whenever it
+        // reports no failure. Bind once so the rest of the method reads
+        // without null-forgiving noise.
+        var workItem = loadedWorkItem!;
+
+        // RA-372: the task list — and the completion bucket it is scored
+        // against — belong to the *effective* task state, which is the item's
+        // own state unless a module redirects it (re-accreditation's
+        // 'updated' waypoint does). See ResolveTaskStateId.
+        var taskStateId = ResolveTaskStateId(workItem, template!);
+        var tasks = template!.GetTasksForState(taskStateId);
         var task = tasks.FirstOrDefault(t =>
             string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
         );
@@ -427,7 +532,7 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        var bucket = GetCompletedBucket(workItem, workItem.StateId);
+        var bucket = GetCompletedBucket(workItem, taskStateId);
         if (!bucket.Add(task.Id))
         {
             // Already completed: idempotent replay. Persist nothing, write
@@ -441,7 +546,7 @@ public sealed class WorkItemService : IWorkItemService
         // source of truth for the new status set, but
         // CompletedTaskIdsByState is retained for one release cycle so
         // legacy readers continue to work. Keep them in lockstep.
-        var completedStateId = workItem.StateId;
+        var completedStateId = taskStateId;
         SetTaskStatus(workItem, completedStateId, task.Id, WorkItemTaskStatus.Completed);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -475,7 +580,24 @@ public sealed class WorkItemService : IWorkItemService
             DescribeUser(user)
         );
 
-        if (!HasIncompleteTasks(template!, workItem))
+        // RA-372: the state handed to post-task hooks is the effective task
+        // state, not the item's literal state. That is deliberate, and it is
+        // what makes the 'updated' waypoint safe rather than a trap.
+        //
+        // Concretely: re-accreditation auto-transitions submitted → duly-made
+        // from a post-task hook, and 'duly-make' is not a caller-invocable
+        // action — the hook is the only way an item leaves 'submitted'. If a
+        // caseworker finished the submitted-state tasks while the item sat in
+        // 'updated' and we suppressed the hook, continue-review would later
+        // drop the item into 'submitted' with every task already ticked and
+        // nothing left that could ever fire the hook again: a permanent dead
+        // end. Firing on the effective state instead means completing the last
+        // task has the same outcome it would have had if the query had never
+        // happened, which is exactly what RA-372 asks for. The waypoint is not
+        // skipped so much as discharged — its purpose (tell the caseworker a
+        // response arrived, let them act on it) has been served by the time
+        // the last task goes green.
+        if (!HasIncompleteTasks(template!, workItem, completedStateId))
         {
             await InvokeAllTasksCompletedHooksAsync(
                 workItem,
@@ -517,14 +639,11 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        var currentState = template.States.FirstOrDefault(s =>
-            string.Equals(s.Id, workItem!.StateId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (currentState?.IsTerminal == true)
+        if (TerminalStates.Find(template, workItem!.StateId) is { } currentTerminalState)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,
-                $"Work item {workItemId} is in terminal state '{currentState.Id}'; no actions are allowed."
+                $"Work item {workItemId} is in terminal state '{currentTerminalState.Id}'; no actions are allowed."
             );
         }
 
@@ -543,12 +662,22 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        if (transition.RequiresAllTasksComplete && HasIncompleteTasks(template, workItem))
+// RA-346 + RA-372: one shared gate, asked about the checklist the
+        // caseworker is actually working. For nearly every item that is its
+        // own state; for one parked in a waypoint it is the redirected state.
+        var gatedTaskStateId = ResolveTaskStateId(workItem, template);
+        if (
+            transition.RequiresAllTasksComplete
+            && WorkItemEngineRules.RequireAllTasksComplete(
+                template,
+                workItem,
+                actionId,
+                gatedTaskStateId
+            ) is
+                { } incompleteTasksFailure
+        )
         {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.IncompleteTasks,
-                $"Action '{actionId}' requires every task for state '{workItem.StateId}' to be complete first."
-            );
+            return incompleteTasksFailure;
         }
 
         var previousState = workItem.StateId;
@@ -626,6 +755,11 @@ public sealed class WorkItemService : IWorkItemService
                 WorkItemActionFailureCode.WorkItemNotFound,
                 $"No work item exists with id '{workItemId}'."
             );
+        }
+
+        if (RequireNonTerminalState(workItem, "assigned") is { } terminalFailure)
+        {
+            return terminalFailure;
         }
 
         var trimmedAssigneeId = assigneeId.Trim();
@@ -720,6 +854,11 @@ public sealed class WorkItemService : IWorkItemService
                 WorkItemActionFailureCode.WorkItemNotFound,
                 $"No work item exists with id '{workItemId}'."
             );
+        }
+
+        if (RequireNonTerminalState(workItem, "unassigned") is { } terminalFailure)
+        {
+            return terminalFailure;
         }
 
         if (workItem.AssignedToId is null)
@@ -909,13 +1048,21 @@ public sealed class WorkItemService : IWorkItemService
             return noteFailure!;
         }
 
-        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
+        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
             return failure;
         }
 
-        var tasks = template!.GetTasksForState(workItem!.StateId);
+        // LoadAsync yields a non-null work item and template whenever it
+        // reports no failure. Bind once so the rest of the method reads
+        // without null-forgiving noise.
+        var workItem = loadedWorkItem!;
+
+        // RA-372: see CompleteTaskAsync — tasks are scoped to the effective
+        // task state, which a module may redirect away from workItem.StateId.
+        var taskStateId = ResolveTaskStateId(workItem, template!);
+        var tasks = template!.GetTasksForState(taskStateId);
         var task = tasks.FirstOrDefault(t =>
             string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
         );
@@ -930,7 +1077,7 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         // Capture before hooks may change it after the write.
-        var completedStateId = workItem.StateId;
+        var completedStateId = taskStateId;
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
 
@@ -1011,7 +1158,7 @@ public sealed class WorkItemService : IWorkItemService
             DescribeUser(user)
         );
 
-        if (taskNewlyCompleted && !HasIncompleteTasks(template, workItem))
+        if (taskNewlyCompleted && !HasIncompleteTasks(template, workItem, completedStateId))
         {
             await InvokeAllTasksCompletedHooksAsync(
                 workItem,
@@ -1037,13 +1184,21 @@ public sealed class WorkItemService : IWorkItemService
             return identityFailure;
         }
 
-        var (workItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
+        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
         if (failure is not null)
         {
             return failure;
         }
 
-        var tasks = template!.GetTasksForState(workItem!.StateId);
+        // LoadAsync yields a non-null work item and template whenever it
+        // reports no failure. Bind once so the rest of the method reads
+        // without null-forgiving noise.
+        var workItem = loadedWorkItem!;
+
+        // RA-372: see CompleteTaskAsync — tasks are scoped to the effective
+        // task state, which a module may redirect away from workItem.StateId.
+        var taskStateId = ResolveTaskStateId(workItem, template!);
+        var tasks = template!.GetTasksForState(taskStateId);
         var task = tasks.FirstOrDefault(t =>
             string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
         );
@@ -1055,7 +1210,7 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        var currentStatus = GetCurrentTaskStatus(workItem, workItem.StateId, task.Id);
+        var currentStatus = GetCurrentTaskStatus(workItem, taskStateId, task.Id);
         if (currentStatus == status)
         {
             // Idempotent no-op: framework rule is that no-ops do not write
@@ -1068,7 +1223,7 @@ public sealed class WorkItemService : IWorkItemService
         // epr-gl6: dual-write — keep CompletedTaskIdsByState in lockstep
         // with TaskStatusesByState so legacy readers (which only consume
         // the bucket) keep observing a consistent view.
-        var changedStateId = workItem.StateId;
+        var changedStateId = taskStateId;
         SetTaskStatus(workItem, changedStateId, task.Id, status);
 
         var now = _timeProvider.GetUtcNow().UtcDateTime;
@@ -1108,7 +1263,10 @@ public sealed class WorkItemService : IWorkItemService
             DescribeUser(user)
         );
 
-        if (status == WorkItemTaskStatus.Completed && !HasIncompleteTasks(template!, workItem))
+        if (
+            status == WorkItemTaskStatus.Completed
+            && !HasIncompleteTasks(template!, workItem, changedStateId)
+        )
         {
             await InvokeAllTasksCompletedHooksAsync(
                 workItem,
@@ -1144,37 +1302,39 @@ public sealed class WorkItemService : IWorkItemService
                 workItem,
                 ResolveTemplateVersion(workItem),
                 Array.Empty<WorkItemTaskProgress>(),
-                Array.Empty<WorkItemTransition>()
+                Array.Empty<WorkItemTransition>(),
+                // No template means no resolver could have been consulted, so
+                // the empty task list describes the item's own state.
+                workItem.StateId
             );
         }
 
-        var completed = workItem.CompletedTaskIdsByState.TryGetValue(workItem.StateId, out var done)
-            ? done
-            : new HashSet<string>();
+// RA-372: project the tasks of the *effective* task state. For nearly
+        // every item that is its own state; for a re-accreditation item
+        // parked in the 'updated' waypoint it is the state the query was
+        // raised from, so the regulator sees that state's checklist —
+        // including the boxes already ticked before the query — instead of an
+        // empty list. Progress has always been stored per state id, so
+        // reading the redirected state's bucket surfaces prior progress for
+        // free.
+        var taskStateId = ResolveTaskStateId(workItem, template);
 
-        // epr-gl6: per-task status map is the canonical source of truth
-        // when present; fall back to the legacy CompletedTaskIdsByState
-        // bucket for documents written before the map existed (Completed
-        // when in the bucket, NotStarted otherwise).
-        var statuses = workItem.TaskStatusesByState.TryGetValue(
-            workItem.StateId,
-            out var stateStatuses
-        )
-            ? stateStatuses
-            : null;
-
+        // RA-346: read task status through the shared rules rather than
+        // re-implementing the canonical-map-then-legacy-bucket fallback here.
+        // This projection is what the management-fe gates its Approve CTA on,
+        // so it must agree with the engine and with the bespoke module
+        // services by construction, not by two copies happening to match.
         var taskProgress = template
-            .GetTasksForState(workItem.StateId)
+            .GetTasksForState(taskStateId)
             .Select(task =>
             {
-                var status =
-                    statuses is not null && statuses.TryGetValue(task.Id, out var explicitStatus)
-                        ? explicitStatus
-                        : (
-                            completed.Contains(task.Id)
-                                ? WorkItemTaskStatus.Completed
-                                : WorkItemTaskStatus.NotStarted
-                        );
+                // RA-372: keyed on taskStateId, not workItem.StateId — status
+                // must come from the same state the task list did.
+                var status = WorkItemEngineRules.GetCurrentTaskStatus(
+                    workItem,
+                    taskStateId,
+                    task.Id
+                );
                 return new WorkItemTaskProgress(
                     task.Id,
                     task.DisplayName,
@@ -1184,11 +1344,26 @@ public sealed class WorkItemService : IWorkItemService
             })
             .ToList();
 
-        var currentState = template.States.FirstOrDefault(s =>
-            string.Equals(s.Id, workItem.StateId, StringComparison.OrdinalIgnoreCase)
-        );
-        var isTerminal = currentState?.IsTerminal == true;
+        var isTerminal = TerminalStates.Find(template, workItem.StateId) is not null;
 
+// RA-346: same gate the engine enforces in ApplyActionAsync, from the
+        // same helper — an action must never be offered that applying would
+        // reject. Hoisted out of the predicate so it is evaluated once rather
+        // than per candidate transition. RA-372: assessed against the
+        // effective task state so it asks exactly the question
+        // ApplyActionAsync will.
+        var allTasksComplete = !WorkItemEngineRules.HasIncompleteTasks(
+            template,
+            workItem,
+            taskStateId
+        );
+
+        // RA-372: available actions are matched on the item's ACTUAL state,
+        // never the effective task state. Which tasks are outstanding and
+        // where the item can move next are different questions — an item in
+        // 'updated' shows the originating state's checklist but only the
+        // transitions that genuinely leave 'updated'. Redirecting this too
+        // would let a caller invoke an action from a state the item is not in.
         IReadOnlyCollection<WorkItemTransition> available = isTerminal
             ? Array.Empty<WorkItemTransition>()
             : template
@@ -1199,14 +1374,27 @@ public sealed class WorkItemService : IWorkItemService
                         StringComparison.OrdinalIgnoreCase
                     )
                 )
-                .Where(t => !t.RequiresAllTasksComplete || taskProgress.All(p => p.IsComplete))
+                // RA-364: never offer an action the generic action endpoint
+                // would reject. Transitions declared CallerInvocable: false
+                // are reachable only through a module's own bespoke service
+                // resolving them server-side (re-accreditation's
+                // resume-during-* / continue-review-during-*), so listing
+                // them here advertised buttons that always failed — and,
+                // because each of those four shares a DisplayName and a
+                // FromStateId, rendered as four identical dead controls.
+                // This mirrors the guard in WorkItemEndpoints.Action; the
+                // bespoke services are unaffected because they call
+                // ApplyActionAsync directly and never consult AvailableActions.
+                .Where(t => t.CallerInvocable)
+                .Where(t => !t.RequiresAllTasksComplete || allTasksComplete)
                 .ToList();
 
         return new WorkItemEngineProjection(
             workItem,
             template.TemplateVersion,
             taskProgress,
-            available
+            available,
+            taskStateId
         );
     }
 
@@ -1246,19 +1434,94 @@ public sealed class WorkItemService : IWorkItemService
     }
 
     /// <summary>
-    /// Pick the template the engine should reason about for a work item. The
-    /// snapshot stored on the work item wins so that historical items keep
-    /// their original task list and action set even if the live type has
-    /// since changed; the live type is used only as a fallback for legacy
-    /// items submitted before snapshots existed.
+    /// Pick the template the engine should reason about for a work item.
+    /// Delegates to <see cref="WorkItemEngineRules.ResolveTemplate"/> so
+    /// bespoke module services resolve the same template the engine does.
     /// </summary>
-    private IWorkItemTemplate? ResolveTemplate(WorkItem workItem)
+    private IWorkItemTemplate? ResolveTemplate(WorkItem workItem) =>
+        WorkItemEngineRules.ResolveTemplate(workItem, _registry);
+
+    /// <summary>
+    /// RA-358: refuse an envelope mutation on a closed case. Assignment and
+    /// unassignment are the two operations that reach a work item without
+    /// going through <see cref="ApplyActionAsync"/>, so before this check a
+    /// direct POST could still hand a withdrawn / approved / rejected item to
+    /// someone (the front end only hid the buttons). Terminality comes from
+    /// the item's own template via <see cref="TerminalStates.Find"/> — no
+    /// state id is hardcoded here, and an in-flight item is judged by the
+    /// template version it was submitted under.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// This deliberately reverses RA-295 AC03, which required assignment to
+    /// stay available "all the way through" and is the reason no gate existed.
+    /// That was about hand-over: keeping a closed case reassignable so it can
+    /// be passed to someone else after the fact. RA-358 trades that capability
+    /// away — confirmed with the product owner on 2026-08-04, for every
+    /// terminal state rather than withdrawal alone. If hand-over on closed
+    /// cases is ever wanted back, it needs a route that is explicitly about
+    /// hand-over, not an unguarded assign endpoint.
+    /// </para>
+    /// <para>
+    /// Fails <em>closed</em> when the template cannot be resolved at all,
+    /// matching <see cref="ApplyActionAsync"/>, which refuses the same
+    /// condition before it ever reaches its terminal check. Otherwise a legacy
+    /// pre-snapshot item sitting in a terminal state would become freely
+    /// assignable the moment its type was de-registered or renamed — the very
+    /// hole this guard exists to close, reached through a different door.
+    /// </para>
+    /// </remarks>
+    /// <param name="operation">
+    /// Past-tense verb naming the refused mutation, e.g. <c>"assigned"</c>.
+    /// </param>
+    private WorkItemActionResult? RequireNonTerminalState(WorkItem workItem, string operation)
     {
-        if (workItem.TemplateSnapshot is not null)
+        var template = ResolveTemplate(workItem);
+        if (template is null)
         {
-            return workItem.TemplateSnapshot;
+            _logger.LogWarning(
+                "Work item {WorkItemId} refused {Operation}: type {TypeId} is not registered "
+                    + "and the item has no template snapshot, so terminality cannot be determined",
+                workItem.Id,
+                operation,
+                workItem.TypeId
+            );
+
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.UnknownAction,
+                "This case cannot be changed because its type is no longer available."
+            );
         }
-        return _registry.Find(workItem.TypeId);
+
+        // A state the template does not declare carries no terminal metadata,
+        // so there is nothing to fail closed on: it is not evidence the case is
+        // closed, only that the state is unmodelled. Kept permissive so a
+        // mis-seeded state id does not silently freeze assignment; the
+        // unresolvable-template case above is the one that hides real terminal
+        // states behind an absence.
+        if (TerminalStates.Find(template, workItem.StateId) is not { } terminal)
+        {
+            return null;
+        }
+
+        _logger.LogInformation(
+            "Work item {WorkItemId} ({TypeId}) refused {Operation}: terminal state {StateId}",
+            workItem.Id,
+            workItem.TypeId,
+            operation,
+            terminal.Id
+        );
+
+        // RA-358: the BFF renders ProblemDetails.detail verbatim in a
+        // user-facing error banner, so the message must name the case in
+        // human terms only. Deliberately no work item id here — removing the
+        // system-generated GUID from user-visible errors is the point of this
+        // story. The id stays in the log line above for support.
+        return WorkItemActionResult.Failure(
+            WorkItemActionFailureCode.TerminalState,
+            $"This case has been {terminal.DisplayName.ToLowerInvariant()} "
+                + $"and can no longer be {operation}."
+        );
     }
 
     private string ResolveTemplateVersion(WorkItem workItem) =>
@@ -1287,24 +1550,7 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem workItem,
         string stateId,
         string taskId
-    )
-    {
-        if (
-            workItem.TaskStatusesByState.TryGetValue(stateId, out var inner)
-            && inner.TryGetValue(taskId, out var explicitStatus)
-        )
-        {
-            return explicitStatus;
-        }
-        if (
-            workItem.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket)
-            && bucket.Contains(taskId)
-        )
-        {
-            return WorkItemTaskStatus.Completed;
-        }
-        return WorkItemTaskStatus.NotStarted;
-    }
+    ) => WorkItemEngineRules.GetCurrentTaskStatus(workItem, stateId, taskId);
 
     /// <summary>
     /// Apply a status change to both <see cref="WorkItem.TaskStatusesByState"/>
@@ -1338,23 +1584,90 @@ public sealed class WorkItemService : IWorkItemService
         }
     }
 
-    private static bool HasIncompleteTasks(IWorkItemTemplate template, WorkItem workItem)
+    /// <summary>
+    /// RA-372: the state whose task list applies to <paramref name="workItem"/>
+    /// right now. Normally the state the item is in, but a module may redirect
+    /// it via an <see cref="IWorkItemTaskStateResolver"/> — see that interface
+    /// for why. The first resolver with an opinion wins; a resolver that
+    /// returns null (or names a state the template does not declare) is
+    /// ignored, so an abstaining or stale resolver degrades to today's
+    /// behaviour rather than emptying an item's task list.
+    ///
+    /// Every task-scoped code path in this engine goes through here — task
+    /// projection, task lookup, the per-state completion bucket, and the
+    /// "all tasks complete" gate — so the redirect is applied consistently to
+    /// reads and writes alike. Anything that is about where the item actually
+    /// *is* (which actions are available, terminality, transition from-state
+    /// matching) deliberately keeps using <see cref="WorkItem.StateId"/>.
+    /// </summary>
+    private string ResolveTaskStateId(WorkItem workItem, IWorkItemTemplate template)
     {
-        var required = template.GetTasksForState(workItem.StateId);
-        if (required.Count == 0)
+        foreach (var resolver in _taskStateResolvers)
         {
-            return false;
+            // Scope by type before consulting. Without this every resolver
+            // would see every item, and "first non-null wins" would make the
+            // outcome depend on module registration order — not something any
+            // contract promises.
+            if (
+                !string.Equals(resolver.TypeId, workItem.TypeId, StringComparison.OrdinalIgnoreCase)
+            )
+            {
+                continue;
+            }
+
+            string? resolved;
+            try
+            {
+                resolved = resolver.ResolveTaskStateId(workItem, template);
+            }
+            catch (Exception ex)
+            {
+                // A resolver is consulted on every read, so a buggy one must
+                // not take the worklist down with it. Fall back to the item's
+                // real state, which is what the engine did before RA-372.
+                _logger.LogError(
+                    ex,
+                    "Task state resolver {ResolverType} failed for work item {WorkItemId}; "
+                        + "falling back to its actual state {StateId}",
+                    resolver.GetType().FullName,
+                    workItem.Id,
+                    workItem.StateId
+                );
+                continue;
+            }
+
+            if (string.IsNullOrWhiteSpace(resolved))
+            {
+                continue;
+            }
+
+            if (
+                !template.States.Any(s =>
+                    string.Equals(s.Id, resolved, StringComparison.OrdinalIgnoreCase)
+                )
+            )
+            {
+                _logger.LogWarning(
+                    "Task state resolver {ResolverType} returned state '{ResolvedStateId}' for work "
+                        + "item {WorkItemId}, which its template does not declare; ignoring",
+                    resolver.GetType().FullName,
+                    resolved,
+                    workItem.Id
+                );
+                continue;
+            }
+
+            return resolved;
         }
-        // epr-08y: TaskStatusesByState is the canonical source of truth
-        // (epr-gl6 / WorkItem.cs:99-110). Consult it first and only fall
-        // back to the legacy CompletedTaskIdsByState bucket when no
-        // per-task status is recorded for a task. Reading only the legacy
-        // bucket would let a v2 module that writes only to the canonical
-        // map silently transition past incomplete tasks.
-        return required.Any(t =>
-            GetCurrentTaskStatus(workItem, workItem.StateId, t.Id) != WorkItemTaskStatus.Completed
-        );
+
+        return workItem.StateId;
     }
+
+    private static bool HasIncompleteTasks(
+        IWorkItemTemplate template,
+        WorkItem workItem,
+        string taskStateId
+    ) => WorkItemEngineRules.HasIncompleteTasks(template, workItem, taskStateId);
 
     /// <summary>
     /// Append a single entry to the work item's audit log (RA-97). Called
@@ -1393,7 +1706,7 @@ public sealed class WorkItemService : IWorkItemService
 
     private static string DescribeUser(ClaimsPrincipal? user) =>
         user?.FindFirstValue("user:id")
-        ?? user?.FindFirstValue("cognito:client_id")
+        ?? user?.FindFirstValue("client_id")
         ?? user?.FindFirstValue(ClaimTypes.NameIdentifier)
         ?? "unknown";
 

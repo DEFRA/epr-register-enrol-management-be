@@ -5,9 +5,8 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
 /// <summary>
 /// Regression coverage for <see cref="WorkItemQueryBinding.FromQueryString"/>.
-/// The headline case (epr-ygz) is the tenancy guard: <c>submittedBy</c>
-/// must never be bound from the query string, because the endpoint
-/// derives it from the authenticated caller's claims.
+/// <c>submittedBy</c> is an ordinary caller-supplied filter — scoping
+/// decisions are made by the frontend, not enforced by this binder.
 /// </summary>
 public class WorkItemQueryBindingTests
 {
@@ -27,16 +26,16 @@ public class WorkItemQueryBindingTests
     [InlineData("SubmittedBy")]
     [InlineData("SUBMITTEDBY")]
     [InlineData("submittedby")]
-    public void SubmittedByQueryParameterIsIgnoredRegardlessOfCase(string key)
+    public void SubmittedByQueryParameterIsBoundRegardlessOfCase(string key)
     {
         var query = WorkItemQueryBinding.FromQueryString(Q((key, "other-tenant-id")));
 
-        Assert.Null(query.SubmittedBy);
-        Assert.Null(query.NormalisedSubmittedBy);
+        Assert.Equal("other-tenant-id", query.SubmittedBy);
+        Assert.Equal("other-tenant-id", query.NormalisedSubmittedBy);
     }
 
     [Fact]
-    public void SubmittedByIsIgnoredEvenWhenCombinedWithOtherParameters()
+    public void SubmittedByIsBoundAlongsideOtherParameters()
     {
         var query = WorkItemQueryBinding.FromQueryString(Q(
             ("submittedBy", "other-tenant-id"),
@@ -44,7 +43,7 @@ public class WorkItemQueryBindingTests
             ("page", "2"),
             ("pageSize", "10")));
 
-        Assert.Null(query.SubmittedBy);
+        Assert.Equal("other-tenant-id", query.SubmittedBy);
         Assert.Equal(2, query.Page);
         Assert.Equal(10, query.PageSize);
         Assert.NotNull(query.TypeIds);
@@ -192,5 +191,91 @@ public class WorkItemQueryBindingTests
         Assert.Null(query.OrgId);
         Assert.Null(query.RegistrationId);
         Assert.Null(query.OrgName);
+    }
+
+    // ─────────────────────────── RA-324 filter + sort params ──────────────────────────
+
+    [Fact]
+    public void OrganisationIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("organisation", "Acme or ORG-1")));
+
+        Assert.Equal("Acme or ORG-1", query.Organisation);
+    }
+
+    [Fact]
+    public void SingleMaterialIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("material", "plastic")));
+
+        Assert.NotNull(query.Materials);
+        Assert.Equal(new[] { "plastic" }, query.Materials!);
+    }
+
+    [Fact]
+    public void RepeatedMaterialParamsAreAllBound()
+    {
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["material"] = new Microsoft.Extensions.Primitives.StringValues(
+                new[] { "plastic", "glass", "paper" })
+        };
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.Equal(new[] { "plastic", "glass", "paper" }, query.Materials!);
+    }
+
+    [Fact]
+    public void MissingMaterialAndOrganisationDefaultToNull()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.Materials);
+        Assert.Null(query.Organisation);
+    }
+
+    [Theory]
+    [InlineData("organisation")]
+    [InlineData("status")]
+    [InlineData("due-date")]
+    public void SortTokenIsBound(string token)
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("sort", token)));
+
+        Assert.Equal(token, query.Sort);
+    }
+
+    [Theory]
+    [InlineData("desc", true)]
+    [InlineData("DESC", true)]
+    [InlineData("descending", true)]
+    [InlineData("asc", false)]
+    [InlineData("ascending", false)]
+    public void SortDirectionIsParsed(string dir, bool expectedDescending)
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("dir", dir)));
+
+        Assert.Equal(expectedDescending, query.SortDescending);
+    }
+
+    [Theory]
+    [InlineData("sideways")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public void UnrecognisedOrBlankSortDirectionIsNull(string dir)
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("dir", dir)));
+
+        Assert.Null(query.SortDescending);
+    }
+
+    [Fact]
+    public void MissingSortAndDirectionDefaultToNull()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.Sort);
+        Assert.Null(query.SortDescending);
     }
 }

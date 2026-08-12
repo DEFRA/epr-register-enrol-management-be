@@ -1,14 +1,26 @@
 # ADR-0001: Custom Cognito client_id authentication handler
 
 **Date:** 2026-04-28
-**Status:** Accepted
+**Status:** Accepted — naming superseded, see amendment below
+
+> **2026-08 amendment:** the assumption below — that CDP terminates inbound
+> traffic and validates a Cognito JWT before forwarding it — turned out to
+> be false; no such CDP-side verification exists for this internal
+> service-to-service traffic. RA-345 (ADR-0006) added HMAC signing
+> specifically because trusting the header alone was insufficient. The
+> handler, options, and header names were renamed from `Cognito*` /
+> `x-cdp-cognito-client-id` to `ClientId*` / `x-cdp-client-id` to stop
+> implying a CDP/Cognito verification step that never existed. This
+> document is kept for historical context; treat ADR-0006 as authoritative
+> on the current trust model.
 
 ## Context
 
-The backend is fronted by the CDP platform, which terminates inbound
-traffic and validates the upstream service's AWS Cognito JWT before
-forwarding the request. CDP injects the validated Cognito client id into
-the `x-cdp-cognito-client-id` request header.
+The backend is fronted by the CDP platform, which was believed at the time
+to terminate inbound traffic and validate the upstream service's AWS
+Cognito JWT before forwarding the request, injecting the validated client
+id into the `x-cdp-cognito-client-id` request header. This assumption was later
+found to be incorrect — see the amendment above.
 
 There is no standard `.NET` equivalent of `@defra/hapi-secure-context`
 published by CDP. Two options were considered for backend authentication:
@@ -23,13 +35,13 @@ published by CDP. Two options were considered for backend authentication:
 
 ## Decision
 
-Use a hand-rolled `CognitoClientIdAuthenticationHandler` that trusts the
+Use a hand-rolled `CognitoClientIdAuthenticationHandler` (since renamed to `ClientIdAuthenticationHandler` — see amendment above) that trusts the
 CDP-injected header (option 1). The handler:
 
 - requires the `x-cdp-cognito-client-id` header to be present and
   non-empty (otherwise `401`),
 - promotes the value to `ClaimTypes.NameIdentifier` and a
-  `cognito:client_id` claim,
+  `client_id` claim,
 - additionally surfaces the user-id / user-name / roles forwarded by the
   BFF via `x-cdp-user-*` headers, so endpoints can do role checks and
   produce useful audit log lines without a separate user lookup.

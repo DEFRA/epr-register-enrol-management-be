@@ -50,6 +50,69 @@ public class ReadinessHealthCheckTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Head_health_returns_200()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new HealthFactory(mongoHealthy: true);
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            new HttpRequestMessage(HttpMethod.Head, "/health"),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Trace_health_returns_405()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new HealthFactory(mongoHealthy: true);
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            new HttpRequestMessage(HttpMethod.Trace, "/health"),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Trace_health_ready_returns_405()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new HealthFactory(mongoHealthy: true);
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            new HttpRequestMessage(HttpMethod.Trace, "/health/ready"),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("PUT")]
+    [InlineData("DELETE")]
+    [InlineData("PATCH")]
+    public async Task Other_verbs_on_health_return_405(string verb)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new HealthFactory(mongoHealthy: true);
+        using var client = factory.CreateClient();
+
+        var response = await client.SendAsync(
+            new HttpRequestMessage(new HttpMethod(verb), "/health"),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+    }
+
     private sealed class HealthFactory(bool mongoHealthy) : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -63,14 +126,20 @@ public class ReadinessHealthCheckTests
                 client.GetDatabase("admin", Arg.Any<MongoDatabaseSettings?>()).Returns(db);
                 if (mongoHealthy)
                 {
-                    db.RunCommandAsync(Arg.Any<Command<BsonDocument>>(),
-                        Arg.Any<ReadPreference>(), Arg.Any<CancellationToken>())
+                    db.RunCommandAsync(
+                            Arg.Any<Command<BsonDocument>>(),
+                            Arg.Any<ReadPreference>(),
+                            Arg.Any<CancellationToken>()
+                        )
                         .Returns(new BsonDocument("ok", 1));
                 }
                 else
                 {
-                    db.RunCommandAsync(Arg.Any<Command<BsonDocument>>(),
-                        Arg.Any<ReadPreference>(), Arg.Any<CancellationToken>())
+                    db.RunCommandAsync(
+                            Arg.Any<Command<BsonDocument>>(),
+                            Arg.Any<ReadPreference>(),
+                            Arg.Any<CancellationToken>()
+                        )
                         .Throws(new TimeoutException("mongo unreachable"));
                 }
                 mongoFactory.GetClient().Returns(client);

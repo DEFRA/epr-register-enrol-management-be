@@ -379,7 +379,7 @@ public sealed class SlaService : ISlaService
 
     private static string DescribeUser(ClaimsPrincipal? user) =>
         user?.FindFirstValue("user:id")
-        ?? user?.FindFirstValue("cognito:client_id")
+        ?? user?.FindFirstValue("client_id")
         ?? user?.FindFirstValue(ClaimTypes.NameIdentifier)
         ?? "unknown";
 }

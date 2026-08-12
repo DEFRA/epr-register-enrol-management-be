@@ -1,18 +1,20 @@
+using System.Diagnostics.CodeAnalysis;
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Health;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils;
 using EprRegisterEnrolManagementBe.Utils.Background;
+using EprRegisterEnrolManagementBe.Utils.Http;
+using EprRegisterEnrolManagementBe.Utils.Logging;
+using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Http;
-using EprRegisterEnrolManagementBe.Utils.Http;
-using EprRegisterEnrolManagementBe.Utils.Mongo;
-using System.Diagnostics.CodeAnalysis;
-using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using MongoDB.Driver.Authentication.AWS;
 using Notify.Client;
@@ -31,7 +33,19 @@ await app.RunAsync();
 // "Startup migrations" section of the README.
 [ExcludeFromCodeCoverage]
 static Task RunStartupMigrations(WebApplication app) =>
-    StartupMigrationRunner.RunAsync(app.Services, app.Logger, migrations: []);
+    StartupMigrationRunner.RunAsync(
+        app.Services,
+        app.Logger,
+        migrations:
+        [
+            // epr-2uxy: READ-ONLY diagnostic — writes nothing, and is a no-op
+            // unless Diagnostics:Ra292IsNewSiteAudit is set. Registered on this
+            // harness because CDP offers no way to run ad-hoc mongosh against a
+            // deployed database, and the open question is precisely whether a
+            // deployed environment retained affected data.
+            ("epr-2uxy-isnewsite-audit (read-only)",
+                ReAccreditationIsNewSiteAudit.RunAsync),
+        ]);
 
 [ExcludeFromCodeCoverage]
 static WebApplication BuildApp(string[] args)
@@ -55,6 +69,11 @@ static WebApplication BuildApp(string[] args)
 static void ConfigureHost(WebApplicationBuilder builder)
 {
     builder.Host.UseSerilog(CdpLogging.Configuration);
+
+    // Suppress the "Server: Kestrel" response header. It's a minor
+    // fingerprinting aid with no direct exploit path, but there's no
+    // reason to advertise the server stack (pentest 2026-08-08, L4).
+    builder.WebHost.ConfigureKestrel(options => options.AddServerHeader = false);
 }
 
 [ExcludeFromCodeCoverage]
@@ -74,6 +93,16 @@ static void ConfigureServices(WebApplicationBuilder builder)
     // on the Squid proxy. Without this the SDK egresses direct and
     // hangs on the platform's deny-all firewall
     // (cdp-documentation/how-to/proxy.md).
+    //
+    // This is process-global: it silently applies to every HttpClient in
+    // the process that doesn't explicitly opt out, not just Notify's bare
+    // one — including named clients from AddHttpClient(...) that don't
+    // configure a primary handler (an omitted handler is NOT the same as
+    // "unproxied"; it just inherits this). Any client that must bypass
+    // Squid (e.g. "DefaultClient" below, for CDP-service-to-CDP-service
+    // calls) has to say so explicitly via
+    // ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    // { UseProxy = false }) — see RA-311 query-push-proxy-fix.
     var defaultProxy = ProxyHttpMessageHandler.BuildDefaultProxy();
     if (defaultProxy is not null)
     {
@@ -95,19 +124,22 @@ static void ConfigureServices(WebApplicationBuilder builder)
     // document is exposed unauthenticated at /openapi/v1.json by
     // ConfigureEndpoints, mirroring the health endpoints' posture, since
     // BFF and platform tooling need to fetch it without credentials.
-    services.AddOpenApi("v1", options =>
-    {
-        // Inject concrete request-body examples so the Swagger UI
-        // "Try it out" panel pre-fills with real payloads. Runs last in
-        // the transformer pipeline to survive schema population. RA-124.
-        // AddDocumentTransformer<T> registers the transformer in DI, so
-        // no separate AddSingleton call is required.
-        options.AddDocumentTransformer<WorkItemOpenApiExampleTransformer>();
-    });
+    services.AddOpenApi(
+        "v1",
+        options =>
+        {
+            // Inject concrete request-body examples so the Swagger UI
+            // "Try it out" panel pre-fills with real payloads. Runs last in
+            // the transformer pipeline to survive schema population. RA-124.
+            // AddDocumentTransformer<T> registers the transformer in DI, so
+            // no separate AddSingleton call is required.
+            options.AddDocumentTransformer<WorkItemOpenApiExampleTransformer>();
+        }
+    );
 
     services.AddHttpContextAccessor();
     // In-memory cache backs the HMAC nonce replay defence in
-    // CognitoClientIdAuthenticationHandler. Singleton by default.
+    // ClientIdAuthenticationHandler. Singleton by default.
     services.AddMemoryCache();
 
     ConfigureAuth(services, configuration);
@@ -118,13 +150,16 @@ static void ConfigureServices(WebApplicationBuilder builder)
     ConfigureCors(services, configuration);
     ConfigureNotifications(services, configuration);
     ConfigureReEx(services, configuration);
+    ConfigureOperatorBackendPush(services, configuration);
 
-    services.AddOptions<LivenessHealthCheckOptions>()
+    services
+        .AddOptions<LivenessHealthCheckOptions>()
         .Bind(configuration.GetSection("Liveness"))
         .ValidateDataAnnotations()
         .ValidateOnStart();
 
-    services.AddHealthChecks()
+    services
+        .AddHealthChecks()
         // Tagged "live" so liveness (/health) only fires checks tagged
         // "live" (currently the thread-pool probe), and readiness
         // (/health/ready) only fires checks tagged "ready". The two sets
@@ -157,12 +192,22 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // (universal rules: max-extension cap, audit shape, operator notify on
     // extend via post-action hooks) so it lives next to the framework, not
     // in a module.
-    services.AddOptions<SlaConfig>()
-        .Bind(builder.Configuration.GetSection("WorkItems:Sla"));
+    services.AddOptions<SlaConfig>().Bind(builder.Configuration.GetSection("WorkItems:Sla"));
     // RA-133: accreditation issuance config (current year drives the
     // generated AccreditationId year segment and AccreditationStartDate).
-    services.AddOptions<AccreditationConfig>()
+    services
+        .AddOptions<AccreditationConfig>()
         .Bind(builder.Configuration.GetSection("Accreditation"));
+    // RA-291 (AC06): public operator-service base URL, surfaced in the
+    // Queried Notify email. Read from the flat OPERATOR_SERVICE_BASE_URL
+    // environment variable, matching NOTIFY_API_KEY's convention.
+    services
+        .AddOptions<OperatorServiceConfig>()
+        .Configure<IConfiguration>(
+            (options, configuration) =>
+                options.BaseUrl =
+                    configuration.GetValue<string>("OPERATOR_SERVICE_BASE_URL") ?? string.Empty
+        );
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>();
     services.AddHostedService<SlaBreachBackgroundService>();
@@ -179,28 +224,120 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
 [ExcludeFromCodeCoverage]
 static void ConfigureAuth(IServiceCollection services, IConfiguration configuration)
 {
-    services
-        .AddAuthentication(CognitoClientIdDefaults.AuthenticationScheme)
-        .AddCognitoClientId();
+    services.AddAuthentication(ClientIdDefaults.AuthenticationScheme).AddClientId();
 
     // Bind options lazily via PostConfigure so test fixtures that add
-    // AUTH_SHARED_SECRET via WebApplicationFactory.ConfigureAppConfiguration
-    // (which fires during builder.Build(), after this method runs) can still
+    // config via WebApplicationFactory.ConfigureAppConfiguration (which
+    // fires during builder.Build(), after this method runs) can still
     // override the value.
-    services.AddOptions<CognitoClientIdAuthenticationOptions>(CognitoClientIdDefaults.AuthenticationScheme)
-        .Configure<IConfiguration>((options, config) =>
-        {
-            options.SharedSecret = config.GetValue<string>("AUTH_SHARED_SECRET");
-            options.MaxClientIdLength = config.GetValue("Auth:MaxClientIdLength", options.MaxClientIdLength);
-            options.MaxUserIdLength = config.GetValue("Auth:MaxUserIdLength", options.MaxUserIdLength);
-            options.MaxUserNameLength = config.GetValue("Auth:MaxUserNameLength", options.MaxUserNameLength);
-            options.MaxUserRolesLength = config.GetValue("Auth:MaxUserRolesLength", options.MaxUserRolesLength);
-            options.MaxSignatureLength = config.GetValue("Auth:MaxSignatureLength", options.MaxSignatureLength);
-            options.MaxTimestampLength = config.GetValue("Auth:MaxTimestampLength", options.MaxTimestampLength);
-            options.MaxNonceLength = config.GetValue("Auth:MaxNonceLength", options.MaxNonceLength);
-        });
+    services
+        .AddOptions<ClientIdAuthenticationOptions>(ClientIdDefaults.AuthenticationScheme)
+        .Configure<IConfiguration>(
+            (options, config) =>
+            {
+                options.ClientSecrets = BuildClientSecrets(config);
+                options.MaxClientIdLength = config.GetValue(
+                    "Auth:MaxClientIdLength",
+                    options.MaxClientIdLength
+                );
+                options.MaxUserIdLength = config.GetValue(
+                    "Auth:MaxUserIdLength",
+                    options.MaxUserIdLength
+                );
+                options.MaxUserNameLength = config.GetValue(
+                    "Auth:MaxUserNameLength",
+                    options.MaxUserNameLength
+                );
+                options.MaxSignatureLength = config.GetValue(
+                    "Auth:MaxSignatureLength",
+                    options.MaxSignatureLength
+                );
+                options.MaxTimestampLength = config.GetValue(
+                    "Auth:MaxTimestampLength",
+                    options.MaxTimestampLength
+                );
+                options.MaxNonceLength = config.GetValue(
+                    "Auth:MaxNonceLength",
+                    options.MaxNonceLength
+                );
+            }
+        );
 
     services.AddAuthorization();
+}
+
+// RA-345: per-caller secrets, keyed by the clientId each caller is expected
+// to assert. Each caller gets its own secret env var so one can be rotated
+// without touching the other — see ADR-0005's "Follow-up: per-caller
+// shared secrets" section and CaseManagementAuthConfig in
+// epr-register-enrol-backend for the single-caller precedent this mirrors.
+[ExcludeFromCodeCoverage]
+static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration config)
+{
+    var map = new Dictionary<string, string>(StringComparer.Ordinal);
+    // Config-key form, NOT the literal env var name: EnvironmentVariablesConfigurationProvider
+    // rewrites "__" to ":" while loading, so the real env var
+    // AUTH_SHARED_SECRET__MANAGEMENT_FE is stored under config key
+    // "AUTH_SHARED_SECRET:MANAGEMENT_FE" — a GetValue call using the literal
+    // double-underscore string never matches it. Same pattern OperatorBackendApi
+    // uses elsewhere in this file (GetSection("OperatorBackendApi"), not a
+    // literal "OperatorBackendApi__Url" GetValue key).
+    AddCallerSecret(
+        map,
+        config,
+        callerName: "ManagementFe",
+        clientIdKey: "Auth:ManagementFeClientId",
+        clientIdDefault: "frontend",
+        secretKey: "AUTH_SHARED_SECRET:MANAGEMENT_FE"
+    );
+    AddCallerSecret(
+        map,
+        config,
+        callerName: "Backend",
+        clientIdKey: "Auth:BackendClientId",
+        clientIdDefault: "epr-register-enrol-backend",
+        secretKey: "AUTH_SHARED_SECRET:BACKEND"
+    );
+    return map;
+}
+
+[ExcludeFromCodeCoverage]
+static void AddCallerSecret(
+    Dictionary<string, string> map,
+    IConfiguration config,
+    string callerName,
+    string clientIdKey,
+    string clientIdDefault,
+    string secretKey
+)
+{
+    var secret = config.GetValue<string>(secretKey);
+    if (string.IsNullOrEmpty(secret))
+    {
+        // Caller not configured yet — same "not signed" posture as today
+        // when AUTH_SHARED_SECRET was unset.
+        return;
+    }
+
+    var clientId = config.GetValue(clientIdKey, clientIdDefault);
+
+    // Fail LOUD: two callers configured to assert the same clientId would
+    // mean the second caller's secret silently overwrites the first's in
+    // the map, breaking the first caller's signing and defeating the
+    // entire point of per-caller secrets (RA-345). Always a config
+    // mistake — never a legitimate state — so this throws rather than
+    // silently letting the later AddCallerSecret call win.
+    if (map.ContainsKey(clientId))
+    {
+        throw new InvalidOperationException(
+            $"ClientIdAuthentication misconfigured: caller '{callerName}' asserts "
+                + $"clientId '{clientId}' (via {clientIdKey}), which is already registered to "
+                + "another caller. Each caller must have a distinct clientId — check for a "
+                + "copy-pasted or missing override."
+        );
+    }
+
+    map[clientId] = secret;
 }
 
 [ExcludeFromCodeCoverage]
@@ -226,8 +363,8 @@ static void ConfigureHeaderPropagation(IServiceCollection services, IConfigurati
         //     burned in THIS API's replay cache. Forwarding any of them
         //     downstream would either leak the integrity proof to another
         //     service or replay the nonce out of band.
-        //   * x-cdp-user-id, x-cdp-user-name, x-cdp-user-roles,
-        //     x-cdp-cognito-client-id — identity headers from the BFF are
+        //   * x-cdp-user-id, x-cdp-user-name,
+        //     x-cdp-client-id — identity headers from the BFF are
         //     for THIS service to consume; downstream services that need
         //     them must mint their own.
         //
@@ -251,6 +388,21 @@ static void ConfigureHeaderPropagation(IServiceCollection services, IConfigurati
 static void ConfigureHttpClients(IServiceCollection services)
 {
     services.AddTransient<ProxyHttpMessageHandler>();
+
+    // RA-311/MBE-1: plain, unproxied client for direct CDP-service-to-CDP-service
+    // calls (the operator backend push adapter) — mirrors the operator
+    // backend's own "DefaultClient" registration, which it uses for its own
+    // calls into this service. UseProxy = false is required, not optional:
+    // omitting the primary handler here would silently inherit
+    // HttpClient.DefaultProxy (set process-wide above for the Notify SDK),
+    // routing this internal cdp-int.defra.cloud traffic through Squid, which
+    // doesn't allow-list it and 502s the tunnel (see RA-311
+    // query-push-proxy-fix; caught this in CDP `test`, not locally, because
+    // HTTPS_PROXY is only set in CDP).
+    services
+        .AddHttpClient("DefaultClient")
+        .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseProxy = false })
+        .AddHeaderPropagation();
 
     // services.AddHttpClientWithTracing<IExampleClient, ExampleClient>();
     // services.AddHttpClientWithProxy<IExternalClient, ExternalClient>();
@@ -284,8 +436,7 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
 [ExcludeFromCodeCoverage]
 static void ConfigureReEx(IServiceCollection services, IConfiguration configuration)
 {
-    services.AddOptions<ReExAccreditationConfig>()
-        .Bind(configuration.GetSection("ReExApi"));
+    services.AddOptions<ReExAccreditationConfig>().Bind(configuration.GetSection("ReExApi"));
 
     var username = configuration.GetValue<string>("REEX_API_BASIC_AUTH_USERNAME");
 
@@ -298,11 +449,63 @@ static void ConfigureReEx(IServiceCollection services, IConfiguration configurat
     services.Configure<ReExAccreditationCredentials>(creds =>
     {
         creds.Username = username;
-        creds.Password = configuration.GetValue<string>("REEX_API_BASIC_AUTH_PASSWORD") ?? string.Empty;
+        creds.Password =
+            configuration.GetValue<string>("REEX_API_BASIC_AUTH_PASSWORD") ?? string.Empty;
     });
     services.AddTransient<ReExBasicAuthHandler>();
-    services.AddHttpClientWithProxy<IReExAccreditationClient, HttpReExAccreditationClient>()
+    services
+        .AddHttpClientWithProxy<IReExAccreditationClient, HttpReExAccreditationClient>()
         .AddHttpMessageHandler<ReExBasicAuthHandler>();
+}
+
+/// <summary>
+/// RA-311/MBE-1: outbound push-to-operator-backend wiring. Adapter selection
+/// is keyed off the explicit <c>OperatorBackendApi:Enabled</c> switch
+/// (defaulting to <c>false</c>), not off whether <c>Url</c> happens to be
+/// set — so a deploy of this code is behaviour-neutral until the flag is
+/// turned on per environment, and the same flag doubles as the rollback
+/// lever (MBE-F5). When disabled, the no-op adapter is registered (the
+/// query flow still succeeds — the push is fire-and-forget) and a startup
+/// warning is logged once via
+/// <see cref="OperatorBackendPushDisabledWarningHostedService"/>. When
+/// enabled, <see cref="OperatorBackendApiConfigValidator"/> fails startup if
+/// <c>Url</c>/<c>ClientId</c>/<c>SharedSecret</c> are incomplete, rather than
+/// letting every push fail silently at runtime. Mirrors
+/// <see cref="ConfigureReEx"/>'s stub/real selection.
+/// </summary>
+[ExcludeFromCodeCoverage]
+static void ConfigureOperatorBackendPush(IServiceCollection services, IConfiguration configuration)
+{
+    // SharedSecret is deliberately NOT part of the OperatorBackendApi__* section —
+    // CDP's secrets naming convention is a flat UPPER_SNAKE_CASE name, not the
+    // nested Section__Property form the rest of this config uses — so it's
+    // sourced from OPERATOR_BACKEND_SHARED_SECRET instead (same flat name the
+    // operator backend's CaseManagementAuth verifies inbound pushes against).
+    services
+        .AddOptions<OperatorBackendApiConfig>()
+        .Configure<IConfiguration>(
+            (options, config) =>
+            {
+                config.GetSection("OperatorBackendApi").Bind(options);
+                options.SharedSecret = config.GetValue<string>("OPERATOR_BACKEND_SHARED_SECRET");
+            }
+        )
+        .ValidateOnStart();
+    services.AddSingleton<
+        IValidateOptions<OperatorBackendApiConfig>,
+        OperatorBackendApiConfigValidator
+    >();
+
+    var enabled = configuration.GetSection("OperatorBackendApi").GetValue("Enabled", false);
+
+    if (!enabled)
+    {
+        services.AddSingleton<IOperatorBackendPushAdapter, NullOperatorBackendPushAdapter>();
+        services.AddHostedService<OperatorBackendPushDisabledWarningHostedService>();
+        return;
+    }
+
+    services.AddSingleton<IOperatorBackendPushAdapter, HttpOperatorBackendPushAdapter>();
 }
 
 /// <summary>
@@ -315,8 +518,7 @@ static void ConfigureReEx(IServiceCollection services, IConfiguration configurat
 [ExcludeFromCodeCoverage]
 static void ConfigureNotifications(IServiceCollection services, IConfiguration configuration)
 {
-    services.AddOptions<NotifyConfig>()
-        .Bind(configuration.GetSection("Notify"));
+    services.AddOptions<NotifyConfig>().Bind(configuration.GetSection("Notify"));
 
     var apiKey = configuration.GetValue<string>("NOTIFY_API_KEY");
 
@@ -330,7 +532,8 @@ static void ConfigureNotifications(IServiceCollection services, IConfiguration c
     services.AddSingleton<IAsyncNotificationClient>(_ =>
         string.IsNullOrWhiteSpace(baseUri)
             ? new NotificationClient(apiKey)
-            : new NotificationClient(baseUri, apiKey));
+            : new NotificationClient(baseUri, apiKey)
+    );
     services.AddSingleton<INotifyClient, GovukNotifyClient>();
 }
 
@@ -351,70 +554,78 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
     // Cors:AllowedOrigins via WebApplicationFactory.ConfigureAppConfiguration
     // (which fires during builder.Build(), after this method runs) can still
     // override the value.
-    services.AddOptions<Microsoft.AspNetCore.Cors.Infrastructure.CorsOptions>()
-        .Configure<IConfiguration>((options, config) =>
-        {
-            var allowedOrigins = config.GetSection("Cors:AllowedOrigins")
-                .Get<string[]>() ?? Array.Empty<string>();
-            var traceHeader = config.GetValue<string>("TraceHeader");
-
-            options.AddPolicy("BackendCors", policy =>
+    services
+        .AddOptions<Microsoft.AspNetCore.Cors.Infrastructure.CorsOptions>()
+        .Configure<IConfiguration>(
+            (options, config) =>
             {
-                if (allowedOrigins.Length == 0)
-                {
-                    // Deny-all: no allowed origin and no wildcard. Browser
-                    // requests from any origin will receive no CORS headers and
-                    // will be blocked by the browser.
-                    policy.WithOrigins().DisallowCredentials();
-                    return;
-                }
+                var allowedOrigins =
+                    config.GetSection("Cors:AllowedOrigins").Get<string[]>()
+                    ?? Array.Empty<string>();
+                var traceHeader = config.GetValue<string>("TraceHeader");
 
-                // EXPLICIT allow-list of request headers a browser is
-                // permitted to send cross-origin. This is a security
-                // boundary: a header that is NOT here will fail a CORS
-                // preflight and the browser will refuse to issue the
-                // request. Mirror of the propagation allow-list above —
-                // keep them in sync.
-                //
-                // Things deliberately NOT advertised:
-                //   * Authorization, Cookie  — we do not accept caller
-                //     credentials over CORS. CDP traffic reaches this
-                //     service via the server-side BFF, not directly from
-                //     a browser.
-                //   * x-cdp-auth-signature, x-cdp-auth-timestamp,
-                //     x-cdp-auth-nonce, x-api-key — HMAC inputs are
-                //     injected by the BFF server-side and must never
-                //     originate from a browser. The HMAC check remains
-                //     the primary defence; excluding them here ensures a
-                //     browser preflight cannot even smuggle them.
-                //   * x-cdp-user-id, x-cdp-user-name, x-cdp-user-roles,
-                //     x-cdp-cognito-client-id — identity headers are
-                //     BFF-injected and must not be browser-supplied.
-                //
-                // To advertise a new header, add it here AND document why
-                // it is browser-legitimate.
-                var allowedHeaders = new List<string>
-                {
-                    // Standard request payload negotiation.
-                    "Content-Type",
-                    "Accept",
-                    // W3C trace context — same headers we propagate
-                    // outbound. Carry no authority.
-                    "traceparent",
-                    "tracestate",
-                    "x-request-id",
-                };
-                if (!string.IsNullOrWhiteSpace(traceHeader))
-                {
-                    allowedHeaders.Add(traceHeader);
-                }
+                options.AddPolicy(
+                    "BackendCors",
+                    policy =>
+                    {
+                        if (allowedOrigins.Length == 0)
+                        {
+                            // Deny-all: no allowed origin and no wildcard. Browser
+                            // requests from any origin will receive no CORS headers and
+                            // will be blocked by the browser.
+                            policy.WithOrigins().DisallowCredentials();
+                            return;
+                        }
 
-                policy.WithOrigins(allowedOrigins)
-                      .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-                      .WithHeaders([.. allowedHeaders])
-                      .DisallowCredentials();
-            });
-        });
+                        // EXPLICIT allow-list of request headers a browser is
+                        // permitted to send cross-origin. This is a security
+                        // boundary: a header that is NOT here will fail a CORS
+                        // preflight and the browser will refuse to issue the
+                        // request. Mirror of the propagation allow-list above —
+                        // keep them in sync.
+                        //
+                        // Things deliberately NOT advertised:
+                        //   * Authorization, Cookie  — we do not accept caller
+                        //     credentials over CORS. CDP traffic reaches this
+                        //     service via the server-side BFF, not directly from
+                        //     a browser.
+                        //   * x-cdp-auth-signature, x-cdp-auth-timestamp,
+                        //     x-cdp-auth-nonce, x-api-key — HMAC inputs are
+                        //     injected by the BFF server-side and must never
+                        //     originate from a browser. The HMAC check remains
+                        //     the primary defence; excluding them here ensures a
+                        //     browser preflight cannot even smuggle them.
+                        //   * x-cdp-user-id, x-cdp-user-name,
+                        //     x-cdp-client-id — identity headers are
+                        //     BFF-injected and must not be browser-supplied.
+                        //
+                        // To advertise a new header, add it here AND document why
+                        // it is browser-legitimate.
+                        var allowedHeaders = new List<string>
+                        {
+                            // Standard request payload negotiation.
+                            "Content-Type",
+                            "Accept",
+                            // W3C trace context — same headers we propagate
+                            // outbound. Carry no authority.
+                            "traceparent",
+                            "tracestate",
+                            "x-request-id",
+                        };
+                        if (!string.IsNullOrWhiteSpace(traceHeader))
+                        {
+                            allowedHeaders.Add(traceHeader);
+                        }
+
+                        policy
+                            .WithOrigins(allowedOrigins)
+                            .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+                            .WithHeaders([.. allowedHeaders])
+                            .DisallowCredentials();
+                    }
+                );
+            }
+        );
 }
 
 /// <summary>
@@ -427,19 +638,21 @@ static void ConfigureCors(IServiceCollection services, IConfiguration configurat
 static void LogNotifyClientRegistration(WebApplication app)
 {
     var notifyClient = app.Services.GetRequiredService<INotifyClient>();
-    var notifyOptions = app.Services
-        .GetRequiredService<Microsoft.Extensions.Options.IOptions<NotifyConfig>>()
+    var notifyOptions = app
+        .Services.GetRequiredService<Microsoft.Extensions.Options.IOptions<NotifyConfig>>()
         .Value;
     var apiKeyConfigured = !string.IsNullOrWhiteSpace(
-        app.Configuration.GetValue<string>("NOTIFY_API_KEY"));
+        app.Configuration.GetValue<string>("NOTIFY_API_KEY")
+    );
     app.Logger.LogInformation(
-        "Notify integration: client={NotifyClientType} apiKeyConfigured={ApiKeyConfigured} " +
-        "baseUri={NotifyBaseUri} timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
+        "Notify integration: client={NotifyClientType} apiKeyConfigured={ApiKeyConfigured} "
+            + "baseUri={NotifyBaseUri} timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
         notifyClient.GetType().FullName,
         apiKeyConfigured,
         string.IsNullOrWhiteSpace(notifyOptions.BaseUri) ? "<sdk-default>" : notifyOptions.BaseUri,
         notifyOptions.RequestTimeoutSeconds,
-        notifyOptions.Templates.Count);
+        notifyOptions.Templates.Count
+    );
 }
 
 [ExcludeFromCodeCoverage]
@@ -475,16 +688,20 @@ static void ConfigureEndpoints(WebApplication app)
     // bare "answer 200 if the pipeline parsed the request" probe would
     // never let Kubernetes / CDP recycle a deadlocked or thread-pool-
     // starved pod.
-    app.MapHealthChecks("/health", new HealthCheckOptions
-    {
-        Predicate = check => check.Tags.Contains("live")
-    }).AllowAnonymous();
+    app.MapHealthChecks(
+            "/health",
+            new HealthCheckOptions { Predicate = check => check.Tags.Contains("live") }
+        )
+        .AllowAnonymous()
+        .WithMetadata(new HttpMethodMetadata(new[] { HttpMethods.Get, HttpMethods.Head }));
     // Readiness: only the "ready"-tagged checks run (currently MongoDB).
     // CDP / Kubernetes uses this to decide when to send traffic.
-    app.MapHealthChecks("/health/ready", new HealthCheckOptions
-    {
-        Predicate = check => check.Tags.Contains("ready")
-    }).AllowAnonymous();
+    app.MapHealthChecks(
+            "/health/ready",
+            new HealthCheckOptions { Predicate = check => check.Tags.Contains("ready") }
+        )
+        .AllowAnonymous()
+        .WithMetadata(new HttpMethodMetadata(new[] { HttpMethods.Get, HttpMethods.Head }));
 
     // OpenAPI document at the conventional /openapi/{documentName}.json
     // route. Anonymous on purpose: the BFF and platform tooling fetch it
@@ -505,8 +722,10 @@ static void ConfigureEndpoints(WebApplication app)
         // Serve the stub-user picker JS that augments the Swagger UI
         // topbar with a dev-only dropdown. Anonymous: the JS contains no
         // secrets, only the dev-fixture stub user list. RA-124.
-        app.MapGet(SwaggerUiStubUserAssets.ScriptPath, () =>
-            Results.Content(SwaggerUiStubUserAssets.ScriptBody, "application/javascript"))
+        app.MapGet(
+                SwaggerUiStubUserAssets.ScriptPath,
+                () => Results.Content(SwaggerUiStubUserAssets.ScriptBody, "application/javascript")
+            )
             .AllowAnonymous()
             .ExcludeFromDescription();
 

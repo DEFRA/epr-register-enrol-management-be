@@ -12,8 +12,28 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v5", _type.TemplateVersion);
+        Assert.Equal("v11", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
+    }
+
+    // RA-324/AC06: state DisplayNames align with the "Applications" design.
+    // Only the labels changed; the ids are the wire contract and stay put.
+    [Theory]
+    [InlineData("submitted", "Not started")]
+    [InlineData("assessment-in-progress", "Updated")]
+    [InlineData("approved", "Granted")]
+    [InlineData("rejected", "Refused")]
+    // Untouched labels — proves the rename did not spill over.
+    [InlineData("duly-made", "Duly made")]
+    [InlineData("awaiting-decision", "Awaiting decision")]
+    [InlineData("queried", "Queried")]
+    [InlineData("updated", "Updated")]
+    [InlineData("withdrawn", "Withdrawn")]
+    public void States_declare_expected_display_names(string stateId, string expectedDisplayName)
+    {
+        var state = _type.States.Single(s => s.Id == stateId);
+
+        Assert.Equal(expectedDisplayName, state.DisplayName);
     }
 
     [Fact]
@@ -34,6 +54,8 @@ public class ReAccreditationTypeTests
         Assert.False(states["awaiting-decision"].IsTerminal);
         Assert.True(states.ContainsKey("queried"));
         Assert.False(states["queried"].IsTerminal);
+        Assert.True(states.ContainsKey("updated"));
+        Assert.False(states["updated"].IsTerminal);
     }
 
     [Theory]
@@ -43,12 +65,28 @@ public class ReAccreditationTypeTests
     // RA-132: approve is NOT a generic-engine transition; it is handled
     // exclusively by ReAccreditationApprovalService.
     [InlineData("reject", "awaiting-decision", "rejected", true)]
+    // RA-291: query is available from every pre-decision state.
+    [InlineData("query-during-duly-making", "submitted", "queried", false)]
+    [InlineData("query-during-duly-made", "duly-made", "queried", false)]
     [InlineData("query-during-assessment", "assessment-in-progress", "queried", false)]
     [InlineData("query-during-decision", "awaiting-decision", "queried", false)]
+    // RA-311/MBE-1: the inverse of the four query-during-* transitions above.
+    // RA-337: these land on 'updated', not the originating state directly.
+    [InlineData("resume-during-duly-making", "queried", "updated", false)]
+    [InlineData("resume-during-duly-made", "queried", "updated", false)]
+    [InlineData("resume-during-assessment", "queried", "updated", false)]
+    [InlineData("resume-during-decision", "queried", "updated", false)]
+    // RA-337: the inverse of the four resume-during-* transitions above.
+    [InlineData("continue-review-during-duly-making", "updated", "submitted", false)]
+    [InlineData("continue-review-during-duly-made", "updated", "duly-made", false)]
+    [InlineData("continue-review-during-assessment", "updated", "assessment-in-progress", false)]
+    [InlineData("continue-review-during-decision", "updated", "awaiting-decision", false)]
     [InlineData("withdraw", "submitted", "withdrawn", false)]
     [InlineData("withdraw-during-duly-made", "duly-made", "withdrawn", false)]
     [InlineData("withdraw-during-assessment", "assessment-in-progress", "withdrawn", false)]
     [InlineData("withdraw-during-decision", "awaiting-decision", "withdrawn", false)]
+    [InlineData("withdraw-during-query", "queried", "withdrawn", false)]
+    [InlineData("withdraw-during-updated", "updated", "withdrawn", false)]
     public void Declares_expected_transition(
         string actionId,
         string fromStateId,
@@ -65,10 +103,10 @@ public class ReAccreditationTypeTests
     }
 
     [Theory]
-    [InlineData(
-        "submitted",
-        new[] { "verify-organisation-details", "confirm-application-completeness" }
-    )]
+    // RA-316: 'submitted' declares no tasks. Duly making is an explicit call to
+    // action carrying a payment date, so the two tasks that used to drive the
+    // auto-transition out of this state were deleted with the hook.
+    [InlineData("submitted", new string[0])]
     [InlineData("duly-made", new[] { "confirm-registration-fee-paid" })]
     [InlineData(
         "assessment-in-progress",

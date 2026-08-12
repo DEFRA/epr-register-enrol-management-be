@@ -1,11 +1,13 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -35,25 +37,39 @@ public class ReAccreditationLifecycleTests
                 cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg-id"));
-        var dulyMadeHook = new ReAccreditationDulyMadeHook(
-            persistence,
-            notifyClient,
+        var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
+        pushAdapter
+            .PushStatusChangedAsync(
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Skipped("test"));
+        var statusPushHook = new ReAccreditationStatusPushHook(
+            pushAdapter,
             auditAppender,
+            NullLogger<ReAccreditationStatusPushHook>.Instance
+        );
+        // RA-316: duly making is an explicit regulator action carrying a payment
+        // date, not a side effect of ticking a checklist, so it is driven here
+        // by its own service exactly as the walk-through would drive it.
+        var dulyMakingService = new ReAccreditationDulyMakingService(
+            persistence,
+            new WorkItemRegistry([type]),
+            [statusPushHook],
             TimeProvider.System,
-            NullLogger<ReAccreditationDulyMadeHook>.Instance
+            NullLogger<ReAccreditationDulyMakingService>.Instance
         );
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance,
-            postTaskHooks: [dulyMadeHook]
+            NullLogger<WorkItemService>.Instance
         );
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
         idGenerator
-            .GenerateAsync(Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .GenerateAsync(Arg.Any<BsonDocument>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns("ACC-2027-X-TEST0000");
         var approvalService = new ReAccreditationApprovalService(
             persistence,
+            new WorkItemRegistry([type]),
             idGenerator,
             Substitute.For<IBackgroundTaskQueue>(),
             [],
@@ -77,17 +93,28 @@ public class ReAccreditationLifecycleTests
                 [
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
-                    new Claim("cognito:client_id", tenantClientId),
+                    new Claim("client_id", tenantClientId),
                     new Claim(ClaimTypes.Role, "reaccreditation-decision-maker"),
                 ],
                 "test"
             )
         );
 
-        // Completing all submitted-state tasks auto-triggers the hook which
-        // transitions the item to duly-made (no separate action call needed).
-        await CompleteAll(engine, workItem.Id, type, "submitted", user, ct);
+        // RA-316: 'submitted' has no tasks at all now. The regulator presses
+        // "Duly make" and supplies the payment date the SLA clock is anchored
+        // to, which is the only way out of 'submitted'.
+        Assert.Empty(type.GetTasksForState("submitted"));
+        var paymentDate = new DateOnly(2027, 1, 20);
+        Assert.True(
+            (
+                await dulyMakingService.CompleteDulyMakingAsync(workItem.Id, paymentDate, user, ct)
+            ).IsSuccess
+        );
         Assert.Equal("duly-made", workItem.StateId);
+        Assert.Equal(
+            paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            workItem.SlaClock!.StartedAt
+        );
 
         await CompleteAll(engine, workItem.Id, type, "duly-made", user, ct);
         Assert.True(
@@ -108,11 +135,13 @@ public class ReAccreditationLifecycleTests
 
         Assert.Equal("approved", workItem.StateId);
 
-        // 2 task-completed (submitted) + 1 action-applied:duly-make + 1 sla-clock-started (hook)
+        // RA-316: 'submitted' contributes no task-completed entries any more
+        // (it has no tasks), so the walk is two entries shorter than before.
+        // 1 action-applied:duly-make + 1 sla-clock-started
         // + 1 task-completed (duly-made) + 1 action-applied:payment-received
         // + 3 task-completed (assessment-in-progress) + 1 action-applied:submit-for-decision
-        // + 1 task-completed (awaiting-decision) + 3 approval entries = 14 total.
-        Assert.Equal(14, workItem.AuditLog.Count);
+        // + 1 task-completed (awaiting-decision) + 3 approval entries = 12 total.
+        Assert.Equal(12, workItem.AuditLog.Count);
         Assert.Contains(
             workItem.AuditLog,
             e =>
@@ -195,6 +224,71 @@ public class ReAccreditationLifecycleTests
         var result = await engine.ApplyActionAsync(
             workItem.Id,
             "withdraw-during-decision",
+            user,
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("withdrawn", workItem.StateId);
+    }
+
+    [Fact]
+    public async Task Withdraw_from_queried_is_allowed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var type = new ReAccreditationType();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var engine = new WorkItemService(
+            new WorkItemRegistry([type]),
+            persistence,
+            NullLogger<WorkItemService>.Instance
+        );
+
+        var workItem = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = "queried",
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+        persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var user = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("user:id", "alice-1")], "test")
+        );
+        var result = await engine.ApplyActionAsync(workItem.Id, "withdraw-during-query", user, ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("withdrawn", workItem.StateId);
+    }
+
+    [Fact]
+    public async Task Withdraw_from_updated_is_allowed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var type = new ReAccreditationType();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var engine = new WorkItemService(
+            new WorkItemRegistry([type]),
+            persistence,
+            NullLogger<WorkItemService>.Instance
+        );
+
+        var workItem = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = "updated",
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+        persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var user = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("user:id", "alice-1")], "test")
+        );
+        var result = await engine.ApplyActionAsync(
+            workItem.Id,
+            "withdraw-during-updated",
             user,
             ct
         );
@@ -305,6 +399,112 @@ public class ReAccreditationLifecycleTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
         Assert.Equal(terminalStateId, workItem.StateId);
+    }
+
+    /// <summary>
+    /// RA-291: a query raised against the real engine (not a substituted
+    /// one) moves the item to <c>queried</c> from every pre-decision state
+    /// without any task having to be completed first, and a second query
+    /// against the now-queried item is refused.
+    /// </summary>
+    [Theory]
+    [InlineData("submitted", "query-during-duly-making")]
+    [InlineData("duly-made", "query-during-duly-made")]
+    [InlineData("assessment-in-progress", "query-during-assessment")]
+    [InlineData("awaiting-decision", "query-during-decision")]
+    public async Task Query_moves_the_item_to_queried_from_any_pre_decision_state(
+        string stateId,
+        string expectedActionId
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var type = new ReAccreditationType();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+        var engine = new WorkItemService(
+            new WorkItemRegistry([type]),
+            persistence,
+            NullLogger<WorkItemService>.Instance
+        );
+        // The query stamps the open query with a targeted payload write
+        // before transitioning; the substitute must report a match.
+        persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<BsonValue>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+        var queryService = new ReAccreditationQueryService(
+            persistence,
+            engine,
+            auditAppender,
+            NullLogger<ReAccreditationQueryService>.Instance
+        );
+
+        const string tenantClientId = "test-client";
+        var workItem = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = stateId,
+            SubmittedBy = tenantClientId,
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+        persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var user = new ClaimsPrincipal(
+            new ClaimsIdentity(
+                [new Claim("user:id", "alice-1"), new Claim("client_id", tenantClientId)],
+                "test"
+            )
+        );
+
+        string[] sections = ["business-plan"];
+        var result = await queryService.QueryAsync(
+            workItem.Id,
+            sections,
+            "Please confirm the tonnage figures.",
+            user,
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("queried", workItem.StateId);
+        // No task had to be completed first: the query transitions all
+        // declare RequiresAllTasksComplete: false.
+        Assert.Contains(
+            workItem.AuditLog,
+            e =>
+                e.Action == "action-applied"
+                && e.Details.GetValueOrDefault("actionId") == expectedActionId
+        );
+
+        // An application awaiting a response cannot be queried again — the
+        // state machine has no transition out of 'queried', and the service
+        // reports it as an invalid transition (409) rather than blowing up.
+        var second = await queryService.QueryAsync(
+            workItem.Id,
+            sections,
+            "Please confirm the tonnage figures.",
+            user,
+            ct
+        );
+
+        Assert.False(second.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, second.FailureCode);
+        Assert.Equal("queried", workItem.StateId);
     }
 
     private static async Task CompleteAll(

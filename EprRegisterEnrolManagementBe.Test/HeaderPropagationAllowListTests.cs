@@ -35,8 +35,7 @@ public class HeaderPropagationAllowListTests
         "x-api-key",
         "x-cdp-user-id",
         "x-cdp-user-name",
-        "x-cdp-user-roles",
-        "x-cdp-cognito-client-id",
+        "x-cdp-client-id",
     };
 
     [Theory]

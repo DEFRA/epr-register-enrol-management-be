@@ -40,7 +40,7 @@ public sealed class WorkItem
     /// </summary>
     public DateTime LastModifiedAt { get; set; }
 
-    /// <summary>Identifier of the upstream caller that submitted the item (CDP Cognito client id).</summary>
+    /// <summary>Identifier of the upstream caller that submitted the item (CDP client id).</summary>
     public string? SubmittedBy { get; init; }
 
     /// <summary>

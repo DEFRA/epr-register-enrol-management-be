@@ -20,14 +20,6 @@ internal sealed class WorkItemEndpointsLogger;
 /// </summary>
 public static class WorkItemEndpoints
 {
-    /// <summary>
-    /// Role that lets a user read every work item regardless of submitter.
-    /// Standard callers (organisations / BFFs acting on their behalf) only
-    /// see items they themselves submitted; case workers / assessors with
-    /// this role see all of them.
-    /// </summary>
-    public const string CaseWorkerRole = "case-worker";
-
     // Request body size caps (epr-rvz). The work item endpoints all parse
     // their JSON body manually after .DisableValidation(), so without an
     // explicit cap an attacker can POST arbitrarily large payloads and
@@ -125,7 +117,7 @@ public static class WorkItemEndpoints
                 ["url.path"] = req.Path.Value,
                 ["http.request.body"] = loggedBody,
                 ["caller.client_id"] = req.Headers.TryGetValue(
-                    "x-cdp-cognito-client-id",
+                    "x-cdp-client-id",
                     out var cid
                 )
                     ? cid.ToString()
@@ -211,7 +203,7 @@ public static class WorkItemEndpoints
         }
 
         var submittedBy =
-            httpContext.User.FindFirstValue("cognito:client_id")
+            httpContext.User.FindFirstValue("client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
         // RA-126: optional caller-supplied audit context. 'source' is a
@@ -317,7 +309,7 @@ public static class WorkItemEndpoints
         var workItem = result.WorkItem!;
         log.Log(
             LogLevel.Information,
-            "Work item submission succeeded",
+            result.IsIdempotentReplay ? "Work item submission was an idempotent replay" : "Work item submission succeeded",
             new Dictionary<string, object?>
             {
                 ["work_item.id"] = workItem.Id.ToString(),
@@ -325,6 +317,15 @@ public static class WorkItemEndpoints
                 ["caller.client_id"] = submittedBy ?? "(unknown)",
             }
         );
+        // RA-311/MBE-3: a retried "submit application" call for an
+        // operatorApplicationId already on file is handed the existing
+        // work item rather than a new one — surface that via the same
+        // X-Idempotent-Replay header the other idempotent mutations use so
+        // a caller (the operator backend) can tell first-hit from replay.
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[IdempotentReplayHeader] = "true";
+        }
         var response = ToResponse(engine.Project(workItem));
         return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
     }
@@ -346,10 +347,8 @@ public static class WorkItemEndpoints
     )
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        if (workItem is null || !WorkItemTenancy.CanRead(httpContext.User, workItem))
+        if (workItem is null)
         {
-            // Always return NotFound for cross-tenant access to avoid
-            // leaking the existence of items the caller cannot see.
             return TypedResults.NotFound();
         }
         return TypedResults.Ok(ToResponse(engine.Project(workItem), timeProvider));
@@ -372,33 +371,6 @@ public static class WorkItemEndpoints
                 detail: $"'page' must be <= {WorkItemQuery.MaxPage}.",
                 statusCode: StatusCodes.Status400BadRequest
             );
-        }
-
-        // Tenancy isolation: standard callers only ever see items they
-        // themselves submitted. Case workers (with the case-worker role)
-        // bypass this filter and see everything.
-        if (!httpContext.User.IsInRole(CaseWorkerRole))
-        {
-            var callerClientId =
-                httpContext.User.FindFirstValue("cognito:client_id")
-                ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (string.IsNullOrEmpty(callerClientId))
-            {
-                // No identifiable submitter → no items can belong to the
-                // caller, so short-circuit with an empty page rather than
-                // ferrying a sentinel into the Mongo filter. Failing
-                // closed structurally means a future submitter id can
-                // never accidentally collide with the gate.
-                return TypedResults.Ok(
-                    new WorkItemListResponse(
-                        Array.Empty<WorkItemListItemResponse>(),
-                        TotalCount: 0,
-                        Page: query.NormalisedPage,
-                        PageSize: query.NormalisedPageSize
-                    )
-                );
-            }
-            query = query with { SubmittedBy = callerClientId };
         }
 
         var page = await persistence.QueryAsync(query, cancellationToken);
@@ -425,18 +397,10 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         [FromRoute] string taskId,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         var result = await engine.CompleteTaskAsync(
             id,
             taskId,
@@ -457,18 +421,10 @@ public static class WorkItemEndpoints
         [FromRoute] string taskId,
         JsonElement body,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
@@ -527,13 +483,30 @@ public static class WorkItemEndpoints
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
+        // Security boundary (RA-311/MBE-1 review): some transitions
+        // (currently the re-accreditation module's resume-during-*/
+        // continue-review-during-* pairs) are declared with
+        // CallerInvocable: false because several of them share the same
+        // FromStateId — the engine's normal "is the item in the right
+        // state" guard cannot tell them apart, so a caller who could invoke
+        // one directly here would pick the target state themselves instead
+        // of the module's bespoke service resolving it server-side from
+        // audit history. Checked against the work item's own frozen
+        // TemplateSnapshot (the same source ApplyActionAsync itself
+        // resolves the transition from) so this rejects using the exact
+        // rules the item was submitted under.
+        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
+        var transition = workItem?.TemplateSnapshot?.Transitions.FirstOrDefault(t =>
+            string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase));
+        if (transition is { CallerInvocable: false })
         {
-            return TypedResults.NotFound();
+            return ToHttpResult(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.UnknownAction,
+                    $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'."),
+                engine);
         }
+
         var result = await engine.ApplyActionAsync(
             id,
             actionId,
@@ -547,18 +520,10 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         JsonElement body,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
@@ -605,18 +570,10 @@ public static class WorkItemEndpoints
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Unassign(
         [FromRoute] Guid id,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         var result = await engine.UnassignAsync(id, httpContext.User, cancellationToken);
         if (result.IsIdempotentReplay)
         {
@@ -629,18 +586,10 @@ public static class WorkItemEndpoints
         [FromRoute] Guid id,
         JsonElement body,
         HttpContext httpContext,
-        [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
     {
-        if (
-            await EnsureTenantAccessAsync(id, httpContext.User, persistence, cancellationToken)
-            is null
-        )
-        {
-            return TypedResults.NotFound();
-        }
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
@@ -668,30 +617,6 @@ public static class WorkItemEndpoints
             cancellationToken
         );
         return ToHttpResult(result, engine);
-    }
-
-    /// <summary>
-    /// Tenancy gate for mutation handlers (epr-0t9). Loads the work item
-    /// and verifies the caller may see it via
-    /// <see cref="WorkItemTenancy.CanRead"/>; returns the loaded item on
-    /// success or <c>null</c> when the caller has no access (in which case
-    /// the handler should respond with NotFound to avoid leaking the
-    /// existence of cross-tenant items). Without this gate the engine
-    /// would happily mutate any item whose id the caller can guess.
-    /// </summary>
-    private static async Task<WorkItem?> EnsureTenantAccessAsync(
-        Guid id,
-        ClaimsPrincipal user,
-        IWorkItemPersistence persistence,
-        CancellationToken cancellationToken
-    )
-    {
-        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        if (workItem is null || !WorkItemTenancy.CanRead(user, workItem))
-        {
-            return null;
-        }
-        return workItem;
     }
 
     private static Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult> ToHttpResult(
@@ -799,9 +724,13 @@ public static class WorkItemEndpoints
                 .ToList(),
             slaRemaining,
             slaState,
+            ComputeSlaDueDate(w.SlaClock),
             w.Payload.TryGetValue("applicationReference", out var reference) && reference.IsString
                 ? reference.AsString
-                : null
+                : null,
+            // RA-372: falls back to the item's own state so the field is
+            // always populated, even for a projection built without one.
+            projection.TaskStateId ?? w.StateId
         );
     }
 
@@ -818,6 +747,18 @@ public static class WorkItemEndpoints
         var state = clock.ComputeState(now.Value);
         return (remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero, state);
     }
+
+    /// <summary>
+    /// RA-324 / RA-295: the absolute SLA deadline (<c>slaClock.StartedAt +
+    /// TargetDuration</c>) for the Applications card's and the case header's
+    /// "Due on:" line, or <c>null</c> when no SLA clock has started. Unlike
+    /// <see cref="ComputeSla"/> this needs no "now" — the deadline is a fixed
+    /// instant, not a relative countdown. Read straight off the live clock, so
+    /// an <see cref="ISlaService"/> extend or override is reflected
+    /// immediately.
+    /// </summary>
+    internal static DateTime? ComputeSlaDueDate(WorkItemSlaClock? clock) =>
+        clock is null ? null : clock.StartedAt + clock.TargetDuration;
 
     /// <summary>
     /// Slim per-item projection used by the list endpoint (epr-4pf).
@@ -851,7 +792,11 @@ public static class WorkItemEndpoints
             w.AssignedAt,
             w.AssignedBy,
             slaRemaining,
-            slaState
+            slaState,
+            ComputeSlaDueDate(w.SlaClock),
+            // RA-372: falls back to the item's own state so the field is
+            // always populated, even for a projection built without one.
+            projection.TaskStateId ?? w.StateId
         );
     }
 }

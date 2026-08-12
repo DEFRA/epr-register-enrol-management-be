@@ -1,5 +1,7 @@
+using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
@@ -204,6 +206,465 @@ public class ReAccreditationSeederTests
             var timestamps = item.AuditLog.Select(e => e.CreatedAt).ToList();
             Assert.Equal(timestamps.OrderBy(t => t).ToList(), timestamps);
         });
+    }
+
+    // ── RA-295: SLA clock ────────────────────────────────────────────────────
+
+    [Fact]
+    public void Build_items_past_submitted_carry_an_sla_clock()
+    {
+        // Every state after `submitted` is only reachable via `duly-made`,
+        // which stamps the clock. Without one the case header and the
+        // Applications card can render no "Due on" date.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var past = items.Where(i => i.StateId != "submitted").ToList();
+
+        Assert.NotEmpty(past);
+        Assert.All(past, item =>
+        {
+            Assert.NotNull(item.SlaClock);
+            Assert.Equal(item.SubmittedAt.AddDays(1), item.SlaClock!.StartedAt);
+            Assert.False(item.SlaClock.Breached);
+        });
+    }
+
+    [Fact]
+    public void Build_submitted_items_have_no_sla_clock()
+    {
+        // The clock has genuinely not started yet, so the due date must stay
+        // null and the UI must render a dash rather than a fabricated date.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var submitted = items.Where(i => i.StateId == "submitted").ToList();
+
+        Assert.NotEmpty(submitted);
+        Assert.All(submitted, item => Assert.Null(item.SlaClock));
+    }
+
+    [Fact]
+    public void Build_full_payload_fixture_lists_more_than_one_sampling_plan_document()
+    {
+        // AC02: supporting documents "should be listed" (plural). A
+        // single-file fixture cannot distinguish a template that renders
+        // every file from one that renders files[0] and stops.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var fullPayload = items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString == "Full Payload Verification Ltd");
+
+        var files = fullPayload.Payload["samplingPlan"]["files"].AsBsonArray;
+
+        Assert.True(files.Count > 1);
+        Assert.Equal(
+            files.Select(f => f["filename"].AsString).Distinct().Count(),
+            files.Count);
+    }
+
+    // ── RA-292: ORS / interim site / authority-to-issue fixture ──────────────
+
+    /// <summary>
+    /// The RA-292 fixture, located the way mgmt-tests locates it — by the
+    /// organisation name the work-items list is searchable on.
+    /// </summary>
+    private static WorkItem BuildOrsFixture()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        return items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.OrsInterimAuthorityOrganisationName);
+    }
+
+    private static BsonArray OrsSites(WorkItem item) =>
+        item.Payload["overseasSites"]["sites"].AsBsonArray;
+
+    [Fact]
+    public void Build_ra292_fixture_organisation_name_is_unique_across_the_seed_set()
+    {
+        // mgmt-tests reaches this item by searching the work-items list on the
+        // organisation name and asserting exactly one row. A duplicate here
+        // would make that search ambiguous and the spec flaky.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var matches = items.Count(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.OrsInterimAuthorityOrganisationName);
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_has_its_own_seed_key_so_it_lands_in_already_seeded_databases()
+    {
+        // Seeding is CreateIfAbsentAsync keyed by a deterministic id: it
+        // inserts, it never updates. Enriching an existing seed item would
+        // therefore be invisible in every environment that has already seeded.
+        // Pin the fixture to its own key so the id differs from the one the
+        // pre-RA-292 seed set already wrote.
+        var expectedId = WorkItemSeed.DeterministicId(
+            ReAccreditationType.Id, ReAccreditationSeeder.OrsInterimAuthoritySeedKey);
+
+        Assert.Equal(expectedId, BuildOrsFixture().Id);
+        Assert.NotEqual(
+            WorkItemSeed.DeterministicId(ReAccreditationType.Id, "full-payload-verification"),
+            expectedId);
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_carries_new_and_not_new_overseas_sites_on_one_item()
+    {
+        // AC01. Both polarities must sit on the SAME work item: a fixture that
+        // only carries `isNewSite: true` cannot tell a correct implementation
+        // from one that badges every site.
+        var sites = OrsSites(BuildOrsFixture());
+
+        Assert.Contains(sites, s =>
+            s.AsBsonDocument.Contains("isNewSite") && s["isNewSite"].AsBoolean);
+        Assert.Contains(sites, s =>
+            s.AsBsonDocument.Contains("isNewSite") && !s["isNewSite"].AsBoolean);
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_carries_an_overseas_site_with_no_isNewSite_key()
+    {
+        // Every RA-292 field is optional on the wire, so "absent" is a real
+        // rendering branch — and it is the one a pre-RA-292 submission takes.
+        var sites = OrsSites(BuildOrsFixture());
+
+        Assert.Contains(sites, s => !s.AsBsonDocument.Contains("isNewSite"));
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_carries_new_and_not_new_interim_sites()
+    {
+        // AC02. The interim site is nested inside a site, which is exactly the
+        // shape a shallow payload merge or a typed model would drop.
+        var sites = OrsSites(BuildOrsFixture());
+        var interimFlags = sites
+            .Select(s => s.AsBsonDocument)
+            .Where(s => s.Contains("interimSite"))
+            .Select(s => s["interimSite"]["isNewSite"].AsBoolean)
+            .ToList();
+
+        Assert.Contains(true, interimFlags);
+        Assert.Contains(false, interimFlags);
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_carries_an_overseas_site_with_no_interim_site()
+    {
+        // A site need not have an interim site at all — the frontend must not
+        // assume the key exists.
+        var sites = OrsSites(BuildOrsFixture());
+
+        Assert.Contains(sites, s => !s.AsBsonDocument.Contains("interimSite"));
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_populates_the_full_ors_detail_field_set()
+    {
+        // AC04: "the specific site data details are clearly displayed" needs a
+        // fixture that actually has those details. Pins the wire contract
+        // produced by the operator backend, so a field silently dropped from
+        // the seed (and therefore never rendered or asserted) fails here.
+        var site = OrsSites(BuildOrsFixture())
+            .Select(s => s.AsBsonDocument)
+            .Single(s => s.Contains("isNewSite") && s["isNewSite"].AsBoolean);
+
+        string[] expected =
+        [
+            "siteId", "orsId", "siteName", "siteAddress", "addressLine1", "addressLine2",
+            "townOrCity", "country", "coordinates", "contactName", "contactEmail",
+            "contactPhone", "operationCode", "code1", "code2", "code3", "repatriatedLoads",
+            "conditionsOfExport", "isEu", "isOecd", "isNewSite", "registeredNowAccredited",
+            "besEvidence", "interimSite"
+        ];
+
+        var missing = expected.Where(f => !site.Contains(f)).ToList();
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_populates_the_full_interim_site_field_set()
+    {
+        // AC04, interim half of the contract.
+        var interim = OrsSites(BuildOrsFixture())
+            .Select(s => s.AsBsonDocument)
+            .Where(s => s.Contains("interimSite"))
+            .Select(s => s["interimSite"].AsBsonDocument)
+            .Single(i => i["isNewSite"].AsBoolean);
+
+        string[] expected =
+        [
+            "siteId", "siteNumber", "isNewSite", "country", "siteName", "addressLine1",
+            "addressLine2", "townOrCity", "stateOrRegion", "postcode", "contactName",
+            "contactEmail", "contactPhone"
+        ];
+
+        var missing = expected.Where(f => !interim.Contains(f)).ToList();
+        Assert.Empty(missing);
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_field_types_match_the_operator_backend_wire_contract()
+    {
+        // Types are pinned against a captured operator-backend payload, not its
+        // model definitions, because two of them are counter-intuitive:
+        // `repatriatedLoads` is a STRING and `conditionsOfExport` a nullable
+        // BOOLEAN, while everything that reads like a flag really is boolean.
+        // Seeding the wrong primitive renders plausibly in some templates and
+        // silently breaks the badge logic in others, so the mismatch has to fail
+        // here rather than in a browser.
+        var sites = OrsSites(BuildOrsFixture()).Select(s => s.AsBsonDocument).ToList();
+
+        foreach (var site in sites.Where(s => s.Contains("isNewSite")))
+        {
+            Assert.Equal(BsonType.Boolean, site["isNewSite"].BsonType);
+        }
+
+        foreach (var site in sites.Where(s => s.Contains("repatriatedLoads")))
+        {
+            Assert.Equal(BsonType.String, site["repatriatedLoads"].BsonType);
+        }
+
+        foreach (var site in sites.Where(s => s.Contains("conditionsOfExport")))
+        {
+            Assert.Equal(BsonType.Boolean, site["conditionsOfExport"].BsonType);
+        }
+
+        foreach (var site in sites.Where(s => s.Contains("coordinates")))
+        {
+            Assert.Equal(BsonType.String, site["coordinates"].BsonType);
+        }
+
+        foreach (var flag in new[] { "isEu", "isOecd", "registeredNowAccredited" })
+        {
+            foreach (var site in sites.Where(s => s.Contains(flag)))
+            {
+                Assert.Equal(BsonType.Boolean, site[flag].BsonType);
+            }
+        }
+
+        foreach (var interim in sites
+            .Where(s => s.Contains("interimSite"))
+            .Select(s => s["interimSite"].AsBsonDocument))
+        {
+            Assert.Equal(BsonType.Boolean, interim["isNewSite"].BsonType);
+        }
+
+        foreach (var authoriser in BuildOrsFixture().Payload["prns"]["authorisers"].AsBsonArray
+            .Select(a => a.AsBsonDocument)
+            .Where(a => a.Contains("isNew")))
+        {
+            Assert.Equal(BsonType.Boolean, authoriser["isNew"].BsonType);
+        }
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_carries_new_not_new_and_unflagged_authorisers()
+    {
+        // AC03, all three observable states of the authority-to-issue flag.
+        var authorisers = BuildOrsFixture().Payload["prns"]["authorisers"].AsBsonArray
+            .Select(a => a.AsBsonDocument)
+            .ToList();
+
+        Assert.Contains(authorisers, a => a.Contains("isNew") && a["isNew"].AsBoolean);
+        Assert.Contains(authorisers, a => a.Contains("isNew") && !a["isNew"].AsBoolean);
+        Assert.Contains(authorisers, a => !a.Contains("isNew"));
+        Assert.All(authorisers, a =>
+        {
+            Assert.False(string.IsNullOrWhiteSpace(a["fullName"].AsString));
+            Assert.False(string.IsNullOrWhiteSpace(a["email"].AsString));
+        });
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_exercises_both_polarities_of_isEu_and_isOecd()
+    {
+        // If the frontend renders these two field-by-field rather than through
+        // a shared boolean helper, a fixture where every site is EU and OECD
+        // lets the false case be dropped unnoticed. Reached with a genuinely
+        // non-EU, non-OECD country rather than by mislabelling a European site
+        // — a fixture that asserts something factually false to hit a code path
+        // is worse than the gap it closes.
+        var sites = OrsSites(BuildOrsFixture()).Select(s => s.AsBsonDocument).ToList();
+
+        foreach (var flag in new[] { "isEu", "isOecd" })
+        {
+            Assert.Contains(sites, s => s.Contains(flag) && s[flag].AsBoolean);
+            Assert.Contains(sites, s => s.Contains(flag) && !s[flag].AsBoolean);
+        }
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_carries_an_empty_and_a_populated_bes_evidence_file_list()
+    {
+        // The producer always emits besEvidence with a files array, sending an
+        // EMPTY array when there is no evidence rather than omitting the key.
+        // That is a third rendering branch, distinct from a populated list and
+        // from the key being absent altogether.
+        var sites = OrsSites(BuildOrsFixture()).Select(s => s.AsBsonDocument).ToList();
+        var fileLists = sites
+            .Where(s => s.Contains("besEvidence"))
+            .Select(s => s["besEvidence"]["files"].AsBsonArray)
+            .ToList();
+
+        Assert.Contains(fileLists, f => f.Count > 0);
+        Assert.Contains(fileLists, f => f.Count == 0);
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_omits_optional_fields_rather_than_nulling_them()
+    {
+        // The producer serialises with WhenWritingNull, so an optional field
+        // with no value is an ABSENT KEY. A null-valued key would misrepresent
+        // a real submission and would exercise a rendering branch that cannot
+        // occur in production.
+        var sites = OrsSites(BuildOrsFixture()).Select(s => s.AsBsonDocument).ToList();
+
+        Assert.All(sites, site =>
+        {
+            Assert.DoesNotContain(site.Elements, e => e.Value.IsBsonNull);
+            if (site.Contains("interimSite"))
+            {
+                Assert.DoesNotContain(
+                    site["interimSite"].AsBsonDocument.Elements, e => e.Value.IsBsonNull);
+            }
+        });
+
+        Assert.All(
+            BuildOrsFixture().Payload["prns"]["authorisers"].AsBsonArray
+                .Select(a => a.AsBsonDocument),
+            a => Assert.DoesNotContain(a.Elements, e => e.Value.IsBsonNull));
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_bes_evidence_file_keys_match_the_producer_casing()
+    {
+        // `filename` is all-lowercase at the producer. A `fileName` seed would
+        // render blank in a template keyed on the real name, and no type in
+        // this codebase would catch it.
+        var file = OrsSites(BuildOrsFixture())
+            .Select(s => s.AsBsonDocument)
+            .Where(s => s.Contains("besEvidence"))
+            .SelectMany(s => s["besEvidence"]["files"].AsBsonArray)
+            .Select(f => f.AsBsonDocument)
+            .First();
+
+        Assert.True(file.Contains("filename"));
+        Assert.False(file.Contains("fileName"));
+    }
+
+    [Fact]
+    public void Build_ra292_fixture_bes_evidence_file_ids_are_unique_within_the_item()
+    {
+        // management-fe's download controller resolves a file by fileId across
+        // the whole payload, so a collision would serve the wrong document.
+        // The s3Key is deliberately shared with the full-payload fixture (one
+        // localstack object, two work items) — only the ids must differ.
+        var fileIds = OrsSites(BuildOrsFixture())
+            .Select(s => s.AsBsonDocument)
+            .Where(s => s.Contains("besEvidence"))
+            .SelectMany(s => s["besEvidence"]["files"].AsBsonArray)
+            .Select(f => f["fileId"].AsString)
+            .ToList();
+
+        Assert.NotEmpty(fileIds);
+        Assert.Equal(fileIds.Count, fileIds.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void Build_retains_a_work_item_with_no_overseas_sites_and_no_prns()
+    {
+        // The whole-item backwards-compatibility case: a pre-RA-292 submission
+        // carries none of these keys, and the overview page must still render.
+        // mgmt-tests already uses "Belfast Fibres Co" as its no-overseas-sites
+        // fixture; this stops a future seed change from quietly enriching every
+        // item and making that spec vacuous.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.Contains(items, i =>
+            !i.Payload.Contains("overseasSites") && !i.Payload.Contains("prns"));
+    }
+
+    /// <summary>
+    /// RA-316 regression guard. Seeded items are what every non-production
+    /// environment renders, the journey-test stack included, and the
+    /// duly-making page shows chargeAmountPence as the charge the regulator
+    /// confirms before recording payment. A seed without it renders "Not
+    /// provided" on the one screen whose entire purpose is confirming a
+    /// payment — and because the payload model is [BsonIgnoreExtraElements]
+    /// nothing throws, so the only signal is an e2e failure against a backend
+    /// that is working perfectly. Assert it here, where the cause is obvious.
+    /// </summary>
+    [Fact]
+    public void Every_seeded_item_carries_a_positive_charge_amount_in_pence()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.NotEmpty(items);
+
+        foreach (var item in items)
+        {
+            Assert.True(
+                item.Payload.Contains("chargeAmountPence"),
+                $"Seed '{item.Payload.GetValue("applicationReference", "?")}' has no "
+                    + "chargeAmountPence; the duly-making page would render no charge."
+            );
+            var charge = item.Payload["chargeAmountPence"];
+            Assert.True(charge.IsInt32 || charge.IsInt64, "chargeAmountPence must be an integer.");
+            // Pence, not pounds. A three-figure value where four are expected is
+            // the tell that someone stored 3276 instead of 327600.
+            Assert.True(charge.ToInt64() > 0, "chargeAmountPence must be positive.");
+
+            // RA-316: keep every seeded charge above £500 in pence. This looks
+            // arbitrary and is not — it protects an assertion in another repo.
+            //
+            // The mgmt-tests journey suite catches a missing /100 in the
+            // frontend by bounding the RENDERED charge below £50,000: correct
+            // rendering of our smallest seed is £546.00, the same value rendered
+            // undivided is £54,600.00, and the ceiling sits in that gap. That
+            // check only discriminates while every seeded value, rendered
+            // undivided, lands ABOVE the ceiling. Seed anything under 50000
+            // pence — 32800 for a single overseas site's £328 increment is the
+            // plausible mistake — and it renders undivided as £32,800, under the
+            // ceiling, so a pounds/pence bug passes silently for that item.
+            //
+            // The coupling is real but invisible from the other repo, so it is
+            // enforced here, where the values live. If a genuine sub-£500 fee
+            // band ever exists, coordinate with mgmt-tests before seeding it
+            // rather than deleting this assertion.
+            Assert.True(
+                charge.ToInt64() >= 50_000,
+                $"Seeded chargeAmountPence {charge.ToInt64()} is below 50000 pence (£500). "
+                    + "This silently weakens the mgmt-tests pounds/pence magnitude check — "
+                    + "see the comment above before changing it."
+            );
+        }
+    }
+
+    /// <summary>
+    /// paymentReference is an OVERRIDE, absent on real submissions because the
+    /// operator backend has no payment reference at submission time — the
+    /// frontend falls back to the application reference. Exactly one seed sets
+    /// it, so both the override and the far more common fallback path are
+    /// exercised in a seeded environment. Seeding it everywhere would leave the
+    /// fallback untested.
+    /// </summary>
+    [Fact]
+    public void Exactly_one_seeded_item_overrides_the_payment_reference()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var withOverride = items.Where(i => i.Payload.Contains("paymentReference")).ToList();
+
+        Assert.Single(withOverride);
+        Assert.False(
+            string.IsNullOrWhiteSpace(withOverride[0].Payload["paymentReference"].AsString)
+        );
+        // Every other seed relies on the applicationReference fallback, which
+        // the framework stamps on all of them.
+        Assert.All(items, i => Assert.True(i.Payload.Contains("applicationReference")));
     }
 }
 

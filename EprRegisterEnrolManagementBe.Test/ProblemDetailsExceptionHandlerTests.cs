@@ -1,4 +1,5 @@
 using System.Net;
+using MongoDB.Bson;
 using System.Net.Http.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -9,6 +10,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test;
 
@@ -37,7 +39,7 @@ public class ProblemDetailsExceptionHandlerTests
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new ThrowingFactory(_fixture);
         using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
 
         var response = await client.GetAsync("/work-items", ct);
 
@@ -79,6 +81,13 @@ public class ProblemDetailsExceptionHandlerTests
     /// </summary>
     private sealed class ThrowingOnQueryPersistence(IWorkItemPersistence inner) : IWorkItemPersistence
     {
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default) =>
+            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
@@ -87,6 +96,10 @@ public class ProblemDetailsExceptionHandlerTests
 
         public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default) =>
+            inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
 
         public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("boom");

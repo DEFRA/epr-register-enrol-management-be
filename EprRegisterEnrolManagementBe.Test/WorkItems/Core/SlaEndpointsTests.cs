@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -59,7 +60,7 @@ public class SlaEndpointsTests
         var ctx = new DefaultHttpContext();
         ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "tl-user"),
             new Claim(ClaimTypes.Role, "standard")
         ], "test"));
@@ -69,10 +70,8 @@ public class SlaEndpointsTests
     private static JsonElement Json(object value) =>
         JsonDocument.Parse(JsonSerializer.Serialize(value)).RootElement;
 
-    private SlaEndpointsTestFactory NewFactory(
-        string? userRoles = "standard",
-        string? userId = "tl-user") =>
-        new(_fixture, userRoles, userId);
+    private SlaEndpointsTestFactory NewFactory(string? userId = "tl-user") =>
+        new(_fixture, userId);
 
     // ── ExtendSla — handler unit tests ────────────────────────────────────────
 
@@ -494,18 +493,15 @@ public class SlaEndpointsTests
     {
         private readonly MongoIntegrationFixture _fixture;
         private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("sla-ep");
-        private readonly string? _userRoles;
         private readonly string? _userId;
 
         private EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory? _clientFactory;
 
         public SlaEndpointsTestFactory(
             MongoIntegrationFixture fixture,
-            string? userRoles,
             string? userId)
         {
             _fixture = fixture;
-            _userRoles = userRoles;
             _userId = userId;
         }
 
@@ -535,11 +531,9 @@ public class SlaEndpointsTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
             if (_userId is not null)
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);
-            if (_userRoles is not null)
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", _userRoles);
         }
 
         async ValueTask IAsyncDisposable.DisposeAsync()

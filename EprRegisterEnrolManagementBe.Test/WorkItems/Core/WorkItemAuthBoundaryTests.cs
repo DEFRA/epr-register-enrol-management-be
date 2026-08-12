@@ -8,13 +8,14 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
 /// <summary>
 /// epr-dt2: negative-path coverage for the auth and assignment role
 /// boundaries documented in AGENTS.md. Every test exercises the real
-/// pipeline (CognitoClientIdAuthenticationHandler, routing,
+/// pipeline (ClientIdAuthenticationHandler, routing,
 /// ProblemDetails) against ephemeral MongoDB so it can also assert the
 /// fail-closed property — that no audit entry is written and no on-disk
 /// version is bumped when the request is denied.
@@ -58,7 +59,7 @@ public class WorkItemAuthBoundaryTests
         // The handler ignores whitespace user-id headers; the engine then
         // sees no 'user:id' claim and refuses the mutation. This is the
         // "claim present-ish but resolves to null/empty" path
-        // (CognitoClientIdAuthenticationHandler whitespace filter +
+        // (ClientIdAuthenticationHandler whitespace filter +
         // WorkItemService.ResolveActorUserId).
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BoundaryFactory(_fixture, userId: "   ");
@@ -149,54 +150,19 @@ public class WorkItemAuthBoundaryTests
         Assert.Single(persisted.AuditLog);
     }
 
-    // ---------------- Cross-tenant GET / LIST denial ----------------
-
-    [Fact]
-    public async Task Get_by_id_returns_404_for_cross_tenant_caller()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        var seeded = NewSubmittedItem(id, submittedBy: "other-tenant");
-        await factory.SeedAsync(seeded, cancellationToken);
-
-        var response = await client.GetAsync($"/work-items/{id}", cancellationToken);
-
-        // Cross-tenant items must never leak via 200 or even via a
-        // distinguishable 403 — return 404 to hide existence.
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task List_hides_cross_tenant_items_from_standard_caller()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: "alice-1");
-        using var client = factory.CreateClient();
-
-        var mine = NewSubmittedItem(Guid.NewGuid());
-        var theirs = NewSubmittedItem(Guid.NewGuid(), submittedBy: "other-tenant");
-        await factory.SeedAsync(mine, cancellationToken);
-        await factory.SeedAsync(theirs, cancellationToken);
-
-        var page = await client.GetFromJsonAsync<WorkItemListResponse>(
-            "/work-items", cancellationToken);
-
-        Assert.NotNull(page);
-        Assert.Single(page!.Items);
-        Assert.Equal(mine.Id, page.Items[0].Id);
-    }
+    // Coverage for "RBAC lives in the frontend now" (no ownership gate on
+    // GetById/list) lives in WorkItemEndpointsTests — this class stays
+    // scoped to the two boundaries above that still exist: missing actor
+    // identity, and the RA-323 assign/unassign permission model.
 
     // ---------------------------- Helpers ----------------------------
 
-    private static WorkItem NewSubmittedItem(Guid id, string submittedBy = TenantClientId) => new()
+    private static WorkItem NewSubmittedItem(Guid id) => new()
     {
         Id = id,
         TypeId = TypeId,
         StateId = "submitted",
-        SubmittedBy = submittedBy
+        SubmittedBy = TenantClientId
     };
 
     private sealed class BoundaryFactory : WebApplicationFactory<Program>
@@ -204,16 +170,13 @@ public class WorkItemAuthBoundaryTests
         private readonly MongoIntegrationFixture _fixture;
         private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("authbnd");
         private readonly string? _userId;
-        private readonly string? _roles;
 
         public BoundaryFactory(
             MongoIntegrationFixture fixture,
-            string? userId,
-            string? roles = null)
+            string? userId)
         {
             _fixture = fixture;
             _userId = userId;
-            _roles = roles;
         }
 
         public IWorkItemPersistence Persistence => Services.GetRequiredService<IWorkItemPersistence>();
@@ -238,7 +201,7 @@ public class WorkItemAuthBoundaryTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", TenantClientId);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, TenantClientId);
             if (_userId is not null)
             {
                 // Use TryAddWithoutValidation so the test can deliberately
@@ -246,10 +209,6 @@ public class WorkItemAuthBoundaryTests
                 // otherwise normalise away) for the
                 // ResolveActorUserId-returns-null path.
                 client.DefaultRequestHeaders.TryAddWithoutValidation("x-cdp-user-id", _userId);
-            }
-            if (_roles is not null)
-            {
-                client.DefaultRequestHeaders.Add("x-cdp-user-roles", _roles);
             }
         }
 

@@ -25,13 +25,13 @@ public class NoOpNotifyClientTests
         Assert.Null(result.ErrorMessage);
     }
 
-    // RA102-okg: the Queried template key has no real Notify GUID configured
-    // yet (pending manual template creation in the Notify portal), but the
-    // no-op client used locally/in dev never looks at NotifyConfig.Templates
-    // at all, so it must resolve and "send" this key successfully today,
-    // exactly as it does for every other key.
+    // RA102-okg: the Queried template key now has a real Notify GUID in
+    // appsettings.json, but the no-op client used locally/in dev never looks
+    // at NotifyConfig.Templates at all, so it must resolve and "send" this
+    // key successfully regardless of how it is configured, exactly as it
+    // does for every other key.
     [Fact]
-    public async Task SendEmailAsync_resolves_the_not_yet_configured_Queried_template_key()
+    public async Task SendEmailAsync_resolves_the_Queried_template_key()
     {
         var sut = new NoOpNotifyClient(Substitute.For<IStructuredLogger<NoOpNotifyClient>>());
 

@@ -52,14 +52,63 @@ public interface IWorkItemPersistence
     /// mutate any field on the supplied <see cref="WorkItem"/> before saving.
     /// </summary>
     Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Set a single named field inside <see cref="WorkItem.Payload"/>, leaving
+    /// every other field of the document byte-for-byte untouched. Returns
+    /// <c>true</c> when a document was matched, <c>false</c> when no work item
+    /// with that id exists.
+    ///
+    /// <para>
+    /// Prefer this over load → mutate → <see cref="ReplaceAsync"/> whenever a
+    /// module needs to stamp one payload field. A full replace round-trips the
+    /// payload through the module's typed model, which MATERIALISES modelled-
+    /// but-absent fields as explicit nulls. That is not cosmetic: the
+    /// <c>payload.accreditationId</c> index is unique + <em>sparse</em>, and a
+    /// sparse index excludes only documents where the field is ABSENT — so
+    /// writing an explicit null pulls the document into the index and the
+    /// second such write anywhere in the collection fails with a duplicate-key
+    /// error (RA-291). A targeted <c>$set</c> cannot resurrect that class of
+    /// bug for any modelled-but-absent field, now or in future.
+    /// </para>
+    ///
+    /// <para>
+    /// Deliberately does NOT participate in the <see cref="WorkItem.Version"/>
+    /// optimistic-concurrency protocol and does not touch
+    /// <see cref="WorkItem.LastModifiedAt"/>: it is a single-field write that
+    /// cannot clobber a concurrent writer's changes to any other field, so
+    /// taking part in the version dance would only manufacture spurious
+    /// conflicts. Callers that need the version bumped should follow up with
+    /// a normal engine operation.
+    /// </para>
+    /// </summary>
+    Task<bool> SetPayloadFieldAsync(
+        Guid workItemId,
+        string fieldName,
+        BsonValue value,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// RA-311/MBE-3: find an existing work item of <paramref name="typeId"/>
+    /// whose <c>payload.operatorApplicationId</c> matches
+    /// <paramref name="operatorApplicationId"/>, or <c>null</c> if none
+    /// exists. Backs the idempotent-submit check in
+    /// <see cref="WorkItemService.SubmitAsync"/>: a caller (the operator
+    /// backend, forwarding an operator's original "submit application" call)
+    /// that retries after a client-side timeout must be handed back the
+    /// work item created by the first attempt rather than creating a
+    /// duplicate.
+    /// </summary>
+    Task<WorkItem?> FindByOperatorApplicationIdAsync(
+        string typeId,
+        string operatorApplicationId,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersistence
 {
-    // Computed once: the distinct terminal state ids across every registered
-    // type (RA-224). Used to hide finished work (approved/rejected/withdrawn)
-    // from the active worklist by default.
-    private readonly IReadOnlySet<string> _terminalStateIds;
+    // Computed once: state id → workflow rank (RA-324), used by the Status sort.
+    private readonly IReadOnlyDictionary<string, int> _statusRank;
 
     public WorkItemPersistence(
         IMongoDbClientFactory connectionFactory,
@@ -67,16 +116,16 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         IWorkItemRegistry registry)
         : base(connectionFactory, "workItems", loggerFactory)
     {
-        _terminalStateIds = TerminalStates.Ids(registry);
+        _statusRank = WorkItemSort.StatusRank(registry);
     }
 
     /// <summary>
-    /// Test-only convenience overload that derives the terminal-state set from
-    /// the shipping module set (currently re-accreditation). Production wiring
+    /// Test-only convenience overload that derives the registry from the
+    /// shipping module set (currently re-accreditation). Production wiring
     /// always uses the registry-injecting constructor above; this keeps the
-    /// many persistence-layer integration tests that predate RA-224 from
-    /// having to thread a registry through, while still exercising the real
-    /// terminal-state behaviour.
+    /// many persistence-layer integration tests that predate it from having to
+    /// thread a registry through, while still exercising the real Status sort
+    /// ordering.
     /// </summary>
     [ExcludeFromCodeCoverage]
     internal WorkItemPersistence(
@@ -125,27 +174,22 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     }
 
     [ExcludeFromCodeCoverage]
+    public async Task<WorkItem?> FindByOperatorApplicationIdAsync(
+        string typeId, string operatorApplicationId, CancellationToken cancellationToken = default)
+    {
+        var filter = Builders<WorkItem>.Filter.And(
+            Builders<WorkItem>.Filter.Eq(w => w.TypeId, typeId),
+            Builders<WorkItem>.Filter.Eq("payload.operatorApplicationId", operatorApplicationId));
+
+        return await Collection.Find(filter).FirstOrDefaultAsync(cancellationToken);
+    }
+
+    [ExcludeFromCodeCoverage]
     public async Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var filter = BuildFilter(query, _terminalStateIds);
-
-        // Project away the per-item Notes and AuditLog collections
-        // (epr-4pf): the list endpoint never renders them and they
-        // dominate document size on chatty items. The deserialiser
-        // re-runs against the trimmed BSON and falls back to the
-        // List<>'s default initialiser for the missing fields, so
-        // returned WorkItem instances carry empty Notes / AuditLog
-        // regardless of what is on disk.
-        var projection = Builders<WorkItem>.Projection
-            .Exclude(w => w.Notes)
-            .Exclude(w => w.AuditLog);
-
-        var find = Collection
-            .Find(filter)
-            .Project<WorkItem>(projection)
-            .SortByDescending(w => w.SubmittedAt);
+        var filter = BuildFilter(query);
 
         var totalCount = await Collection.CountDocumentsAsync(filter, cancellationToken: cancellationToken);
 
@@ -153,16 +197,68 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         var pageSize = query.NormalisedPageSize;
         var skip = (page - 1) * pageSize;
 
-        var items = await find
-            .Skip(skip)
-            .Limit(pageSize)
-            .ToListAsync(cancellationToken);
+        var sortStages = WorkItemSort.BuildStages(query.Sort, query.SortDescending, _statusRank);
+
+        List<WorkItem> items;
+        if (sortStages is null)
+        {
+            // Default path (RA-324: unchanged from the original behaviour) —
+            // newest submitted first, with the per-item Notes / AuditLog
+            // collections projected away (epr-4pf): the list endpoint never
+            // renders them and they dominate document size on chatty items.
+            var projection = Builders<WorkItem>.Projection
+                .Exclude(w => w.Notes)
+                .Exclude(w => w.AuditLog);
+
+            items = await Collection
+                .Find(filter)
+                .Project<WorkItem>(projection)
+                .SortByDescending(w => w.SubmittedAt)
+                .Skip(skip)
+                .Limit(pageSize)
+                .ToListAsync(cancellationToken);
+        }
+        else
+        {
+            // Explicit RA-324 sort (organisation / status / due-date). Status
+            // and due-date can't be expressed as a plain field sort, so an
+            // aggregation computes the sort key. Two $unset stages: the first
+            // drops the fat Notes / AuditLog collections (the same ones the
+            // default projection excludes) BEFORE the in-memory $sort so the
+            // sort buffers slim documents; the second drops the computed sort
+            // scratch fields AFTER the $sort that reads them, so the result
+            // still deserialises to WorkItem (which does not ignore extra BSON
+            // elements).
+            var (addFields, sort) = sortStages.Value;
+            var serializer = MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry
+                .GetSerializer<WorkItem>();
+            var matchDoc = filter.Render(
+                new RenderArgs<WorkItem>(serializer, MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry));
+
+            var stages = new List<BsonDocument>
+            {
+                new("$match", matchDoc),
+                new("$unset", new BsonArray { "notes", "auditLog" }),
+            };
+            if (addFields is not null)
+            {
+                stages.Add(new BsonDocument("$addFields", addFields));
+            }
+            stages.Add(new BsonDocument("$sort", sort));
+            stages.Add(new BsonDocument("$unset", new BsonArray(WorkItemSort.ComputedFields)));
+            stages.Add(new BsonDocument("$skip", skip));
+            stages.Add(new BsonDocument("$limit", pageSize));
+
+            PipelineDefinition<WorkItem, WorkItem> pipeline = stages;
+            items = await Collection
+                .Aggregate(pipeline, cancellationToken: cancellationToken)
+                .ToListAsync(cancellationToken);
+        }
 
         return new WorkItemPage(items, totalCount, page, pageSize);
     }
 
-    internal static FilterDefinition<WorkItem> BuildFilter(
-        WorkItemQuery query, IReadOnlySet<string> terminalStateIds)
+    internal static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
     {
         var builder = Builders<WorkItem>.Filter;
         var clauses = new List<FilterDefinition<WorkItem>>();
@@ -215,6 +311,42 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             clauses.Add(builder.Text($"\"{orgName}\"", new TextSearchOptions { CaseSensitive = false }));
         }
 
+        // RA-324: the Applications page merges the old separate orgName / orgId
+        // inputs into ONE "Organisation name or ID" box. It matches the needle
+        // case-insensitively as a substring of payload.organisationName OR
+        // payload.operatorOrganisationId (e.g. ORG-123-001). Registration-id is
+        // deliberately NOT matched here (dropped from the product per RA-324).
+        // Uses a regex on organisationName rather than the $text index because
+        // Mongo forbids OR-ing a $text clause with other conditions; fine at
+        // this volume since the list is always pre-filtered by typeId/state.
+        var organisation = query.NormalisedOrganisation;
+        if (!string.IsNullOrEmpty(organisation))
+        {
+            var escaped = System.Text.RegularExpressions.Regex.Escape(organisation);
+            var contains = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            clauses.Add(builder.Or(
+                builder.Regex("payload.organisationName", contains),
+                builder.Regex("payload.operatorOrganisationId", contains)));
+        }
+
+        // RA-324: material filter (multi-select). payload.material stores a
+        // single lowercase token (plastic/glass/paper/steel/wood/aluminium/
+        // fibre); match each requested value case-insensitively as an exact
+        // token (anchored regex) so casing differences never hide a match, and
+        // OR multiple selections together.
+        if (query.Materials is { Count: > 0 } materials)
+        {
+            var materialClauses = materials
+                .Select(m => builder.Regex(
+                    "payload.material",
+                    new MongoDB.Bson.BsonRegularExpression(
+                        $"^{System.Text.RegularExpressions.Regex.Escape(m)}$", "i")))
+                .ToList();
+            clauses.Add(materialClauses.Count == 1
+                ? materialClauses[0]
+                : builder.Or(materialClauses));
+        }
+
         var assigneeId = query.NormalisedAssigneeId;
         if (assigneeId is not null && query.UnassignedOnly)
         {
@@ -246,25 +378,28 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             clauses.Add(builder.In("payload.nation", nations));
         }
 
-        // Archive exclusion: hide finished work in any terminal state
-        // (approved/rejected/withdrawn) by default so the active worklist stays
-        // focused on in-flight work (RA-224). Pass IncludeArchived=true to reveal
-        // them (e.g. for the "Show archived" filter or background jobs).
+        // RA-313: there is deliberately NO terminal-state exclusion here.
         //
-        // Any terminal state the caller explicitly requested via StateIds is
-        // left in place — combining $in:[X] with $nin:[X,...] on the same field
-        // would make the query unsatisfiable (matches nothing). So we only
-        // exclude terminal states that were NOT explicitly requested.
-        if (!query.IncludeArchived && terminalStateIds.Count > 0)
-        {
-            var toExclude = terminalStateIds
-                .Where(id => !(query.StateIds?.Contains(id, StringComparer.OrdinalIgnoreCase) ?? false))
-                .ToList();
-            if (toExclude.Count > 0)
-            {
-                clauses.Add(builder.Nin(w => w.StateId, toExclude));
-            }
-        }
+        // RA-224 used to hide every terminal state (approved/rejected/withdrawn)
+        // from the list unless IncludeArchived was set, so that the worklist
+        // showed only in-flight work. That ticket was closed as incorrectly
+        // filed and should never have been built: RA-313 AC01 requires a
+        // withdrawn application to be visible in the regulator's worklist with
+        // its "Withdrawn" status, and the same reasoning applies to the other
+        // two terminal states — a regulator looking for a decided application
+        // should find it where every other application is.
+        //
+        // WorkItemQuery.IncludeArchived is retained and still bound from the
+        // query string: management-fe continues to send it and the snapshot /
+        // backfill migrations pass IncludeArchived: true. It now selects
+        // nothing, because nothing is excluded. See epr-kenf for retiring the
+        // parameter and its "Show archived items" checkbox — deliberately NOT
+        // done here, because the Applications page UI was signed off against a
+        // prototype that no story captures.
+        //
+        // payload.archivedAt is untouched: ArchiveBackgroundService still
+        // stamps it after ArchiveAfterDays, and the list still renders it as
+        // "Archived: <date>" on the card. It is now purely informational.
 
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
@@ -291,6 +426,38 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         Logger.LogInformation(
             "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState} (version {Version})",
             workItem.Id, workItem.TypeId, workItem.StateId, workItem.Version);
+    }
+
+    public async Task<bool> SetPayloadFieldAsync(
+        Guid workItemId,
+        string fieldName,
+        BsonValue value,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldName);
+        // A C# null would be written as an explicit BSON null; callers must
+        // pass BsonNull.Value deliberately if that is what they mean.
+        ArgumentNullException.ThrowIfNull(value);
+
+        // Guard the dotted-path injection: a caller passing "a.b" or a "$"
+        // operator would target a nested document or rewrite a different part
+        // of the envelope entirely. This method's contract is one field
+        // directly under `payload`.
+        if (fieldName.Contains('.', StringComparison.Ordinal)
+            || fieldName.StartsWith('$'))
+        {
+            throw new ArgumentException(
+                "Payload field name must be a single field directly under 'payload' " +
+                "(no dotted paths, no update operators).",
+                nameof(fieldName));
+        }
+
+        var result = await Collection.UpdateOneAsync(
+            Builders<WorkItem>.Filter.Eq(w => w.Id, workItemId),
+            Builders<WorkItem>.Update.Set($"payload.{fieldName}", value),
+            cancellationToken: cancellationToken);
+
+        return result.MatchedCount > 0;
     }
 
     [ExcludeFromCodeCoverage]
@@ -334,7 +501,22 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         var applicationReference = new CreateIndexModel<WorkItem>(
             builder.Ascending("payload.applicationReference"),
             new CreateIndexOptions { Unique = true, Sparse = true });
-        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference];
+        // RA-311/MBE-3: the operator backend forwards the operator's own
+        // "submit application" call and may retry it after a client-side
+        // timeout even though the original request already succeeded here
+        // (CDP logs show OJ FE aborting at 5s while this round-trip can take
+        // up to 100s). Unique + sparse on the same principle as
+        // applicationReference above: only documents that actually carry
+        // payload.operatorApplicationId are constrained, so items submitted
+        // without one (e.g. case-management-created items, legacy items)
+        // are unaffected, but two submissions carrying the same operator
+        // application id can never both persist — the engine's retry-lookup
+        // in WorkItemService.SubmitAsync uses this as its duplicate-key
+        // signal to hand back the original work item instead of erroring.
+        var operatorApplicationId = new CreateIndexModel<WorkItem>(
+            builder.Ascending("payload.operatorApplicationId"),
+            new CreateIndexOptions { Unique = true, Sparse = true });
+        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference, operatorApplicationId];
     }
 }
 

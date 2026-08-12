@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using MongoDB.Bson;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -99,7 +100,7 @@ public class WorkItemServiceCompoundTests : IAsyncDisposable
     private static ClaimsPrincipal User() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "alice-1"),
             new Claim("user:name", "Alice Example")
         ], "test"));
@@ -270,7 +271,7 @@ public class WorkItemServiceCompoundTests : IAsyncDisposable
     public async Task Missing_actor_identity_is_rejected_before_loading_the_document()
     {
         var anonymous = new ClaimsPrincipal(new ClaimsIdentity(
-            [new Claim("cognito:client_id", "test-client")], "test"));
+            [new Claim("client_id", "test-client")], "test"));
 
         var result = await BuildService(BuildType()).AddNoteAndCompleteTaskAsync(
             Guid.NewGuid(), "record-rationale", "Some valid note text.",
@@ -314,6 +315,13 @@ public class WorkItemServiceCompoundTests : IAsyncDisposable
     /// </summary>
     private sealed class RacingPersistence(IWorkItemPersistence inner, Action onBeforeReplace) : IWorkItemPersistence
     {
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default) =>
+            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
@@ -322,6 +330,10 @@ public class WorkItemServiceCompoundTests : IAsyncDisposable
 
         public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default) =>
+            inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
 
         public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default) =>
             inner.QueryAsync(query, cancellationToken);

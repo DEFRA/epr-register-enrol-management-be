@@ -12,8 +12,16 @@ public static class HttpClientRegistrationExtension
     {
         services.AddTransient<ProxyHttpMessageHandler>();
 
+        // UseProxy = false is explicit, not the framework default: this is
+        // the "unproxied" counterpart to AddHttpClientWithProxy below, so it
+        // must not silently inherit HttpClient.DefaultProxy (set process-wide
+        // in Program.cs for the Notify SDK's bare HttpClient) just because no
+        // primary handler was configured. RA-311 query-push-proxy-fix hit
+        // exactly this for "DefaultClient" — omitting a handler here isn't
+        // "unproxied", it's "whatever DefaultProxy happens to be".
         return services
             .AddHttpClient<TClient, TImplementation>()
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { UseProxy = false })
             .AddHeaderPropagation();
     }
 

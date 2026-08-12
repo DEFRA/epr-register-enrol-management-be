@@ -49,6 +49,17 @@ public static class MongoIndexReconciler
     private static readonly int[] s_conflictCodes = [85, 86];
 
     /// <summary>
+    /// MongoDB server error code raised when building a <c>Unique</c> index
+    /// finds existing documents that already violate it. Left unhandled this
+    /// crash-loops the service on startup (<see cref="MongoService{T}"/> runs
+    /// <c>EnsureIndexes</c> from its constructor) for any environment that
+    /// already carries duplicate values for a field that only just became
+    /// unique — e.g. RA-311/MBE-3 tightening <c>payload.operatorApplicationId</c>
+    /// on top of the very bug that had been writing duplicates of it.
+    /// </summary>
+    private const int DuplicateKeyErrorCode = 11000;
+
+    /// <summary>
     /// Render every desired index model down to its key <see cref="BsonDocument"/>
     /// using the collection's document serializer, so callers do not have to
     /// reimplement the serializer-registry plumbing.
@@ -106,6 +117,64 @@ public static class MongoIndexReconciler
             collection.Indexes.CreateMany(models);
             return dropped;
         }
+        catch (MongoCommandException ex) when (IsDuplicateKeyError(ex))
+        {
+            // Building the batch as one command fails all-or-nothing, so a
+            // single dirty unique index (existing documents already violate
+            // it) would otherwise block every other index in this batch too,
+            // and take the service down with it. Fall back to creating each
+            // index one at a time so the clean ones still get built, and log
+            // an error (not a warning) for whichever one is dirty — it needs
+            // a human to clean up the offending duplicate values and redeploy
+            // before the constraint actually takes effect.
+            logger.LogError(
+                ex,
+                "Unique index build failed on collection {Collection} because existing documents already " +
+                    "violate the constraint; creating indexes individually so this does not block startup.",
+                collection.CollectionNamespace.CollectionName);
+            return EnsureIndexesIndividually(collection, models, logger);
+        }
+    }
+
+    /// <summary>
+    /// Same contract as <see cref="EnsureIndexes{T}"/> but one model at a
+    /// time, used once a batched <c>CreateMany</c> has already failed with a
+    /// duplicate-key error so the offending index can be isolated: every
+    /// other index in the set still gets created, and the dirty one is
+    /// skipped with a logged error rather than failing startup.
+    /// </summary>
+    private static IReadOnlyList<string> EnsureIndexesIndividually<T>(
+        IMongoCollection<T> collection,
+        IReadOnlyList<CreateIndexModel<T>> models,
+        ILogger logger)
+    {
+        var dropped = new List<string>();
+
+        foreach (var model in models)
+        {
+            var single = new List<CreateIndexModel<T>> { model };
+            try
+            {
+                collection.Indexes.CreateMany(single);
+            }
+            catch (MongoCommandException ex) when (IsIndexDefinitionConflict(ex))
+            {
+                dropped.AddRange(DropConflictingIndexes(collection, single, logger));
+                collection.Indexes.CreateMany(single);
+            }
+            catch (MongoCommandException ex) when (IsDuplicateKeyError(ex))
+            {
+                var key = RenderKeys(collection, single).Single();
+                logger.LogError(
+                    ex,
+                    "Skipping index {Key} on collection {Collection}: existing documents already violate " +
+                        "the unique constraint. Clean up the duplicate values and redeploy to build this index.",
+                    key,
+                    collection.CollectionNamespace.CollectionName);
+            }
+        }
+
+        return dropped;
     }
 
     /// <summary>
@@ -115,6 +184,14 @@ public static class MongoIndexReconciler
     /// </summary>
     private static bool IsIndexDefinitionConflict(MongoCommandException ex) =>
         s_conflictCodes.Contains(ex.Code);
+
+    /// <summary>
+    /// True when the command failure means a <c>Unique</c> index build
+    /// found existing documents that already collide on the indexed key.
+    /// See <see cref="DuplicateKeyErrorCode"/>.
+    /// </summary>
+    private static bool IsDuplicateKeyError(MongoCommandException ex) =>
+        ex.Code == DuplicateKeyErrorCode;
 
     private static IReadOnlyList<string> DropConflictingIndexes<T>(
         IMongoCollection<T> collection,

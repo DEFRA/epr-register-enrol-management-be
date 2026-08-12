@@ -116,19 +116,19 @@ public class WorkItemServiceTests : IAsyncDisposable
     private static ClaimsPrincipal User() =>
         new(
             new ClaimsIdentity(
-                [new Claim("cognito:client_id", "test-client"), new Claim("user:id", "test-user")],
+                [new Claim("client_id", "test-client"), new Claim("user:id", "test-user")],
                 "test"
             )
         );
 
     private static ClaimsPrincipal UserWithoutActorId() =>
-        new(new ClaimsIdentity([new Claim("cognito:client_id", "test-client")], "test"));
+        new(new ClaimsIdentity([new Claim("client_id", "test-client")], "test"));
 
     private static ClaimsPrincipal UserWithRoles(string userId, params string[] roles)
     {
         var claims = new List<Claim>
         {
-            new("cognito:client_id", "test-client"),
+            new("client_id", "test-client"),
             new("user:id", userId),
         };
         foreach (var role in roles)
@@ -651,6 +651,150 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Project_excludes_transitions_that_are_not_caller_invocable()
+    {
+        // RA-364: the reported bug. Four transitions sharing a FromStateId and
+        // a DisplayName, all CallerInvocable: false because a module service
+        // resolves the right one server-side, rendered as four identical dead
+        // buttons because the projection never filtered on the flag.
+        var type = BuildType(
+            transitions:
+            [
+                new WorkItemTransition(
+                    "resume-a", "Resume", "submitted", "approved",
+                    RequiresAllTasksComplete: false, CallerInvocable: false),
+                new WorkItemTransition(
+                    "resume-b", "Resume", "submitted", "rejected",
+                    RequiresAllTasksComplete: false, CallerInvocable: false),
+                new WorkItemTransition(
+                    "withdraw", "Withdraw", "submitted", "rejected",
+                    RequiresAllTasksComplete: false),
+            ]
+        );
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client",
+        };
+
+        var projection = BuildService(type).Project(workItem);
+
+        // Only the caller-invocable one survives — no duplicate "Resume"s.
+        Assert.Equal(["withdraw"], projection.AvailableActions.Select(a => a.ActionId).ToArray());
+        Assert.DoesNotContain(projection.AvailableActions, a => a.DisplayName == "Resume");
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Project_keeps_every_transition_when_all_are_caller_invocable()
+    {
+        // Regression guard for RA-364: the new filter must not cost a state
+        // anything when nothing is declared non-invocable.
+        var type = BuildType(
+            transitions:
+            [
+                new WorkItemTransition(
+                    "approve", "Approve", "submitted", "approved",
+                    RequiresAllTasksComplete: false),
+                new WorkItemTransition(
+                    "reject", "Reject", "submitted", "rejected",
+                    RequiresAllTasksComplete: false),
+            ]
+        );
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client",
+        };
+
+        var projection = BuildService(type).Project(workItem);
+
+        Assert.Equal(
+            ["approve", "reject"],
+            projection.AvailableActions.Select(a => a.ActionId).OrderBy(a => a).ToArray());
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Project_returns_no_actions_when_every_transition_is_non_invocable()
+    {
+        // The empty-actions case the frontend renders as "no actions
+        // available" — distinct from the terminal-state path below, which
+        // short-circuits before the filter runs.
+        var type = BuildType(
+            transitions:
+            [
+                new WorkItemTransition(
+                    "resume-a", "Resume", "submitted", "approved",
+                    RequiresAllTasksComplete: false, CallerInvocable: false),
+            ]
+        );
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client",
+        };
+
+        var projection = BuildService(type).Project(workItem);
+
+        Assert.Empty(projection.AvailableActions);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
+    public async Task Project_excludes_non_invocable_transition_even_when_tasks_are_complete()
+    {
+        // Covers the interaction of the two predicates: a transition that
+        // passes the RequiresAllTasksComplete gate must still be dropped when
+        // it is not caller-invocable.
+        var type = BuildType(
+            tasksByState: new()
+            {
+                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
+            },
+            transitions:
+            [
+                new WorkItemTransition(
+                    "resume-a", "Resume", "submitted", "approved", CallerInvocable: false),
+            ]
+        );
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client",
+            CompletedTaskIdsByState =
+            {
+                ["submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "check-eligibility",
+                },
+            },
+        };
+
+        var projection = BuildService(type).Project(workItem);
+
+        Assert.True(projection.Tasks.Single().IsComplete);
+        Assert.Empty(projection.AvailableActions);
+        await Task.CompletedTask;
+    }
+
+    [Fact]
     public async Task Project_returns_no_actions_for_terminal_state()
     {
         var type = BuildType(
@@ -883,6 +1027,245 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal(0, fetched.Version);
     }
 
+    // ---- RA-358: assignment is refused on a closed (terminal) case ----
+
+    /// <summary>
+    /// A type whose closed states cover every terminal id the service uses in
+    /// anger. Built here rather than folded into <see cref="BuildType"/> so
+    /// the existing assignment tests keep their original state machine.
+    /// </summary>
+    private static TestWorkItemType BuildTypeWithTerminalStates()
+    {
+        var states = new[]
+        {
+            new WorkItemState("submitted", "Submitted"),
+            new WorkItemState("withdrawn", "Withdrawn", IsTerminal: true),
+            new WorkItemState("approved", "Approved", IsTerminal: true),
+            new WorkItemState("rejected", "Rejected", IsTerminal: true),
+        };
+        return new TestWorkItemType(TypeId, "Test type", initialState: states[0], states: states);
+    }
+
+    [Theory]
+    [InlineData("withdrawn")]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Assign_is_rejected_when_work_item_is_in_a_terminal_state(string stateId)
+    {
+        var type = BuildTypeWithTerminalStates();
+        var workItem = await SeedAsync(stateId: stateId);
+
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+        Assert.Contains(stateId, result.Message);
+        // RA-358: the message is rendered verbatim to the user, so it must
+        // never carry the system-generated work item id.
+        Assert.DoesNotContain(workItem.Id.ToString(), result.Message);
+        Assert.False(result.IsIdempotentReplay);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Null(fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+        Assert.Empty(fetched.AuditLog);
+    }
+
+    [Theory]
+    [InlineData("withdrawn")]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Unassign_is_rejected_when_work_item_is_in_a_terminal_state(string stateId)
+    {
+        var type = BuildTypeWithTerminalStates();
+        var workItem = await SeedAsync(stateId: stateId, configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).UnassignAsync(
+            workItem.Id, actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+        Assert.Contains(stateId, result.Message);
+        Assert.DoesNotContain(workItem.Id.ToString(), result.Message);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("alice-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+        Assert.Empty(fetched.AuditLog);
+    }
+
+    [Fact]
+    public async Task Assign_terminal_check_runs_before_the_idempotent_replay_shortcut()
+    {
+        // Re-assigning a closed case to whoever already holds it must still be
+        // refused rather than answered with a misleading 200 + replay header.
+        var type = BuildTypeWithTerminalStates();
+        var workItem = await SeedAsync(stateId: "withdrawn", configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id,
+            "alice-1",
+            "Alice",
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+        Assert.False(result.IsIdempotentReplay);
+    }
+
+    [Fact]
+    public async Task Unassign_terminal_check_runs_before_the_idempotent_replay_shortcut()
+    {
+        var type = BuildTypeWithTerminalStates();
+        var workItem = await SeedAsync(stateId: "withdrawn");
+
+        var result = await BuildService(type).UnassignAsync(
+            workItem.Id,
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+        Assert.False(result.IsIdempotentReplay);
+    }
+
+    [Fact]
+    public async Task Assign_terminality_is_judged_by_the_stored_template_snapshot()
+    {
+        // Template versioning: the item was submitted under a template that
+        // calls "closed" terminal. The live registry no longer declares that
+        // state at all, but the in-flight item must still be treated as closed.
+        var snapshotType = new TestWorkItemType(
+            TypeId,
+            "Test type",
+            initialState: new WorkItemState("submitted", "Submitted"),
+            states:
+            [
+                new WorkItemState("submitted", "Submitted"),
+                new WorkItemState("closed", "Closed", IsTerminal: true),
+            ]
+        );
+        var workItem = await SeedAsync(
+            stateId: "closed",
+            configure: w => w.TemplateSnapshot = WorkItemTemplateSnapshot.Capture(snapshotType)
+        );
+
+        var result = await BuildService(BuildType()).AssignAsync(
+            workItem.Id,
+            "alice-1",
+            "Alice",
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task Assign_succeeds_when_the_current_state_is_unknown_to_the_template()
+    {
+        // Not terminal because nothing says it is — assignment stays open
+        // rather than failing closed on a state the template never declared.
+        var workItem = await SeedAsync(stateId: "some-unmodelled-state");
+
+        var result = await BuildService(BuildType()).AssignAsync(
+            workItem.Id,
+            "alice-1",
+            "Alice",
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("alice-1", (await GetAsync(workItem.Id)).AssignedToId);
+    }
+
+    /// <summary>
+    /// Unregistered type and no snapshot: terminality cannot be determined, so
+    /// the guard fails closed rather than waving the mutation through. Without
+    /// this, a legacy pre-snapshot item in a terminal state becomes freely
+    /// assignable as soon as its type is de-registered or renamed — the same
+    /// hole RA-358 closes, reached through a different door. Matches
+    /// ApplyActionAsync, which refuses this condition before its own terminal
+    /// check.
+    /// </summary>
+    private async Task<WorkItem> SeedUnresolvableTemplateItemAsync()
+    {
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = "not-registered",
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client",
+            AssignedToId = "bob-1",
+            AssignedToName = "Bob",
+            AssignedAt = InitialNow,
+            AssignedBy = "old-actor",
+        };
+        await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
+        return workItem;
+    }
+
+    [Fact]
+    public async Task Assign_is_rejected_when_no_template_can_be_resolved_for_the_work_item()
+    {
+        var workItem = await SeedUnresolvableTemplateItemAsync();
+
+        var result = await BuildService(BuildType()).AssignAsync(
+            workItem.Id,
+            "alice-1",
+            "Alice",
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+        Assert.DoesNotContain(workItem.Id.ToString(), result.Message);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("bob-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+        Assert.Empty(fetched.AuditLog);
+    }
+
+    [Fact]
+    public async Task Unassign_is_rejected_when_no_template_can_be_resolved_for_the_work_item()
+    {
+        var workItem = await SeedUnresolvableTemplateItemAsync();
+
+        var result = await BuildService(BuildType()).UnassignAsync(
+            workItem.Id,
+            UserWithRoles("actor-1", "assign"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("bob-1", fetched.AssignedToId);
+        Assert.Equal(0, fetched.Version);
+    }
+
     [Fact]
     public async Task Assign_blank_assignee_id_is_rejected()
     {
@@ -1022,7 +1405,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         var actor = new ClaimsPrincipal(
             new ClaimsIdentity(
                 [
-                    new Claim("cognito:client_id", "test-client"),
+                    new Claim("client_id", "test-client"),
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
                 ],
@@ -1135,7 +1518,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         new(
             new ClaimsIdentity(
                 [
-                    new Claim("cognito:client_id", "test-client"),
+                    new Claim("client_id", "test-client"),
                     new Claim("user:id", userId),
                     new Claim("user:name", userName),
                 ],
@@ -1769,6 +2152,109 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Single(page.Items);
     }
 
+    [Fact]
+    public async Task Submit_is_idempotent_for_a_retried_operatorApplicationId()
+    {
+        // RA-311/MBE-3: the operator backend forwards the operator's
+        // original "submit application" call and may retry it after OJ
+        // FE's 5s client timeout even though the first attempt already
+        // succeeded here (this round trip can take up to 100s). A retried
+        // submit carrying the same operatorApplicationId must hand back
+        // the SAME work item rather than creating a second one.
+        var type = BuildType();
+
+        var first = await BuildService(type).SubmitAsync(
+            type,
+            new BsonDocument { ["operatorApplicationId"] = "app-001" },
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        Assert.True(first.IsSuccess);
+        Assert.False(first.IsIdempotentReplay);
+
+        // A fresh payload instance with the same operatorApplicationId,
+        // mirroring a real retried HTTP POST rather than reusing the first
+        // call's (now server-mutated) BsonDocument.
+        var second = await BuildService(type).SubmitAsync(
+            type,
+            new BsonDocument { ["operatorApplicationId"] = "app-001" },
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.True(second.IsSuccess);
+        Assert.True(second.IsIdempotentReplay);
+        Assert.Equal(first.WorkItem!.Id, second.WorkItem!.Id);
+
+        // Exactly one document exists for this operatorApplicationId — the
+        // retry did not create a duplicate work item.
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(TypeIds: [TypeId], Page: 1, PageSize: 10),
+            TestContext.Current.CancellationToken
+        );
+        Assert.Single(page.Items);
+    }
+
+    [Fact]
+    public async Task Submit_does_not_rerun_submitted_hooks_on_an_idempotent_replay()
+    {
+        // A replay must not re-trigger downstream side effects (e.g. a
+        // notification hook that already fired for the original submission).
+        var type = BuildType();
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+        var service = BuildServiceWithHook(type, hook);
+
+        await service.SubmitAsync(
+            type,
+            new BsonDocument { ["operatorApplicationId"] = "app-002" },
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        await hook.Received(1).OnSubmittedAsync(
+            Arg.Any<WorkItem>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+
+        var second = await service.SubmitAsync(
+            type,
+            new BsonDocument { ["operatorApplicationId"] = "app-002" },
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.True(second.IsIdempotentReplay);
+        // Still exactly the one call from the original submission — the
+        // replay path returns before the hook fan-out runs again.
+        await hook.Received(1).OnSubmittedAsync(
+            Arg.Any<WorkItem>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Submit_without_an_operatorApplicationId_always_creates_a_new_work_item()
+    {
+        // Sanity check: the idempotency guard only engages when the payload
+        // actually carries an operatorApplicationId. Case-management-created
+        // items (and any legacy submission) never set it, so two otherwise
+        // identical submissions must still create two distinct work items.
+        var type = BuildType();
+
+        var first = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var second = await BuildService(type).SubmitAsync(
+            type, new BsonDocument(), "test-client", AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.True(first.IsSuccess);
+        Assert.True(second.IsSuccess);
+        Assert.False(second.IsIdempotentReplay);
+        Assert.NotEqual(first.WorkItem!.Id, second.WorkItem!.Id);
+    }
+
     /// <summary>
     /// Deterministic generator for the collision tests. Returns the supplied
     /// values in order; once the script is exhausted it repeats the last
@@ -1815,6 +2301,13 @@ public class WorkItemServiceTests : IAsyncDisposable
     private sealed class RacingPersistence(IWorkItemPersistence inner, Action onBeforeReplace)
         : IWorkItemPersistence
     {
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default) =>
+            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
@@ -1827,6 +2320,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             Guid id,
             CancellationToken cancellationToken = default
         ) => inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default
+        ) => inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
 
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,

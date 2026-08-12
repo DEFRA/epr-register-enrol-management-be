@@ -23,30 +23,17 @@ internal static class WorkItemQueryBinding
     internal const string RegistrationIdParam = "registrationId";
     internal const string OrgNameParam = "orgName";
 
-    /// <summary>
-    /// Name of the tenancy-isolation field on <see cref="WorkItemQuery"/>.
-    /// Captured here only so the explicit-discard guard below has a
-    /// single source of truth — this binder must NEVER read it from the
-    /// query string. See <see cref="WorkItemQuery.SubmittedBy"/> for the
-    /// full rationale and the endpoint's tenancy enforcement.
-    /// </summary>
+    // RA-324 (Applications page) filter + sort params.
+    internal const string MaterialParam = "material";
+    internal const string OrganisationParam = "organisation";
+    internal const string SortParam = "sort";
+    internal const string SortDirectionParam = "dir";
+
     internal const string SubmittedByParam = "submittedBy";
 
     public static WorkItemQuery FromQueryString(IQueryCollection query)
     {
         ArgumentNullException.ThrowIfNull(query);
-
-        // Tenancy guard (epr-ygz). WorkItemQuery.SubmittedBy is server-set
-        // from the authenticated caller's claims by WorkItemEndpoints.GetAll;
-        // accepting it from the query string here would let any caller
-        // impersonate another tenant's submitter id and read their items.
-        // Explicitly probe for and discard the parameter (and any
-        // case-insensitive variant — IQueryCollection is case-insensitive)
-        // rather than relying on the absence of a Read* call, so the
-        // intent is obvious to anyone who later considers wiring it up.
-        // We deliberately do NOT throw: the goal is "harmless to attempt,
-        // structurally impossible to succeed".
-        _ = query.TryGetValue(SubmittedByParam, out _);
 
         return new WorkItemQuery(
             TypeIds: ReadStrings(query, TypeIdParam),
@@ -56,13 +43,42 @@ internal static class WorkItemQueryBinding
             UnassignedOnly: ReadBool(query, UnassignedOnlyParam),
             Page: ReadInt(query, PageParam, defaultValue: 1),
             PageSize: ReadInt(query, PageSizeParam, defaultValue: WorkItemQuery.DefaultPageSize),
+            SubmittedBy: ReadString(query, SubmittedByParam),
             Nations: ReadNations(query, NationParam),
             IncludeArchived: ReadBool(query, IncludeArchivedParam),
             OrgId: ReadString(query, OrgIdParam),
             RegistrationId: ReadString(query, RegistrationIdParam),
-            OrgName: ReadString(query, OrgNameParam));
-        // NB: SubmittedBy is intentionally omitted from the constructor
-        // call above. Do not add it. See WorkItemQuery.SubmittedBy.
+            OrgName: ReadString(query, OrgNameParam),
+            Materials: ReadStrings(query, MaterialParam),
+            Organisation: ReadString(query, OrganisationParam),
+            Sort: ReadString(query, SortParam),
+            SortDescending: ReadSortDirection(query, SortDirectionParam));
+    }
+
+    /// <summary>
+    /// Reads the optional <c>?dir=</c> value: <c>desc</c>/<c>descending</c> →
+    /// <c>true</c>, <c>asc</c>/<c>ascending</c> → <c>false</c>, anything else
+    /// (absent, blank, unrecognised) → <c>null</c> so the requested sort column
+    /// applies its own natural default direction.
+    /// </summary>
+    private static bool? ReadSortDirection(IQueryCollection query, string key)
+    {
+        var value = ReadString(query, key)?.Trim();
+        if (string.IsNullOrEmpty(value))
+        {
+            return null;
+        }
+        if (value.Equals("desc", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("descending", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        if (value.Equals("asc", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("ascending", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        return null;
     }
 
     private static IReadOnlyCollection<string>? ReadStrings(IQueryCollection query, string key)

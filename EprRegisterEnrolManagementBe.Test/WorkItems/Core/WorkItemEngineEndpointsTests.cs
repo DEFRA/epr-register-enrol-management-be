@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -200,9 +201,6 @@ public class WorkItemEngineEndpointsTests
         await using var factory = new EngineFactory(_fixture);
         using var client = factory.CreateClient();
 
-        // Seed a work item the caller (cognito:client_id = 'test-client')
-        // can see, otherwise the cross-tenant gate (epr-0t9) returns 404
-        // before body validation runs.
         var workItemId = Guid.NewGuid();
         await factory.SeedAsync(new WorkItem
         {
@@ -227,10 +225,6 @@ public class WorkItemEngineEndpointsTests
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Remove("x-cdp-user-id");
 
-        // Seed a work item visible to the caller so the cross-tenant
-        // gate (epr-0t9) doesn't pre-empt the engine's missing-actor
-        // 401. cognito:client_id is still 'test-client' here — the only
-        // header we removed is x-cdp-user-id (the 'user:id' claim).
         var workItemId = Guid.NewGuid();
         await factory.SeedAsync(new WorkItem
         {
@@ -292,7 +286,7 @@ public class WorkItemEngineEndpointsTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
             client.DefaultRequestHeaders.Add("x-cdp-user-id", "test-user");
         }
 

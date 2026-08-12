@@ -31,20 +31,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <param name="Page">1-based page number. Coerced to a minimum of 1.</param>
 /// <param name="PageSize">Page size. Coerced into [<see cref="MinPageSize"/>, <see cref="MaxPageSize"/>].</param>
 /// <param name="SubmittedBy">
-/// Tenancy isolation filter. **Server-set only.** This value is populated
-/// by <c>WorkItemEndpoints.GetAll</c> from the authenticated caller's
-/// <c>cognito:client_id</c> (or NameIdentifier) claim for non-case-worker
-/// callers; case-worker callers leave it null to see every tenant.
-/// <para>
-/// This property is intentionally NOT bound from the query string by
-/// <see cref="WorkItemQueryBinding"/>. A future contributor must not
-/// "helpfully" wire it up: doing so would let any caller pass
-/// <c>?submittedBy=other-tenant</c> and read another tenant's items,
-/// breaking the isolation enforced by the endpoint (and the fail-closed
-/// short-circuit added in epr-z0k for callers with no identifiable
-/// submitter id). The binding actively discards the parameter — see
-/// <see cref="WorkItemQueryBinding.FromQueryString"/>.
-/// </para>
+/// Restrict to items submitted by this caller id. Caller-supplied via
+/// <c>?submittedBy=...</c>; RBAC (who is allowed to ask for whose items)
+/// is enforced by the frontend, not this filter — the backend applies
+/// whatever scope the request asks for. Empty/null means "any submitter".
 /// </param>
 /// <param name="Nations">
 /// Restrict to items whose <c>payload.nation</c> is in this set.
@@ -74,7 +64,11 @@ public sealed record WorkItemQuery(
     bool IncludeArchived = false,
     string? OrgId = null,
     string? RegistrationId = null,
-    string? OrgName = null)
+    string? OrgName = null,
+    IReadOnlyCollection<string>? Materials = null,
+    string? Organisation = null,
+    string? Sort = null,
+    bool? SortDescending = null)
 {
     public const int DefaultPageSize = 20;
     public const int MinPageSize = 1;
@@ -125,6 +119,14 @@ public sealed record WorkItemQuery(
     /// <summary>Trimmed org name (payload.organisationName), or <c>null</c> if blank/whitespace.</summary>
     public string? NormalisedOrgName =>
         string.IsNullOrWhiteSpace(OrgName) ? null : OrgName.Trim();
+
+    /// <summary>
+    /// Trimmed combined "organisation name or ID" needle (RA-324), or
+    /// <c>null</c> if blank/whitespace. Matched against
+    /// <c>payload.organisationName</c> and <c>payload.operatorOrganisationId</c>.
+    /// </summary>
+    public string? NormalisedOrganisation =>
+        string.IsNullOrWhiteSpace(Organisation) ? null : Organisation.Trim();
 }
 
 /// <summary>
