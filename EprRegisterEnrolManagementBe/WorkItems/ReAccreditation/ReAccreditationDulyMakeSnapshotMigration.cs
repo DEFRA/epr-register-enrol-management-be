@@ -61,6 +61,7 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
     {
         var migrated = 0;
         var skipped = 0;
+        var failed = 0;
         var page = 1;
         const int pageSize = WorkItemQuery.MaxPageSize;
 
@@ -78,38 +79,69 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
 
             foreach (var candidate in result.Items)
             {
-                if (!NeedsMigration(candidate))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                // QueryAsync omits AuditLog/Notes — fetch the full document
-                // before saving so we do not wipe audit history on ReplaceAsync.
-                var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
-                if (full is null || !NeedsMigration(full))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                PatchSnapshot(full);
-
+                // One unreadable document must not abandon the batch (epr-dtkw).
+                // Without this, a single document whose snapshot tripped
+                // NeedsMigration threw straight out of ApplyAsync; the host
+                // logged "failed; continuing startup. Will retry on next boot"
+                // and the next boot met the same document. Every work item
+                // behind it in the page was left unmigrated, permanently — the
+                // duly-make transition never reached their snapshots, so duly
+                // making refused them with InvalidTransition. Skipping the one
+                // document and logging it keeps the other thousands migrating,
+                // and turns a silent permanent stall into a named record to
+                // investigate.
                 try
                 {
-                    await persistence.ReplaceAsync(full, cancellationToken);
-                    migrated++;
+                    if (!NeedsMigration(candidate))
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    // QueryAsync omits AuditLog/Notes — fetch the full document
+                    // before saving so we do not wipe audit history on ReplaceAsync.
+                    var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
+                    if (full is null || !NeedsMigration(full))
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    PatchSnapshot(full);
+
+                    try
+                    {
+                        await persistence.ReplaceAsync(full, cancellationToken);
+                        migrated++;
+                    }
+                    catch (WorkItemConcurrencyException)
+                    {
+                        // Another instance migrated this item concurrently; it is
+                        // already up to date.
+                        logger.LogDebug(
+                            "Concurrency conflict on work item {Id}; skipping — another instance "
+                                + "already migrated it.",
+                            full.Id
+                        );
+                        skipped++;
+                    }
                 }
-                catch (WorkItemConcurrencyException)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    // Another instance migrated this item concurrently; it is
-                    // already up to date.
-                    logger.LogDebug(
-                        "Concurrency conflict on work item {Id}; skipping — another instance "
-                            + "already migrated it.",
-                        full.Id
+                    // Deliberately broad, and deliberately not rethrown. The
+                    // point is that NOTHING about one malformed document may
+                    // stop the others migrating; narrowing this to the
+                    // exception we happen to have seen would just move the
+                    // stall to the next unanticipated shape. Cancellation still
+                    // propagates — a shutdown is not a document problem.
+                    failed++;
+                    logger.LogError(
+                        ex,
+                        "Migration '{Name}' could not process work item {Id}; skipping it and "
+                            + "continuing with the rest of the batch.",
+                        Name,
+                        candidate.Id
                     );
-                    skipped++;
                 }
             }
 
@@ -122,11 +154,15 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
             page++;
         }
 
+        // `failed` is reported even when zero: a migration that silently
+        // skips documents reads as "complete" and hides a permanent gap.
         logger.LogInformation(
-            "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current.",
+            "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current, "
+                + "{Failed} skipped after errors.",
             Name,
             migrated,
-            skipped
+            skipped,
+            failed
         );
     }
 
