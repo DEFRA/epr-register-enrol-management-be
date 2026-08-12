@@ -3,7 +3,6 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
-using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -132,6 +131,32 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         // And the document AFTER the bad one is migrated, not skipped.
         Assert.Contains(healthy.TemplateSnapshot!.Transitions, t => t.ActionId == "duly-make");
         Assert.Equal("v11", healthy.TemplateVersion);
+    }
+
+    /// <summary>
+    /// epr-dtkw, review follow-up. The poisoned document is not merely survived
+    /// — it is the one that MOST needs migrating (null TasksByState AND no
+    /// duly-make transition), so it must actually be migrated, not skipped into
+    /// the `failed` bucket where it keeps failing every boot and duly making
+    /// keeps refusing it. `PatchSnapshot` dereferences `TasksByState` directly,
+    /// so without a fallback there it throws ArgumentNullException, the batch's
+    /// broad catch swallows it, and this document never completes.
+    /// </summary>
+    [Fact]
+    public async Task A_snapshot_with_no_tasksByState_is_itself_migrated()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var poisoned = BuildItem(snapshot: SnapshotWithNullTasksByState());
+        var persistence = BuildPersistence(poisoned);
+
+        await BuildMigration().ApplyAsync(persistence, ct);
+
+        Assert.Contains(poisoned.TemplateSnapshot!.Transitions, t => t.ActionId == "duly-make");
+        Assert.Equal("v11", poisoned.TemplateVersion);
+        // And the null it carried is replaced by a real (empty) task list, so a
+        // later read cannot trip the same NRE.
+        Assert.NotNull(poisoned.TemplateSnapshot.TasksByState);
+        Assert.Empty(poisoned.TemplateSnapshot.GetTasksForState("submitted"));
     }
 
     /// <summary>

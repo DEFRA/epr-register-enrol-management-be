@@ -210,8 +210,20 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
         // dictionary on the deserialised snapshot, and the original may be
         // case-sensitive depending on how it round-tripped through BSON. An
         // explicit OrdinalIgnoreCase copy matches WorkItemTemplateSnapshot.Capture.
+        //
+        // The `?? new(...)` is the same guard GetTasksForState carries, and for
+        // the same reason (epr-dtkw): a snapshot stored without tasksByState
+        // deserialises with TasksByState null, the Dictionary copy-constructor
+        // throws ArgumentNullException on a null source, and — because such a
+        // document also lacks the duly-make transition — it reaches HERE rather
+        // than being filtered out. Without this fallback that throw is caught by
+        // the batch's per-item guard and the document is never migrated, so it
+        // keeps failing every boot and duly making keeps refusing it: the exact
+        // symptom this migration exists to remove. Rebuilding onto an empty
+        // dictionary both migrates the document and replaces the null, so a
+        // later GetTasksForState on the migrated snapshot cannot trip either.
         var tasksByState = new Dictionary<string, List<WorkItemTask>>(
-            snapshot.TasksByState,
+            snapshot.TasksByState ?? [],
             StringComparer.OrdinalIgnoreCase
         )
         {
