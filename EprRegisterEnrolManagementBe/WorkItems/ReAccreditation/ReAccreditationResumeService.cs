@@ -75,6 +75,15 @@ internal sealed class ReAccreditationResumeService(
     /// (e.g. the case management summary page) see the resubmitted values
     /// without having to know about <see cref="LatestSectionsPayloadField"/>.
     ///
+    /// Keyed by the operator backend's <c>OperatorSection</c> enum name
+    /// (<c>HttpCaseWorkingApiAdapter.BuildSectionsPayload</c>), e.g.
+    /// <c>"BusinessPlan"</c> — NOT the kebab-case keys in
+    /// <see cref="ReAccreditationQuerySections"/>, which only apply to
+    /// <see cref="ResumeFromQueryRequest.SectionKeys"/>, a separate field.
+    /// <see cref="ResumeFromQueryRequest.Sections"/> is keyed independently
+    /// by whatever the operator backend sends, and it sends its own enum
+    /// name, not the CM checkbox key.
+    ///
     /// Only covers the sections a resubmit can actually change on this
     /// field set: <c>authority-to-issue</c> is deliberately absent — a
     /// separate, unrelated code path already merges it into its canonical
@@ -87,9 +96,9 @@ internal sealed class ReAccreditationResumeService(
     private static readonly IReadOnlyDictionary<string, string> s_canonicalPayloadFieldBySectionKey =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["business-plan"] = "businessPlan",
-            ["prn-tonnage"] = "prns",
-            ["sampling-and-inspection-plan"] = "samplingPlan",
+            ["BusinessPlan"] = "businessPlan",
+            ["Prns"] = "prns",
+            ["SamplingPlan"] = "samplingPlan",
         };
 
     public async Task<WorkItemActionResult> ResumeFromQueryAsync(
@@ -215,7 +224,7 @@ internal sealed class ReAccreditationResumeService(
     ///
     /// RA-291 regression fix: also merges each resubmitted section that has a
     /// canonical top-level field (<see cref="s_canonicalPayloadFieldBySectionKey"/>)
-    /// back onto that field, e.g. <c>sections["business-plan"]</c> onto
+    /// back onto that field, e.g. <c>sections["BusinessPlan"]</c> onto
     /// <c>payload.businessPlan</c>. Without this, only <c>latestSections</c>
     /// was ever updated, which nothing — including the case management
     /// summary page — reads back, so a resubmitted business plan / PRN
