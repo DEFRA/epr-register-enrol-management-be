@@ -37,8 +37,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// </para>
 /// </summary>
 public sealed class AccreditationIdLookupMongoIntegrationTests
-    : IClassFixture<MongoIntegrationFixture>,
-        IAsyncDisposable
+    : IAsyncDisposable
 {
     private const string CollectionName = "workItems";
     private const string IndexName = "payload.accreditationId_1";

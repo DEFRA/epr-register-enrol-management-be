@@ -14,7 +14,7 @@ namespace EprRegisterEnrolManagementBe.Test.Integrations.OperatorBackend;
 /// to be set. Mirrors
 /// <see cref="EprRegisterEnrolManagementBe.Test.Config.OperatorServiceConfigBindingTests"/>.
 /// </summary>
-public class OperatorBackendApiConfigBindingTests : IClassFixture<MongoIntegrationFixture>
+public class OperatorBackendApiConfigBindingTests
 {
     private readonly MongoIntegrationFixture _fixture;
 

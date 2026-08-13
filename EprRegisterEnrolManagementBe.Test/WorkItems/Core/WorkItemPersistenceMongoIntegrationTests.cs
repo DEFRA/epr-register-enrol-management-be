@@ -24,7 +24,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// regression in BSON conventions, indexes or projections pass CI.
 /// </summary>
 public sealed class WorkItemPersistenceMongoIntegrationTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable, IDisposable
+    : IAsyncDisposable, IDisposable
 {
     /// <summary>
     /// Deterministic timestamp seed used for every <see cref="WorkItem"/>

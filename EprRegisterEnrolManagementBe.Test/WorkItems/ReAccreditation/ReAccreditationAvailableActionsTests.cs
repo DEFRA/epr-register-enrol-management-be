@@ -18,7 +18,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// module's template specifically.
 /// </summary>
 public class ReAccreditationAvailableActionsTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
+    : IAsyncDisposable
 {
     private static readonly DateTime Now = new(2026, 4, 27, 10, 0, 0, DateTimeKind.Utc);
 
