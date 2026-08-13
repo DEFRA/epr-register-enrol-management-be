@@ -15,7 +15,7 @@ namespace EprRegisterEnrolManagementBe.Test.Config;
 /// Configure call would leave every Queried email carrying an empty
 /// operator_service_link with all other tests still green.
 /// </summary>
-public class OperatorServiceConfigBindingTests : IClassFixture<MongoIntegrationFixture>
+public class OperatorServiceConfigBindingTests
 {
     private readonly MongoIntegrationFixture _fixture;
 

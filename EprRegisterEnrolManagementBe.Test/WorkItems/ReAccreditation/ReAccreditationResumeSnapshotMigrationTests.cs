@@ -24,8 +24,7 @@ public class ReAccreditationResumeSnapshotMigrationTests
             States = snapshot.States,
             Transitions = snapshot.Transitions
                 .Where(t => !t.ActionId.StartsWith("resume-during-", StringComparison.Ordinal))
-                .ToList(),
-            TasksByState = snapshot.TasksByState
+                .ToList()
         };
     }
 

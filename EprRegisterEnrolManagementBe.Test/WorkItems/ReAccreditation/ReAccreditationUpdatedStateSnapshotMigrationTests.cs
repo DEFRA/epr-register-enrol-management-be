@@ -35,8 +35,7 @@ public class ReAccreditationUpdatedStateSnapshotMigrationTests
                     "resume-during-decision" => t with { ToStateId = "awaiting-decision" },
                     _ => t
                 })
-                .ToList(),
-            TasksByState = snapshot.TasksByState
+                .ToList()
         };
     }
 

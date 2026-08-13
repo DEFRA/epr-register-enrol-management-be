@@ -18,7 +18,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// module's template specifically.
 /// </summary>
 public class ReAccreditationAvailableActionsTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
+    : IAsyncDisposable
 {
     private static readonly DateTime Now = new(2026, 4, 27, 10, 0, 0, DateTimeKind.Utc);
 
@@ -133,37 +133,15 @@ public class ReAccreditationAvailableActionsTests
     }
 
     [Fact]
-    public void Task_gated_action_still_appears_once_its_tasks_are_complete()
+    public void Payment_received_action_is_available_now_no_task_gate_exists()
     {
-        // The RA-364 filter is additive to the existing task gate, not a
-        // replacement for it: 'payment-received' is caller-invocable but
-        // task-gated, so it is absent while tasks are outstanding and present
-        // once they are done. Proves the new predicate did not swallow the
-        // task-gated path.
-        var type = new ReAccreditationType();
-
-        Assert.DoesNotContain(
-            "payment-received",
-            ProjectInState("duly-made").AvailableActions.Select(a => a.ActionId));
-
-        var completed = new HashSet<string>(
-            type.GetTasksForState("duly-made").Select(t => t.Id),
-            StringComparer.OrdinalIgnoreCase
-        );
-        Assert.NotEmpty(completed);
-
-        var projection = _service.Project(
-            new WorkItem
-            {
-                Id = Guid.NewGuid(),
-                TypeId = ReAccreditationType.Id,
-                StateId = "duly-made",
-                SubmittedAt = Now,
-                LastModifiedAt = Now,
-                SubmittedBy = "test-client",
-                CompletedTaskIdsByState = { ["duly-made"] = completed },
-            }
-        );
+        // RA-410: this used to assert 'payment-received' was absent while its
+        // task was outstanding and present once completed — the RA-364
+        // CallerInvocable filter was additive to that task gate, not a
+        // replacement for it. The task framework (and the gate) are gone, so
+        // the caller-invocable 'payment-received' is simply always available
+        // from 'duly-made' — regression cover for the ungating.
+        var projection = ProjectInState("duly-made");
 
         Assert.Contains("payment-received", projection.AvailableActions.Select(a => a.ActionId));
         Assert.All(projection.AvailableActions, a => Assert.True(a.CallerInvocable));

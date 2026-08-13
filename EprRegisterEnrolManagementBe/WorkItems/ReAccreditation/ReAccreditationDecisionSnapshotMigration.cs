@@ -3,43 +3,49 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// Adds the <c>withdraw-during-query</c> transition (RA-252) to the frozen
-/// <see cref="WorkItemTemplateSnapshot"/> of every re-accreditation work
-/// item and bumps <see cref="WorkItem.TemplateVersion"/> from <c>v8</c> to
-/// <c>v9</c>.
+/// RA-410: marks <c>submit-for-decision</c> and <c>reject</c> as
+/// <see cref="WorkItemTransition.CallerInvocable"/> <c>false</c> on the frozen
+/// <see cref="WorkItemTemplateSnapshot"/> of every existing re-accreditation
+/// work item, and bumps <see cref="WorkItem.TemplateVersion"/> from <c>v11</c>
+/// to <c>v12</c>.
 ///
-/// <see cref="WorkItemService"/> matches an action against the work item's
-/// own frozen snapshot, not the live <see cref="ReAccreditationType"/> (the
-/// snapshot is captured once, at submission). Without this migration, every
-/// re-accreditation work item submitted before this deploy — including any
-/// already sitting in <c>queried</c> today — has no way to reach
-/// <c>withdrawn</c> from <c>queried</c>: adding the transition to the live
-/// type only benefits work items submitted after the deploy. This mirrors
-/// <see cref="ReAccreditationResumeSnapshotMigration"/>'s v6→v7 precedent.
+/// <see cref="WorkItemService"/> builds a work item's available actions from
+/// its own frozen snapshot, not the live <see cref="ReAccreditationType"/>.
+/// Without this migration an in-flight application would keep advertising the
+/// old two-step decision path — a "Submit for decision" control whose only
+/// effect is to park it in <c>awaiting-decision</c>, exactly the intermediate
+/// state RA-410 exists to stop users seeing — while a freshly submitted one
+/// offered the single "Log decision" call to action. Two different decision
+/// journeys running side by side is worse than either.
 ///
-/// The migration is idempotent: items whose snapshot already contains
-/// <c>withdraw-during-query</c> are skipped.
+/// Nothing else about the snapshot changes. Task lists are not stripped here
+/// because they no longer need to be: <see cref="WorkItemTemplateSnapshot"/>
+/// stopped modelling them, so a stale <c>tasksByState</c> is ignored on read
+/// and dropped on the next write. State ids, action ids and target states are
+/// untouched — <c>reject</c> stays <c>reject</c> and still lands on
+/// <c>rejected</c>, so stored audit entries and notification templates that
+/// name them keep resolving.
+///
+/// The migration is idempotent: an item whose snapshot already declares both
+/// transitions non-caller-invocable is skipped.
 /// </summary>
-internal sealed class ReAccreditationWithdrawQuerySnapshotMigration(
-    ILogger<ReAccreditationWithdrawQuerySnapshotMigration> logger
+internal sealed class ReAccreditationDecisionSnapshotMigration(
+    ILogger<ReAccreditationDecisionSnapshotMigration> logger
 ) : IWorkItemMigration
 {
-    /// <summary>
-    /// Marker transition id used to test whether a snapshot already has the
-    /// v9 transition. Kept in sync with the literal <c>withdraw-during-query</c>
-    /// id declared in <see cref="ReAccreditationType"/>.
-    /// </summary>
-    private const string MarkerActionId = "withdraw-during-query";
+    private const string TargetVersion = "v12";
 
-    private static readonly WorkItemTransition s_newTransition = new(
-        "withdraw-during-query",
-        "Withdraw",
-        "queried",
-        "withdrawn"
-    );
+    /// <summary>
+    /// The action ids whose <c>CallerInvocable</c> flag this migration clears.
+    /// Kept in sync with <see cref="ReAccreditationType"/>: an item migrated
+    /// with different flags would be judged by different rules than a freshly
+    /// submitted one.
+    /// </summary>
+    private static readonly IReadOnlySet<string> s_serverResolvedActionIds =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "submit-for-decision", "reject" };
 
     public string Name =>
-        "ReAccreditation: add withdraw-during-query transition to snapshot (v8 → v9)";
+        "ReAccreditation: make submit-for-decision and reject server-resolved in snapshot (v11 → v12)";
 
     public async Task ApplyAsync(
         IWorkItemPersistence persistence,
@@ -117,17 +123,25 @@ internal sealed class ReAccreditationWithdrawQuerySnapshotMigration(
 
     private static bool NeedsMigration(WorkItem workItem) =>
         workItem.TemplateSnapshot is not null
-        && workItem.TemplateSnapshot.Transitions.All(t => t.ActionId != MarkerActionId);
+        && workItem.TemplateSnapshot.Transitions.Any(t =>
+            s_serverResolvedActionIds.Contains(t.ActionId) && t.CallerInvocable
+        );
 
     private static void PatchSnapshot(WorkItem workItem)
     {
         var snapshot = workItem.TemplateSnapshot!;
         workItem.TemplateSnapshot = new WorkItemTemplateSnapshot
         {
-            TemplateVersion = "v9",
+            TemplateVersion = TargetVersion,
             States = snapshot.States,
-            Transitions = snapshot.Transitions.Append(s_newTransition).ToList()
+            Transitions = snapshot
+                .Transitions.Select(t =>
+                    s_serverResolvedActionIds.Contains(t.ActionId)
+                        ? t with { CallerInvocable = false }
+                        : t
+                )
+                .ToList()
         };
-        workItem.TemplateVersion = "v9";
+        workItem.TemplateVersion = TargetVersion;
     }
 }
