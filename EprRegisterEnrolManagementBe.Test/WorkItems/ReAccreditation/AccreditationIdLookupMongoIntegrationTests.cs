@@ -9,17 +9,25 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// epr-r9oy: real-Mongo coverage for the <c>payload.accreditationId</c> index
-/// that <see cref="AccreditationIdLookup"/> owns.
+/// epr-r9oy: real-Mongo coverage for the <c>payload.accreditationId</c> index,
+/// which <see cref="AccreditationIdLookup"/> reads and
+/// <see cref="WorkItemPersistence"/> defines.
 ///
 /// <para>
-/// Every test drives the index through the <see cref="AccreditationIdLookup"/>
-/// CONSTRUCTOR rather than creating it by hand, because the constructor is what
-/// creates it in production (<c>MongoService</c> calls <c>EnsureIndexes</c>) and
-/// because a test that hand-rolls the index proves nothing about the definition
-/// the service actually ships. It also means the reconcile-on-deploy path is
-/// exercised for real: the old copy is created first, and the constructor is
-/// left to retire it.
+/// Every test drives the index through a real CONSTRUCTOR rather than creating
+/// it by hand, because <c>MongoService.EnsureIndexes</c> running from the
+/// constructor is the whole delivery mechanism — and a test that hand-rolls the
+/// index proves nothing about the definition the service actually ships, nor
+/// about whether that definition ever reaches a deployed environment. It also
+/// exercises the reconcile-on-deploy path for real: the legacy copy is created
+/// first and the constructor is left to retire it.
+/// </para>
+///
+/// <para>
+/// Which constructor matters, and is itself under test. Version 0.81.0 shipped
+/// this index defined on <see cref="AccreditationIdLookup"/> and changed nothing
+/// in production, because that type is a lazy singleton nothing resolves during
+/// startup — see <see cref="TheLookupItselfCreatesNoIndexes"/>.
 /// </para>
 ///
 /// <para>
@@ -49,6 +57,14 @@ public sealed class AccreditationIdLookupMongoIntegrationTests
         new(_clientFactory, NullLoggerFactory.Instance);
 
     /// <summary>
+    /// Creating the persistence is what creates the index in production —
+    /// WorkItemMigrationHostedService resolves IWorkItemPersistence on every
+    /// boot, so its constructor's EnsureIndexes runs on every deploy.
+    /// </summary>
+    private WorkItemPersistence CreatePersistence() =>
+        new(_clientFactory, NullLoggerFactory.Instance);
+
+    /// <summary>
     /// The defect, pinned against the OLD definition so the fix is demonstrably
     /// fixing something. Two documents carrying an explicit null — exactly what
     /// the duly-making payload merge writes — and the second is rejected.
@@ -70,7 +86,7 @@ public sealed class AccreditationIdLookupMongoIntegrationTests
     [Fact]
     public async Task ExplicitNullsCoexistUnderThePartialIndex()
     {
-        CreateLookup();
+        CreatePersistence();
 
         await _raw.InsertOneAsync(WorkItemWithAccreditationId(BsonNull.Value));
         await _raw.InsertOneAsync(WorkItemWithAccreditationId(BsonNull.Value));
@@ -87,7 +103,7 @@ public sealed class AccreditationIdLookupMongoIntegrationTests
     {
         await CreateLegacySparseIndexAsync();
 
-        CreateLookup();
+        CreatePersistence();
 
         var index = await FindIndexAsync();
         Assert.NotNull(index);
@@ -111,7 +127,7 @@ public sealed class AccreditationIdLookupMongoIntegrationTests
         await _raw.InsertOneAsync(WorkItemWithAccreditationId(BsonNull.Value));
         await _raw.InsertOneAsync(WorkItemWithAccreditationId(BsonNull.Value));
 
-        CreateLookup();
+        CreatePersistence();
 
         Assert.NotNull(await FindIndexAsync());
     }
@@ -123,7 +139,7 @@ public sealed class AccreditationIdLookupMongoIntegrationTests
     [Fact]
     public async Task StillRejectsDuplicateRealAccreditationIds()
     {
-        CreateLookup();
+        CreatePersistence();
 
         await _raw.InsertOneAsync(WorkItemWithAccreditationId("EA26AB1234"));
 
@@ -139,6 +155,7 @@ public sealed class AccreditationIdLookupMongoIntegrationTests
     [InlineData("EA26ZZ9999", false)]
     public async Task ExistsAsyncFindsOnlyRealIds(string probe, bool expected)
     {
+        CreatePersistence();
         var lookup = CreateLookup();
         await _raw.InsertOneAsync(WorkItemWithAccreditationId("EA26AB1234"));
         await _raw.InsertOneAsync(WorkItemWithAccreditationId(BsonNull.Value));
@@ -157,12 +174,32 @@ public sealed class AccreditationIdLookupMongoIntegrationTests
     [Fact]
     public async Task ExistsAsyncUsesAnIndexScanNotACollectionScan()
     {
-        CreateLookup();
+        CreatePersistence();
 
         var stages = await WinningPlanStagesAsync(AccreditationIdLookup.ExistsFilter("EA26AB1234"));
 
         Assert.Contains("IXSCAN", stages);
         Assert.DoesNotContain("COLLSCAN", stages);
+    }
+
+    /// <summary>
+    /// The trap that shipped 0.81.0 without fixing anything. MongoService creates
+    /// indexes from its constructor, and AccreditationIdLookup is a lazy
+    /// singleton nothing resolves at startup, so an index defined on it is not
+    /// created until the first approval — a changed definition never reaches a
+    /// deployed environment on deploy. Pinning that the lookup defines no
+    /// indexes is what stops the definition drifting back onto it.
+    /// </summary>
+    [Fact]
+    public async Task TheLookupItselfCreatesNoIndexes()
+    {
+        CreateLookup();
+
+        // Not merely "the accreditation-id index is missing": the collection is
+        // never created at all, so there is not even an implicit _id_ index.
+        // Constructing the lookup touches Mongo not one bit.
+        using var cursor = await _raw.Indexes.ListAsync();
+        Assert.Empty(await cursor.ToListAsync());
     }
 
     /// <summary>

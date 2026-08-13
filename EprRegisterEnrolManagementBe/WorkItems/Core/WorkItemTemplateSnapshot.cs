@@ -34,9 +34,31 @@ public sealed class WorkItemTemplateSnapshot : IWorkItemTemplate
     /// </summary>
     public required Dictionary<string, List<WorkItemTask>> TasksByState { get; init; }
 
+    /// <summary>
+    /// Tasks captured for <paramref name="stateId"/>, or an empty collection
+    /// when the snapshot records none.
+    ///
+    /// <para>
+    /// The <c>TasksByState is not null</c> guard is load-bearing (epr-dtkw).
+    /// <c>required</c> is a compile-time contract that the BSON deserialiser
+    /// does not honour: a stored snapshot written without a <c>tasksByState</c>
+    /// element deserialises with this property NULL, and every such document
+    /// then threw here. It took out two unrelated paths — the v10 → v11
+    /// snapshot migration aborted on the first such document and failed on
+    /// every boot thereafter, and <c>WorkItemService.Project</c> threw while
+    /// building the duly-making response AFTER the transition had already been
+    /// committed, so the application moved but the regulator saw a 500.
+    /// </para>
+    ///
+    /// <para>
+    /// "No tasks recorded" and "no tasks for this state" are the same answer to
+    /// the caller, so absent is treated as empty rather than exceptional.
+    /// </para>
+    /// </summary>
     public IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId)
     {
-        if (stateId is not null && TasksByState.TryGetValue(stateId, out var tasks))
+        if (stateId is not null && TasksByState is not null
+            && TasksByState.TryGetValue(stateId, out var tasks))
         {
             return tasks;
         }
