@@ -19,7 +19,13 @@ public sealed class NotifyConfig
     /// written either. Re-enable later per environment with the
     /// <c>Notify__Enabled=true</c> environment override (CDP injects env vars).
     /// The gate is read once at startup via
-    /// <see cref="NotifyFeature.NotificationsEnabled"/>.
+    /// <see cref="NotifyFeature.NotificationsEnabled"/>, which reads the raw
+    /// configuration key directly (the options graph is not yet built at service
+    /// registration). This bound property is the config model for that key and
+    /// carries the same value at runtime, but it is NOT what the
+    /// registration gate consults — treat <see cref="NotifyFeature"/> as the
+    /// authoritative switch rather than an injected
+    /// <c>IOptions&lt;NotifyConfig&gt;.Enabled</c>.
     /// </summary>
     public bool Enabled { get; set; }
 
