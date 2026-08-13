@@ -52,41 +52,30 @@ internal sealed class AccreditationIdLookup(
             Builders<WorkItem>.Filter.Eq("payload.accreditationId", accreditationId),
             Builders<WorkItem>.Filter.Type("payload.accreditationId", BsonType.String));
 
+    /// <summary>
+    /// Deliberately empty (epr-r9oy). The <c>payload.accreditationId</c> index
+    /// this service reads is defined by
+    /// <see cref="WorkItemPersistence.DefineIndexes"/> instead.
+    ///
+    /// <para>
+    /// Defining it here does not work: <c>MongoService</c> creates indexes from
+    /// its constructor, and this type is a lazily constructed singleton that
+    /// nothing resolves during startup. The only migration that pulls it in
+    /// resolves <c>IAccreditationIdGenerator</c> after a feature-flag check that
+    /// is off by default — deliberately, since eager resolution once broke every
+    /// WebApplicationFactory test's host bootstrap (25a1399). So an index
+    /// declared here is not created until the first approval, which means a
+    /// changed definition does not reach a deployed environment on deploy. It
+    /// belongs on the <see cref="WorkItemPersistence"/> that owns the same
+    /// collection and IS constructed on every boot.
+    /// </para>
+    ///
+    /// <para>
+    /// Left as an explicit empty override rather than deleted so this reasoning
+    /// sits where the next person looks for it — the abstract member has to be
+    /// implemented regardless.
+    /// </para>
+    /// </summary>
     protected override List<CreateIndexModel<WorkItem>> DefineIndexes(
-        IndexKeysDefinitionBuilder<WorkItem> builder)
-    {
-        // Unique index so ExistsAsync uses an index scan rather than a full
-        // collection scan, and as a DB-level backstop against two concurrent
-        // approvals stamping the same accreditation id (TOCTOU).
-        //
-        // PARTIAL, not sparse (epr-r9oy). Sparse excludes only documents where
-        // the field is ABSENT; a document carrying an EXPLICIT null is indexed
-        // like any other, so the second one collides on the unique constraint.
-        // That is not hypothetical: the payload merge in
-        // ReAccreditationDulyMakingService round-trips through
-        // ReAccreditationPayload and materialises every modelled-but-absent
-        // field as an explicit null, accreditationId among them (it is null
-        // until approval). Under Sparse that made the first duly making in a
-        // collection succeed and every one after it fail with E11000, which
-        // reached the regulator as a 500.
-        //
-        // A partial filter of "is a string" excludes explicit nulls and absent
-        // fields alike, while keeping uniqueness over real ids. ExistsAsync
-        // above must carry the same predicate for the index to be usable.
-        //
-        // MongoIndexReconciler retires the older Sparse copy on deploy: the key
-        // spec is unchanged, so the server raises IndexKeySpecsConflict (86) and
-        // the reconciler drops and recreates with these options. The rebuild is
-        // clean even on a collection already full of explicit nulls, because
-        // they now fall outside the filter.
-        var accreditationId = new CreateIndexModel<WorkItem>(
-            builder.Ascending("payload.accreditationId"),
-            new CreateIndexOptions<WorkItem>
-            {
-                Unique = true,
-                PartialFilterExpression = Builders<WorkItem>.Filter.Type(
-                    "payload.accreditationId", BsonType.String),
-            });
-        return [accreditationId];
-    }
+        IndexKeysDefinitionBuilder<WorkItem> builder) => [];
 }

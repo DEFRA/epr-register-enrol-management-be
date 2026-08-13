@@ -516,7 +516,40 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         var operatorApplicationId = new CreateIndexModel<WorkItem>(
             builder.Ascending("payload.operatorApplicationId"),
             new CreateIndexOptions { Unique = true, Sparse = true });
-        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference, operatorApplicationId];
+        // epr-r9oy: read by AccreditationIdLookup.ExistsAsync, but DEFINED HERE
+        // rather than there, because index definitions only take effect when the
+        // owning MongoService is constructed. AccreditationIdLookup is a lazy
+        // singleton that nothing resolves during startup — the only migration
+        // that pulls it in resolves it after a feature-flag check that is off by
+        // default (25a1399) — so its indexes are not created until the first
+        // approval. WorkItemPersistence is resolved by
+        // WorkItemMigrationHostedService on every boot, so a definition here
+        // reaches every environment on deploy.
+        //
+        // PARTIAL, not sparse. Sparse excludes only documents where the field is
+        // ABSENT; a document carrying an EXPLICIT null is indexed like any other,
+        // so the second one collides on the unique constraint. That is not
+        // hypothetical: ReAccreditationDulyMakingService round-trips the payload
+        // through ReAccreditationPayload and merges ToBsonDocument(), which
+        // materialises every modelled-but-absent field as an explicit null,
+        // accreditationId among them (it is null until approval). Under Sparse
+        // that made the first duly making in a collection succeed and every one
+        // after it fail with E11000, which reached the regulator as a 500.
+        //
+        // "Is a string" excludes explicit nulls and absent fields alike while
+        // keeping uniqueness over real ids, so the backstop against two
+        // concurrent approvals stamping the same id survives. Note that
+        // AccreditationIdLookup.ExistsFilter must carry the same $type predicate
+        // for the planner to use this index at all.
+        var accreditationId = new CreateIndexModel<WorkItem>(
+            builder.Ascending("payload.accreditationId"),
+            new CreateIndexOptions<WorkItem>
+            {
+                Unique = true,
+                PartialFilterExpression = Builders<WorkItem>.Filter.Type(
+                    "payload.accreditationId", BsonType.String),
+            });
+        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference, operatorApplicationId, accreditationId];
     }
 }
 
