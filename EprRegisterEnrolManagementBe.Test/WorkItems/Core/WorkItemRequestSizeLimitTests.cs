@@ -32,7 +32,6 @@ public class WorkItemRequestSizeLimitTests
     public static IEnumerable<TheoryDataRow<string, long>> EndpointSizeCases() => new TheoryDataRow<string, long>[]
     {
         new("SubmitWorkItem",                          WorkItemEndpoints.MaxSubmitBodyBytes)             { TestDisplayName = "Submit"                },
-        new("SetWorkItemTaskStatus",                   WorkItemEndpoints.MaxTaskStatusBodyBytes)         { TestDisplayName = "SetTaskStatus"         },
         new("AssignWorkItem",                          WorkItemEndpoints.MaxAssignBodyBytes)             { TestDisplayName = "Assign"                },
         new("AddWorkItemNote",                         WorkItemEndpoints.MaxNoteBodyBytes)               { TestDisplayName = "AddNote"               },
         new("RecordReAccreditationDecisionRationale",  ReAccreditationEndpoints.MaxRationaleBodyBytes)   { TestDisplayName = "RecordDecisionRationale" }

@@ -8,10 +8,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 public enum WorkItemActionFailureCode
 {
     WorkItemNotFound,
-    TaskNotApplicable,
     UnknownAction,
     InvalidTransition,
-    IncompleteTasks,
     TerminalState,
     /// <summary>
     /// The caller is not allowed to perform this assignment (e.g. a standard
@@ -47,11 +45,22 @@ public enum WorkItemActionFailureCode
     /// server-side condition rather than a client error, so the endpoint maps
     /// it to a 503 and the caller can safely retry the submission.
     /// </summary>
-    ApplicationReferenceExhausted
+    ApplicationReferenceExhausted,
+    /// <summary>
+    /// A mandatory upstream notification a mutation is gated on could not be
+    /// delivered within its retry budget, so the mutation was abandoned before
+    /// anything was persisted (epr-p86e / RA-410: the operator-journey status
+    /// push that the re-accreditation decision is gated on). No state changed —
+    /// the caller may retry. Distinct from a client error: the endpoint maps it
+    /// to a generic 500 rather than a 4xx, because the request itself was
+    /// well-formed and the failure is a server-side dependency being
+    /// unreachable.
+    /// </summary>
+    UpstreamNotificationFailed
 }
 
 /// <summary>
-/// Result of a state- or task-changing operation. Either succeeds with the
+/// Result of a state-changing operation. Either succeeds with the
 /// updated <see cref="WorkItem"/>, or fails with a <see cref="WorkItemActionFailureCode"/>
 /// and human-readable message.
 /// </summary>

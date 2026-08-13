@@ -1,7 +1,7 @@
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
-/// The shape the engine actually queries to decide what tasks/actions apply to
+/// The shape the engine actually queries to decide what actions apply to
 /// a work item. Implemented by both the live <see cref="IWorkItemType"/> (used
 /// for new work items) and by <see cref="WorkItemTemplateSnapshot"/> (a frozen
 /// copy stored on each work item when it is submitted, so that audit/history
@@ -17,10 +17,4 @@ public interface IWorkItemTemplate
 
     /// <summary>Allowed transitions across <see cref="States"/>.</summary>
     IReadOnlyCollection<WorkItemTransition> Transitions { get; }
-
-    /// <summary>
-    /// Tasks required while in <paramref name="stateId"/>. Returns an empty
-    /// collection for states with no tasks or that the template does not know.
-    /// </summary>
-    IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId);
 }

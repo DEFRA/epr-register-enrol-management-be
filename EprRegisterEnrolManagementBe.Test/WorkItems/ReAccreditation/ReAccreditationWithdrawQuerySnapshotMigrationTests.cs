@@ -25,7 +25,6 @@ public class ReAccreditationWithdrawQuerySnapshotMigrationTests
             Transitions = snapshot
                 .Transitions.Where(t => t.ActionId != "withdraw-during-query")
                 .ToList(),
-            TasksByState = snapshot.TasksByState,
         };
     }
 

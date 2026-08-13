@@ -5,7 +5,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <summary>
 /// Module-scoped service object demonstrating where re-accreditation business
 /// logic lives. The framework's <see cref="Core.IWorkItemService"/> drives
-/// universal task / transition rules; type-specific reasoning over the
+/// universal transition rules; type-specific reasoning over the
 /// payload (e.g. "should we recommend approving this?") belongs here.
 /// </summary>
 internal interface IReAccreditationDecisionService

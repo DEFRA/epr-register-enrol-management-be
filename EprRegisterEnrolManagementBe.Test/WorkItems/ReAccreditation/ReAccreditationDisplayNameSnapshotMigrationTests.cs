@@ -35,8 +35,7 @@ public class ReAccreditationDisplayNameSnapshotMigrationTests
             States = snapshot.States
                 .Select(s => s_oldLabels.TryGetValue(s.Id, out var old) ? s with { DisplayName = old } : s)
                 .ToList(),
-            Transitions = snapshot.Transitions,
-            TasksByState = snapshot.TasksByState
+            Transitions = snapshot.Transitions
         };
     }
 
@@ -99,12 +98,11 @@ public class ReAccreditationDisplayNameSnapshotMigrationTests
     }
 
     [Fact]
-    public async Task ApplyAsync_preserves_transitions_tasks_and_terminal_flags()
+    public async Task ApplyAsync_preserves_transitions_and_terminal_flags()
     {
         var ct = TestContext.Current.CancellationToken;
         var item = BuildItem();
         var originalTransitionCount = item.TemplateSnapshot!.Transitions.Count;
-        var originalTasks = item.TemplateSnapshot!.TasksByState;
         var persistence = Substitute.For<IWorkItemPersistence>();
         persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
         persistence.GetByIdAsync(item.Id, ct).Returns(item);
@@ -112,7 +110,6 @@ public class ReAccreditationDisplayNameSnapshotMigrationTests
         await BuildSut().ApplyAsync(persistence, ct);
 
         Assert.Equal(originalTransitionCount, item.TemplateSnapshot!.Transitions.Count);
-        Assert.Same(originalTasks, item.TemplateSnapshot!.TasksByState);
         // Relabelling must not disturb IsTerminal on the renamed terminal states.
         Assert.True(item.TemplateSnapshot!.States.Single(s => s.Id == "approved").IsTerminal);
         Assert.True(item.TemplateSnapshot!.States.Single(s => s.Id == "rejected").IsTerminal);
