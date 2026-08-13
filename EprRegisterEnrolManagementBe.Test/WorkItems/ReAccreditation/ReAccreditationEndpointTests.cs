@@ -29,7 +29,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// it is the module's collaborator under test, not an infrastructure
 /// boundary the integration suite is supposed to hit.
 /// </summary>
-public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixture>
+public class ReAccreditationEndpointTests
 {
     private const string TenantClientId = "test-client";
     private const string DefaultUserId = "alice-1";

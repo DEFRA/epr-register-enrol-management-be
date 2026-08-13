@@ -1,7 +1,8 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using MongoDB.Bson;
+using MongoDB.Bson.Serialization;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
-using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -100,6 +101,115 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
             persistence.GetByIdAsync(item.Id, Arg.Any<CancellationToken>()).Returns(item);
         }
         return persistence;
+    }
+
+    // ------------------------- one bad document must not stop the batch -------------------------
+
+    /// <summary>
+    /// epr-dtkw. A snapshot stored without `tasksByState` deserialises with the
+    /// property null, and `NeedsMigration` reads it via `GetTasksForState`. That
+    /// throw used to escape `ApplyAsync` entirely: the host logged "failed;
+    /// continuing startup. Will retry on next boot", the next boot met the same
+    /// document, and every item behind it stayed unmigrated forever — no
+    /// `duly-make` transition, so duly making refused them.
+    ///
+    /// Built by deserialising a snapshot document rather than by object
+    /// initialiser, because `required` stops C# constructing the broken shape;
+    /// only the BSON deserialiser can produce it.
+    /// </summary>
+    [Fact]
+    public async Task A_snapshot_with_no_tasksByState_does_not_abandon_the_batch()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var poisoned = BuildItem(snapshot: SnapshotWithNullTasksByState());
+        var healthy = BuildItem();
+        var persistence = BuildPersistence(poisoned, healthy);
+
+        // Must not throw — the whole point.
+        await BuildMigration().ApplyAsync(persistence, ct);
+
+        // And the document AFTER the bad one is migrated, not skipped.
+        Assert.Contains(healthy.TemplateSnapshot!.Transitions, t => t.ActionId == "duly-make");
+        Assert.Equal("v11", healthy.TemplateVersion);
+    }
+
+    /// <summary>
+    /// epr-dtkw, review follow-up. The poisoned document is not merely survived
+    /// — it is the one that MOST needs migrating (null TasksByState AND no
+    /// duly-make transition), so it must actually be migrated, not skipped into
+    /// the `failed` bucket where it keeps failing every boot and duly making
+    /// keeps refusing it. `PatchSnapshot` dereferences `TasksByState` directly,
+    /// so without a fallback there it throws ArgumentNullException, the batch's
+    /// broad catch swallows it, and this document never completes.
+    /// </summary>
+    [Fact]
+    public async Task A_snapshot_with_no_tasksByState_is_itself_migrated()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var poisoned = BuildItem(snapshot: SnapshotWithNullTasksByState());
+        var persistence = BuildPersistence(poisoned);
+
+        await BuildMigration().ApplyAsync(persistence, ct);
+
+        Assert.Contains(poisoned.TemplateSnapshot!.Transitions, t => t.ActionId == "duly-make");
+        Assert.Equal("v11", poisoned.TemplateVersion);
+        // And the null it carried is replaced by a real (empty) task list, so a
+        // later read cannot trip the same NRE.
+        Assert.NotNull(poisoned.TemplateSnapshot.TasksByState);
+        Assert.Empty(poisoned.TemplateSnapshot.GetTasksForState("submitted"));
+    }
+
+    /// <summary>
+    /// A document that throws for some other reason is skipped too, and the run
+    /// still completes. The catch is deliberately broad: narrowing it to the
+    /// exception we happened to see would just move the stall to the next
+    /// unanticipated shape.
+    /// </summary>
+    [Fact]
+    public async Task A_document_that_cannot_be_loaded_is_skipped_not_fatal()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var broken = BuildItem();
+        var healthy = BuildItem();
+        var persistence = BuildPersistence(broken, healthy);
+        persistence
+            .GetByIdAsync(broken.Id, Arg.Any<CancellationToken>())
+            .Returns<Task<WorkItem?>>(_ => throw new InvalidOperationException("unreadable"));
+
+        await BuildMigration().ApplyAsync(persistence, ct);
+
+        Assert.Contains(healthy.TemplateSnapshot!.Transitions, t => t.ActionId == "duly-make");
+    }
+
+    /// <summary>
+    /// Cancellation is not a document problem — a shutdown mid-migration must
+    /// propagate rather than be logged as a skipped work item.
+    /// </summary>
+    [Fact]
+    public async Task Cancellation_still_propagates()
+    {
+        using var cancelled = new CancellationTokenSource();
+        await cancelled.CancelAsync();
+        var item = BuildItem();
+        var persistence = BuildPersistence(item);
+        persistence
+            .GetByIdAsync(item.Id, Arg.Any<CancellationToken>())
+            .Returns<Task<WorkItem?>>(_ => throw new OperationCanceledException());
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => BuildMigration().ApplyAsync(persistence, cancelled.Token)
+        );
+    }
+
+    /// <summary>
+    /// The pre-RA-316 snapshot shape as stored, minus `tasksByState`.
+    /// </summary>
+    private static WorkItemTemplateSnapshot SnapshotWithNullTasksByState()
+    {
+        var document = BuildV10Snapshot().ToBsonDocument();
+        document.Remove("TasksByState");
+        document.Remove("tasksByState");
+        return BsonSerializer.Deserialize<WorkItemTemplateSnapshot>(document);
     }
 
     // ------------------------- the two stranding properties -------------------------
