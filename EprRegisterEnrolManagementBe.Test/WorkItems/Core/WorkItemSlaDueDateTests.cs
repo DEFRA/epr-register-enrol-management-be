@@ -31,7 +31,7 @@ public class WorkItemSlaDueDateTests
     };
 
     private static WorkItemEngineProjection Project(WorkItem item) =>
-        new(item, "v9", Array.Empty<WorkItemTaskProgress>(), Array.Empty<WorkItemTransition>());
+        new(item, "v9", Array.Empty<WorkItemTransition>());
 
     [Fact]
     public void ComputeSlaDueDate_is_null_when_no_clock()

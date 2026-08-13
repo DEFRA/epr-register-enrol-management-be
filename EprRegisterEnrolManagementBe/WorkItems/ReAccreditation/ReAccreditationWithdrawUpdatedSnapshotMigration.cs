@@ -37,8 +37,7 @@ internal sealed class ReAccreditationWithdrawUpdatedSnapshotMigration(
         "withdraw-during-updated",
         "Withdraw",
         "updated",
-        "withdrawn",
-        RequiresAllTasksComplete: false
+        "withdrawn"
     );
 
     public string Name =>
@@ -129,8 +128,7 @@ internal sealed class ReAccreditationWithdrawUpdatedSnapshotMigration(
         {
             TemplateVersion = "v10",
             States = snapshot.States,
-            Transitions = snapshot.Transitions.Append(s_newTransition).ToList(),
-            TasksByState = snapshot.TasksByState,
+            Transitions = snapshot.Transitions.Append(s_newTransition).ToList()
         };
         workItem.TemplateVersion = "v10";
     }

@@ -5,7 +5,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <summary>
 /// Re-accreditation work item type (RA-98). Reference module that proves the
 /// framework's "one folder + one registration line" promise. The states /
-/// transitions / tasks declared here follow the workflow diagram referenced
+/// transitions declared here follow the workflow diagram referenced
 /// in RA-85; the shape is intentionally declarative so a reader can grasp
 /// the lifecycle without reading code.
 /// </summary>
@@ -59,32 +59,6 @@ internal sealed class ReAccreditationType : IWorkItemType
         "Withdrawn",
         IsTerminal: true
     );
-
-    private static readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>> s_tasksByState =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            // RA-316: 'submitted' deliberately has NO tasks. Duly making is
-            // driven by an explicit "Duly make" call to action that captures a
-            // payment date, not by ticking a checklist — see the duly-make
-            // transition below. The two former tasks
-            // ('verify-organisation-details', 'confirm-application-completeness')
-            // existed only to trigger the auto-transition hook that the button
-            // replaces, so they are gone rather than merely unused.
-            [s_dulyMade.Id] =
-            [
-                new WorkItemTask("confirm-registration-fee-paid", "Confirm registration fee paid"),
-            ],
-            [s_assessmentInProgress.Id] =
-            [
-                new WorkItemTask("review-compliance-history", "Review compliance history"),
-                new WorkItemTask("assess-technical-capacity", "Assess technical capacity"),
-                new WorkItemTask("assess-financial-capacity", "Assess financial capacity"),
-            ],
-            [s_awaitingDecision.Id] =
-            [
-                new WorkItemTask("record-decision-rationale", "Record decision rationale"),
-            ],
-        };
 
     public string TypeId => Id;
     public string DisplayName => "Re-accreditation";
@@ -141,7 +115,16 @@ internal sealed class ReAccreditationType : IWorkItemType
     // still carry the submitted-state tasks and no duly-make transition, so
     // they have no way to be duly made until
     // ReAccreditationDulyMakeSnapshotMigration patches their frozen snapshot.
-    public string TemplateVersion => "v11";
+    // v12 (RA-410): the task framework is gone. Every per-state checklist and
+    // every "all tasks complete" gate is deleted, so the transitions that used
+    // to be gated (payment-received, submit-for-decision) now simply succeed.
+    // submit-for-decision and reject additionally become CallerInvocable:
+    // false — a decision is now one call to
+    // POST /work-items/re-accreditation/{id}/decision, which performs both
+    // hops server-side. Items snapshotted before v12 keep the v11 action set
+    // until ReAccreditationDecisionSnapshotMigration patches their frozen
+    // snapshot.
+    public string TemplateVersion => "v12";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -170,17 +153,11 @@ internal sealed class ReAccreditationType : IWorkItemType
         // caller reaching this through /work-items/{id}/actions/duly-make would
         // move the item to duly-made with no payment date and therefore no
         // clock, silently defeating the SLA.
-        //
-        // RequiresAllTasksComplete is false because 'submitted' has no tasks
-        // (see s_tasksByState above); the gate would be vacuous either way, and
-        // stating it explicitly keeps the reason visible if tasks are ever
-        // reintroduced there.
         new WorkItemTransition(
             "duly-make",
             "Duly make",
             s_submitted.Id,
             s_dulyMade.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
         new WorkItemTransition(
@@ -189,72 +166,88 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_dulyMade.Id,
             s_assessmentInProgress.Id
         ),
-        // SLA extension is a self-loop on assessment-in-progress; it
-        // bypasses the "all tasks complete" gate so an assessor can
-        // record an extension at any time during assessment.
+        // SLA extension is a self-loop on assessment-in-progress so an
+        // assessor can record an extension at any time during assessment.
         new WorkItemTransition(
             "sla-extend",
             "Extend SLA",
             s_assessmentInProgress.Id,
-            s_assessmentInProgress.Id,
-            RequiresAllTasksComplete: false
+            s_assessmentInProgress.Id
         ),
+        // RA-410: 'awaiting-decision' survives as an internal hop, but no
+        // caseworker clicks through it any more. Recording a decision is a
+        // single call to POST /work-items/re-accreditation/{id}/decision,
+        // which applies this transition and then the outcome server-side, so
+        // a failure between the two cannot strand an application in
+        // 'awaiting-decision' with no way forward.
+        //
+        // CallerInvocable is false to make that the only route. Left
+        // invocable, the generic action endpoint would keep offering a
+        // "Submit for decision" button whose only effect is to park an
+        // application in the intermediate state this story exists to hide.
         new WorkItemTransition(
             "submit-for-decision",
             "Submit for decision",
             s_assessmentInProgress.Id,
-            s_awaitingDecision.Id
+            s_awaitingDecision.Id,
+            CallerInvocable: false
         ),
         // RA-132: approve is handled exclusively by ReAccreditationApprovalService
         // via POST /work-items/re-accreditation/{id}/approve. The transition is NOT
         // registered here so the generic engine rejects any attempt to call
         // /work-items/{id}/actions/approve, preventing a caller from bypassing the
         // bespoke side-effects (accreditation id issuance, SLA clock stop, queued
-        // publishing job). Reject still goes through awaiting-decision via the generic engine.
-        new WorkItemTransition("reject", "Reject", s_awaitingDecision.Id, s_rejected.Id),
+        // publishing job).
+        //
+        // RA-410: reject is now CallerInvocable: false for the same reason as
+        // submit-for-decision above. Both halves of a decision are driven by
+        // ReAccreditationLogDecisionService through the single /decision
+        // endpoint, so the pair either both happen or neither does. The action
+        // id stays 'reject' and the target state stays 'rejected' — the
+        // regulator-facing "Refused" wording is a frontend label only, and
+        // renaming either would break every notification template and stored
+        // audit entry that names them.
+        new WorkItemTransition(
+            "reject",
+            "Reject",
+            s_awaitingDecision.Id,
+            s_rejected.Id,
+            CallerInvocable: false
+        ),
         // RA-211 / RA-291: a case worker can query an application from any
         // pre-decision state when they need clarification before proceeding.
-        // Like sla-extend/withdraw, this bypasses the "all tasks complete"
-        // gate — a query can be raised at any point during review, not just
-        // once every task box is ticked. There is deliberately no transition
+        // There is deliberately no transition
         // out of 'queried' back to 'queried': an application awaiting a
         // response cannot be queried again.
         new WorkItemTransition(
             "query-during-duly-making",
             "Query",
             s_submitted.Id,
-            s_queried.Id,
-            RequiresAllTasksComplete: false
+            s_queried.Id
         ),
         new WorkItemTransition(
             "query-during-duly-made",
             "Query",
             s_dulyMade.Id,
-            s_queried.Id,
-            RequiresAllTasksComplete: false
+            s_queried.Id
         ),
         new WorkItemTransition(
             "query-during-assessment",
             "Query",
             s_assessmentInProgress.Id,
-            s_queried.Id,
-            RequiresAllTasksComplete: false
+            s_queried.Id
         ),
         new WorkItemTransition(
             "query-during-decision",
             "Query",
             s_awaitingDecision.Id,
-            s_queried.Id,
-            RequiresAllTasksComplete: false
+            s_queried.Id
         ),
         // RA-311/MBE-1: the inverse of the four query-during-* transitions
         // above, one per originating state, so a resubmitted application
         // moves out of 'queried'. Which one applies is resolved server-side
         // (ReAccreditationResumeService) from the work item's own
         // 'application-queried' audit history, never chosen by the caller.
-        // RequiresAllTasksComplete is false for the same reason as
-        // query-during-*: task completeness for the target state is
-        // re-evaluated there, not gated on the way in.
         // RA-337: these land on 'updated' rather than jumping straight back
         // to the originating state — see continue-review-during-* below.
         //
@@ -272,7 +265,6 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Resume",
             s_queried.Id,
             s_updated.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
         new WorkItemTransition(
@@ -280,7 +272,6 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Resume",
             s_queried.Id,
             s_updated.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
         new WorkItemTransition(
@@ -288,7 +279,6 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Resume",
             s_queried.Id,
             s_updated.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
         new WorkItemTransition(
@@ -296,7 +286,6 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Resume",
             s_queried.Id,
             s_updated.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
         // RA-337: the inverse of the four resume-during-* transitions above,
@@ -305,9 +294,6 @@ internal sealed class ReAccreditationType : IWorkItemType
         // queried from. Which one applies is resolved server-side
         // (ReAccreditationContinueReviewService) from the work item's own
         // resume-during-* audit entry, never chosen by the caller.
-        // RequiresAllTasksComplete is false because 'updated' has no tasks
-        // of its own — task completeness for the target state is
-        // re-evaluated there, not gated on the way in.
         //
         // Security review (RA-311/MBE-1): CallerInvocable is false for the
         // same reason as resume-during-* above — all four share FromStateId
@@ -319,7 +305,6 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Continue review",
             s_updated.Id,
             s_submitted.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
         new WorkItemTransition(
@@ -327,7 +312,6 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Continue review",
             s_updated.Id,
             s_dulyMade.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
         new WorkItemTransition(
@@ -335,7 +319,6 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Continue review",
             s_updated.Id,
             s_assessmentInProgress.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
         new WorkItemTransition(
@@ -343,40 +326,33 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Continue review",
             s_updated.Id,
             s_awaitingDecision.Id,
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         ),
-        // Withdrawal is always available before a decision is recorded; it
-        // bypasses the "all tasks complete" gate so an organisation can
-        // withdraw at any point without an assessor having to first tick
-        // every box.
+        // Withdrawal is always available before a decision is recorded, so an
+        // organisation can withdraw at any point during review.
         new WorkItemTransition(
             "withdraw",
             "Withdraw",
             s_submitted.Id,
-            s_withdrawn.Id,
-            RequiresAllTasksComplete: false
+            s_withdrawn.Id
         ),
         new WorkItemTransition(
             "withdraw-during-duly-made",
             "Withdraw",
             s_dulyMade.Id,
-            s_withdrawn.Id,
-            RequiresAllTasksComplete: false
+            s_withdrawn.Id
         ),
         new WorkItemTransition(
             "withdraw-during-assessment",
             "Withdraw",
             s_assessmentInProgress.Id,
-            s_withdrawn.Id,
-            RequiresAllTasksComplete: false
+            s_withdrawn.Id
         ),
         new WorkItemTransition(
             "withdraw-during-decision",
             "Withdraw",
             s_awaitingDecision.Id,
-            s_withdrawn.Id,
-            RequiresAllTasksComplete: false
+            s_withdrawn.Id
         ),
         // RA-252: an operator can withdraw an application awaiting a query
         // response too — unlike resume-during-*/continue-review-during-*
@@ -387,8 +363,7 @@ internal sealed class ReAccreditationType : IWorkItemType
             "withdraw-during-query",
             "Withdraw",
             s_queried.Id,
-            s_withdrawn.Id,
-            RequiresAllTasksComplete: false
+            s_withdrawn.Id
         ),
         // RA-252: an operator can also withdraw an application sitting in
         // 'updated' — a query response has arrived but a caseworker has not
@@ -400,11 +375,8 @@ internal sealed class ReAccreditationType : IWorkItemType
             "withdraw-during-updated",
             "Withdraw",
             s_updated.Id,
-            s_withdrawn.Id,
-            RequiresAllTasksComplete: false
+            s_withdrawn.Id
         ),
     ];
 
-    public IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId) =>
-        s_tasksByState.TryGetValue(stateId, out var tasks) ? tasks : Array.Empty<WorkItemTask>();
 }

@@ -25,7 +25,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// verified via a small integration subset using
 /// <see cref="SlaEndpointsTestFactory"/>.
 /// </summary>
-public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
+public class SlaEndpointsTests
 {
     private const string TypeId = "test-type";
     private static readonly Guid WorkItemId = Guid.NewGuid();
@@ -53,7 +53,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
     };
 
     private static WorkItemEngineProjection AProjection(WorkItem workItem) =>
-        new(workItem, "v1", [], []);
+        new(workItem, "v1", []);
 
     private static DefaultHttpContext TeamLeaderContext()
     {

@@ -13,7 +13,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// exercised against the actual optimistic-concurrency implementation.
 /// </summary>
 public class WorkItemAuditAppenderTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
+    : IAsyncDisposable
 {
     private readonly TestMongoDbClientFactory _clientFactory;
     private readonly string _databaseName;

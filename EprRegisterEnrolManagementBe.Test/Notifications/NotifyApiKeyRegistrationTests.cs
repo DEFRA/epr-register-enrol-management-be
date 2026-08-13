@@ -24,7 +24,7 @@ internal static class NotifyTestConstants
 /// races with other WebApplicationFactory spin-ups — same reasoning as
 /// WorkItemSeederGatingTests.
 /// </summary>
-public class NotifyApiKeyRegistrationTests : IClassFixture<MongoIntegrationFixture>
+public class NotifyApiKeyRegistrationTests
 {
     private readonly MongoIntegrationFixture _fixture;
 
@@ -84,7 +84,7 @@ public sealed class EnvVarMutationCollection
 /// Program.cs and drives the same INotifyClient registration decision.
 /// </summary>
 [Collection(EnvVarMutationCollection.Name)]
-public class NotifyApiKeyEnvVarRegistrationTests : IClassFixture<MongoIntegrationFixture>
+public class NotifyApiKeyEnvVarRegistrationTests
 {
     private readonly MongoIntegrationFixture _fixture;
 

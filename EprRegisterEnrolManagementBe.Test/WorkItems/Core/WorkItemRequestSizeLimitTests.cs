@@ -23,7 +23,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// test server does not host through Kestrel and therefore does not
 /// honour <c>MaxRequestBodySize</c>.
 /// </summary>
-public class WorkItemRequestSizeLimitTests : IClassFixture<MongoIntegrationFixture>
+public class WorkItemRequestSizeLimitTests
 {
     private readonly MongoIntegrationFixture _fixture;
 
@@ -32,7 +32,6 @@ public class WorkItemRequestSizeLimitTests : IClassFixture<MongoIntegrationFixtu
     public static IEnumerable<TheoryDataRow<string, long>> EndpointSizeCases() => new TheoryDataRow<string, long>[]
     {
         new("SubmitWorkItem",                          WorkItemEndpoints.MaxSubmitBodyBytes)             { TestDisplayName = "Submit"                },
-        new("SetWorkItemTaskStatus",                   WorkItemEndpoints.MaxTaskStatusBodyBytes)         { TestDisplayName = "SetTaskStatus"         },
         new("AssignWorkItem",                          WorkItemEndpoints.MaxAssignBodyBytes)             { TestDisplayName = "Assign"                },
         new("AddWorkItemNote",                         WorkItemEndpoints.MaxNoteBodyBytes)               { TestDisplayName = "AddNote"               },
         new("RecordReAccreditationDecisionRationale",  ReAccreditationEndpoints.MaxRationaleBodyBytes)   { TestDisplayName = "RecordDecisionRationale" }
