@@ -24,7 +24,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// regression in BSON conventions, indexes or projections pass CI.
 /// </summary>
 public sealed class WorkItemPersistenceMongoIntegrationTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable, IDisposable
+    : IAsyncDisposable, IDisposable
 {
     /// <summary>
     /// Deterministic timestamp seed used for every <see cref="WorkItem"/>
@@ -122,7 +122,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_eight_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_nine_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -138,7 +138,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(8, keyDocs.Count);
+        Assert.Equal(9, keyDocs.Count);
         Assert.Contains(keyDocs, k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"stateId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"assignedToId\" : 1") && k.Contains("\"submittedAt\" : -1"));
@@ -153,6 +153,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // RA-311/MBE-3: ascending index backing the operatorApplicationId
         // idempotent-submit lookup.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorApplicationId\" : 1"));
+        // epr-r9oy: ascending index backing AccreditationIdLookup.ExistsAsync.
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.accreditationId\" : 1"));
 
         // RA-219: that index must be UNIQUE (enforce one ref per work item /
         // give the engine a collision signal) and SPARSE (legacy docs without
@@ -169,6 +171,18 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             i["key"].AsBsonDocument.Contains("payload.operatorApplicationId"));
         Assert.True(operatorApplicationIdIndex.GetValue("unique", false).ToBoolean());
         Assert.True(operatorApplicationIdIndex.GetValue("sparse", false).ToBoolean());
+
+        // epr-r9oy: UNIQUE but PARTIAL rather than sparse. Sparse would exclude
+        // only documents where the field is absent, and duly making writes an
+        // explicit null — under sparse the second such write in the collection
+        // fails with E11000 and the regulator gets a 500. Asserting NOT sparse
+        // is the half that stops a well-meaning "make it consistent with the
+        // two above" from reintroducing the outage.
+        var accreditationIdIndex = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("payload.accreditationId"));
+        Assert.True(accreditationIdIndex.GetValue("unique", false).ToBoolean());
+        Assert.False(accreditationIdIndex.GetValue("sparse", false).ToBoolean());
+        Assert.True(accreditationIdIndex.Contains("partialFilterExpression"));
     }
 
     [Fact]
