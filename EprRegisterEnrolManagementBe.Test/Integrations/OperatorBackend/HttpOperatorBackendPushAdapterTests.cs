@@ -42,16 +42,21 @@ public class HttpOperatorBackendPushAdapterTests
         });
 
         var adapter = new HttpOperatorBackendPushAdapter(
-            httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance, FastRetryPipeline());
+            httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance,
+            FastRetryPipeline(maxRetryAttempts: 2), FastRetryPipeline(maxRetryAttempts: 5));
         return (adapter, handler);
     }
 
-    /// <summary>Same shape as the adapter's production pipeline (2 retries, 5xx/transport only), no delay.</summary>
-    private static ResiliencePipeline<HttpResponseMessage> FastRetryPipeline() =>
+    /// <summary>
+    /// Same shape as the adapter's production pipelines (5xx/transport only),
+    /// no delay. Used for both the best-effort pipeline (2 retries) and the
+    /// decision pipeline (5 retries) so retry-path tests run at unit-test speed.
+    /// </summary>
+    private static ResiliencePipeline<HttpResponseMessage> FastRetryPipeline(int maxRetryAttempts) =>
         new ResiliencePipelineBuilder<HttpResponseMessage>()
             .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
             {
-                MaxRetryAttempts = 2,
+                MaxRetryAttempts = maxRetryAttempts,
                 Delay = TimeSpan.Zero,
                 ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
                     .Handle<HttpRequestException>()
@@ -416,6 +421,58 @@ public class HttpOperatorBackendPushAdapterTests
 
         var result = await adapter.PushStatusChangedAsync(
             Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    // --------------------------- epr-p86e / RA-410: the decision push ---------------------------
+
+    [Fact]
+    public async Task PushDecisionStatusChangedAsync_posts_to_the_case_management_status_endpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+
+        var result = await adapter.PushDecisionStatusChangedAsync(
+            workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            $"{BaseUrl}/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            handler.LastRequest!.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task PushDecisionStatusChangedAsync_retries_five_times_before_giving_up_on_a_persistent_5xx()
+    {
+        // The decision push is a hard gate, so it retries harder than the
+        // best-effort push (5 retries vs 2). 1 initial attempt + 5 retries = 6.
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.InternalServerError, "still down");
+
+        var result = await adapter.PushDecisionStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(6, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushDecisionStatusChangedAsync_does_not_retry_a_4xx_response()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.BadRequest, "nope");
+
+        var result = await adapter.PushDecisionStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "rejected", "Refused", "reject", "Reject",
             DateTime.UtcNow, ct);
 
         Assert.False(result.IsSuccess);

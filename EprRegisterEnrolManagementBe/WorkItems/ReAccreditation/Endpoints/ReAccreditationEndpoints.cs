@@ -569,6 +569,11 @@ internal static class ReAccreditationEndpoints
     /// OTHER way is a 409, not a replay: reporting success would tell a
     /// caseworker their refusal landed on an application that is in fact
     /// approved and carrying an issued accreditation id.
+    ///
+    /// epr-p86e / RA-410: the decision is gated on the operator-journey status
+    /// push, fired once before anything is persisted. If it cannot be delivered
+    /// within its retry budget the decision is abandoned with a generic 500 and
+    /// no state changes — the item stays exactly where it was.
     /// </summary>
     public static async Task<
         Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
@@ -627,6 +632,12 @@ internal static class ReAccreditationEndpoints
             WorkItemActionFailureCode.InvalidTransition
             or WorkItemActionFailureCode.TerminalState
             or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            // epr-p86e / RA-410: the operator journey could not be notified, so
+            // the decision was abandoned before anything was persisted. The
+            // request itself was well-formed — this is a server-side dependency
+            // being unreachable — so it maps to a generic 500, not a 4xx. No
+            // errorCode is attached: the frontend shows a generic try-again.
+            WorkItemActionFailureCode.UpstreamNotificationFailed => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
         };
 
