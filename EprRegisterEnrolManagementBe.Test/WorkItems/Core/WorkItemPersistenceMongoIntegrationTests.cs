@@ -12,8 +12,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// epr-bqe: real Mongo end-to-end coverage for <see cref="WorkItemPersistence"/>.
 /// Uses Ephemeral MongoDB (real <c>mongod</c> on a random port, in a
 /// temp data directory, torn down with the fixture) so the BSON
-/// serializers registered by <see cref="MongoConventions"/> /
-/// <see cref="WorkItemBsonRegistration"/>, the index definitions in
+/// serializers registered by <see cref="MongoConventions"/>, the index definitions in
 /// <see cref="WorkItemPersistence.DefineIndexes"/>, the projection that
 /// strips <see cref="WorkItem.Notes"/> / <see cref="WorkItem.AuditLog"/>
 /// from <see cref="WorkItemPersistence.QueryAsync"/>, and the
@@ -24,7 +23,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// regression in BSON conventions, indexes or projections pass CI.
 /// </summary>
 public sealed class WorkItemPersistenceMongoIntegrationTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable, IDisposable
+    : IAsyncDisposable, IDisposable
 {
     /// <summary>
     /// Deterministic timestamp seed used for every <see cref="WorkItem"/>
@@ -83,17 +82,6 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             SubmittedAt = now,
             LastModifiedAt = now,
             SubmittedBy = "client-1",
-            CompletedTaskIdsByState =
-            {
-                ["submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Task-One" }
-            },
-            TaskStatusesByState =
-            {
-                ["submitted"] = new(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["Task-One"] = WorkItemTaskStatus.Completed
-                }
-            },
             Payload = new BsonDocument { ["key"] = "value" }
         };
 
@@ -106,14 +94,6 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Equal("client-1", fetched.SubmittedBy);
         Assert.Equal("value", fetched.Payload["key"].AsString);
 
-        // Case-insensitive contract survives the Mongo round-trip on
-        // both dictionaries (epr-aq5 / epr-gl6 / epr-81c).
-        Assert.True(fetched.CompletedTaskIdsByState.ContainsKey("SUBMITTED"));
-        Assert.Contains("task-one", fetched.CompletedTaskIdsByState["submitted"]);
-        Assert.True(fetched.TaskStatusesByState.TryGetValue("SUBMITTED", out var inner));
-        Assert.True(inner!.TryGetValue("TASK-ONE", out var status));
-        Assert.Equal(WorkItemTaskStatus.Completed, status);
-
         var page = await _persistence.QueryAsync(
             new WorkItemQuery(), TestContext.Current.CancellationToken);
         Assert.Equal(1, page.TotalCount);
@@ -122,7 +102,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_eight_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_nine_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -138,7 +118,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(8, keyDocs.Count);
+        Assert.Equal(9, keyDocs.Count);
         Assert.Contains(keyDocs, k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"stateId\" : 1") && k.Contains("\"submittedAt\" : -1"));
         Assert.Contains(keyDocs, k => k.Contains("\"assignedToId\" : 1") && k.Contains("\"submittedAt\" : -1"));
@@ -153,6 +133,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // RA-311/MBE-3: ascending index backing the operatorApplicationId
         // idempotent-submit lookup.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorApplicationId\" : 1"));
+        // epr-r9oy: ascending index backing AccreditationIdLookup.ExistsAsync.
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.accreditationId\" : 1"));
 
         // RA-219: that index must be UNIQUE (enforce one ref per work item /
         // give the engine a collision signal) and SPARSE (legacy docs without
@@ -169,6 +151,18 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             i["key"].AsBsonDocument.Contains("payload.operatorApplicationId"));
         Assert.True(operatorApplicationIdIndex.GetValue("unique", false).ToBoolean());
         Assert.True(operatorApplicationIdIndex.GetValue("sparse", false).ToBoolean());
+
+        // epr-r9oy: UNIQUE but PARTIAL rather than sparse. Sparse would exclude
+        // only documents where the field is absent, and duly making writes an
+        // explicit null — under sparse the second such write in the collection
+        // fails with E11000 and the regulator gets a 500. Asserting NOT sparse
+        // is the half that stops a well-meaning "make it consistent with the
+        // two above" from reintroducing the outage.
+        var accreditationIdIndex = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("payload.accreditationId"));
+        Assert.True(accreditationIdIndex.GetValue("unique", false).ToBoolean());
+        Assert.False(accreditationIdIndex.GetValue("sparse", false).ToBoolean());
+        Assert.True(accreditationIdIndex.Contains("partialFilterExpression"));
     }
 
     [Fact]
@@ -773,7 +767,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                 ["retiredSnapshotField"] = "legacy",
                 ["states"] = new BsonArray
                 {
-                    // WorkItemState.Id / WorkItemTask.Id map to the "_id" element
+                    // WorkItemState.Id maps to the "_id" element
                     // (default NamedIdMemberConvention), not "id".
                     new BsonDocument
                     {
@@ -804,6 +798,12 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                         ["requiredRoles"] = new BsonArray { "regulator-admin", "regulator-approver" }
                     }
                 },
+                // RA-410: tasksByState itself is now a retired, whole-sale-ignored
+                // element on the snapshot root — the task framework (and the type
+                // that modelled a single task) is gone entirely, not just one of
+                // its fields. A snapshot frozen before RA-410 still carries this
+                // sub-document, and it must keep deserialising rather than
+                // taking the whole worklist batch down with it.
                 ["tasksByState"] = new BsonDocument
                 {
                     ["submitted"] = new BsonArray
@@ -812,7 +812,6 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                         {
                             ["_id"] = "task-one",
                             ["displayName"] = "Task One",
-                            // Task stray element (WorkItemTask).
                             ["mandatory"] = true
                         }
                     }
@@ -844,7 +843,5 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.NotNull(fetched.TemplateSnapshot);
         Assert.Equal("Submitted", Assert.Single(
             fetched.TemplateSnapshot!.States, s => s.Id == "submitted").DisplayName);
-        Assert.Equal("task-one",
-            Assert.Single(fetched.TemplateSnapshot.GetTasksForState("submitted")).Id);
     }
 }

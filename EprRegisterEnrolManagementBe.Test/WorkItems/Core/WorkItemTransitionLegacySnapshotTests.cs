@@ -33,8 +33,6 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class WorkItemTransitionLegacySnapshotTests
 {
-    static WorkItemTransitionLegacySnapshotTests() => WorkItemBsonRegistration.Register();
-
     [Fact]
     public void Transition_persisted_without_caller_invocable_element_reads_back_as_false()
     {
@@ -52,7 +50,6 @@ public class WorkItemTransitionLegacySnapshotTests
         var transition = BsonSerializer.Deserialize<WorkItemTransition>(legacy);
 
         Assert.Equal("withdraw-during-query", transition.ActionId);
-        Assert.False(transition.RequiresAllTasksComplete);
 
         // The hazard: NOT the record's `CallerInvocable = true` default. A
         // missing element becomes default(bool). Asserted so that if a driver
@@ -86,7 +83,6 @@ public class WorkItemTransitionLegacySnapshotTests
             "Resume",
             "queried",
             "updated",
-            RequiresAllTasksComplete: false,
             CallerInvocable: false
         );
 

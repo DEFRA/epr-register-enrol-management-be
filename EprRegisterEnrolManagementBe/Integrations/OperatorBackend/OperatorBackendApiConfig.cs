@@ -48,4 +48,30 @@ public sealed class OperatorBackendApiConfig
     /// <c>GovukNotifyClient</c>'s outbound pipeline. Set to 0 to disable.
     /// </summary>
     public int RequestTimeoutSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// epr-p86e / RA-410: retry budget for the <em>decision</em> status push
+    /// only (<see cref="IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync"/>),
+    /// which — unlike every other best-effort push — is a hard pre-commit gate:
+    /// the re-accreditation decision is abandoned with a 500 if it cannot be
+    /// delivered, so it is worth trying harder than the fire-and-forget default
+    /// (<c>MaxRetryAttempts = 2</c>). Five retries = six attempts total.
+    /// </summary>
+    public int DecisionPushMaxRetryAttempts { get; set; } = 5;
+
+    /// <summary>
+    /// epr-p86e / RA-410: per-attempt timeout for the decision status push.
+    /// Deliberately shorter than <see cref="RequestTimeoutSeconds"/> because
+    /// this push runs synchronously on the caseworker's own /decision request
+    /// and, unlike the best-effort pushes, is retried up to
+    /// <see cref="DecisionPushMaxRetryAttempts"/> times before failing — so the
+    /// per-attempt bound has to stay small to keep the whole worst-case budget
+    /// well under a minute. Worst case is
+    /// <c>(DecisionPushMaxRetryAttempts + 1) × DecisionPushRequestTimeoutSeconds</c>
+    /// of HTTP time plus the capped backoff between attempts; the case
+    /// management frontend's /decision request timeout MUST exceed that total,
+    /// or a client abort mid-retry re-creates the cancellation bug this change
+    /// exists to fix. See <c>HttpOperatorBackendPushAdapter.BuildDecisionRetryPipeline</c>.
+    /// </summary>
+    public int DecisionPushRequestTimeoutSeconds { get; set; } = 3;
 }

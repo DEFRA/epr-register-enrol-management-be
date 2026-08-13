@@ -29,7 +29,6 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </list>
 /// </summary>
 public class WorkItemAvailableActionsWireContractTests
-    : IClassFixture<MongoIntegrationFixture>
 {
     private const string TypeId = "wire-contract-type";
     private readonly MongoIntegrationFixture _fixture;
@@ -161,14 +160,11 @@ public class WorkItemAvailableActionsWireContractTests
                     transitions:
                     [
                         new WorkItemTransition(
-                            "resume-a", "Resume", "queried", "updated",
-                            RequiresAllTasksComplete: false, CallerInvocable: false),
+                            "resume-a", "Resume", "queried", "updated", CallerInvocable: false),
                         new WorkItemTransition(
-                            "resume-b", "Resume", "queried", "updated",
-                            RequiresAllTasksComplete: false, CallerInvocable: false),
+                            "resume-b", "Resume", "queried", "updated", CallerInvocable: false),
                         new WorkItemTransition(
-                            "withdraw", "Withdraw", "queried", "withdrawn",
-                            RequiresAllTasksComplete: false)
+                            "withdraw", "Withdraw", "queried", "withdrawn")
                     ]));
             });
         }
