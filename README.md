@@ -72,7 +72,7 @@ those slots are used up — see
 
 To smoke-test the real integration locally, set `NOTIFY_API_KEY` to a key from
 the [Notify dashboard](https://www.notifications.service.gov.uk/) **and**
-`Notify__SendEmails=true`, and make sure the recipient address is registered on
+`NOTIFY_SENDEMAILS=true`, and make sure the recipient address is registered on
 the Notify team.
 
 If you do not have MongoDB installed locally, start just the database from

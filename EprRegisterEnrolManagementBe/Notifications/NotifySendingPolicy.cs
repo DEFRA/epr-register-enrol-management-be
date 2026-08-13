@@ -26,10 +26,12 @@ public static class NotifySendingPolicy
 {
     /// <summary>
     /// Configuration key for the explicit override. Settable on CDP through
-    /// <c>DEFRA/cdp-app-config</c> as the <c>Notify__SendEmails</c>
-    /// environment variable.
+    /// <c>DEFRA/cdp-app-config</c> as the <c>NOTIFY_SENDEMAILS</c>
+    /// environment variable — a flat top-level key, matching
+    /// <c>NOTIFY_API_KEY</c>'s convention rather than the nested
+    /// <c>Notify__*</c> form the rest of the Notify config binds through.
     /// </summary>
-    public const string SendEmailsKey = "Notify:SendEmails";
+    public const string SendEmailsKey = "NOTIFY_SENDEMAILS";
 
     /// <summary>
     /// CDP platform environment name (<c>local</c>, <c>dev</c>, <c>test</c>,
@@ -79,7 +81,7 @@ public static class NotifySendingPolicy
     ///
     /// <list type="number">
     /// <item>
-    /// An explicit <c>Notify:SendEmails</c> value always wins, in both
+    /// An explicit <c>NOTIFY_SENDEMAILS</c> value always wins, in both
     /// directions: it can force sending on in dev (to smoke-test the real
     /// integration against a whitelisted address) and force it off anywhere
     /// else.
@@ -98,7 +100,7 @@ public static class NotifySendingPolicy
     /// </list>
     /// </summary>
     /// <param name="explicitOverride">
-    /// Value of <c>Notify:SendEmails</c>, or <c>null</c> when unset.
+    /// Value of <c>NOTIFY_SENDEMAILS</c>, or <c>null</c> when unset.
     /// </param>
     /// <param name="cdpEnvironment">Value of the <c>ENVIRONMENT</c> variable.</param>
     /// <param name="isDevelopmentHostEnvironment">

@@ -33,7 +33,7 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 | `Auth__ManagementFeClientId` | Service config  | The `clientId` (`x-cdp-client-id` value) that `management-fe` is expected to assert. Defaults to `frontend` — override only if `management-fe`'s own `BACKEND_API_CLIENT_ID` is set to something else. Must be distinct from `Auth__BackendClientId` (see RA-345 below). |
 | `Auth__BackendClientId` | Service config      | The `clientId` that `epr-register-enrol-backend` is expected to assert. Defaults to `epr-register-enrol-backend` — override only if that service's own `CaseWorking__ClientId` is set to something else. Must be distinct from `Auth__ManagementFeClientId`; the service throws at first request if the two collide. |
 | `ENVIRONMENT`              | CDP platform          | Platform environment name (`local`, `dev`, `test`, `perf-test`, `ext-test`, `prod`). Read by `NotifySendingPolicy` — see [Notify sending by environment](#notify-sending-by-environment) below. |
-| `Notify__SendEmails`       | Service config        | Optional. Overrides the environment-derived decision about whether email is really dispatched. Leave unset in normal operation. |
+| `NOTIFY_SENDEMAILS`        | Service config        | Optional. Overrides the environment-derived decision about whether email is really dispatched (`true`/`false`). A flat top-level key, matching `NOTIFY_API_KEY`'s convention. Leave unset in normal operation. |
 
 ## Required secrets (cdp-portal)
 
@@ -92,7 +92,7 @@ set from `appsettings.json`.
 
 The fail-open default is deliberate: an unset or renamed `ENVIRONMENT` in a
 deployed environment must not silently swallow real notifications. To force the
-decision either way, set `Notify__SendEmails` (`true` to smoke-test the real
+decision either way, set `NOTIFY_SENDEMAILS` (`true` to smoke-test the real
 integration in dev against a Notify-registered address, `false` to silence a
 sending environment). Environment variables for deployed environments live in
 [DEFRA/cdp-app-config](https://github.com/DEFRA/cdp-app-config), not in this

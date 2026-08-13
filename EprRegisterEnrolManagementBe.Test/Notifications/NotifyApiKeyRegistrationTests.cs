@@ -63,7 +63,7 @@ public class NotifyApiKeyRegistrationTests
     // Always set NOTIFY_API_KEY explicitly so an ambient value in the test
     // runner's environment cannot influence the no-key test cases.
     //
-    // Notify:SendEmails=true pins NotifySendingPolicy open. Without it these
+    // NOTIFY_SENDEMAILS=true pins NotifySendingPolicy open. Without it these
     // tests would assert the dev/localhost environment gate (the test host
     // defaults to the Development environment) instead of the API-key branch
     // they are about — NotifyEnvironmentGatingTests covers the gate itself.
