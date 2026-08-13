@@ -578,7 +578,7 @@ public static class WorkItemEndpoints
     {
         var w = projection.WorkItem;
         var now = timeProvider?.GetUtcNow().UtcDateTime;
-        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now);
+        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now, projection.IsTerminal);
         return new WorkItemResponse(
             w.Id,
             w.TypeId,
@@ -640,10 +640,30 @@ public static class WorkItemEndpoints
 
     internal static (TimeSpan? Remaining, WorkItemSlaState? State) ComputeSla(
         WorkItemSlaClock? clock,
-        DateTime? now
+        DateTime? now,
+        bool isTerminal = false
     )
     {
-        if (clock is null || now is null)
+        // No clock means no SLA at all — nothing to cancel, run or breach.
+        // This is checked before terminality on purpose: a terminal item that
+        // never started an SLA reports no state, exactly as a non-terminal one
+        // does. Only items with an actual clock are eligible for Cancelled.
+        if (clock is null)
+        {
+            return (null, null);
+        }
+        // RA-359: a terminal work item (withdrawn / approved / rejected) has no
+        // live SLA. Its clock is cancelled regardless of elapsed time, so we
+        // stop the countdown (Remaining => null) and report Cancelled instead
+        // of an OnTrack/AtRisk/Breached derived purely from the clock. The
+        // historical deadline is untouched and still surfaced via
+        // ComputeSlaDueDate. Terminality is time-independent, so this holds even
+        // when no "now" was supplied.
+        if (isTerminal)
+        {
+            return (null, WorkItemSlaState.Cancelled);
+        }
+        if (now is null)
         {
             return (null, null);
         }
@@ -679,7 +699,7 @@ public static class WorkItemEndpoints
     {
         var w = projection.WorkItem;
         var now = timeProvider?.GetUtcNow().UtcDateTime;
-        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now);
+        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now, projection.IsTerminal);
         return new WorkItemListItemResponse(
             w.Id,
             w.TypeId,

@@ -13,5 +13,13 @@ public enum WorkItemSlaState
     AtRisk,
 
     /// <summary>The deadline has passed or <see cref="WorkItemSlaClock.Breached"/> is true.</summary>
-    Breached
+    Breached,
+
+    /// <summary>
+    /// The work item has reached a terminal state (withdrawn / approved /
+    /// rejected), so its SLA clock is cancelled and no longer running (RA-359).
+    /// This is a read-time projection: the historical due date is preserved on
+    /// the persisted clock; only the derived running state is neutralised.
+    /// </summary>
+    Cancelled
 }
