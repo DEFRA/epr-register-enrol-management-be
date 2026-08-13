@@ -9,7 +9,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// timestamps, submitted-by, payload); modules describe what their payload
 /// means via their <see cref="IWorkItemType"/> and operate on it via their
 /// own service objects.
+///
+/// RA-410: ignores extra BSON elements. The task framework's
+/// <c>completedTaskIdsByState</c> / <c>taskStatusesByState</c> fields were
+/// removed from this model but remain on every document persisted before that
+/// change; without this attribute each of those documents would throw a
+/// <see cref="System.FormatException"/> on read and take the whole worklist
+/// batch down with it. Stale fields are simply ignored and disappear from a
+/// document the next time it is written, so no backfill is needed. This also
+/// makes a rolling deploy safe in both directions.
 /// </summary>
+[BsonIgnoreExtraElements]
 public sealed class WorkItem
 {
     [BsonId(IdGenerator = typeof(GuidGenerator))]
@@ -33,14 +43,14 @@ public sealed class WorkItem
     public DateTime SubmittedAt { get; init; }
 
     /// <summary>
-    /// UTC timestamp of the last engine-driven mutation (task completion, state
+    /// UTC timestamp of the last engine-driven mutation (state
     /// transition). Equal to <see cref="SubmittedAt"/> for a freshly-submitted
     /// item. Has no default initializer for the same reason as
     /// <see cref="SubmittedAt"/>.
     /// </summary>
     public DateTime LastModifiedAt { get; set; }
 
-    /// <summary>Identifier of the upstream caller that submitted the item (CDP Cognito client id).</summary>
+    /// <summary>Identifier of the upstream caller that submitted the item (CDP client id).</summary>
     public string? SubmittedBy { get; init; }
 
     /// <summary>
@@ -65,7 +75,7 @@ public sealed class WorkItem
     public string? AssignedBy { get; set; }
 
     /// <summary>
-    /// Frozen copy of the type's template (states, tasks per state,
+    /// Frozen copy of the type's template (states,
     /// transitions and version) captured at submission time. Used by the
     /// engine in preference to the live <see cref="IWorkItemType"/> so that
     /// the work item — and its audit history — keep rendering as they did at
@@ -80,40 +90,6 @@ public sealed class WorkItem
     /// so it can be queried/indexed without deserialising the whole snapshot.
     /// </summary>
     public string? TemplateVersion { get; set; }
-
-    /// <summary>
-    /// Ids of completed tasks, keyed by the state id those tasks belong to.
-    /// Tracking per-state lets the engine reason about progress in the current
-    /// state without losing the audit trail of work done in earlier states.
-    ///
-    /// Kept in sync with <see cref="TaskStatusesByState"/> on every write
-    /// (see epr-gl6): a task is in this bucket iff its
-    /// <see cref="WorkItemTaskStatus"/> in <see cref="TaskStatusesByState"/>
-    /// is <see cref="WorkItemTaskStatus.Completed"/>. Retained for one
-    /// release cycle as a duplicated source of truth so legacy readers keep
-    /// working; new code should prefer <see cref="TaskStatusesByState"/>.
-    /// </summary>
-    [BsonSerializer(typeof(CompletedTaskBucketsSerializer))]
-    public Dictionary<string, HashSet<string>> CompletedTaskIdsByState { get; init; }
-        = new(StringComparer.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// Per-task lifecycle status (epr-gl6), keyed by state id then task id.
-    /// Replaces the legacy binary view exposed by
-    /// <see cref="CompletedTaskIdsByState"/>; the engine writes both
-    /// data structures atomically on every change so older readers that
-    /// still consume <see cref="CompletedTaskIdsByState"/> keep working.
-    ///
-    /// Both the outer dictionary (state ids) and every inner dictionary
-    /// (task ids) use <see cref="StringComparer.OrdinalIgnoreCase"/> for
-    /// the same reason as <see cref="CompletedTaskIdsByState"/>: state and
-    /// task ids are compared case-insensitively throughout the engine,
-    /// and the BSON round-trip is normalised by
-    /// <see cref="WorkItemBsonRegistration"/>.
-    /// </summary>
-    [BsonSerializer(typeof(TaskStatusesByStateSerializer))]
-    public Dictionary<string, Dictionary<string, WorkItemTaskStatus>> TaskStatusesByState { get; init; }
-        = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Free-form, type-specific payload supplied by the upstream caller. Stored
@@ -148,9 +124,8 @@ public sealed class WorkItem
 
     /// <summary>
     /// Append-only system audit log (RA-97). The framework writes one entry
-    /// here for every successful state-changing engine call (task
-    /// completion, action application, assignment / unassignment, note
-    /// added). Entries are stored in chronological (insertion) order and
+    /// here for every successful state-changing engine call (action
+    /// application, assignment / unassignment, note added). Entries are stored in chronological (insertion) order and
     /// projected oldest-first on the wire so a UI renders a natural
     /// top-to-bottom timeline. Framework-owned so every work item type
     /// inherits the same audit behaviour without writing any audit code.

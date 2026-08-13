@@ -12,57 +12,38 @@ public class ReAccreditationDulyMadeSnapshotMigrationTests
     {
         var type = new ReAccreditationType();
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
+
         // Re-inject the duly-make transition to simulate a v4 snapshot.
+        //
+        // RA-410: this fixture used to also re-inject two submitted-state
+        // tasks, because a pre-v5 migration path auto-transitioned a
+        // submitted item once its checklist was complete. That auto-transition
+        // is gone (see ReAccreditationDulyMadeSnapshotMigration), so there is
+        // nothing left to state a task checklist for.
         return new WorkItemTemplateSnapshot
         {
             TemplateVersion = "v4",
             States = snapshot.States,
             Transitions = snapshot.Transitions
+                .Where(t => t.ActionId != "duly-make")
                 .Append(new WorkItemTransition(
                     "duly-make", "Mark as duly made", "submitted", "duly-made"))
-                .ToList(),
-            TasksByState = snapshot.TasksByState
+                .ToList()
         };
     }
 
     private static WorkItem BuildItem(
         string stateId = "submitted",
-        bool allTasksComplete = false,
-        WorkItemTemplateSnapshot? snapshot = null)
-    {
-        snapshot ??= BuildV4Snapshot();
-        var item = new WorkItem
+        WorkItemTemplateSnapshot? snapshot = null) =>
+        new()
         {
             TypeId = ReAccreditationType.Id,
             StateId = stateId,
-            TemplateSnapshot = snapshot,
+            TemplateSnapshot = snapshot ?? BuildV4Snapshot(),
             TemplateVersion = "v4",
             SubmittedAt = DateTime.UtcNow,
             LastModifiedAt = DateTime.UtcNow
         };
-
-        if (allTasksComplete)
-        {
-            foreach (var task in snapshot.GetTasksForState(stateId))
-            {
-                if (!item.TaskStatusesByState.TryGetValue(stateId, out var map))
-                {
-                    map = new Dictionary<string, WorkItemTaskStatus>(StringComparer.OrdinalIgnoreCase);
-                    item.TaskStatusesByState[stateId] = map;
-                }
-                map[task.Id] = WorkItemTaskStatus.Completed;
-
-                if (!item.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket))
-                {
-                    bucket = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                    item.CompletedTaskIdsByState[stateId] = bucket;
-                }
-                bucket.Add(task.Id);
-            }
-        }
-
-        return item;
-    }
 
     private static WorkItemPage SinglePage(params WorkItem[] items) =>
         new(items, items.Length, 1, WorkItemQuery.MaxPageSize);
@@ -99,31 +80,18 @@ public class ReAccreditationDulyMadeSnapshotMigrationTests
         Assert.Equal("v5", item.TemplateSnapshot!.TemplateVersion);
     }
 
-    [Fact]
-    public async Task ApplyAsync_auto_transitions_submitted_item_when_all_tasks_complete()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem(stateId: "submitted", allTasksComplete: true);
-        var persistence = Substitute.For<IWorkItemPersistence>();
-        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
-        persistence.GetByIdAsync(item.Id, ct).Returns(item);
-
-        await BuildSut().ApplyAsync(persistence, ct);
-
-        Assert.Equal("duly-made", item.StateId);
-        Assert.Contains(item.AuditLog, e =>
-            e.Action == "action-applied" &&
-            e.Details["actionId"] == "duly-make" &&
-            e.Details["fromStateId"] == "submitted" &&
-            e.Details["toStateId"] == "duly-made" &&
-            e.CreatedBy == "migration");
-    }
+    // RA-410: ApplyAsync_auto_transitions_submitted_item_when_all_tasks_complete
+    // is gone along with the auto-transition it exercised — see
+    // ReAccreditationDulyMadeSnapshotMigration's class doc. A submitted item
+    // is now always left in submitted, regardless of task state (there is no
+    // task state), and presented with the "Duly make" call to action like any
+    // other. The two tests below now cover that unconditional behaviour.
 
     [Fact]
-    public async Task ApplyAsync_does_not_auto_transition_submitted_item_when_tasks_incomplete()
+    public async Task ApplyAsync_leaves_a_submitted_item_in_submitted()
     {
         var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem(stateId: "submitted", allTasksComplete: false);
+        var item = BuildItem(stateId: "submitted");
         var persistence = Substitute.For<IWorkItemPersistence>();
         persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
         persistence.GetByIdAsync(item.Id, ct).Returns(item);
@@ -138,7 +106,7 @@ public class ReAccreditationDulyMadeSnapshotMigrationTests
     public async Task ApplyAsync_does_not_auto_transition_non_submitted_item()
     {
         var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem(stateId: "duly-made", allTasksComplete: true);
+        var item = BuildItem(stateId: "duly-made");
         var persistence = Substitute.For<IWorkItemPersistence>();
         persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
         persistence.GetByIdAsync(item.Id, ct).Returns(item);
@@ -220,54 +188,18 @@ public class ReAccreditationDulyMadeSnapshotMigrationTests
         await persistence.Received(1).ReplaceAsync(item2, ct);
     }
 
-    [Fact]
-    public async Task ApplyAsync_stamps_audit_entry_with_injected_time()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var clock = new FakeTimeProvider();
-        var frozen = new DateTimeOffset(2026, 1, 15, 10, 0, 0, TimeSpan.Zero);
-        clock.SetUtcNow(frozen);
-
-        var item = BuildItem(stateId: "submitted", allTasksComplete: true);
-        var persistence = Substitute.For<IWorkItemPersistence>();
-        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
-        persistence.GetByIdAsync(item.Id, ct).Returns(item);
-
-        await BuildSut(clock).ApplyAsync(persistence, ct);
-
-        var entry = item.AuditLog.Single(e => e.Action == "action-applied");
-        Assert.Equal(frozen.UtcDateTime, entry.CreatedAt);
-    }
+    // RA-410: ApplyAsync_stamps_audit_entry_with_injected_time and
+    // ApplyAsync_sets_sla_clock_on_auto_transitioned_item are gone along with
+    // the auto-transition whose side effects they asserted — see the class
+    // doc on ReAccreditationDulyMadeSnapshotMigration. The migration never
+    // writes an "action-applied" entry or starts an SLA clock any more; the
+    // test below covers that.
 
     [Fact]
-    public async Task ApplyAsync_sets_sla_clock_on_auto_transitioned_item()
+    public async Task ApplyAsync_does_not_set_an_sla_clock_on_a_submitted_item()
     {
         var ct = TestContext.Current.CancellationToken;
-        var clock = new FakeTimeProvider();
-        var frozen = new DateTimeOffset(2026, 1, 15, 10, 0, 0, TimeSpan.Zero);
-        clock.SetUtcNow(frozen);
-
-        var item = BuildItem(stateId: "submitted", allTasksComplete: true);
-        var persistence = Substitute.For<IWorkItemPersistence>();
-        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
-        persistence.GetByIdAsync(item.Id, ct).Returns(item);
-
-        await BuildSut(clock).ApplyAsync(persistence, ct);
-
-        Assert.NotNull(item.SlaClock);
-        Assert.Equal(frozen.UtcDateTime, item.SlaClock!.StartedAt);
-        Assert.Contains(item.AuditLog, e =>
-            e.Action == "sla-clock-started" &&
-            e.Details.ContainsKey("startedAt") &&
-            e.Details.ContainsKey("targetDays") &&
-            e.CreatedBy == "migration");
-    }
-
-    [Fact]
-    public async Task ApplyAsync_does_not_set_sla_clock_for_non_auto_transitioned_item()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem(stateId: "submitted", allTasksComplete: false);
+        var item = BuildItem(stateId: "submitted");
         var persistence = Substitute.For<IWorkItemPersistence>();
         persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
         persistence.GetByIdAsync(item.Id, ct).Returns(item);

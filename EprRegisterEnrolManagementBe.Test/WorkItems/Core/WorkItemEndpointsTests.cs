@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -25,7 +26,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <see cref="WorkItemQuery"/> the endpoint built — the wrapper records
 /// calls but delegates to the real persistence so behaviour stays end-to-end.
 /// </summary>
-public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
+public class WorkItemEndpointsTests
 {
     private const string TypeId = "test-type";
     private readonly MongoIntegrationFixture _fixture;
@@ -36,11 +37,11 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         bool includeAuthHeader = true,
         string? userId = "test-user",
         string? userName = null,
-        Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
-    ) => new(_fixture, includeAuthHeader, userId, userName, tasksByState);
+        IReadOnlyCollection<WorkItemState>? states = null
+    ) => new(_fixture, includeAuthHeader, userId, userName, states);
 
     [Fact]
-    public async Task Post_returns_unauthorized_without_cognito_client_id()
+    public async Task Post_returns_unauthorized_without_client_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory(includeAuthHeader: false);
@@ -942,6 +943,147 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         Assert.Equal(0, persisted!.Version);
     }
 
+    // ---- RA-358: assignment endpoints refuse a closed (terminal) case ----
+
+    /// <summary>
+    /// Every terminal state the case management types declare. A hand-crafted
+    /// POST to a closed case must be refused by the API itself, not only by
+    /// the front end hiding the button.
+    /// </summary>
+    private static readonly WorkItemState[] TerminalStateMachine =
+    [
+        new("submitted", "Submitted"),
+        new("withdrawn", "Withdrawn", IsTerminal: true),
+        new("approved", "Approved", IsTerminal: true),
+        new("rejected", "Rejected", IsTerminal: true),
+    ];
+
+    [Theory]
+    [InlineData("withdrawn")]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Assign_returns_409_problem_when_work_item_is_terminal(string stateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory(userId: "actor-1", states: TerminalStateMachine);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = stateId,
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "alice-1", assigneeName = "Alice Example" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.False(response.Headers.Contains("X-Idempotent-Replay"));
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Action not allowed", problem?.Title);
+        Assert.Equal(409, problem?.Status);
+        Assert.Contains(stateId, problem?.Detail);
+        Assert.DoesNotContain(id.ToString(), problem?.Detail);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Null(persisted!.AssignedToId);
+        Assert.Equal(0, persisted.Version);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Theory]
+    [InlineData("withdrawn")]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Unassign_returns_409_problem_when_work_item_is_terminal(string stateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory(userId: "actor-1", states: TerminalStateMachine);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = stateId,
+                SubmittedBy = "test-client",
+                AssignedToId = "alice-1",
+                AssignedToName = "Alice Example",
+                AssignedAt = new DateTime(2026, 4, 27, 9, 0, 0, DateTimeKind.Utc),
+                AssignedBy = "earlier-actor",
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/unassign",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.False(response.Headers.Contains("X-Idempotent-Replay"));
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Action not allowed", problem?.Title);
+        Assert.Equal(409, problem?.Status);
+        Assert.DoesNotContain(id.ToString(), problem?.Detail);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("alice-1", persisted!.AssignedToId);
+        Assert.Equal(0, persisted.Version);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Fact]
+    public async Task Assign_still_succeeds_when_work_item_is_not_in_a_terminal_state()
+    {
+        // Regression guard for the RA-358 terminal check: the normal
+        // assignment path through the same state machine is untouched.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory(userId: "actor-1", states: TerminalStateMachine);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+
+        var assign = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "alice-1", assigneeName = "Alice Example" },
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, assign.StatusCode);
+
+        var unassign = await client.PostAsync(
+            $"/work-items/{id}/unassign",
+            content: null,
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, unassign.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Null(persisted!.AssignedToId);
+    }
+
     [Fact]
     public async Task AddNote_persists_note_and_returns_updated_response()
     {
@@ -1082,7 +1224,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     }
 
     [Fact]
-    public async Task AddNote_returns_unauthorized_without_cognito_client_id()
+    public async Task AddNote_returns_unauthorized_without_client_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory(includeAuthHeader: false);
@@ -1235,14 +1377,6 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
     public static IEnumerable<TheoryDataRow<string, string, object?>> MutationCases() =>
         new TheoryDataRow<string, string, object?>[]
         {
-            new("POST", "/work-items/{id}/tasks/some-task/complete", null)
-            {
-                TestDisplayName = "CompleteTask",
-            },
-            new("PUT", "/work-items/{id}/tasks/some-task/status", new { status = "Completed" })
-            {
-                TestDisplayName = "SetTaskStatus",
-            },
             new("POST", "/work-items/{id}/actions/approve", null)
             {
                 TestDisplayName = "ApplyAction",
@@ -1325,21 +1459,21 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
         private readonly bool _includeAuthHeader;
         private readonly string? _userId;
         private readonly string? _userName;
-        private readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>>? _tasksByState;
+        private readonly IReadOnlyCollection<WorkItemState>? _states;
 
         public TestApplicationFactory(
             MongoIntegrationFixture fixture,
             bool includeAuthHeader,
             string? userId,
             string? userName,
-            Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
+            IReadOnlyCollection<WorkItemState>? states = null
         )
         {
             _fixture = fixture;
             _includeAuthHeader = includeAuthHeader;
             _userId = userId;
             _userName = userName;
-            _tasksByState = tasksByState;
+            _states = states;
         }
 
         public IWorkItemPersistence Persistence => Recording.Inner;
@@ -1386,7 +1520,11 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
                     )
                 ));
                 services.AddSingleton<IWorkItemType>(
-                    new TestWorkItemType(TypeId, "Test type", tasksByState: _tasksByState)
+                    new TestWorkItemType(
+                        TypeId,
+                        "Test type",
+                        states: _states
+                    )
                 );
 
                 // Background services call QueryAsync at startup which sets
@@ -1421,7 +1559,7 @@ public class WorkItemEndpointsTests : IClassFixture<MongoIntegrationFixture>
             base.ConfigureClient(client);
             if (_includeAuthHeader)
             {
-                client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+                client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
             }
             if (_userId is not null)
             {

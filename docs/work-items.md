@@ -11,7 +11,7 @@ a localised change to a new module.
 - The core application provides the framework; modules provide the behaviour.
 - **Adding a new type is one folder + one line in `Program.cs`.** No other
   module changes; no core changes beyond the registration call.
-- It is obvious from reading a module which **tasks** are required for each
+- It is obvious from reading a module which **transitions** are allowed for each
   **state** of the work item.
 
 ## Building blocks
@@ -22,18 +22,18 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | --- | --- |
 | `WorkItemState` | Identifier + display name for a state. `IsTerminal` marks completion states (e.g. approved/rejected). |
 | `WorkItemTask` | Identifier + display name for a unit of work to be completed in a state. |
-| `WorkItemTransition` | A named action (`approve`, `reject`, `withdraw`) that moves a work item from one state to another. `RequiresAllTasksComplete` (default `true`) gates the action behind every task for the from-state being marked complete. |
-| `WorkItemTaskProgress` | A task's id + display name + its `WorkItemTaskStatus` (`NotStarted` / `InProgress` / `Blocked` / `Completed`) for the work item's current state. The legacy `IsComplete` boolean is retained for back-compat and equals `Status == Completed`. |
+| `WorkItemTransition` | A named action (`approve`, `reject`, `withdraw`) that moves a work item from one state to another. `CallerInvocable` (default `true`) decides whether the generic action endpoint may select it by id, or whether it is reachable only through a module's own service resolving it server-side. |
 | `IWorkItemType` | Declares a type's `TypeId`, `DisplayName`, `InitialState`, `States`, `GetTasksForState(stateId)` and `Transitions`. Pure & side-effect free. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
+| `IWorkItemOriginStateResolver` | Optional, module-supplied. Lets a type say "this item is in a waypoint and will return to some *other* state" — see [Waypoint origin state](#waypoint-origin-state-ra-410). |
 | `IWorkItemRegistry` | DI-resolvable lookup of every registered type. |
-| `IWorkItemService` | Framework service object that drives task completion and state transitions. Resolves the work item, validates the request against the type, persists the change and writes an audit log. |
-| `WorkItem` | The persisted work item envelope: id, type id, state id, submitted-at, last-modified-at, submitted-by (CDP Cognito client id), per-state completed task ids, free-form payload. |
+| `IWorkItemService` | Framework service object that drives state transitions. Resolves the work item, validates the request against the type, persists the change and writes an audit log. |
+| `WorkItem` | The persisted work item envelope: id, type id, state id, submitted-at, last-modified-at, submitted-by (CDP client id), free-form payload. |
 | `IWorkItemPersistence` | Framework-owned MongoDB persistence for `WorkItem`s. |
 | `WorkItemModuleExtensions` | `AddWorkItemFramework()`, `AddWorkItemModule<T>()`, `MapWorkItemModules()`, `MapWorkItemFrameworkEndpoints()`. |
 
-> The **task and state engine** validates progressions, enforces task
-> completion before transitions and handles the corresponding HTTP requests.
+> The **state engine** validates progressions and handles the
+> corresponding HTTP requests.
 > Module-specific business logic belongs in module service objects which
 > may call (or wrap) `IWorkItemService`.
 
@@ -45,15 +45,13 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 
 | Method | Route | Description |
 | --- | --- | --- |
-| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP Cognito client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
-| `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with current task progress and the actions the engine will currently allow. |
+| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
+| `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with the actions the engine will currently allow. |
 | `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
-| `POST` | `/work-items/{id}/tasks/{taskId}/complete` | Mark a task complete on the work item's current state. Idempotent. `400` if the task does not apply to the current state, `404` if the work item is unknown. Equivalent to `PUT /tasks/{taskId}/status` with `{"status":"Completed"}` for callers that only care about the binary view. |
-| `PUT` | `/work-items/{id}/tasks/{taskId}/status` | Set a task's `WorkItemTaskStatus` (epr-gl6). Body: `{ "status": "NotStarted" \| "InProgress" \| "Blocked" \| "Completed" }`. Status name binding is case-insensitive. Idempotent (no-ops do not write audit). On change appends a `task-status-changed` entry with `fromStatus` / `toStatus` in `Details` — no extra `task-completed` is written when transitioning to `Completed` via this endpoint. `400` for unknown tasks or unrecognised status values. |
-| `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state or has outstanding tasks; `400` for unknown actions or transitions whose from-state does not match. |
+| `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state; `400` for unknown actions, transitions whose from-state does not match, and transitions declared `CallerInvocable: false`. |
 
-All three endpoints require authentication via the CDP Cognito client id
-header (`x-cdp-cognito-client-id`) per RA-89/RA-85b.
+All three endpoints require authentication via the CDP client id
+header (`x-cdp-client-id`) per RA-89/RA-85b.
 
 The persisted envelope is owned by the framework; modules describe the shape
 of their payload via their `IWorkItemType` and operate on it via their own
@@ -72,8 +70,8 @@ service objects.
      Models/              // module-scoped models
    ```
 
-2. **Implement `IWorkItemType`**, declaring states and tasks-per-state. Make
-   the static structure obvious from a glance; if tasks depend on data, return
+2. **Implement `IWorkItemType`**, declaring states and transitions. Make
+   the static structure obvious from a glance; if transitions depend on data, return
    a dynamically-built collection from `GetTasksForState` — but keep the
    declaration co-located with the type.
 
@@ -107,15 +105,34 @@ That is the complete list of changes required outside the new module folder.
   `/work-items/<type-id>` so they do not clash with another module's routes.
 - Treat `IWorkItemType` as data: no I/O, no DI dependencies. Behaviour
   belongs in service objects registered via `RegisterServices`.
-- Form submissions (task completion, state transitions, type-specific
-  payload edits) **must** flow through service objects. The framework's
-  `IWorkItemService` covers task completion and transitions; module-scoped
-  services should follow the same pattern (intent-named methods, return
-  result objects rather than raw exceptions).
+- Form submissions (state transitions, type-specific payload edits)
+  **must** flow through service objects. The framework's `IWorkItemService`
+  covers transitions, assignment and notes; module-scoped services should
+  follow the same pattern (intent-named methods, return result objects
+  rather than raw exceptions).
+- A bespoke module endpoint that performs a state change **outside** a
+  registered `WorkItemTransition` does not inherit the engine's guards. Such
+  a service **must** resolve the same template the engine would, via
+  `WorkItemEngineRules.ResolveTemplate`, so an in-flight item is judged by
+  the rules it was submitted under. Put every check before any side effect,
+  and return the shared failure code rather than a bespoke one — the
+  frontend maps a single message per failure reason.
+- **A multi-step change belongs behind one call.** Where reaching a
+  meaningful outcome takes more than one transition, the module service
+  applies them all server-side and the caller makes one request. Declare the
+  intermediate transitions `CallerInvocable: false` so that is the only
+  route, and accept every intermediate state as a valid entry state so a
+  failure part-way through is finished by replaying the same request rather
+  than needing a rescue path. RA-410's
+  `POST /work-items/re-accreditation/{id}/decision` is the reference case: it
+  carries an application from `assessment-in-progress` through
+  `awaiting-decision` to `approved`/`rejected` in one call, because two calls
+  left a window in which an application stranded in `awaiting-decision` had
+  no call to action to discharge it.
 
 ## Template versioning (RA-94)
 
-Work items live for a long time. Their state machine, tasks and detail
+Work items live for a long time. Their state machine and detail
 templates evolve. Once a work item has been progressed by an assessor under
 v1 of a type, the audit history must continue to make sense even after the
 team ships v2. The framework solves this by **freezing the template at
@@ -149,8 +166,8 @@ Both are populated by `POST /work-items` before the envelope is persisted.
 `WorkItemService.ResolveTemplate(workItem)` returns the work item's
 `TemplateSnapshot` if present, otherwise it falls back to the live
 `IWorkItemType` from the registry (so legacy items submitted before this
-change continue to work). Every engine operation — task completion,
-action validation, projection of tasks and available actions — runs
+change continue to work). Every engine operation — action validation,
+projection of available actions — runs
 against the resolved template, never the live type. As a result, shipping
 v2 of a type cannot retroactively change the rules under which an in-flight
 v1 work item was being progressed.
@@ -159,6 +176,45 @@ v1 work item was being progressed.
 
 `WorkItemResponse` includes `templateVersion`. Clients use it (together
 with `typeId`) to pick the correct detail template for the work item.
+
+## Waypoint origin state (RA-410)
+
+The engine normally treats a work item's `StateId` as the whole answer to
+*where is this item in its lifecycle?* For most types it is. It comes apart
+for a **waypoint state** — a state an item passes through on its way back to
+somewhere else, where the question a caller actually needs answered is *back
+to where?*
+
+Re-accreditation's `updated` state is the motivating case: an application
+queried mid-review lands there once the operator responds. Which stage it
+returns to is derivable only from the item's own audit history, so no client
+can compute it — and the case management frontend needs it to decide which
+call to action to offer. Offering "Duly make" for an application queried out
+of `submitted` is right; offering it for one queried out of assessment would
+invite a caseworker to send the application backwards.
+
+`IWorkItemOriginStateResolver` is the seam. A module registers one as a
+singleton; the engine consults every registered resolver and takes the first
+that returns a non-null state id, falling back to `workItem.StateId` when they
+all abstain. The result is surfaced as `originStateId` on `WorkItemResponse`
+and on each item of the list response — always populated, and equal to
+`stateId` for any item not in a waypoint.
+
+This is a **read projection only**. It governs nothing about where the item
+actually *is*: available actions, terminality and transition from-state
+matching all keep using `workItem.StateId`. Redirecting those would let a
+caller invoke an action from a state the item is not in.
+
+Rules for implementations:
+
+- **Return null to abstain**, including for every work item whose `TypeId`
+  is not your own. An abstaining resolver is invisible.
+- **Be pure.** This runs on every read projection; no I/O.
+- **Resolve against the supplied template**, not the live type, so an
+  in-flight item is judged by the rules it was submitted under.
+- Core must never learn the module's state names. A resolver that throws,
+  abstains, or names a state the template does not declare is ignored and
+  the engine falls back to `workItem.StateId`.
 
 ## Assignment (RA-95)
 
@@ -173,7 +229,7 @@ responsibility, not this backend's.
 
 ### Identity from the BFF
 
-The Cognito auth handler (`CognitoClientIdAuthenticationHandler`)
+The client id auth handler (`ClientIdAuthenticationHandler`)
 optionally reads two headers forwarded by the BFF and turns them into
 `ClaimsPrincipal` claims:
 
@@ -243,7 +299,7 @@ item document. A `WorkItemNote` carries:
 | `Id` | Server-generated GUID. |
 | `Text` | Note body. Trimmed at write; rendered verbatim by clients (templates must escape). |
 | `CreatedAt` | UTC timestamp set by `WorkItemService` from the injected `TimeProvider`. |
-| `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, falling back to the Cognito client id). |
+| `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, falling back to the client id). |
 | `CreatedByName` | Snapshot of the actor's display name (`user:name` claim) at write time, so the audit narrative survives directory changes. |
 
 Notes are stored in insertion order. The wire projection in
@@ -309,9 +365,9 @@ the work item document. An entry carries:
 | Field | Purpose |
 | --- | --- |
 | `Id` | Server-generated GUID. |
-| `Action` | Stable machine id of the action: `work-item-submitted`, `task-completed`, `task-status-changed`, `action-applied`, `assigned`, `unassigned`, `note-added`. `task-status-changed` (epr-gl6) is the canonical record for any move through the richer `WorkItemTaskStatus` set (`NotStarted` / `InProgress` / `Blocked` / `Completed`); the legacy `task-completed` entry is still emitted by the `POST /tasks/{id}/complete` endpoint for back-compat with existing audit consumers. |
-| `ActionDisplayName` | Human-readable description (e.g. `Task completed`). |
-| `Details` | `Dictionary<string, string?>` of contextual fields per action: `typeId`/`stateId`/`templateVersion` (submission); `taskId`/`taskDisplayName`/`stateId`; `actionId`/`actionDisplayName`/`fromStateId`/`toStateId`; `assigneeId`/`assigneeName`/`previousAssigneeId`/`previousAssigneeName`; `previousAssigneeId`/`previousAssigneeName`; `noteId`. |
+| `Action` | Stable machine id of the action: `work-item-submitted`, `action-applied`, `assigned`, `unassigned`, `note-added`. Modules append their own alongside these (e.g. `accreditation-issued`, `sla-clock-stopped`). |
+| `ActionDisplayName` | Human-readable description (e.g. `Action applied`). |
+| `Details` | `Dictionary<string, string?>` of contextual fields per action: `typeId`/`stateId`/`templateVersion` (submission); `actionId`/`actionDisplayName`/`fromStateId`/`toStateId`; `assigneeId`/`assigneeName`/`previousAssigneeId`/`previousAssigneeName`; `previousAssigneeId`/`previousAssigneeName`; `noteId`. |
 | `CreatedAt` | UTC timestamp from the injected `TimeProvider`. |
 | `CreatedBy` | Snapshot of the actor's user id (`user:id` claim, required — mutations without it are rejected with 401). |
 | `CreatedByName` | Snapshot of the actor's display name (`user:name`) at write time. |
@@ -325,15 +381,61 @@ a UI renders a natural top-to-bottom timeline without re-sorting.
 
 - **Append-only.** No edit / delete / clear endpoints — the log is the
   audit trail.
-- **Failures never write.** Idempotent no-ops (e.g. completing an
-  already-complete task, re-assigning to the same user, unassigning an
-  already-unassigned item) and validation / authorization rejections do
+- **Failures never write.** Idempotent no-ops (e.g. re-assigning to the
+  same user, unassigning an already-unassigned item, re-recording a decision
+  that has already been made) and validation / authorization rejections do
   **not** append an entry. This keeps the timeline meaningful.
 - **No module-specific entry shape.** If a module needs richer details,
   extend the framework's `Details` keys rather than introducing a parallel
   audit channel.
 - **Snapshot identity at write time.** `CreatedBy` / `CreatedByName` are
   not live foreign keys — the audit narrative survives directory changes.
+
+## Seeding
+
+Modules may ship demo data by registering an `IWorkItemSeeder`.
+`WorkItemSeederHostedService` runs every registered seeder once at startup,
+gated on `WorkItems:SeedOnStartup` (default `false`, so tests never touch
+Mongo during host startup).
+
+### Insert-only, by deterministic id
+
+Each seeded item gets a deterministic `Id` from
+`WorkItemSeed.DeterministicId(typeId, seedKey)`, and is written through
+`IWorkItemPersistence.CreateIfAbsentAsync`. That makes seeding idempotent and
+safe against a multi-instance rollout: the first writer wins and every loser
+is swallowed as a duplicate-key no-op.
+
+**It inserts; it never updates.** This is the property to internalise, because
+it has one consequence that reliably costs someone an afternoon:
+
+> Changing the *contents* of an existing seed item is invisible to any
+> database that has already seeded it — local volumes, shared dev, and any
+> e2e stack with a persistent volume. Only a brand-new `seedKey` reaches
+> them.
+
+The failure mode is nasty because it doesn't look like a seed problem. The
+backend is correct, the frontend is correct, and the e2e suite fails
+asserting against fixture values that only exist in the new seed — so the
+evidence points at whichever repo the assertion lives in. RA-292 lost a run
+to exactly this.
+
+So, when changing seed data:
+
+- **Adding a new fixture?** Use a new `seedKey`. It lands everywhere on the
+  next boot regardless of what's already stored.
+- **Changing an existing fixture's contents?** Everyone with a warm volume
+  keeps the old one. Either use a new `seedKey` instead (preferred — it makes
+  the change reach real environments), or write an `IWorkItemMigration` if
+  the existing documents genuinely need rewriting.
+- **Running e2e locally against a seed change?** `docker compose down -v`
+  first. Without the `-v` the volume survives and you test the old fixture.
+
+This is deliberate, not a defect: seeds that silently mutated under a running
+environment would be far worse than seeds that only ever appear. The
+`ReAccreditationSeeder` RA-292 fixture is the worked example — it got its own
+`seedKey` rather than enriching `full-payload-verification` precisely so it
+would reach already-seeded environments.
 
 ## Example: re-accreditation module (RA-98)
 
@@ -343,7 +445,7 @@ registration line" promise. All files live under
 
 | File | Role |
 | --- | --- |
-| `ReAccreditationType.cs` | Declares states (`submitted`, `assessment-in-progress`, `awaiting-decision`, terminal `approved` / `rejected` / `withdrawn`), per-state placeholder tasks, and transitions (`start-assessment`, `submit-for-decision`, `approve`, `reject`, `withdraw`, `withdraw-during-assessment`). |
+| `ReAccreditationType.cs` | Declares the states (`submitted`, `duly-made`, `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `reject`, `resume-during-*` and `continue-review-during-*` are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. |
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
 | `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
 | `Endpoints/ReAccreditationEndpoints.cs` | Module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
@@ -355,8 +457,8 @@ Wired into the application by a single line in `Program.cs.ConfigureWorkItems`:
 services.AddWorkItemModule<ReAccreditationModule>();
 ```
 
-The states / tasks / transitions are placeholders for the PoC per the AC; the
-intended workflow diagram is referenced in RA-85. The module inherits the
+The workflow diagram these states and transitions follow is referenced in
+RA-85. The module inherits the
 framework's audit log automatically — see `ReAccreditationLifecycleTests` for
 a happy-path walk from `submitted` → `approved` that asserts every step is
 captured.

@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -18,7 +19,6 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <see cref="EngineFactory.Persistence"/> and re-read for assertions.
 /// </summary>
 public class WorkItemEngineEndpointsTests
-    : IClassFixture<MongoIntegrationFixture>
 {
     private const string TypeId = "test-type";
     private readonly MongoIntegrationFixture _fixture;
@@ -26,36 +26,12 @@ public class WorkItemEngineEndpointsTests
     public WorkItemEngineEndpointsTests(MongoIntegrationFixture fixture) => _fixture = fixture;
 
     [Fact]
-    public async Task Complete_task_returns_updated_work_item_with_task_marked_complete()
+    public async Task Action_returns_200_when_no_tasks_gate_the_transition()
     {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new EngineFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var workItemId = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = workItemId,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/{workItemId}/tasks/check-eligibility/complete", content: null, cancellationToken);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
-        Assert.NotNull(body);
-        Assert.Single(body!.Tasks);
-        Assert.True(body.Tasks.Single().IsComplete);
-        var persisted = await factory.Persistence.GetByIdAsync(workItemId, cancellationToken);
-        Assert.Equal(1, persisted!.Version);
-    }
-
-    [Fact]
-    public async Task Action_returns_409_when_tasks_outstanding()
-    {
+        // RA-410: this used to assert 409 Conflict because the "approve"
+        // transition was gated on an outstanding task. The task framework
+        // (and the gate) are gone, so the same seed now simply succeeds —
+        // regression cover for the ungating.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new EngineFactory(_fixture);
         using var client = factory.CreateClient();
@@ -72,9 +48,9 @@ public class WorkItemEngineEndpointsTests
         var response = await client.PostAsync(
             $"/work-items/{workItemId}/actions/approve", content: null, cancellationToken);
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
-        Assert.Equal("Action not allowed", problem?.Title);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.Equal("approved", body?.StateId);
     }
 
     [Fact]
@@ -90,8 +66,7 @@ public class WorkItemEngineEndpointsTests
             Id = workItemId,
             TypeId = TypeId,
             StateId = "submitted",
-            SubmittedBy = "test-client",
-            CompletedTaskIdsByState = new() { ["submitted"] = ["check-eligibility"] }
+            SubmittedBy = "test-client"
         }, cancellationToken);
 
         var response = await client.PostAsync(
@@ -157,88 +132,11 @@ public class WorkItemEngineEndpointsTests
         var body = await client.GetFromJsonAsync<WorkItemResponse>($"/work-items/{workItemId}", cancellationToken);
 
         Assert.NotNull(body);
-        Assert.Single(body!.Tasks);
-        Assert.False(body.Tasks.Single().IsComplete);
-        Assert.Empty(body.AvailableActions); // approve is gated on the task
-    }
-
-    // ---------------------- Task status endpoint (epr-gl6) ----------------------
-
-    [Fact]
-    public async Task Set_task_status_returns_updated_response_with_in_progress_status()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new EngineFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var workItemId = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = workItemId,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
-
-        var response = await client.PutAsJsonAsync(
-            $"/work-items/{workItemId}/tasks/check-eligibility/status",
-            new { status = "InProgress" }, cancellationToken);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
-        var task = Assert.Single(body!.Tasks);
-        Assert.Equal(WorkItemTaskStatus.InProgress, task.Status);
-        Assert.False(task.IsComplete);
-    }
-
-    [Theory]
-    [InlineData("in-progress")]
-    [InlineData("nonsense")]
-    [InlineData("")]
-    public async Task Set_task_status_returns_400_for_invalid_status_value(string statusValue)
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new EngineFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var workItemId = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = workItemId,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
-
-        var response = await client.PutAsJsonAsync(
-            $"/work-items/{workItemId}/tasks/check-eligibility/status",
-            new { status = statusValue }, cancellationToken);
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Set_task_status_returns_401_when_user_id_header_missing()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new EngineFactory(_fixture);
-        using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Remove("x-cdp-user-id");
-
-        var workItemId = Guid.NewGuid();
-        await factory.SeedAsync(new WorkItem
-        {
-            Id = workItemId,
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedBy = "test-client"
-        }, cancellationToken);
-
-        var response = await client.PutAsJsonAsync(
-            $"/work-items/{workItemId}/tasks/check-eligibility/status",
-            new { status = "InProgress" }, cancellationToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        // RA-410: "approve" used to be absent here because it was gated on
+        // an outstanding task. The task framework (and the gate) are gone,
+        // so the same seed now offers it — regression cover for the
+        // ungating.
+        Assert.Contains(body!.AvailableActions, a => a.ActionId == "approve");
     }
 
     private sealed class EngineFactory : WebApplicationFactory<Program>
@@ -272,10 +170,6 @@ public class WorkItemEngineEndpointsTests
                         new WorkItemState("submitted", "Submitted"),
                         new WorkItemState("approved", "Approved", IsTerminal: true)
                     ],
-                    tasksByState: new Dictionary<string, IReadOnlyCollection<WorkItemTask>>
-                    {
-                        ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
-                    },
                     transitions:
                     [
                         new WorkItemTransition("approve", "Approve", "submitted", "approved")
@@ -286,7 +180,7 @@ public class WorkItemEngineEndpointsTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
             client.DefaultRequestHeaders.Add("x-cdp-user-id", "test-user");
         }
 

@@ -39,20 +39,6 @@ internal sealed class ReAccreditationContinueReviewService(
             "submitted", "duly-made", "assessment-in-progress", "awaiting-decision",
         };
 
-    /// <summary>
-    /// Inverse of the <c>resume-during-*</c> action that put a work item
-    /// into <c>updated</c>: which <c>continue-review-during-*</c> action
-    /// carries it on to the state it was originally queried from.
-    /// </summary>
-    private static readonly Dictionary<string, string> s_continueActionByResumeAction =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["resume-during-duly-making"] = "continue-review-during-duly-making",
-            ["resume-during-duly-made"] = "continue-review-during-duly-made",
-            ["resume-during-assessment"] = "continue-review-during-assessment",
-            ["resume-during-decision"] = "continue-review-during-decision",
-        };
-
     public async Task<WorkItemActionResult> ContinueReviewAsync(
         Guid workItemId,
         ClaimsPrincipal user,
@@ -76,7 +62,10 @@ internal sealed class ReAccreditationContinueReviewService(
                 $"Work item {workItemId} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.");
         }
 
-        if (!string.Equals(workItem.StateId, "updated", StringComparison.OrdinalIgnoreCase))
+        if (!string.Equals(
+                workItem.StateId,
+                ReAccreditationUpdatedOrigin.StateId,
+                StringComparison.OrdinalIgnoreCase))
         {
             // A genuinely concurrent/duplicate call (e.g. a double-click)
             // must not fail the caller's retry — once the work item has left
@@ -97,15 +86,14 @@ internal sealed class ReAccreditationContinueReviewService(
                 $"Work item {workItemId} is in state '{workItem.StateId}' and cannot be continued from review.");
         }
 
-        var resumeActionId = workItem
-            .AuditLog
-            .Where(entry => string.Equals(entry.Action, "action-applied", StringComparison.Ordinal))
-            .OrderByDescending(entry => entry.CreatedAt)
-            .Select(entry => entry.Details.GetValueOrDefault("actionId"))
-            .FirstOrDefault(actionId => actionId is not null);
+        // RA-410: shared with ReAccreditationOriginStateResolver so the action
+        // that moves the item on and the origin state reported on the wire are
+        // resolved from exactly the same audit history — a caseworker can
+        // never be offered one state's call to action and be carried into a
+        // different one.
+        var continueActionId = ReAccreditationUpdatedOrigin.ResolveContinueActionId(workItem);
 
-        if (resumeActionId is null
-            || !s_continueActionByResumeAction.TryGetValue(resumeActionId, out var continueActionId))
+        if (continueActionId is null)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,

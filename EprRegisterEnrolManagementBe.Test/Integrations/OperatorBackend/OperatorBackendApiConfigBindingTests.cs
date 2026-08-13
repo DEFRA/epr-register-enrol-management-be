@@ -14,7 +14,7 @@ namespace EprRegisterEnrolManagementBe.Test.Integrations.OperatorBackend;
 /// to be set. Mirrors
 /// <see cref="EprRegisterEnrolManagementBe.Test.Config.OperatorServiceConfigBindingTests"/>.
 /// </summary>
-public class OperatorBackendApiConfigBindingTests : IClassFixture<MongoIntegrationFixture>
+public class OperatorBackendApiConfigBindingTests
 {
     private readonly MongoIntegrationFixture _fixture;
 
@@ -22,7 +22,7 @@ public class OperatorBackendApiConfigBindingTests : IClassFixture<MongoIntegrati
         _fixture = fixture;
 
     [Fact]
-    public void Config_binds_from_the_OperatorBackendApi_section()
+    public void Config_binds_from_the_OperatorBackendApi_section_and_flat_shared_secret_env_var()
     {
         using var factory = NewFactory(
             enabled: true,
@@ -48,11 +48,28 @@ public class OperatorBackendApiConfigBindingTests : IClassFixture<MongoIntegrati
         Assert.False(options.Value.Enabled);
         Assert.Equal(string.Empty, options.Value.Url);
         Assert.Equal("epr-register-enrol-management-be", options.Value.ClientId);
-        // appsettings.Development.json now carries an explicit blank
-        // placeholder for SharedSecret (MBE-F3) rather than leaving the
-        // section absent, so this binds to "" rather than the C# `null`
-        // default — functionally identical (the adapter treats both as
-        // "no secret configured" via string.IsNullOrEmpty).
+        Assert.True(string.IsNullOrEmpty(options.Value.SharedSecret));
+    }
+
+    [Fact]
+    public void SharedSecret_ignores_retired_nested_OperatorBackendApi_SharedSecret_key()
+    {
+        // The old OperatorBackendApi__SharedSecret env var name must have no
+        // effect after the naming-convention fix — otherwise an operator who
+        // hasn't migrated their secret's env var name yet would be silently
+        // unsigned (empty SharedSecret) rather than getting a clear signal
+        // that the old name no longer works.
+        using var factory = new EphemeralMongoTestFactory(
+            _fixture,
+            "operator-backend-api-config-retired-key",
+            settings: new Dictionary<string, string?>
+            {
+                ["OperatorBackendApi:Url"] = string.Empty,
+                ["OperatorBackendApi:SharedSecret"] = "should-not-be-used",
+            });
+
+        var options = factory.Services.GetRequiredService<IOptions<OperatorBackendApiConfig>>();
+
         Assert.True(string.IsNullOrEmpty(options.Value.SharedSecret));
     }
 
@@ -171,7 +188,7 @@ public class OperatorBackendApiConfigBindingTests : IClassFixture<MongoIntegrati
         }
         if (sharedSecret is not null)
         {
-            settings["OperatorBackendApi:SharedSecret"] = sharedSecret;
+            settings["OPERATOR_BACKEND_SHARED_SECRET"] = sharedSecret;
         }
 
         return new(_fixture, "operator-backend-api-config", settings: settings);

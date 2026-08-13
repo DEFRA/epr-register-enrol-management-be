@@ -35,8 +35,7 @@ internal sealed class ReAccreditationWithdrawQuerySnapshotMigration(
         "withdraw-during-query",
         "Withdraw",
         "queried",
-        "withdrawn",
-        RequiresAllTasksComplete: false
+        "withdrawn"
     );
 
     public string Name =>
@@ -127,8 +126,7 @@ internal sealed class ReAccreditationWithdrawQuerySnapshotMigration(
         {
             TemplateVersion = "v9",
             States = snapshot.States,
-            Transitions = snapshot.Transitions.Append(s_newTransition).ToList(),
-            TasksByState = snapshot.TasksByState,
+            Transitions = snapshot.Transitions.Append(s_newTransition).ToList()
         };
         workItem.TemplateVersion = "v9";
     }

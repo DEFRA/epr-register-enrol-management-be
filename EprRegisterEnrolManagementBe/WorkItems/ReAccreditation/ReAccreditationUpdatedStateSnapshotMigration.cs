@@ -54,10 +54,10 @@ internal sealed class ReAccreditationUpdatedStateSnapshotMigration(
     // resolution.
     private static readonly IReadOnlyList<WorkItemTransition> s_continueReviewTransitions =
     [
-        new WorkItemTransition("continue-review-during-duly-making", "Continue review", "updated", "submitted", RequiresAllTasksComplete: false, CallerInvocable: false),
-        new WorkItemTransition("continue-review-during-duly-made", "Continue review", "updated", "duly-made", RequiresAllTasksComplete: false, CallerInvocable: false),
-        new WorkItemTransition("continue-review-during-assessment", "Continue review", "updated", "assessment-in-progress", RequiresAllTasksComplete: false, CallerInvocable: false),
-        new WorkItemTransition("continue-review-during-decision", "Continue review", "updated", "awaiting-decision", RequiresAllTasksComplete: false, CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-duly-making", "Continue review", "updated", "submitted", CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-duly-made", "Continue review", "updated", "duly-made", CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-assessment", "Continue review", "updated", "assessment-in-progress", CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-decision", "Continue review", "updated", "awaiting-decision", CallerInvocable: false),
     ];
 
     public string Name => "ReAccreditation: add 'updated' state + continue-review-during-* transitions to snapshot (v7 → v8)";
@@ -148,8 +148,7 @@ internal sealed class ReAccreditationUpdatedStateSnapshotMigration(
         {
             TemplateVersion = "v8",
             States = snapshot.States.Append(s_updatedState).ToList(),
-            Transitions = retargetedTransitions.Concat(s_continueReviewTransitions).ToList(),
-            TasksByState = snapshot.TasksByState
+            Transitions = retargetedTransitions.Concat(s_continueReviewTransitions).ToList()
         };
         workItem.TemplateVersion = "v8";
     }

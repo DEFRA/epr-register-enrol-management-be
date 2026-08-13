@@ -22,7 +22,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <see cref="IWorkItemPersistence"/> wholesale.
 /// </summary>
 public class WorkItemServiceTimestampTests
-    : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
+    : IAsyncDisposable
 {
     private const string TypeId = "test-type";
     private static readonly DateTimeOffset T = new(2026, 4, 27, 10, 0, 0, TimeSpan.Zero);
@@ -54,16 +54,12 @@ public class WorkItemServiceTimestampTests
             TypeId,
             "Test type",
             initialState: new WorkItemState("submitted", "Submitted"),
-            states: [new WorkItemState("submitted", "Submitted")],
-            tasksByState: new Dictionary<string, IReadOnlyCollection<WorkItemTask>>
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")]
-            });
+            states: [new WorkItemState("submitted", "Submitted")]);
 
     private static ClaimsPrincipal User() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "alice-1"),
             new Claim("user:name", "Alice Example")
         ], "test"));
@@ -126,34 +122,6 @@ public class WorkItemServiceTimestampTests
         Assert.Equal(expected, fetched.LastModifiedAt);
         var audit = Assert.Single(fetched.AuditLog);
         Assert.Equal("note-added", audit.Action);
-        Assert.Equal(expected, audit.CreatedAt);
-    }
-
-    [Fact]
-    public async Task CompleteTask_records_LastModifiedAt_and_audit_timestamp_from_advanced_TimeProvider()
-    {
-        var workItem = await SeedAsync(new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedAt = T.UtcDateTime,
-            LastModifiedAt = T.UtcDateTime,
-            SubmittedBy = "test-client"
-        });
-
-        _time.Advance(TimeSpan.FromMinutes(2));
-        var expected = _time.GetUtcNow().UtcDateTime;
-
-        var result = await BuildService(BuildType()).CompleteTaskAsync(
-            workItem.Id, "check-eligibility", User(), TestContext.Current.CancellationToken);
-
-        Assert.True(result.IsSuccess, result.Message);
-
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal(expected, fetched.LastModifiedAt);
-        var audit = Assert.Single(fetched.AuditLog);
-        Assert.Equal("task-completed", audit.Action);
         Assert.Equal(expected, audit.CreatedAt);
     }
 

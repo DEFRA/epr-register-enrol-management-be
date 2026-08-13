@@ -43,6 +43,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationApprovalService(
     IWorkItemPersistence persistence,
+    IWorkItemRegistry registry,
     IAccreditationIdGenerator accreditationIdGenerator,
     IBackgroundTaskQueue backgroundTaskQueue,
     IEnumerable<IWorkItemPostActionHook> postActionHooks,
@@ -134,16 +135,28 @@ internal sealed class ReAccreditationApprovalService(
                     $"but {workItemId} is in '{workItem.StateId}'.");
             }
 
+            // Resolved before any side effect: an approval on a work item
+            // whose type is neither registered nor snapshotted issues no
+            // accreditation id, stops no SLA clock, queues no publishing job,
+            // changes no state and writes no audit entry.
+            var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
+            if (template is null)
+            {
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.UnknownAction,
+                    $"Work item {workItemId} references unregistered type '{workItem.TypeId}' " +
+                    "and has no stored template snapshot.");
+            }
+
             var now = _timeProvider.GetUtcNow();
             var nowUtc = now.UtcDateTime;
             var accreditationYear = _accreditationConfig.CurrentYear;
-            var material = ResolveMaterial(workItem.Payload);
 
             string accreditationId;
             try
             {
                 accreditationId = await accreditationIdGenerator.GenerateAsync(
-                    material, accreditationYear, cancellationToken);
+                    workItem.Payload, accreditationYear, cancellationToken);
             }
             catch (InvalidOperationException ex)
             {
@@ -276,9 +289,6 @@ internal sealed class ReAccreditationApprovalService(
         workItem.ReplacePayload(merged);
         return true;
     }
-
-    private static string? ResolveMaterial(BsonDocument? payload) =>
-        TryReadString(payload, "material");
 
     private async Task EnqueuePublishingAuditAsync(
         WorkItem workItem,

@@ -20,4 +20,32 @@ internal sealed class NullOperatorBackendPushAdapter : IOperatorBackendPushAdapt
         IReadOnlyList<string> sectionKeys,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
+
+    public Task<OperatorBackendPushResult> PushStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
+
+    // epr-p86e / RA-410: the decision push is gated on, so "disabled" must be a
+    // Skipped pass (not a Failure) — otherwise every decision in an environment
+    // that has not enabled the push would 500. The gate in
+    // ReAccreditationLogDecisionService treats Skipped as "proceed".
+    public Task<OperatorBackendPushResult> PushDecisionStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
 }

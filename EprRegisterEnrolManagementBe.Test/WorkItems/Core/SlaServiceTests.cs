@@ -41,7 +41,7 @@ public class SlaServiceTests
     private static ClaimsPrincipal TeamLeader(string userId = "tl-1") =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", userId),
             new Claim("user:name", "Test Leader"),
             new Claim(ClaimTypes.Role, "standard")
@@ -50,7 +50,7 @@ public class SlaServiceTests
     private static ClaimsPrincipal NoIdentityUser() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client")
+            new Claim("client_id", "test-client")
             // No user:id claim
         ], "test"));
 

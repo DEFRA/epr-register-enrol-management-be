@@ -21,12 +21,12 @@ public class WorkItemTemplateVersioningTests
     private static ClaimsPrincipal User() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "test-user")
         ], "test"));
 
     [Fact]
-    public void Capture_freezes_states_transitions_and_tasks_per_state()
+    public void Capture_freezes_states_and_transitions()
     {
         var type = new VersionedTestType(
             templateVersion: "v3",
@@ -35,10 +35,6 @@ public class WorkItemTemplateVersioningTests
                 new WorkItemState("submitted", "Submitted"),
                 new WorkItemState("approved", "Approved", IsTerminal: true)
             ],
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check", "Check")]
-            },
             transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]);
 
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
@@ -46,9 +42,6 @@ public class WorkItemTemplateVersioningTests
         Assert.Equal("v3", snapshot.TemplateVersion);
         Assert.Equal(2, snapshot.States.Count);
         Assert.Single(snapshot.Transitions);
-        Assert.Equal("check", snapshot.GetTasksForState("submitted").Single().Id);
-        Assert.Empty(snapshot.GetTasksForState("approved"));
-        Assert.Empty(snapshot.GetTasksForState("unknown-state"));
     }
 
     [Fact]
@@ -59,13 +52,11 @@ public class WorkItemTemplateVersioningTests
         var snapshot = WorkItemTemplateSnapshot.Capture(new VersionedTestType(
             templateVersion: "v1",
             states: [new WorkItemState("submitted", "Submitted")],
-            tasksByState: new() { ["submitted"] = [new WorkItemTask("check", "Check")] },
             transitions: []));
 
         var liveType = new VersionedTestType(
             templateVersion: "v2",
             states: [new WorkItemState("submitted", "Submitted")],
-            tasksByState: new() { ["submitted"] = [new WorkItemTask("review", "Review")] },
             transitions: []);
 
         var workItem = new WorkItem
@@ -81,7 +72,6 @@ public class WorkItemTemplateVersioningTests
         var projection = BuildService(liveType).Project(workItem);
 
         Assert.Equal("v1", projection.TemplateVersion);
-        Assert.Equal("check", projection.Tasks.Single().TaskId);
     }
 
     [Fact]
@@ -95,13 +85,11 @@ public class WorkItemTemplateVersioningTests
                 new WorkItemState("submitted", "Submitted"),
                 new WorkItemState("approved", "Approved", IsTerminal: true)
             ],
-            tasksByState: new() { ["submitted"] = [] },
             transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]));
 
         var liveType = new VersionedTestType(
             templateVersion: "v2",
             states: [new WorkItemState("submitted", "Submitted")],
-            tasksByState: new(),
             transitions: []);
 
         var workItem = new WorkItem
@@ -129,7 +117,6 @@ public class WorkItemTemplateVersioningTests
         var liveType = new VersionedTestType(
             templateVersion: "v1",
             states: [new WorkItemState("submitted", "Submitted")],
-            tasksByState: new() { ["submitted"] = [new WorkItemTask("check", "Check")] },
             transitions: []);
 
         var legacy = new WorkItem
@@ -144,7 +131,6 @@ public class WorkItemTemplateVersioningTests
         var projection = BuildService(liveType).Project(legacy);
 
         Assert.Equal("v1", projection.TemplateVersion);
-        Assert.Single(projection.Tasks);
     }
 
     [Fact]
@@ -155,7 +141,6 @@ public class WorkItemTemplateVersioningTests
         var liveType = new VersionedTestType(
             templateVersion: "v1",
             states: [new WorkItemState("submitted", "Submitted")],
-            tasksByState: new(),
             transitions: []);
         var registry = new WorkItemRegistry([liveType]);
 
@@ -169,7 +154,6 @@ public class WorkItemTemplateVersioningTests
             .Project(orphan);
 
         Assert.Equal("unknown", projection.TemplateVersion);
-        Assert.Empty(projection.Tasks);
         Assert.Empty(projection.AvailableActions);
     }
 
@@ -182,18 +166,14 @@ public class WorkItemTemplateVersioningTests
     /// </summary>
     private sealed class VersionedTestType : IWorkItemType
     {
-        private readonly Dictionary<string, IReadOnlyCollection<WorkItemTask>> _tasksByState;
-
         public VersionedTestType(
             string templateVersion,
             IReadOnlyCollection<WorkItemState> states,
-            Dictionary<string, IReadOnlyCollection<WorkItemTask>> tasksByState,
             IReadOnlyCollection<WorkItemTransition> transitions)
         {
             TemplateVersion = templateVersion;
             States = states;
             InitialState = states.First();
-            _tasksByState = tasksByState;
             Transitions = transitions;
         }
 
@@ -203,8 +183,5 @@ public class WorkItemTemplateVersioningTests
         public IReadOnlyCollection<WorkItemState> States { get; }
         public IReadOnlyCollection<WorkItemTransition> Transitions { get; }
         public string TemplateVersion { get; }
-
-        public IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId) =>
-            _tasksByState.TryGetValue(stateId, out var tasks) ? tasks : [];
     }
 }

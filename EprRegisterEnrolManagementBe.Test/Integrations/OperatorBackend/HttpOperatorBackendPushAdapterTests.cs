@@ -42,16 +42,21 @@ public class HttpOperatorBackendPushAdapterTests
         });
 
         var adapter = new HttpOperatorBackendPushAdapter(
-            httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance, FastRetryPipeline());
+            httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance,
+            FastRetryPipeline(maxRetryAttempts: 2), FastRetryPipeline(maxRetryAttempts: 5));
         return (adapter, handler);
     }
 
-    /// <summary>Same shape as the adapter's production pipeline (2 retries, 5xx/transport only), no delay.</summary>
-    private static ResiliencePipeline<HttpResponseMessage> FastRetryPipeline() =>
+    /// <summary>
+    /// Same shape as the adapter's production pipelines (5xx/transport only),
+    /// no delay. Used for both the best-effort pipeline (2 retries) and the
+    /// decision pipeline (5 retries) so retry-path tests run at unit-test speed.
+    /// </summary>
+    private static ResiliencePipeline<HttpResponseMessage> FastRetryPipeline(int maxRetryAttempts) =>
         new ResiliencePipelineBuilder<HttpResponseMessage>()
             .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
             {
-                MaxRetryAttempts = 2,
+                MaxRetryAttempts = maxRetryAttempts,
                 Delay = TimeSpan.Zero,
                 ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
                     .Handle<HttpRequestException>()
@@ -104,7 +109,7 @@ public class HttpOperatorBackendPushAdapterTests
 
         Assert.Equal(
             "epr-register-enrol-management-be",
-            handler.LastRequest!.Headers.GetValues("x-cdp-cognito-client-id").Single());
+            handler.LastRequest!.Headers.GetValues("x-cdp-client-id").Single());
     }
 
     [Fact]
@@ -259,6 +264,219 @@ public class HttpOperatorBackendPushAdapterTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(3, handler.CallCount); // 1 initial attempt + 2 retries
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_fails_fast_when_url_is_not_configured()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut(url: string.Empty);
+
+        var result = await adapter.PushStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "submitted", "duly-made", "Duly made", "duly-make", "Mark as duly made",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_posts_to_the_case_management_status_endpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+
+        var result = await adapter.PushStatusChangedAsync(
+            workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.NotNull(handler.LastRequest);
+        Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
+        Assert.Equal(
+            $"{BaseUrl}/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            handler.LastRequest.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_sends_the_client_id_and_correlation_id_headers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+        var correlationId = Guid.NewGuid();
+
+        await adapter.PushStatusChangedAsync(
+            Guid.NewGuid(), correlationId, "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.Equal(
+            "epr-register-enrol-management-be",
+            handler.LastRequest!.Headers.GetValues("x-cdp-client-id").Single());
+        Assert.Equal(
+            correlationId.ToString(),
+            handler.LastRequest.Headers.GetValues("X-Correlation-Id").Single());
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_body_contains_the_transition_fields_but_not_workItemId()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 1, 15, 9, 30, 0, DateTimeKind.Utc);
+
+        await adapter.PushStatusChangedAsync(
+            workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            occurredAt, ct);
+
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        var root = body.RootElement;
+
+        Assert.Equal("awaiting-decision", root.GetProperty("fromStateId").GetString());
+        Assert.Equal("approved", root.GetProperty("toStateId").GetString());
+        Assert.Equal("Granted", root.GetProperty("toStateDisplayName").GetString());
+        Assert.Equal("approve", root.GetProperty("actionId").GetString());
+        Assert.Equal("Approve", root.GetProperty("actionDisplayName").GetString());
+        Assert.Equal(occurredAt, root.GetProperty("occurredAt").GetDateTime());
+
+        foreach (var property in root.EnumerateObject())
+        {
+            Assert.NotEqual("workitemid", property.Name, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_signs_the_request_when_a_secret_is_configured()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut(sharedSecret: "shh-its-a-secret");
+        handler.Respond(HttpStatusCode.OK);
+
+        await adapter.PushStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.True(handler.LastRequest!.Headers.Contains("x-cdp-auth-signature"));
+        Assert.True(handler.LastRequest.Headers.Contains("x-cdp-auth-timestamp"));
+        Assert.True(handler.LastRequest.Headers.Contains("x-cdp-auth-nonce"));
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_fails_on_a_non_success_status_code()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.InternalServerError, "boom");
+
+        var result = await adapter.PushStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.NotNull(result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_never_throws_when_sending_fails()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.ThrowOnSend = new HttpRequestException("connection refused");
+
+        var result = await adapter.PushStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("connection refused", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_retries_a_5xx_and_succeeds_once_the_backend_recovers()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.RespondSequence(
+            (HttpStatusCode.InternalServerError, "boom"),
+            (HttpStatusCode.OK, string.Empty));
+
+        var result = await adapter.PushStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_does_not_retry_a_4xx_response()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.NotFound, "not found");
+
+        var result = await adapter.PushStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    // --------------------------- epr-p86e / RA-410: the decision push ---------------------------
+
+    [Fact]
+    public async Task PushDecisionStatusChangedAsync_posts_to_the_case_management_status_endpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+
+        var result = await adapter.PushDecisionStatusChangedAsync(
+            workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            $"{BaseUrl}/api/v1/accreditation-applications/case-management/{workItemId}/status",
+            handler.LastRequest!.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task PushDecisionStatusChangedAsync_retries_five_times_before_giving_up_on_a_persistent_5xx()
+    {
+        // The decision push is a hard gate, so it retries harder than the
+        // best-effort push (5 retries vs 2). 1 initial attempt + 5 retries = 6.
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.InternalServerError, "still down");
+
+        var result = await adapter.PushDecisionStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(6, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushDecisionStatusChangedAsync_does_not_retry_a_4xx_response()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.BadRequest, "nope");
+
+        var result = await adapter.PushDecisionStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "rejected", "Refused", "reject", "Reject",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, handler.CallCount);
     }
 
     private sealed class FakeHttpMessageHandler : HttpMessageHandler

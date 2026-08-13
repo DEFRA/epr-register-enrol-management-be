@@ -31,7 +31,7 @@ public class WorkItemSlaDueDateTests
     };
 
     private static WorkItemEngineProjection Project(WorkItem item) =>
-        new(item, "v9", Array.Empty<WorkItemTaskProgress>(), Array.Empty<WorkItemTransition>());
+        new(item, "v9", Array.Empty<WorkItemTransition>());
 
     [Fact]
     public void ComputeSlaDueDate_is_null_when_no_clock()
@@ -230,7 +230,7 @@ public class WorkItemSlaDueDateTests
     private static ClaimsPrincipal Caseworker() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "cw-1"),
             new Claim("user:name", "Case Worker")
         ], "test"));

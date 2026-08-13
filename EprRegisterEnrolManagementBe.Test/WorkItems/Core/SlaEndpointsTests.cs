@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using NSubstitute;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -24,7 +25,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// verified via a small integration subset using
 /// <see cref="SlaEndpointsTestFactory"/>.
 /// </summary>
-public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
+public class SlaEndpointsTests
 {
     private const string TypeId = "test-type";
     private static readonly Guid WorkItemId = Guid.NewGuid();
@@ -52,14 +53,14 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
     };
 
     private static WorkItemEngineProjection AProjection(WorkItem workItem) =>
-        new(workItem, "v1", [], []);
+        new(workItem, "v1", []);
 
     private static DefaultHttpContext TeamLeaderContext()
     {
         var ctx = new DefaultHttpContext();
         ctx.User = new ClaimsPrincipal(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", "test-client"),
+            new Claim("client_id", "test-client"),
             new Claim("user:id", "tl-user"),
             new Claim(ClaimTypes.Role, "standard")
         ], "test"));
@@ -530,7 +531,7 @@ public class SlaEndpointsTests : IClassFixture<MongoIntegrationFixture>
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", "test-client");
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
             if (_userId is not null)
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);
         }

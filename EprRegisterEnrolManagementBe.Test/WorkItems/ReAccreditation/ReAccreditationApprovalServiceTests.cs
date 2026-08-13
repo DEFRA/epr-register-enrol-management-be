@@ -34,17 +34,18 @@ public class ReAccreditationApprovalServiceTests
         [
             new Claim("user:id", DecisionMakerId),
             new Claim("user:name", "Alice Example"),
-            new Claim("cognito:client_id", clientId ?? OwnerClientId),
+            new Claim("client_id", clientId ?? OwnerClientId),
             new Claim(ClaimTypes.Role, "reaccreditation-decision-maker")
         ], "test"));
 
     private static ClaimsPrincipal AnonymousUser() =>
         new(new ClaimsIdentity(
         [
-            new Claim("cognito:client_id", OwnerClientId),
+            new Claim("client_id", OwnerClientId),
             new Claim(ClaimTypes.Role, "reaccreditation-decision-maker")
         ], "test"));
 
+    /// <summary>Build a re-accreditation work item.</summary>
     private static WorkItem BuildWorkItem(
         string stateId = "awaiting-decision",
         string? submittedBy = OwnerClientId,
@@ -78,12 +79,13 @@ public class ReAccreditationApprovalServiceTests
     private static Sut Build(
         string accreditationId = "ACC-2025-A-DEADBEEF",
         int currentYear = 2025,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        bool registerType = true)
     {
         var persistence = Substitute.For<IWorkItemPersistence>();
         var idGenerator = Substitute.For<IAccreditationIdGenerator>();
         idGenerator.GenerateAsync(
-                Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                Arg.Any<BsonDocument>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(accreditationId));
         var queue = Substitute.For<IBackgroundTaskQueue>();
         var hooks = new List<IWorkItemPostActionHook> { Substitute.For<IWorkItemPostActionHook>() };
@@ -91,6 +93,7 @@ public class ReAccreditationApprovalServiceTests
 
         var sut = new ReAccreditationApprovalService(
             persistence,
+            new WorkItemRegistry(registerType ? [new ReAccreditationType()] : []),
             idGenerator,
             queue,
             hooks,
@@ -99,6 +102,72 @@ public class ReAccreditationApprovalServiceTests
             time);
 
         return new Sut(sut, persistence, idGenerator, queue, hooks, time);
+    }
+
+    // ──────────────── RA-410: awaiting-decision task gate removed ────────────────
+
+    /// <summary>
+    /// RA-346 AC2 root cause: 'approve' is not a registered
+    /// <see cref="WorkItemTransition"/>, so it bypassed the engine's
+    /// task-completeness gate entirely and a caseworker could approve a
+    /// determination with 'record-decision-rationale' still pending.
+    ///
+    /// RA-410: the task framework (and this gate) is gone, so approval no
+    /// longer depends on any task state at all — regression cover for the
+    /// ungating.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_succeeds_from_awaiting_decision_now_the_task_gate_is_gone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("approved", workItem.StateId);
+    }
+
+    /// <summary>
+    /// RA-346: a legacy work item with no stored snapshot falls back to the
+    /// live registered type, exactly as the engine does.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_falls_back_to_the_registered_type_when_no_snapshot_is_stored()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        workItem.TemplateSnapshot = null;
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("approved", workItem.StateId);
+    }
+
+    /// <summary>
+    /// RA-346: with neither a snapshot nor a registered type there is no
+    /// template to judge tasks against. Refuse rather than approve blind.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_refuses_when_no_template_can_be_resolved()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build(registerType: false);
+        var workItem = BuildWorkItem();
+        workItem.TemplateSnapshot = null;
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+        Assert.Contains("has no stored template snapshot", result.Message);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
     }
 
     // ─────────────────────────── happy path ───────────────────────────
@@ -192,6 +261,99 @@ public class ReAccreditationApprovalServiceTests
         Assert.Equal(2025, payload.AccreditationYear);
         Assert.NotNull(payload.SlaClock);
         Assert.Equal(s_fixedNow, payload.SlaClock!.StoppedAt);
+    }
+
+    [Fact]
+    public async Task ApproveAsync_preserves_ra292_overseas_site_and_authoriser_flags()
+    {
+        // RA-292: the new-ORS / new-interim-site / authority-to-issue flags are
+        // payload data the operator backend produces and the case management
+        // frontend badges. They live two and three levels deep inside
+        // `overseasSites.sites[].interimSite` and `prns.authorisers[]`, and
+        // ReAccreditationPayload models neither top-level key.
+        //
+        // Approval is the ONLY place that round-trips the payload through that
+        // [BsonIgnoreExtraElements] model, so it is the one operation that could
+        // silently blank these fields. The merge is shallow: it survives today
+        // precisely because `overseasSites` and `prns` are unmodelled. Adding
+        // either to ReAccreditationPayload without deepening the merge would
+        // drop every undeclared key nested inside it — this test is the guard
+        // that turns that into a red build rather than a blank regulator page.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build("ACC-2025-A-12345678");
+        var workItem = BuildWorkItem(payload: new BsonDocument
+        {
+            ["organisationName"] = "Acme Ltd",
+            ["overseasSites"] = new BsonDocument
+            {
+                ["sites"] = new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        ["siteId"] = 1,
+                        ["orsId"] = "ORS-2026-0292",
+                        ["isNewSite"] = true,
+                        ["repatriatedLoads"] = "3",
+                        ["interimSite"] = new BsonDocument
+                        {
+                            ["siteNumber"] = "INT-001",
+                            ["isNewSite"] = true,
+                            ["townOrCity"] = "Antwerp"
+                        }
+                    },
+                    new BsonDocument
+                    {
+                        ["siteId"] = 2,
+                        ["isNewSite"] = false,
+                        ["interimSite"] = new BsonDocument { ["isNewSite"] = false }
+                    }
+                }
+            },
+            ["prns"] = new BsonDocument
+            {
+                ["authorisers"] = new BsonArray
+                {
+                    new BsonDocument
+                    {
+                        ["fullName"] = "Grace Adeyemi",
+                        ["email"] = "grace.adeyemi@example.com",
+                        ["isNew"] = true
+                    },
+                    new BsonDocument
+                    {
+                        ["fullName"] = "Martin Cole",
+                        ["email"] = "martin.cole@example.com",
+                        ["isNew"] = false
+                    }
+                }
+            }
+        });
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess);
+
+        var sites = workItem.Payload["overseasSites"]["sites"].AsBsonArray;
+        Assert.Equal(2, sites.Count);
+
+        var newSite = sites[0].AsBsonDocument;
+        Assert.True(newSite["isNewSite"].AsBoolean);
+        Assert.Equal("ORS-2026-0292", newSite["orsId"].AsString);
+        Assert.Equal("3", newSite["repatriatedLoads"].AsString);
+        Assert.True(newSite["interimSite"]["isNewSite"].AsBoolean);
+        Assert.Equal("INT-001", newSite["interimSite"]["siteNumber"].AsString);
+        Assert.Equal("Antwerp", newSite["interimSite"]["townOrCity"].AsString);
+
+        var establishedSite = sites[1].AsBsonDocument;
+        Assert.False(establishedSite["isNewSite"].AsBoolean);
+        Assert.False(establishedSite["interimSite"]["isNewSite"].AsBoolean);
+
+        var authorisers = workItem.Payload["prns"]["authorisers"].AsBsonArray;
+        Assert.Equal(2, authorisers.Count);
+        Assert.True(authorisers[0]["isNew"].AsBoolean);
+        Assert.Equal("Grace Adeyemi", authorisers[0]["fullName"].AsString);
+        Assert.False(authorisers[1]["isNew"].AsBoolean);
     }
 
     [Fact]
@@ -475,7 +637,7 @@ public class ReAccreditationApprovalServiceTests
     // ─────────────────────────── RA-133 ────────────────────────────────
 
     [Fact]
-    public async Task ApproveAsync_passes_material_and_configured_year_to_generator()
+    public async Task ApproveAsync_passes_payload_and_configured_year_to_generator()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build(currentYear: 2028);
@@ -489,11 +651,11 @@ public class ReAccreditationApprovalServiceTests
         await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         await sut.IdGenerator.Received(1).GenerateAsync(
-            "plastic", 2028, Arg.Any<CancellationToken>());
+            Arg.Is<BsonDocument>(p => p["material"] == "plastic"), 2028, Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ApproveAsync_passes_null_material_when_material_is_missing()
+    public async Task ApproveAsync_passes_the_payload_unchanged_when_material_is_missing()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
@@ -506,11 +668,11 @@ public class ReAccreditationApprovalServiceTests
         await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         await sut.IdGenerator.Received(1).GenerateAsync(
-            null, Arg.Any<int>(), Arg.Any<CancellationToken>());
+            Arg.Is<BsonDocument>(p => !p.Contains("material")), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task ApproveAsync_passes_null_material_when_material_is_bson_null()
+    public async Task ApproveAsync_passes_the_payload_unchanged_when_material_is_bson_null()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
@@ -524,7 +686,8 @@ public class ReAccreditationApprovalServiceTests
         await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
         await sut.IdGenerator.Received(1).GenerateAsync(
-            null, Arg.Any<int>(), Arg.Any<CancellationToken>());
+            Arg.Is<BsonDocument>(p => p["material"] == BsonNull.Value),
+            Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -623,7 +786,7 @@ public class ReAccreditationApprovalServiceTests
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
         sut.IdGenerator.GenerateAsync(
-                Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+                Arg.Any<BsonDocument>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns<Task<string>>(_ => throw new InvalidOperationException("no unique id"));
         var workItem = BuildWorkItem();
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);

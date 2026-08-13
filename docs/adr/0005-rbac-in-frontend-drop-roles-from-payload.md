@@ -14,13 +14,13 @@ with that direction.
 Independently of that direction, the specific checks being removed here
 were already close to dead code in this service. The original design
 (ADR-0001) had the backend perform some of its own authorization:
-`CognitoClientIdAuthenticationHandler` turned the optional
+`ClientIdAuthenticationHandler` turned the optional
 `x-cdp-user-roles` header into `ClaimTypes.Role` claims, and the framework
 used a single `case-worker` role to decide two things:
 
 - `WorkItemEndpoints.GetAll` — whether a caller saw every work item or only
   the ones they themselves submitted (`WorkItemQuery.SubmittedBy`, inferred
-  from the caller's `cognito:client_id` claim).
+  from the caller's `client_id` claim).
 - `WorkItemTenancy.CanRead` — whether a caller could read or mutate a
   specific work item by id (case-worker bypass, otherwise ownership match).
 
@@ -63,7 +63,7 @@ Concretely:
 - Role membership is dropped from the trust contract entirely: the
   `x-cdp-user-roles` header, its parsing into `ClaimTypes.Role` claims, and
   the `UserRolesHeaderName`/`MaxUserRolesLength` options are removed from
-  `CognitoClientIdAuthenticationHandler`.
+  `ClientIdAuthenticationHandler`.
 - The HMAC canonical signing payload bumps from `v2` to `v3`, dropping the
   roles field:
 
@@ -160,12 +160,17 @@ secret for, which is not distinguishable from a normal auth failure today.
 This is not a blocker for this change — the exposure is not new (see the
 first bullet above) — but should be tracked as a follow-up rather than
 silently accepted. A ticket should be raised against the shared HMAC
-authentication scheme (`CognitoClientIdAuthenticationHandler` and its
+authentication scheme (`ClientIdAuthenticationHandler` and its
 config in `Program.cs`/`compose/aws.env`) to scope the work.
+
+> **Actioned:** this follow-up was raised as RA-345 and implemented — see
+> [ADR-0006](0006-per-caller-client-secrets.md). `AUTH_SHARED_SECRET` no
+> longer exists; each caller now has its own secret, keyed by the
+> `clientId` it is expected to assert.
 
 ## Verification
 
-- `EprRegisterEnrolManagementBe.Test/Auth/CognitoClientIdAuthenticationTests.cs`
+- `EprRegisterEnrolManagementBe.Test/Auth/ClientIdAuthenticationTests.cs`
   — `ComputeSignature` call sites updated to the 6-argument `v3` form; the
   `x-cdp-user-roles` length-cap cases are removed.
 - `EprRegisterEnrolManagementBe.Test/HeaderPropagationAllowListTests.cs` and

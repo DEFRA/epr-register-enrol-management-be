@@ -18,12 +18,6 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <param name="DisplayName">Human-readable label shown in UIs and audit logs.</param>
 /// <param name="FromStateId">State the work item must be in for the action to be allowed.</param>
 /// <param name="ToStateId">State the work item moves to when the action succeeds.</param>
-/// <param name="RequiresAllTasksComplete">
-/// When <c>true</c> (the default) every task returned by
-/// <see cref="IWorkItemType.GetTasksForState"/> for <see cref="FromStateId"/>
-/// must be marked complete before the action is allowed. Set to <c>false</c>
-/// for transitions that should always be available (e.g. "withdraw").
-/// </param>
 /// <param name="CallerInvocable">
 /// Security boundary (see RA-311/MBE-1 security review). When <c>true</c>
 /// (the default) the generic <c>POST /work-items/{id}/actions/{actionId}</c>
@@ -37,7 +31,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// pick. A caller-invocable transition in that situation would let any
 /// authenticated caller choose the target state directly, defeating the
 /// server-side resolution and potentially skipping required
-/// states/tasks. Bespoke module services still reach the transition by
+/// states. Bespoke module services still reach the transition by
 /// calling the engine's <c>ApplyActionAsync</c> directly with a
 /// server-computed action id; this flag only gates the generic
 /// <c>POST /work-items/{id}/actions/{actionId}</c> HTTP endpoint.
@@ -48,5 +42,4 @@ public sealed record WorkItemTransition(
     string DisplayName,
     string FromStateId,
     string ToStateId,
-    bool RequiresAllTasksComplete = true,
     bool CallerInvocable = true);

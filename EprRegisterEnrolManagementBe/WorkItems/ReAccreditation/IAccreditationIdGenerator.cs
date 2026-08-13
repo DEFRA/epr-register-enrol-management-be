@@ -1,3 +1,5 @@
+using MongoDB.Bson;
+
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
@@ -10,18 +12,21 @@ public interface IAccreditationIdGenerator
 {
     /// <summary>
     /// Produce a fresh accreditation id of the shape
-    /// <c>ACC-{Year}-{Material[:1]}-{ULID8}</c>. The generator owns
-    /// uniqueness: implementations must consult the persistence layer
-    /// and regenerate on collision, returning a value that does not yet
-    /// exist on any persisted work item. When uniqueness cannot be
-    /// established within a small bounded number of attempts the
-    /// implementation throws so the calling approval service can
-    /// surface a domain failure.
+    /// <c>A{Year:2}{Agency:1}{OperatorType:1}{OrgId:6}{PostcodeSuffix:3}{Material:2}</c>
+    /// (16 characters, fixed width). The generator owns uniqueness:
+    /// implementations must consult the persistence layer and, on
+    /// collision, disambiguate rather than regenerate (the format is
+    /// deterministic for a given payload/year), returning a value that
+    /// does not yet exist on any persisted work item. When uniqueness
+    /// cannot be established within a small bounded number of attempts the
+    /// implementation throws so the calling approval service can surface a
+    /// domain failure.
     /// </summary>
-    /// <param name="material">First material the work item handles.
-    /// Its uppercase first character forms the material segment;
-    /// when null/empty the literal <c>X</c> is used.</param>
-    /// <param name="year">Four-digit accreditation year segment.</param>
+    /// <param name="payload">The work item's payload. Supplies the
+    /// material, regulator postcode, waste-processing (operator) type and
+    /// operator organisation id segments.</param>
+    /// <param name="year">Four-digit accreditation year; only its last two
+    /// digits form the year segment.</param>
     /// <param name="cancellationToken">Token to cancel the lookup.</param>
-    Task<string> GenerateAsync(string? material, int year, CancellationToken cancellationToken = default);
+    Task<string> GenerateAsync(BsonDocument payload, int year, CancellationToken cancellationToken = default);
 }

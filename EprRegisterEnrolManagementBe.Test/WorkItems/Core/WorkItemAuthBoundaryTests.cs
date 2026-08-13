@@ -8,19 +8,19 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using EprRegisterEnrolManagementBe.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
 /// <summary>
 /// epr-dt2: negative-path coverage for the auth and assignment role
 /// boundaries documented in AGENTS.md. Every test exercises the real
-/// pipeline (CognitoClientIdAuthenticationHandler, routing,
+/// pipeline (ClientIdAuthenticationHandler, routing,
 /// ProblemDetails) against ephemeral MongoDB so it can also assert the
 /// fail-closed property — that no audit entry is written and no on-disk
 /// version is bumped when the request is denied.
 /// </summary>
 public class WorkItemAuthBoundaryTests
-    : IClassFixture<MongoIntegrationFixture>
 {
     private const string TypeId = "test-type";
     private const string TenantClientId = "test-client";
@@ -28,54 +28,12 @@ public class WorkItemAuthBoundaryTests
 
     public WorkItemAuthBoundaryTests(MongoIntegrationFixture fixture) => _fixture = fixture;
 
-    // --------- (1) Mutations require a 'user:id' claim — fail closed ---------
-
-    [Fact]
-    public async Task Complete_task_returns_401_when_user_id_claim_missing()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: null);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(NewSubmittedItem(id), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/{id}/tasks/check-eligibility/complete", content: null, cancellationToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-
-        // Atomicity: the engine's RequireActorIdentity gate fires before
-        // any mutation, so the persisted document is unchanged.
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal(0, persisted!.Version);
-        Assert.Empty(persisted.AuditLog);
-        Assert.False(persisted.CompletedTaskIdsByState.TryGetValue("submitted", out _));
-    }
-
-    [Fact]
-    public async Task Complete_task_returns_401_when_user_id_header_is_whitespace()
-    {
-        // The handler ignores whitespace user-id headers; the engine then
-        // sees no 'user:id' claim and refuses the mutation. This is the
-        // "claim present-ish but resolves to null/empty" path
-        // (CognitoClientIdAuthenticationHandler whitespace filter +
-        // WorkItemService.ResolveActorUserId).
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BoundaryFactory(_fixture, userId: "   ");
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(NewSubmittedItem(id), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/{id}/tasks/check-eligibility/complete", content: null, cancellationToken);
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal(0, persisted!.Version);
-        Assert.Empty(persisted.AuditLog);
-    }
+    // Coverage for "mutations require a 'user:id' claim — fail closed" used to
+    // live here, driven through the task-complete endpoint. RA-410 removed
+    // that endpoint along with the rest of the task framework; the
+    // missing-actor-identity boundary itself is unit-tested in
+    // WorkItemServiceTests and HTTP-tested in WorkItemEndpointsTests /
+    // WorkItemEngineEndpointsTests against the endpoints that remain.
 
     // ---------------- (2) Assign / Unassign — RA-323: any caseworker ----------------
 
@@ -152,8 +110,7 @@ public class WorkItemAuthBoundaryTests
 
     // Coverage for "RBAC lives in the frontend now" (no ownership gate on
     // GetById/list) lives in WorkItemEndpointsTests — this class stays
-    // scoped to the two boundaries above that still exist: missing actor
-    // identity, and the RA-323 assign/unassign permission model.
+    // scoped to the RA-323 assign/unassign permission model boundary above.
 
     // ---------------------------- Helpers ----------------------------
 
@@ -201,7 +158,7 @@ public class WorkItemAuthBoundaryTests
         protected override void ConfigureClient(HttpClient client)
         {
             base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add("x-cdp-cognito-client-id", TenantClientId);
+            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, TenantClientId);
             if (_userId is not null)
             {
                 // Use TryAddWithoutValidation so the test can deliberately

@@ -8,11 +8,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// and bumps <see cref="WorkItem.TemplateVersion"/> from <c>v4</c> to
 /// <c>v5</c>.
 ///
-/// For items in the <c>submitted</c> state whose tasks are all already
-/// complete, also applies the <c>submitted → duly-made</c> state transition
-/// that would previously have required a manual "Mark as duly made" action,
-/// since the auto-transition hook (<see cref="ReAccreditationDulyMadeHook"/>)
-/// never fired for them. No notification email is sent during migration.
+/// RA-410: this migration used to also auto-advance a <c>submitted</c> item
+/// whose checklist was fully ticked into <c>duly-made</c>, standing in for the
+/// auto-transition hook that never fired for it. With the task framework gone
+/// there is no checklist to read, and RA-316 had already made duly making
+/// depend on a regulator-entered payment date that a migration cannot invent
+/// without anchoring the 12-week SLA to a fiction. Such items are now left in
+/// <c>submitted</c> and presented with the "Duly make" call to action like any
+/// other, which is the correct destination for them.
 ///
 /// The migration is idempotent: items whose snapshot no longer contains
 /// <c>duly-make</c> are skipped.
@@ -62,41 +65,6 @@ internal sealed class ReAccreditationDulyMadeSnapshotMigration(
 
                 PatchSnapshot(full);
 
-                if (full.StateId == "submitted" && AllTasksComplete(full, "submitted"))
-                {
-                    var now = _timeProvider.GetUtcNow().UtcDateTime;
-                    full.StateId = "duly-made";
-                    full.SlaClock = new WorkItemSlaClock { StartedAt = now };
-                    full.AuditLog.Add(new WorkItemAuditEntry
-                    {
-                        Action = "action-applied",
-                        ActionDisplayName = "Action applied",
-                        CreatedAt = now,
-                        CreatedBy = "migration",
-                        CreatedByName = "Migration",
-                        Details = new Dictionary<string, string?>
-                        {
-                            ["actionId"] = "duly-make",
-                            ["fromStateId"] = "submitted",
-                            ["toStateId"] = "duly-made"
-                        }
-                    });
-                    full.AuditLog.Add(new WorkItemAuditEntry
-                    {
-                        Action = "sla-clock-started",
-                        ActionDisplayName = "SLA clock started",
-                        CreatedAt = now,
-                        CreatedBy = "migration",
-                        CreatedByName = "Migration",
-                        Details = new Dictionary<string, string?>
-                        {
-                            ["startedAt"] = now.ToString("O"),
-                            ["targetDays"] = new WorkItemSlaClock().TargetDuration.TotalDays.ToString()
-                        }
-                    });
-                    autoTransitioned++;
-                }
-
                 try
                 {
                     await persistence.ReplaceAsync(full, cancellationToken);
@@ -126,9 +94,39 @@ internal sealed class ReAccreditationDulyMadeSnapshotMigration(
             Name, migrated, autoTransitioned, skipped);
     }
 
+    /// <summary>
+    /// RA-316: the presence of <c>duly-make</c> is no longer sufficient on its
+    /// own. <see cref="ReAccreditationDulyMakeSnapshotMigration"/> deliberately
+    /// re-adds that transition at v11, so this migration must additionally
+    /// establish that the item really is a pre-v5 straggler. Without the version
+    /// gate the two migrations would fight on every boot — this one stripping
+    /// what the other had just restored, two pointless writes per item per
+    /// start-up, and a window in which nothing could be duly made.
+    ///
+    /// Versions are compared numerically rather than by string equality so a
+    /// v1/v2/v3 item (should any survive) is still caught.
+    /// </summary>
     private static bool NeedsMigration(WorkItem workItem) =>
         workItem.TemplateSnapshot is not null &&
-        workItem.TemplateSnapshot.Transitions.Any(t => t.ActionId == "duly-make");
+        workItem.TemplateSnapshot.Transitions.Any(t => t.ActionId == "duly-make") &&
+        IsPreV5(workItem.TemplateSnapshot.TemplateVersion);
+
+    /// <summary>
+    /// True when <paramref name="templateVersion"/> is a "v&lt;n&gt;" string with
+    /// n &lt; 5. An unrecognised or absent version is treated as pre-v5: the only
+    /// snapshots that never carried a parseable version predate versioning
+    /// altogether, and they are exactly the ones this migration exists for.
+    /// </summary>
+    private static bool IsPreV5(string? templateVersion)
+    {
+        if (string.IsNullOrWhiteSpace(templateVersion))
+        {
+            return true;
+        }
+
+        var digits = templateVersion.TrimStart('v', 'V');
+        return !int.TryParse(digits, out var version) || version < 5;
+    }
 
     private static void PatchSnapshot(WorkItem workItem)
     {
@@ -137,37 +135,8 @@ internal sealed class ReAccreditationDulyMadeSnapshotMigration(
         {
             TemplateVersion = "v5",
             States = snapshot.States,
-            Transitions = snapshot.Transitions.Where(t => t.ActionId != "duly-make").ToList(),
-            TasksByState = snapshot.TasksByState
+            Transitions = snapshot.Transitions.Where(t => t.ActionId != "duly-make").ToList()
         };
         workItem.TemplateVersion = "v5";
-    }
-
-    private static bool AllTasksComplete(WorkItem workItem, string stateId)
-    {
-        var tasks = workItem.TemplateSnapshot!.GetTasksForState(stateId);
-        if (tasks.Count == 0)
-        {
-            return false;
-        }
-
-        return tasks.All(t => GetTaskStatus(workItem, stateId, t.Id) == WorkItemTaskStatus.Completed);
-    }
-
-    private static WorkItemTaskStatus GetTaskStatus(WorkItem workItem, string stateId, string taskId)
-    {
-        if (workItem.TaskStatusesByState.TryGetValue(stateId, out var statuses) &&
-            statuses.TryGetValue(taskId, out var status))
-        {
-            return status;
-        }
-
-        if (workItem.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket) &&
-            bucket.Contains(taskId))
-        {
-            return WorkItemTaskStatus.Completed;
-        }
-
-        return WorkItemTaskStatus.NotStarted;
     }
 }

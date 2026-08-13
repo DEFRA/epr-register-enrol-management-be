@@ -84,18 +84,18 @@ Auth headers are added by `BuildRequest`:
 
 ```
 # always present
-x-cdp-cognito-client-id:  epr-register-enrol-backend
+x-cdp-client-id:  epr-register-enrol-backend
 x-cdp-user-id:            {submitter email}
 x-cdp-user-name:          {submitter full name}
 
-# only when CaseWorking__SharedSecret is configured
+# only when CASE_MANAGEMENT_API_SHARED_SECRET is configured
 x-cdp-auth-signature:     HMAC-SHA256(secret, v3-canonical-string)
 x-cdp-auth-timestamp:     2025-07-08T10:00:00Z
 x-cdp-auth-nonce:         {16-byte random, base64}
 ```
 
 The v3 canonical string is `v3\nclientId\nuserId\nuserName\ntimestamp\nnonce`.
-This is identical to the formula in this repo's `CognitoClientIdAuthenticationHandler.ComputeSignature`.
+This is identical to the formula in this repo's `ClientIdAuthenticationHandler.ComputeSignature`.
 Any change to this contract is a breaking change and requires a coordinated deploy.
 
 ---
@@ -110,10 +110,11 @@ POST http://case-management-backend:8085/work-items
 
 ### 6. Authentication (Management BE)
 
-`CognitoClientIdAuthenticationHandler`
-(`Auth/CognitoClientIdAuthenticationHandler.cs`) runs as ASP.NET middleware
-before any endpoint code. When `AUTH_SHARED_SECRET` is set it enforces three
-checks in order:
+`ClientIdAuthenticationHandler`
+(`Auth/ClientIdAuthenticationHandler.cs`) runs as ASP.NET middleware
+before any endpoint code. When `AUTH_SHARED_SECRET__BACKEND` is set (the
+per-caller secret registered for `epr-register-enrol-backend`'s clientId —
+see RA-345 in `docs/cdp-deployment.md`) it enforces three checks in order:
 
 1. **Timestamp** — must be within ±5 minutes of server time (clock-skew
    guard against request replay).
@@ -126,11 +127,12 @@ checks in order:
 On success a `ClaimsPrincipal` is created from the identity headers and the
 request proceeds.
 
-> **Fails closed**: if `AUTH_SHARED_SECRET` is not set in any non-Development
-> environment the handler emits a `LogCritical` and rejects **every** request
-> with 401. Trusting caller-supplied identity headers without a shared secret
-> would let any service forge an identity. The fix is purely deployment config
-> — see [Configuration](#configuration--the-401-matrix) below.
+> **Fails closed**: if no per-caller secrets are configured (`ClientSecrets`
+> empty) in any non-Development environment the handler emits a `LogCritical`
+> and rejects **every** request with 401. Trusting caller-supplied identity
+> headers without a secret would let any service forge an identity. The fix
+> is purely deployment config — see [Configuration](#configuration--the-401-matrix)
+> below.
 
 When a 401 fires, `HandleChallengeAsync` emits a `LogWarning` that captures
 the failure reason alongside every auth-relevant header value, so operators
@@ -272,7 +274,7 @@ management FE's inbox when the work-items list is next polled.
 
 ## Configuration — the 401 matrix
 
-| `CaseWorking__SharedSecret` (Operator BE) | `AUTH_SHARED_SECRET` (Management BE) | Result |
+| `CASE_MANAGEMENT_API_SHARED_SECRET` (Operator BE) | `AUTH_SHARED_SECRET__BACKEND` (Management BE) | Result |
 | --- | --- | --- |
 | absent | absent | **401** — management BE fails closed |
 | `"secret"` | absent | **401** — operator sends a signature; management BE can't verify it |
@@ -280,10 +282,16 @@ management FE's inbox when the work-items list is next polled.
 | `"X"` | `"Y"` (different) | **401** — HMAC mismatch |
 | `"secret"` | `"secret"` (matching) | **201** — work item created |
 
-Env var names are case-insensitive in .NET's configuration system:
-`CaseWorking__SharedSecret` and `CASEWORKING__SHAREDSECRET` are equivalent.
-The double-underscore is the .NET convention for navigating config-section
-hierarchy (`CaseWorking` section → `SharedSecret` property).
+`AUTH_SHARED_SECRET__BACKEND` is verified only against the clientId
+`epr-register-enrol-backend` asserts (`Auth__BackendClientId`, default
+`epr-register-enrol-backend`) — it is independent of `AUTH_SHARED_SECRET__MANAGEMENT_FE`,
+the separate secret management-fe's requests are verified against (RA-345).
+
+`CASE_MANAGEMENT_API_SHARED_SECRET` is a flat env var name on the Operator
+BE side, following CDP's secrets naming convention — unlike `Url`/`UseStub`/
+`ClientId` on that same config, which remain under the nested
+`CaseWorking__*` form (`CaseWorking:SharedSecret` was retired by RA-345;
+see `epr-register-enrol-backend`'s `CaseWorkingApiConfig`).
 
 See also [ADR-0001](adr/0001-cognito-client-id-auth.md) and
 [ADR-0003](adr/0003-hmac-canonical-v2-timestamp-nonce.md) for the auth design

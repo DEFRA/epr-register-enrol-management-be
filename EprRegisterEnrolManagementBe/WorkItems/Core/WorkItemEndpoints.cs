@@ -30,7 +30,6 @@ public static class WorkItemEndpoints
     public const long MaxSubmitBodyBytes = 1 * 1024 * 1024; // 1 MB
     public const long MaxNoteBodyBytes = 100 * 1024; // 100 KB
     public const long MaxAssignBodyBytes = 10 * 1024; // 10 KB
-    public const long MaxTaskStatusBodyBytes = 10 * 1024; // 10 KB
 
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapWorkItemFrameworkEndpoints(
@@ -49,18 +48,6 @@ public static class WorkItemEndpoints
         group.MapGet("/{id:guid}", GetById).WithName("GetWorkItemById").RequireAuthorization();
 
         group.MapGet(string.Empty, GetAll).WithName("ListWorkItems").RequireAuthorization();
-
-        group
-            .MapPost("/{id:guid}/tasks/{taskId}/complete", CompleteTask)
-            .WithName("CompleteWorkItemTask")
-            .RequireAuthorization();
-
-        group
-            .MapPut("/{id:guid}/tasks/{taskId}/status", SetTaskStatus)
-            .WithName("SetWorkItemTaskStatus")
-            .DisableValidation()
-            .WithMetadata(new RequestSizeLimitAttribute(MaxTaskStatusBodyBytes))
-            .RequireAuthorization();
 
         group
             .MapPost("/{id:guid}/actions/{actionId}", ApplyAction)
@@ -117,7 +104,7 @@ public static class WorkItemEndpoints
                 ["url.path"] = req.Path.Value,
                 ["http.request.body"] = loggedBody,
                 ["caller.client_id"] = req.Headers.TryGetValue(
-                    "x-cdp-cognito-client-id",
+                    "x-cdp-client-id",
                     out var cid
                 )
                     ? cid.ToString()
@@ -203,7 +190,7 @@ public static class WorkItemEndpoints
         }
 
         var submittedBy =
-            httpContext.User.FindFirstValue("cognito:client_id")
+            httpContext.User.FindFirstValue("client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
 
         // RA-126: optional caller-supplied audit context. 'source' is a
@@ -385,92 +372,12 @@ public static class WorkItemEndpoints
     }
 
     /// <summary>
-    /// Header name set on a CompleteTask response when the task was already
-    /// complete. Lets clients distinguish "first hit" from "replay" without
-    /// needing to introspect the audit log.
+    /// Header name set on a response whose operation was a no-op because the
+    /// work item was already in the requested condition. Lets clients
+    /// distinguish "first hit" from "replay" without needing to introspect the
+    /// audit log.
     /// </summary>
     public const string IdempotentReplayHeader = "X-Idempotent-Replay";
-
-    internal static async Task<
-        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
-    > CompleteTask(
-        [FromRoute] Guid id,
-        [FromRoute] string taskId,
-        HttpContext httpContext,
-        [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken
-    )
-    {
-        var result = await engine.CompleteTaskAsync(
-            id,
-            taskId,
-            httpContext.User,
-            cancellationToken
-        );
-        if (result.IsIdempotentReplay)
-        {
-            httpContext.Response.Headers[IdempotentReplayHeader] = "true";
-        }
-        return ToHttpResult(result, engine);
-    }
-
-    internal static async Task<
-        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
-    > SetTaskStatus(
-        [FromRoute] Guid id,
-        [FromRoute] string taskId,
-        JsonElement body,
-        HttpContext httpContext,
-        [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken
-    )
-    {
-        if (body.ValueKind != JsonValueKind.Object)
-        {
-            return BadRequest(
-                "Invalid request",
-                "Request body must be a JSON object containing 'status'."
-            );
-        }
-        if (
-            !body.TryGetProperty("status", out var statusElement)
-            || statusElement.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(statusElement.GetString())
-        )
-        {
-            return BadRequest(
-                "Invalid request",
-                "'status' is required and must be a non-empty string."
-            );
-        }
-
-        // Case-insensitive bind matches the JSON enum convention used
-        // elsewhere on the wire and means a UI can send "InProgress" or
-        // "in-progress"-style casing without breaking the API.
-        if (
-            !Enum.TryParse<WorkItemTaskStatus>(
-                statusElement.GetString(),
-                ignoreCase: true,
-                out var status
-            ) || !Enum.IsDefined(status)
-        )
-        {
-            return BadRequest(
-                "Invalid status",
-                $"'{statusElement.GetString()}' is not a recognised task status. "
-                    + $"Expected one of: {string.Join(", ", Enum.GetNames<WorkItemTaskStatus>())}."
-            );
-        }
-
-        var result = await engine.SetTaskStatusAsync(
-            id,
-            taskId,
-            status,
-            httpContext.User,
-            cancellationToken
-        );
-        return ToHttpResult(result, engine);
-    }
 
     internal static async Task<
         Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
@@ -633,8 +540,7 @@ public static class WorkItemEndpoints
         return result.FailureCode switch
         {
             WorkItemActionFailureCode.WorkItemNotFound => TypedResults.NotFound(),
-            WorkItemActionFailureCode.TaskNotApplicable
-            or WorkItemActionFailureCode.UnknownAction
+            WorkItemActionFailureCode.UnknownAction
             or WorkItemActionFailureCode.InvalidTransition
             or WorkItemActionFailureCode.InvalidAssignment
             or WorkItemActionFailureCode.InvalidNote => TypedResults.Problem(
@@ -652,8 +558,7 @@ public static class WorkItemEndpoints
                 detail: result.Message,
                 statusCode: StatusCodes.Status401Unauthorized
             ),
-            WorkItemActionFailureCode.IncompleteTasks
-            or WorkItemActionFailureCode.TerminalState
+            WorkItemActionFailureCode.TerminalState
             or WorkItemActionFailureCode.ConcurrencyConflict => TypedResults.Problem(
                 title: "Action not allowed",
                 detail: result.Message,
@@ -683,7 +588,6 @@ public static class WorkItemEndpoints
             w.SubmittedBy,
             projection.TemplateVersion,
             WorkItemPayloadConverter.ToJson(w.Payload),
-            projection.Tasks,
             projection.AvailableActions,
             w.AssignedToId,
             w.AssignedToName,
@@ -727,7 +631,10 @@ public static class WorkItemEndpoints
             ComputeSlaDueDate(w.SlaClock),
             w.Payload.TryGetValue("applicationReference", out var reference) && reference.IsString
                 ? reference.AsString
-                : null
+                : null,
+            // RA-410: falls back to the item's own state so the field is
+            // always populated, even for a projection built without one.
+            projection.OriginStateId ?? w.StateId
         );
     }
 
@@ -782,7 +689,6 @@ public static class WorkItemEndpoints
             w.SubmittedBy,
             projection.TemplateVersion,
             WorkItemPayloadConverter.ToJson(w.Payload),
-            projection.Tasks,
             projection.AvailableActions,
             w.AssignedToId,
             w.AssignedToName,
@@ -790,7 +696,10 @@ public static class WorkItemEndpoints
             w.AssignedBy,
             slaRemaining,
             slaState,
-            ComputeSlaDueDate(w.SlaClock)
+            ComputeSlaDueDate(w.SlaClock),
+            // RA-410: falls back to the item's own state so the field is
+            // always populated, even for a projection built without one.
+            projection.OriginStateId ?? w.StateId
         );
     }
 }

@@ -5,8 +5,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <summary>
 /// API representation of a persisted work item. Mirrors <see cref="WorkItem"/>
 /// but carries the payload as a JSON element so callers do not see BSON types,
-/// and projects engine state (current-state task progress and the actions the
-/// engine will currently allow) so a UI can render without re-deriving it.
+/// and projects engine state (the actions the engine will currently allow) so
+/// a UI can render without re-deriving it.
 ///
 /// <see cref="TemplateVersion"/> exposes the version of the type's template
 /// the work item was assessed against, so a UI can pick a matching detail
@@ -21,7 +21,6 @@ public sealed record WorkItemResponse(
     string? SubmittedBy,
     string TemplateVersion,
     JsonElement Payload,
-    IReadOnlyCollection<WorkItemTaskProgress> Tasks,
     IReadOnlyCollection<WorkItemTransition> AvailableActions,
     string? AssignedToId = null,
     string? AssignedToName = null,
@@ -42,7 +41,23 @@ public sealed record WorkItemResponse(
     DateTime? SlaDueDate = null,
     // RA-318: surfaced as a top-level field (mirroring payload.applicationReference)
     // so callers don't need to parse the payload JSON to obtain it.
-    string? ApplicationReference = null
+    string? ApplicationReference = null,
+    // RA-410: the state this work item returns to when its current waypoint
+    // discharges (see IWorkItemOriginStateResolver). Equal to StateId for any
+    // item not in a waypoint state, so a client can read it unconditionally.
+    //
+    // Load-bearing rather than informational: for re-accreditation's 'updated'
+    // state this is the state the query was raised from, which is derivable
+    // only from the work item's own audit history. The case management
+    // frontend uses it to decide which call to action to offer — most
+    // importantly to offer "Duly make" for an application queried out of
+    // 'submitted' while refusing one queried out of assessment or decision,
+    // where offering it would send the application backwards. Without it that
+    // journey has no server-side signal to key off and clients start
+    // hardcoding module state ids.
+    //
+    // Additive + nullable, so the DTO stays backward-compatible.
+    string? OriginStateId = null
 );
 
 /// <summary>

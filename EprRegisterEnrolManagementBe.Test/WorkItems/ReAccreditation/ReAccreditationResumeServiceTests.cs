@@ -98,6 +98,68 @@ public class ReAccreditationResumeServiceTests
     }
 
     [Fact]
+    public async Task ResumeFromQueryAsync_preserves_ra292_ors_interim_and_authoriser_fields()
+    {
+        // RA-292: the operator backend now emits the SAME ORS and prns shapes on
+        // the resume-from-query path as on submit, byte for byte. That is new
+        // surface — the previous projection sent a weaker ORS section with no
+        // orsId, no isNewSite and no interimSite, so a queried-then-resubmitted
+        // work item had its interim data wiped.
+        //
+        // Sections are stamped through the same schemaless
+        // WorkItemPayloadConverter.ToBson as the submit payload, so they survive
+        // by construction — this pins that, because the failure mode (a typed
+        // section model) would look like a fix rather than a regression.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-duly-making");
+        BsonValue? stamped = null;
+        harness.Persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Do<BsonValue>(v => stamped = v),
+                Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["overseas-sites", "prn-tonnage"],
+            new Dictionary<string, JsonElement>
+            {
+                ["overseas-sites"] = JsonDocument.Parse(
+                    """
+                    {
+                      "sites": [
+                        {
+                          "siteId": 1,
+                          "orsId": "ORS-2026-0292",
+                          "isNewSite": true,
+                          "repatriatedLoads": "3",
+                          "conditionsOfExport": true,
+                          "interimSite": { "siteNumber": "INT-001", "isNewSite": true }
+                        }
+                      ]
+                    }
+                    """).RootElement,
+                ["prn-tonnage"] = JsonDocument.Parse(
+                    """{"authorisers":[{"fullName":"Grace Adeyemi","isNew":true}]}""").RootElement,
+            },
+            []);
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        var site = stamped!.AsBsonDocument["sections"]["overseas-sites"]["sites"][0].AsBsonDocument;
+        Assert.Equal("ORS-2026-0292", site["orsId"].AsString);
+        Assert.True(site["isNewSite"].AsBoolean);
+        Assert.Equal("3", site["repatriatedLoads"].AsString);
+        Assert.True(site["conditionsOfExport"].AsBoolean);
+        Assert.Equal("INT-001", site["interimSite"]["siteNumber"].AsString);
+        Assert.True(site["interimSite"]["isNewSite"].AsBoolean);
+
+        var authoriser = stamped.AsBsonDocument["sections"]["prn-tonnage"]["authorisers"][0];
+        Assert.Equal("Grace Adeyemi", authoriser["fullName"].AsString);
+        Assert.True(authoriser["isNew"].AsBoolean);
+    }
+
+    [Fact]
     public async Task ResumeFromQueryAsync_stamps_section_values_and_file_references()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -121,6 +183,50 @@ public class ReAccreditationResumeServiceTests
         Assert.Equal("file-1", fileRef["fileId"].AsString);
         Assert.Equal(s_now.UtcDateTime, doc["respondedAt"].ToUniversalTime());
         Assert.Equal("alice-1", doc["respondedBy"].AsString);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_merges_resubmitted_sections_onto_their_canonical_payload_fields()
+    {
+        // RA-XXX regression test: the operator backend keys `sections` by its
+        // own OperatorSection enum name (HttpCaseWorkingApiAdapter.BuildSectionsPayload),
+        // e.g. "BusinessPlan"/"Prns"/"SamplingPlan" — NOT the kebab-case
+        // ReAccreditationQuerySections keys used for sectionKeys. A prior fix
+        // mis-keyed the canonical merge map with the kebab-case keys, so the
+        // merge always missed and the case management summary page kept
+        // showing stale business plan / PRN / sampling plan values after a
+        // resubmission.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-duly-making");
+
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["business-plan", "prn-tonnage", "sampling-and-inspection-plan"],
+            new Dictionary<string, JsonElement>
+            {
+                ["BusinessPlan"] = JsonDocument.Parse("""{"newInfrastructurePercent":20}""").RootElement,
+                ["Prns"] = JsonDocument.Parse("""{"tonnage":123}""").RootElement,
+                ["SamplingPlan"] = JsonDocument.Parse("""{"files":[]}""").RootElement,
+            },
+            []);
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "businessPlan",
+            Arg.Is<BsonValue>(v => v["newInfrastructurePercent"].AsInt32 == 20),
+            ct);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "prns",
+            Arg.Is<BsonValue>(v => v["tonnage"].AsInt32 == 123),
+            ct);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "samplingPlan",
+            Arg.Any<BsonValue>(),
+            ct);
     }
 
     // ------------------------------- idempotency -------------------------------
@@ -378,7 +484,7 @@ public class ReAccreditationResumeServiceTests
                 [
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
-                    new Claim("cognito:client_id", TenantClientId),
+                    new Claim("client_id", TenantClientId),
                 ],
                 "test"));
 

@@ -28,6 +28,49 @@ public interface IOperatorBackendPushAdapter
         string queryNote,
         IReadOnlyList<string> sectionKeys,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// RA-368: push a work item's state transition to the operator backend so
+    /// its own record of application progress (<c>ApplicationStatus</c>)
+    /// reflects CM's lifecycle beyond just queries. <paramref name="correlationId"/>
+    /// follows the same one-per-push, cross-repo-log-joining contract as
+    /// <see cref="PushQueryRaisedAsync"/>.
+    /// </summary>
+    Task<OperatorBackendPushResult> PushStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// epr-p86e / RA-410: push a re-accreditation <em>decision</em> transition
+    /// to the operator backend as a hard, pre-commit gate. Identical on the wire
+    /// to <see cref="PushStatusChangedAsync"/> — same endpoint, body and signing
+    /// — but backed by a larger retry budget
+    /// (<see cref="OperatorBackendApiConfig.DecisionPushMaxRetryAttempts"/>),
+    /// because the caller (<c>ReAccreditationLogDecisionService</c>) invokes it
+    /// <em>before</em> persisting any state change and abandons the whole
+    /// decision with a 500 on failure, rather than treating the push as
+    /// fire-and-forget. Still never throws: a failure is reported as a
+    /// non-success <see cref="OperatorBackendPushResult"/>, and
+    /// <see cref="OperatorBackendPushResult.IsSkipped"/> (the push is disabled)
+    /// is a pass the caller must not gate on.
+    /// </summary>
+    Task<OperatorBackendPushResult> PushDecisionStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>
