@@ -56,7 +56,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// not created by any spec, so an mgmt-tests search by organisation name
     /// resolves to exactly one row.
     /// </summary>
-    public const string OrsInterimAuthorityOrganisationName = "Overseas Reprocessing Verification Ltd";
+    public const string OrsInterimAuthorityOrganisationName =
+        "Overseas Reprocessing Verification Ltd";
 
     public string TypeId => ReAccreditationType.Id;
 
@@ -107,7 +108,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["chargeAmountPence"] = 54600,
             },
             submittedBy: "stub-portal-client",
-            now: now);
+            now: now
+        );
 
         // Submitted and self-claimed by a standard user; first state still
         // has work to do.
@@ -131,7 +133,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-standard-1",
             assignedToName: "Stub Standard User",
-            now: now);
+            now: now
+        );
 
         // Mid-assessment: assigned and under active review.
         yield return Build(
@@ -145,6 +148,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["registrationNumber"] = "EPR-099812",
                 ["operatorRegistrationId"] = "reg-003",
                 ["material"] = "glass",
+                // RA-307: e2e coverage for the "Glass - Remelt" display suffix
+                // (see mgmt-tests glass-recycling-process.e2e.js).
+                ["glassRecyclingProcess"] = "glass_re_melt",
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 2,
                 ["operatorEmail"] = "riverside.glass@example.com",
@@ -154,7 +160,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
-            now: now);
+            now: now
+        );
 
         // Awaiting decision: parked in the intermediate state a pre-RA-410
         // two-step decision left items in, so the single-call /decision
@@ -179,7 +186,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
-            now: now);
+            now: now
+        );
 
         // Already approved — terminal state, useful for exercising the
         // "no further actions" rendering path.
@@ -203,7 +211,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
-            now: now);
+            now: now
+        );
 
         // Additional Scotland item — submitted, unassigned.
         yield return Build(
@@ -224,7 +233,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["chargeAmountPence"] = 54600,
             },
             submittedBy: "stub-portal-client",
-            now: now);
+            now: now
+        );
 
         // Additional Wales item — assessment in progress.
         yield return Build(
@@ -238,6 +248,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["registrationNumber"] = "EPR-099441",
                 ["operatorRegistrationId"] = "reg-007",
                 ["material"] = "glass",
+                // RA-307: e2e coverage for the "Glass - Other" display suffix
+                // (see mgmt-tests glass-recycling-process.e2e.js).
+                ["glassRecyclingProcess"] = "glass_other",
                 ["previousAccreditationYear"] = 2024,
                 ["complianceIssuesReported"] = 1,
                 ["operatorEmail"] = "swansea.textiles@example.com",
@@ -247,7 +260,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
-            now: now);
+            now: now
+        );
 
         // Additional Northern Ireland item — submitted, unassigned.
         yield return Build(
@@ -268,7 +282,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["chargeAmountPence"] = 396500,
             },
             submittedBy: "stub-portal-client",
-            now: now);
+            now: now
+        );
 
         // RA-254: carries every field a real operator submission can send —
         // including submittedBy, prns, businessPlan and samplingPlan, which
@@ -300,7 +315,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 {
                     ["fullName"] = "Priya Sharma",
                     ["jobTitle"] = "Compliance Manager",
-                    ["email"] = "priya.sharma@example.com"
+                    ["email"] = "priya.sharma@example.com",
                 },
                 ["prns"] = new BsonDocument
                 {
@@ -310,9 +325,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         new BsonDocument
                         {
                             ["fullName"] = "Tom Baker",
-                            ["email"] = "tom.baker@example.com"
-                        }
-                    }
+                            ["email"] = "tom.baker@example.com",
+                        },
+                    },
                 },
                 ["businessPlan"] = new BsonDocument
                 {
@@ -327,7 +342,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     ["businessCollectionsDetail"] = "Kerbside collection expansion",
                     ["communicationsDetail"] = "Customer awareness campaign",
                     ["newMarketsDetail"] = "New export contracts secured",
-                    ["newUsesDetail"] = "Recycled content packaging trial"
+                    ["newUsesDetail"] = "Recycled content packaging trial",
                 },
                 ["samplingPlan"] = new BsonDocument
                 {
@@ -352,8 +367,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // (docker/scripts/localstack/10-setup-buckets.sh),
                             // so the download link this seed item exercises
                             // resolves to a real object end-to-end.
-                            ["s3Key"] = "sampling-plans/full-payload-verification/sampling-plan.pdf",
-                            ["s3Bucket"] = "epr-register-enrol-sampling-plans"
+                            ["s3Key"] =
+                                "sampling-plans/full-payload-verification/sampling-plan.pdf",
+                            ["s3Bucket"] = "epr-register-enrol-sampling-plans",
                         },
                         // RA-295 / AC02: the sampling & inspection plan "could
                         // have other supporting docs and should be listed", so
@@ -375,10 +391,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // two s3Keys distinct: an href bug that serves
                             // file one for both documents is invisible to a
                             // filename-only assertion.
-                            ["s3Key"] = "sampling-plans/full-payload-verification/sampling-plan-appendix.pdf",
-                            ["s3Bucket"] = "epr-register-enrol-sampling-plans"
-                        }
-                    }
+                            ["s3Key"] =
+                                "sampling-plans/full-payload-verification/sampling-plan-appendix.pdf",
+                            ["s3Bucket"] = "epr-register-enrol-sampling-plans",
+                        },
+                    },
                 },
                 // Matches the fixture object seeded into floci's S3 bucket by the
                 // mgmt-tests compose stack (docker/scripts/localstack/10-setup-buckets.sh),
@@ -405,17 +422,19 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                         ["contentType"] = "application/pdf",
                                         ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
                                         ["scanStatus"] = "Clean",
-                                        ["s3Key"] = "bes-evidence/full-payload-verification/bes-evidence.pdf",
-                                        ["s3Bucket"] = "epr-register-enrol-bes-evidence"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                                        ["s3Key"] =
+                                            "bes-evidence/full-payload-verification/bes-evidence.pdf",
+                                        ["s3Bucket"] = "epr-register-enrol-bes-evidence",
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
             },
             submittedBy: "stub-portal-client",
-            now: now);
+            now: now
+        );
 
         // RA-292: the ORS / interim-site / authority-to-issue fixture.
         //
@@ -477,7 +496,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 {
                     ["fullName"] = "Grace Adeyemi",
                     ["jobTitle"] = "Head of Compliance",
-                    ["email"] = "grace.adeyemi@example.com"
+                    ["email"] = "grace.adeyemi@example.com",
                 },
                 // AC03: authority-to-issue contacts, one of each flag state.
                 ["prns"] = new BsonDocument
@@ -489,21 +508,21 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         {
                             ["fullName"] = "Grace Adeyemi",
                             ["email"] = "grace.adeyemi@example.com",
-                            ["isNew"] = true
+                            ["isNew"] = true,
                         },
                         new BsonDocument
                         {
                             ["fullName"] = "Martin Cole",
                             ["email"] = "martin.cole@example.com",
-                            ["isNew"] = false
+                            ["isNew"] = false,
                         },
                         // No isNew key — a pre-RA-292 authoriser record.
                         new BsonDocument
                         {
                             ["fullName"] = "Priya Nair",
-                            ["email"] = "priya.nair@example.com"
-                        }
-                    }
+                            ["email"] = "priya.nair@example.com",
+                        },
+                    },
                 },
                 ["overseasSites"] = new BsonDocument
                 {
@@ -560,10 +579,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                         // fileId is distinct because
                                         // download-file.controller.js resolves
                                         // files by fileId within one work item.
-                                        ["s3Key"] = "bes-evidence/full-payload-verification/bes-evidence.pdf",
-                                        ["s3Bucket"] = "epr-register-enrol-bes-evidence"
-                                    }
-                                }
+                                        ["s3Key"] =
+                                            "bes-evidence/full-payload-verification/bes-evidence.pdf",
+                                        ["s3Bucket"] = "epr-register-enrol-bes-evidence",
+                                    },
+                                },
                             },
                             ["interimSite"] = new BsonDocument
                             {
@@ -579,8 +599,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                 ["postcode"] = "2030",
                                 ["contactName"] = "Elke Janssens",
                                 ["contactEmail"] = "elke.janssens@example.com",
-                                ["contactPhone"] = "+32 3 987 6543"
-                            }
+                                ["contactPhone"] = "+32 3 987 6543",
+                            },
                         },
                         // AC01 + AC02 negative case: an established site and an
                         // established interim site. Empty besEvidence file
@@ -616,10 +636,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // EMPTY array rather than omitting the key. That is
                             // its own rendering branch, distinct from both a
                             // populated list and an absent key.
-                            ["besEvidence"] = new BsonDocument
-                            {
-                                ["files"] = new BsonArray()
-                            },
+                            ["besEvidence"] = new BsonDocument { ["files"] = new BsonArray() },
                             ["interimSite"] = new BsonDocument
                             {
                                 ["siteId"] = 21,
@@ -633,8 +650,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                 ["postcode"] = "28217",
                                 ["contactName"] = "Lukas Braun",
                                 ["contactEmail"] = "lukas.braun@example.com",
-                                ["contactPhone"] = "+49 421 555 0188"
-                            }
+                                ["contactPhone"] = "+49 421 555 0188",
+                            },
                         },
                         // Pre-RA-292 shape: no isNewSite, no interimSite, no
                         // besEvidence. Proves absent flags render as "not new"
@@ -658,7 +675,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["siteName"] = "Bilbao Legacy Reprocessing Site",
                             ["siteAddress"] = "7 Muelle Tomas Olabarri, Bilbao",
                             ["townOrCity"] = "Bilbao",
-                            ["country"] = "Spain"
+                            ["country"] = "Spain",
                         },
                         // Non-EU, non-OECD site. Without this the fixture had
                         // no `isEu: false` / `isOecd: false` anywhere, so a
@@ -695,16 +712,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["isOecd"] = false,
                             ["isNewSite"] = false,
                             ["registeredNowAccredited"] = false,
-                            ["besEvidence"] = new BsonDocument
-                            {
-                                ["files"] = new BsonArray()
-                            }
-                        }
-                    }
-                }
+                            ["besEvidence"] = new BsonDocument { ["files"] = new BsonArray() },
+                        },
+                    },
+                },
             },
             submittedBy: "stub-portal-client",
-            now: now);
+            now: now
+        );
     }
 
     /// <summary>
@@ -727,7 +742,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         string submittedBy,
         DateTime now,
         string? assignedToId = null,
-        string? assignedToName = null)
+        string? assignedToName = null
+    )
     {
         var submittedAt = now.AddDays(-submittedDaysAgo);
         var assignedAt = assignedToId is null ? (DateTime?)null : submittedAt.AddHours(2);
@@ -782,10 +798,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             // that still renders it. Point those at an item with a clock (or
             // pin one via the SLA override endpoint) — this already made an
             // mgmt-tests SLA-badge-removal spec silently vacuous.
-            SlaClock = stateId == SubmittedStateId
-                ? null
-                : new WorkItemSlaClock { StartedAt = submittedAt.AddDays(1) },
-            Payload = payload
+            SlaClock =
+                stateId == SubmittedStateId
+                    ? null
+                    : new WorkItemSlaClock { StartedAt = submittedAt.AddDays(1) },
+            Payload = payload,
         };
 
         // RA-175: seed a realistic audit trail so the timeline view has
@@ -793,56 +810,62 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // the post-submission hooks append for real items.
 
         // Birth event (mirrors WorkItemService.SubmitAsync).
-        workItem.AuditLog.Add(new WorkItemAuditEntry
-        {
-            Action = "work-item-submitted",
-            ActionDisplayName = "Work item submitted",
-            Details = new Dictionary<string, string?>
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
             {
-                ["typeId"] = ReAccreditationType.Id,
-                ["stateId"] = stateId,
-                ["source"] = "seeder",
-                ["clientId"] = submittedBy,
-                ["applicationReference"] = applicationReference
-            },
-            CreatedAt = submittedAt,
-            CreatedBy = submittedBy,
-            CreatedByName = null
-        });
+                Action = "work-item-submitted",
+                ActionDisplayName = "Work item submitted",
+                Details = new Dictionary<string, string?>
+                {
+                    ["typeId"] = ReAccreditationType.Id,
+                    ["stateId"] = stateId,
+                    ["source"] = "seeder",
+                    ["clientId"] = submittedBy,
+                    ["applicationReference"] = applicationReference,
+                },
+                CreatedAt = submittedAt,
+                CreatedBy = submittedBy,
+                CreatedByName = null,
+            }
+        );
 
         // Nation routing event (mirrors ReAccreditationNationRoutingHook).
-        workItem.AuditLog.Add(new WorkItemAuditEntry
-        {
-            Action = "routed-to-nation",
-            ActionDisplayName = "Routed to nation",
-            Details = new Dictionary<string, string?>
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
             {
-                ["nation"] = nation.ToString(),
-                ["derivedFrom"] = "site-address"
-            },
-            CreatedAt = submittedAt.AddSeconds(1),
-            CreatedBy = null,
-            CreatedByName = null
-        });
+                Action = "routed-to-nation",
+                ActionDisplayName = "Routed to nation",
+                Details = new Dictionary<string, string?>
+                {
+                    ["nation"] = nation.ToString(),
+                    ["derivedFrom"] = "site-address",
+                },
+                CreatedAt = submittedAt.AddSeconds(1),
+                CreatedBy = null,
+                CreatedByName = null,
+            }
+        );
 
         // Assignment event for assigned items (mirrors WorkItemService.AssignAsync).
         if (assignedToId is not null && assignedAt is not null)
         {
-            workItem.AuditLog.Add(new WorkItemAuditEntry
-            {
-                Action = "assigned",
-                ActionDisplayName = "Assigned",
-                Details = new Dictionary<string, string?>
+            workItem.AuditLog.Add(
+                new WorkItemAuditEntry
                 {
-                    ["assigneeId"] = assignedToId,
-                    ["assigneeName"] = assignedToName,
-                    ["previousAssigneeId"] = null,
-                    ["previousAssigneeName"] = null
-                },
-                CreatedAt = assignedAt.Value,
-                CreatedBy = SeederAssignedBy,
-                CreatedByName = null
-            });
+                    Action = "assigned",
+                    ActionDisplayName = "Assigned",
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["assigneeId"] = assignedToId,
+                        ["assigneeName"] = assignedToName,
+                        ["previousAssigneeId"] = null,
+                        ["previousAssigneeName"] = null,
+                    },
+                    CreatedAt = assignedAt.Value,
+                    CreatedBy = SeederAssignedBy,
+                    CreatedByName = null,
+                }
+            );
         }
 
         return workItem;
@@ -854,7 +877,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         var hash = System.Security.Cryptography.SHA1.HashData(input);
 
         // Simple stable uint from first 4 bytes
-        uint val = ((uint)hash[0] << 24) | ((uint)hash[1] << 16) | ((uint)hash[2] << 8) | (uint)hash[3];
+        uint val =
+            ((uint)hash[0] << 24) | ((uint)hash[1] << 16) | ((uint)hash[2] << 8) | (uint)hash[3];
         var digits = 100_000_000 + (val % 900_000_000);
         return $"RA-{digits}";
     }
