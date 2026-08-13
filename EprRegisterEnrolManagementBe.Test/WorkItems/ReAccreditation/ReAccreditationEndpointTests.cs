@@ -230,7 +230,7 @@ public class ReAccreditationEndpointTests
                 },
                 prns = new
                 {
-                    plannedTonnageBand = "UpTo1000",
+                    plannedTonnageBand = "UpTo5000",
                     authorisers = new[]
                     {
                         new { fullName = "Bob Jones", email = "bob@example.com" },
@@ -806,7 +806,7 @@ public class ReAccreditationEndpointTests
         var stubData = new PriorYearAccreditationDto
         {
             Year = 2024,
-            TonnageBand = "UpTo1000",
+            TonnageBand = "UpTo5000",
             Authorisers =
             [
                 new PriorYearAuthoriserDto
@@ -850,7 +850,7 @@ public class ReAccreditationEndpointTests
         );
         Assert.NotNull(body);
         Assert.Equal(2024, body!.Year);
-        Assert.Equal("UpTo1000", body.TonnageBand);
+        Assert.Equal("UpTo5000", body.TonnageBand);
         Assert.Single(body.Authorisers);
         Assert.Equal("Alice Smith", body.Authorisers[0].FullName);
         Assert.Equal("alice@example.com", body.Authorisers[0].Email);
