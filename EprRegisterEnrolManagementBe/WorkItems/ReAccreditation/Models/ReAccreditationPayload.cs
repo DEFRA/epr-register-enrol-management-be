@@ -1,3 +1,4 @@
+using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
@@ -33,6 +34,23 @@ internal sealed record ReAccreditationPayload
     public string? ApplicationReference { get; init; }
 
     public string? Material { get; init; }
+
+    /// <summary>
+    /// RA-307: the glass recycling process, present only when
+    /// <see cref="Material"/> is glass. Stamped onto the payload by the
+    /// operator backend's HttpCaseWorkingApiAdapter as a plain string wire
+    /// value (e.g. "glass_re_melt"); absent for every non-glass material and
+    /// for glass applications that predate RA-307.
+    ///
+    /// BsonRepresentation(String) pins ToBsonDocument() to write the enum's
+    /// member name rather than the driver's default ordinal int — the member
+    /// names are the wire values themselves (see GlassRecyclingProcess.cs),
+    /// so this keeps every write consistent with what ingestion already
+    /// stores. Matches the convention on WorkItem/WorkItemAuditEntry/WorkItemNote.
+    /// </summary>
+    [BsonRepresentation(BsonType.String)]
+    public GlassRecyclingProcess? GlassRecyclingProcess { get; init; }
+
     public int? PreviousAccreditationYear { get; init; }
     public int? ComplianceIssuesReported { get; init; }
 
