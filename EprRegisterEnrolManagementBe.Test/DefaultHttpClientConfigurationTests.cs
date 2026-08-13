@@ -28,7 +28,7 @@ namespace EprRegisterEnrolManagementBe.Test;
 /// <see cref="HttpClientHandler.UseProxy"/> — the property that must be
 /// explicitly <c>false</c> for this regression to be closed.
 /// </summary>
-public class DefaultHttpClientConfigurationTests : IClassFixture<MongoIntegrationFixture>
+public class DefaultHttpClientConfigurationTests
 {
     private readonly MongoIntegrationFixture _fixture;
 
