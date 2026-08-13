@@ -33,7 +33,6 @@ public sealed class MongoIntegrationFixture : IAsyncLifetime
         // fixture itself can be instantiated more than once across
         // parallel test classes.
         MongoConventions.Register();
-        WorkItemBsonRegistration.Register();
     }
 
     public string ConnectionString =>

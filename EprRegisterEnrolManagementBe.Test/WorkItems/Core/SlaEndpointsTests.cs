@@ -53,7 +53,7 @@ public class SlaEndpointsTests
     };
 
     private static WorkItemEngineProjection AProjection(WorkItem workItem) =>
-        new(workItem, "v1", [], []);
+        new(workItem, "v1", []);
 
     private static DefaultHttpContext TeamLeaderContext()
     {

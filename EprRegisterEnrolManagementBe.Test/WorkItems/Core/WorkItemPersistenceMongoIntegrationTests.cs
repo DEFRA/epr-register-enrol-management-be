@@ -12,8 +12,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// epr-bqe: real Mongo end-to-end coverage for <see cref="WorkItemPersistence"/>.
 /// Uses Ephemeral MongoDB (real <c>mongod</c> on a random port, in a
 /// temp data directory, torn down with the fixture) so the BSON
-/// serializers registered by <see cref="MongoConventions"/> /
-/// <see cref="WorkItemBsonRegistration"/>, the index definitions in
+/// serializers registered by <see cref="MongoConventions"/>, the index definitions in
 /// <see cref="WorkItemPersistence.DefineIndexes"/>, the projection that
 /// strips <see cref="WorkItem.Notes"/> / <see cref="WorkItem.AuditLog"/>
 /// from <see cref="WorkItemPersistence.QueryAsync"/>, and the
@@ -83,17 +82,6 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             SubmittedAt = now,
             LastModifiedAt = now,
             SubmittedBy = "client-1",
-            CompletedTaskIdsByState =
-            {
-                ["submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Task-One" }
-            },
-            TaskStatusesByState =
-            {
-                ["submitted"] = new(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["Task-One"] = WorkItemTaskStatus.Completed
-                }
-            },
             Payload = new BsonDocument { ["key"] = "value" }
         };
 
@@ -105,14 +93,6 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Equal("submitted", fetched.StateId);
         Assert.Equal("client-1", fetched.SubmittedBy);
         Assert.Equal("value", fetched.Payload["key"].AsString);
-
-        // Case-insensitive contract survives the Mongo round-trip on
-        // both dictionaries (epr-aq5 / epr-gl6 / epr-81c).
-        Assert.True(fetched.CompletedTaskIdsByState.ContainsKey("SUBMITTED"));
-        Assert.Contains("task-one", fetched.CompletedTaskIdsByState["submitted"]);
-        Assert.True(fetched.TaskStatusesByState.TryGetValue("SUBMITTED", out var inner));
-        Assert.True(inner!.TryGetValue("TASK-ONE", out var status));
-        Assert.Equal(WorkItemTaskStatus.Completed, status);
 
         var page = await _persistence.QueryAsync(
             new WorkItemQuery(), TestContext.Current.CancellationToken);
@@ -787,7 +767,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                 ["retiredSnapshotField"] = "legacy",
                 ["states"] = new BsonArray
                 {
-                    // WorkItemState.Id / WorkItemTask.Id map to the "_id" element
+                    // WorkItemState.Id maps to the "_id" element
                     // (default NamedIdMemberConvention), not "id".
                     new BsonDocument
                     {
@@ -818,6 +798,12 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                         ["requiredRoles"] = new BsonArray { "regulator-admin", "regulator-approver" }
                     }
                 },
+                // RA-410: tasksByState itself is now a retired, whole-sale-ignored
+                // element on the snapshot root — the task framework (and the type
+                // that modelled a single task) is gone entirely, not just one of
+                // its fields. A snapshot frozen before RA-410 still carries this
+                // sub-document, and it must keep deserialising rather than
+                // taking the whole worklist batch down with it.
                 ["tasksByState"] = new BsonDocument
                 {
                     ["submitted"] = new BsonArray
@@ -826,7 +812,6 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                         {
                             ["_id"] = "task-one",
                             ["displayName"] = "Task One",
-                            // Task stray element (WorkItemTask).
                             ["mandatory"] = true
                         }
                     }
@@ -858,7 +843,5 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.NotNull(fetched.TemplateSnapshot);
         Assert.Equal("Submitted", Assert.Single(
             fetched.TemplateSnapshot!.States, s => s.Id == "submitted").DisplayName);
-        Assert.Equal("task-one",
-            Assert.Single(fetched.TemplateSnapshot.GetTasksForState("submitted")).Id);
     }
 }
