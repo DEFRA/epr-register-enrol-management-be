@@ -39,12 +39,19 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// jittered exponential backoff before giving up; never retries a 4xx, since
 /// the most likely first-enablement failure is a systemic auth/validation
 /// error that a retry would only amplify (MBE-F6).
+///
+/// epr-p86e / RA-410: <see cref="PushDecisionStatusChangedAsync"/> shares the
+/// same wire contract and signing but uses its own, more aggressive pipeline
+/// (<see cref="BuildDecisionRetryPipeline"/>) because it is a hard pre-commit
+/// gate on the re-accreditation decision rather than a best-effort push — the
+/// decision is abandoned with a 500 if it cannot be delivered.
 /// </summary>
 internal sealed class HttpOperatorBackendPushAdapter(
     IHttpClientFactory httpClientFactory,
     IOptions<OperatorBackendApiConfig> config,
     ILogger<HttpOperatorBackendPushAdapter> logger,
-    ResiliencePipeline<HttpResponseMessage>? retryPipeline = null) : IOperatorBackendPushAdapter
+    ResiliencePipeline<HttpResponseMessage>? retryPipeline = null,
+    ResiliencePipeline<HttpResponseMessage>? decisionRetryPipeline = null) : IOperatorBackendPushAdapter
 {
     private const string QueryRelativePathTemplate =
         "/api/v1/accreditation-applications/case-management/{0}/query";
@@ -58,9 +65,24 @@ internal sealed class HttpOperatorBackendPushAdapter(
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
+    // epr-p86e / RA-410: per-attempt backoff cap for the decision push, so the
+    // jittered exponential delay between attempts can never exceed this — which
+    // is what makes the decision push's total worst-case budget a firm number.
+    private static readonly TimeSpan s_decisionMaxBackoff = TimeSpan.FromSeconds(2);
+
     private readonly OperatorBackendApiConfig _config = config.Value;
     private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline =
         retryPipeline ?? BuildRetryPipeline(logger, config.Value.RequestTimeoutSeconds);
+
+    // epr-p86e / RA-410: the decision push is a hard pre-commit gate, so it gets
+    // its own, more aggressive pipeline (more retries, a shorter per-attempt
+    // timeout, and a capped backoff) — kept separate from the best-effort one
+    // above so the non-decision pushes' behaviour is untouched.
+    private readonly ResiliencePipeline<HttpResponseMessage> _decisionRetryPipeline =
+        decisionRetryPipeline ?? BuildDecisionRetryPipeline(
+            logger,
+            config.Value.DecisionPushRequestTimeoutSeconds,
+            config.Value.DecisionPushMaxRetryAttempts);
 
     public async Task<OperatorBackendPushResult> PushQueryRaisedAsync(
         Guid workItemId,
@@ -90,10 +112,11 @@ internal sealed class HttpOperatorBackendPushAdapter(
             workItemId, endpoint, correlationId, sectionKeys, queryNote.Length);
 
         var body = new QueryRaisedPushRequest(queryNote, sectionKeys);
-        return await ExecutePushAsync(workItemId, endpoint, correlationId, body, "query-raised", cancellationToken);
+        return await ExecutePushAsync(
+            workItemId, endpoint, correlationId, body, "query-raised", _retryPipeline, cancellationToken);
     }
 
-    public async Task<OperatorBackendPushResult> PushStatusChangedAsync(
+    public Task<OperatorBackendPushResult> PushStatusChangedAsync(
         Guid workItemId,
         Guid correlationId,
         string fromStateId,
@@ -102,7 +125,43 @@ internal sealed class HttpOperatorBackendPushAdapter(
         string actionId,
         string actionDisplayName,
         DateTime occurredAt,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        PushStatusInternalAsync(
+            workItemId, correlationId, fromStateId, toStateId, toStateDisplayName, actionId,
+            actionDisplayName, occurredAt, _retryPipeline, "status-changed", cancellationToken);
+
+    public Task<OperatorBackendPushResult> PushDecisionStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default) =>
+        PushStatusInternalAsync(
+            workItemId, correlationId, fromStateId, toStateId, toStateDisplayName, actionId,
+            actionDisplayName, occurredAt, _decisionRetryPipeline, "decision-status-changed", cancellationToken);
+
+    /// <summary>
+    /// Shared body for both status pushes. Identical on the wire — same
+    /// endpoint, body and signing — differing only in the resilience
+    /// <paramref name="pipeline"/> (best-effort vs the decision gate's larger
+    /// budget) and the <paramref name="operationName"/> used in logs.
+    /// </summary>
+    private async Task<OperatorBackendPushResult> PushStatusInternalAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        ResiliencePipeline<HttpResponseMessage> pipeline,
+        string operationName,
+        CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_config.Url))
         {
@@ -113,12 +172,12 @@ internal sealed class HttpOperatorBackendPushAdapter(
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
         logger.LogInformation(
-            "Pushing status-changed for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); {FromStateId} -> {ToStateId} via {ActionId}",
-            workItemId, endpoint, correlationId, fromStateId, toStateId, actionId);
+            "Pushing {Operation} for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); {FromStateId} -> {ToStateId} via {ActionId}",
+            operationName, workItemId, endpoint, correlationId, fromStateId, toStateId, actionId);
 
         var body = new StatusChangedPushRequest(
             fromStateId, toStateId, toStateDisplayName, actionId, actionDisplayName, occurredAt);
-        return await ExecutePushAsync(workItemId, endpoint, correlationId, body, "status-changed", cancellationToken);
+        return await ExecutePushAsync(workItemId, endpoint, correlationId, body, operationName, pipeline, cancellationToken);
     }
 
     /// <summary>
@@ -130,11 +189,12 @@ internal sealed class HttpOperatorBackendPushAdapter(
     /// </summary>
     private async Task<OperatorBackendPushResult> ExecutePushAsync<TBody>(
         Guid workItemId, string endpoint, Guid correlationId, TBody body, string operationName,
+        ResiliencePipeline<HttpResponseMessage> pipeline,
         CancellationToken cancellationToken)
     {
         try
         {
-            var response = await _retryPipeline.ExecuteAsync(
+            var response = await pipeline.ExecuteAsync(
                 async ct =>
                 {
                     // Rebuilt on every attempt (retry included): the request
@@ -225,6 +285,74 @@ internal sealed class HttpOperatorBackendPushAdapter(
                 {
                     logger.LogWarning(
                         "Operator backend push attempt timed out after {TimeoutSeconds}s.",
+                        args.Timeout.TotalSeconds);
+                    return ValueTask.CompletedTask;
+                },
+            });
+        }
+
+        return builder.Build();
+    }
+
+    /// <summary>
+    /// epr-p86e / RA-410: the decision push's own pipeline. Same 5xx/transport
+    /// retry predicate and outer-retry/inner-timeout ordering as
+    /// <see cref="BuildRetryPipeline"/>, but tuned for a hard, synchronous,
+    /// request-path gate rather than a fire-and-forget best-effort push:
+    /// <list type="bullet">
+    ///   <item><paramref name="maxRetryAttempts"/> (default 5) instead of 2 —
+    ///   worth trying harder because the decision is abandoned with a 500 if
+    ///   this fails.</item>
+    ///   <item>a shorter per-attempt timeout
+    ///   (<paramref name="requestTimeoutSeconds"/>, default 3s).</item>
+    ///   <item>a <see cref="RetryStrategyOptions{T}.MaxDelay"/> cap on the
+    ///   jittered backoff so the whole worst-case budget is a firm, bounded
+    ///   number the frontend can set its /decision timeout safely above.</item>
+    /// </list>
+    /// Worst case ≈ (maxRetryAttempts + 1) × requestTimeoutSeconds of HTTP time
+    /// + maxRetryAttempts × <see cref="s_decisionMaxBackoff"/> of backoff. With
+    /// the defaults: 6 × 3s + 5 × 2s = 28s. The case-management frontend's
+    /// /decision request timeout MUST exceed that or a client abort mid-retry
+    /// re-creates the cancellation bug (epr-p86e).
+    /// </summary>
+    private static ResiliencePipeline<HttpResponseMessage> BuildDecisionRetryPipeline(
+        ILogger logger, int requestTimeoutSeconds, int maxRetryAttempts)
+    {
+        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>()
+            .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+            {
+                MaxRetryAttempts = maxRetryAttempts,
+                BackoffType = DelayBackoffType.Exponential,
+                UseJitter = true,
+                Delay = TimeSpan.FromMilliseconds(250),
+                // Caps each jittered backoff delay so the total budget stays a
+                // firm number (see the worst-case sum in the summary above).
+                MaxDelay = s_decisionMaxBackoff,
+                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                    .Handle<HttpRequestException>()
+                    .Handle<TaskCanceledException>()
+                    .Handle<TimeoutRejectedException>()
+                    .HandleResult(response => (int)response.StatusCode >= 500),
+                OnRetry = args =>
+                {
+                    logger.LogWarning(
+                        "Operator backend decision push attempt {Attempt} failed{StatusInfo}; retrying in {DelayMs}ms.",
+                        args.AttemptNumber + 1,
+                        args.Outcome.Result is { } result ? $" (HTTP {(int)result.StatusCode})" : string.Empty,
+                        (long)args.RetryDelay.TotalMilliseconds);
+                    return ValueTask.CompletedTask;
+                },
+            });
+
+        if (requestTimeoutSeconds > 0)
+        {
+            builder.AddTimeout(new TimeoutStrategyOptions
+            {
+                Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
+                OnTimeout = args =>
+                {
+                    logger.LogWarning(
+                        "Operator backend decision push attempt timed out after {TimeoutSeconds}s.",
                         args.Timeout.TotalSeconds);
                     return ValueTask.CompletedTask;
                 },

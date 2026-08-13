@@ -465,7 +465,6 @@ public class ReAccreditationDulyMakingServiceTests
             TemplateVersion = "v10",
             States = live.States,
             Transitions = live.Transitions.Where(t => t.ActionId != "duly-make").ToList(),
-            TasksByState = live.TasksByState,
         };
         var workItem = BuildWorkItem(snapshot: v10Snapshot);
         var harness = BuildHarness(workItem);

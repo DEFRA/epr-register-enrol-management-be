@@ -8,9 +8,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///
 /// The <c>updated</c> state is a waypoint. A queried application returns to it
 /// when the operator responds, and it carries no identity of its own — every
-/// question worth asking about an item sitting there ("which tasks apply?",
-/// "which continue-review action moves it on?") is really a question about the
-/// state the query was raised from.
+/// question worth asking about an item sitting there ("what should a
+/// caseworker be offered?", "which continue-review action moves it on?") is
+/// really a question about the state the query was raised from.
 ///
 /// That originating state is not stored on the document. It is derived from
 /// the item's own audit history, which is deliberate: the audit log is the
@@ -19,13 +19,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// that are already in flight.
 ///
 /// Two callers share this, and they must agree — if they disagreed, a
-/// caseworker could complete one state's tasks and then be moved into a
-/// different one:
+/// caseworker could be offered a call to action for one state and then be
+/// moved into a different one:
 /// <list type="bullet">
 ///   <item><see cref="ReAccreditationContinueReviewService"/>, to pick the
 ///   <c>continue-review-during-*</c> action that moves the item on.</item>
-///   <item><see cref="ReAccreditationTaskStateResolver"/>, to pick whose task
-///   list the engine should project and score against.</item>
+///   <item><see cref="ReAccreditationOriginStateResolver"/>, to report the
+///   origin on the wire so the frontend can offer the matching call to
+///   action.</item>
 /// </list>
 /// </summary>
 internal static class ReAccreditationUpdatedOrigin
@@ -72,12 +73,12 @@ internal static class ReAccreditationUpdatedOrigin
     /// check, such an entry landing in the same tick as a genuine resume could
     /// win the sort and mis-derive the origin.
     ///
-    /// Pre-RA-372 a mis-derivation only picked the wrong
-    /// <c>continue-review-during-*</c> action. Since RA-372 it also decides
-    /// which per-state bucket task completions are read from and
-    /// <em>written to</em>, so a wrong answer would silently record a
-    /// regulator's work against the wrong state. Requiring the entry to name
-    /// <c>updated</c> as its destination keeps the derivation tied to the
+    /// A mis-derivation does not just pick the wrong
+    /// <c>continue-review-during-*</c> action; it is also reported on the wire
+    /// as the item's origin state, from which the frontend decides which call
+    /// to action to offer — so a wrong answer could invite a caseworker to
+    /// send an application backwards past assessment. Requiring the entry to
+    /// name <c>updated</c> as its destination keeps the derivation tied to the
     /// event that actually put the item where it is.
     /// </summary>
     public static string? ResolveContinueActionId(WorkItem workItem)

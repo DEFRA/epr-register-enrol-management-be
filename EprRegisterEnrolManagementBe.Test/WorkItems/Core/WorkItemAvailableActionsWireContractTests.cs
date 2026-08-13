@@ -160,14 +160,11 @@ public class WorkItemAvailableActionsWireContractTests
                     transitions:
                     [
                         new WorkItemTransition(
-                            "resume-a", "Resume", "queried", "updated",
-                            RequiresAllTasksComplete: false, CallerInvocable: false),
+                            "resume-a", "Resume", "queried", "updated", CallerInvocable: false),
                         new WorkItemTransition(
-                            "resume-b", "Resume", "queried", "updated",
-                            RequiresAllTasksComplete: false, CallerInvocable: false),
+                            "resume-b", "Resume", "queried", "updated", CallerInvocable: false),
                         new WorkItemTransition(
-                            "withdraw", "Withdraw", "queried", "withdrawn",
-                            RequiresAllTasksComplete: false)
+                            "withdraw", "Withdraw", "queried", "withdrawn")
                     ]));
             });
         }

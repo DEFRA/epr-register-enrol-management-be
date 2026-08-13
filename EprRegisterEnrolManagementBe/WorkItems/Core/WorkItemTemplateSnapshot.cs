@@ -3,16 +3,16 @@ using MongoDB.Bson.Serialization.Attributes;
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
-/// Frozen copy of an <see cref="IWorkItemType"/>'s template (states, tasks
-/// per state, transitions and version) captured when a work item is first
-/// submitted. Stored alongside the work item so that — even if the live
-/// module's templates evolve later — the work item and its audit history
-/// continue to render with the same task list, action set and template
-/// version they were assessed against.
+/// Frozen copy of an <see cref="IWorkItemType"/>'s template (states,
+/// transitions and version) captured when a work item is first submitted.
+/// Stored alongside the work item so that — even if the live module's
+/// templates evolve later — the work item and its audit history continue to
+/// render with the same action set and template version they were assessed
+/// against.
 ///
 /// Snapshots are taken eagerly at submission rather than lazily on read so
 /// that the frozen view survives the live module being unregistered or its
-/// task definitions changing.
+/// state machine changing.
 ///
 /// By design a frozen snapshot can contain fields the live model has since
 /// removed, so it ignores extra BSON elements: a snapshot persisted under an
@@ -29,64 +29,19 @@ public sealed class WorkItemTemplateSnapshot : IWorkItemTemplate
     public required IReadOnlyCollection<WorkItemTransition> Transitions { get; init; }
 
     /// <summary>
-    /// Tasks required while in each known state, captured at snapshot time.
-    /// Stored as a plain dictionary so MongoDB serialises cleanly.
-    /// </summary>
-    public required Dictionary<string, List<WorkItemTask>> TasksByState { get; init; }
-
-    /// <summary>
-    /// Tasks captured for <paramref name="stateId"/>, or an empty collection
-    /// when the snapshot records none.
-    ///
-    /// <para>
-    /// The <c>TasksByState is not null</c> guard is load-bearing (epr-dtkw).
-    /// <c>required</c> is a compile-time contract that the BSON deserialiser
-    /// does not honour: a stored snapshot written without a <c>tasksByState</c>
-    /// element deserialises with this property NULL, and every such document
-    /// then threw here. It took out two unrelated paths — the v10 → v11
-    /// snapshot migration aborted on the first such document and failed on
-    /// every boot thereafter, and <c>WorkItemService.Project</c> threw while
-    /// building the duly-making response AFTER the transition had already been
-    /// committed, so the application moved but the regulator saw a 500.
-    /// </para>
-    ///
-    /// <para>
-    /// "No tasks recorded" and "no tasks for this state" are the same answer to
-    /// the caller, so absent is treated as empty rather than exceptional.
-    /// </para>
-    /// </summary>
-    public IReadOnlyCollection<WorkItemTask> GetTasksForState(string stateId)
-    {
-        if (stateId is not null && TasksByState is not null
-            && TasksByState.TryGetValue(stateId, out var tasks))
-        {
-            return tasks;
-        }
-        return Array.Empty<WorkItemTask>();
-    }
-
-    /// <summary>
-    /// Build a snapshot from a live <see cref="IWorkItemType"/>. Walks every
-    /// declared state to capture its task list so the snapshot is
-    /// self-contained and does not need to call the live type again later.
+    /// Build a snapshot from a live <see cref="IWorkItemType"/>, so the
+    /// snapshot is self-contained and does not need to call the live type
+    /// again later.
     /// </summary>
     public static WorkItemTemplateSnapshot Capture(IWorkItemType type)
     {
         ArgumentNullException.ThrowIfNull(type);
 
-        var states = type.States.ToList();
-        var tasksByState = new Dictionary<string, List<WorkItemTask>>(StringComparer.OrdinalIgnoreCase);
-        foreach (var state in states)
-        {
-            tasksByState[state.Id] = type.GetTasksForState(state.Id).ToList();
-        }
-
         return new WorkItemTemplateSnapshot
         {
             TemplateVersion = type.TemplateVersion,
-            States = states,
-            Transitions = type.Transitions.ToList(),
-            TasksByState = tasksByState
+            States = type.States.ToList(),
+            Transitions = type.Transitions.ToList()
         };
     }
 }

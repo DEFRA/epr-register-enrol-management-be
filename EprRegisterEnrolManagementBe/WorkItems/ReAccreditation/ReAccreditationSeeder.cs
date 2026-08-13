@@ -133,9 +133,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             assignedToName: "Stub Standard User",
             now: now);
 
-        // Mid-assessment: first-state tasks complete, item has moved on,
-        // and the assigner has picked up two of the three assessment
-        // tasks.
+        // Mid-assessment: assigned and under active review.
         yield return Build(
             seedKey: "riverside-glass",
             postcode: "CF10 1AA",
@@ -156,22 +154,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
-            now: now,
-            completedTasks: new()
-            {
-                ["duly-made"] =
-                [
-                    "confirm-registration-fee-paid"
-                ],
-                ["assessment-in-progress"] =
-                [
-                    "review-compliance-history",
-                    "assess-technical-capacity"
-                ]
-            });
+            now: now);
 
-        // Awaiting decision: every prior task complete, item parked with
-        // the assigner pending the rationale being recorded.
+        // Awaiting decision: parked in the intermediate state a pre-RA-410
+        // two-step decision left items in, so the single-call /decision
+        // endpoint has a fixture proving it recovers them.
         yield return Build(
             seedKey: "coastal-materials",
             postcode: "BT1 1AA",
@@ -192,20 +179,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
-            now: now,
-            completedTasks: new()
-            {
-                ["duly-made"] =
-                [
-                    "confirm-registration-fee-paid"
-                ],
-                ["assessment-in-progress"] =
-                [
-                    "review-compliance-history",
-                    "assess-technical-capacity",
-                    "assess-financial-capacity"
-                ]
-            });
+            now: now);
 
         // Already approved — terminal state, useful for exercising the
         // "no further actions" rendering path.
@@ -229,24 +203,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
-            now: now,
-            completedTasks: new()
-            {
-                ["duly-made"] =
-                [
-                    "confirm-registration-fee-paid"
-                ],
-                ["assessment-in-progress"] =
-                [
-                    "review-compliance-history",
-                    "assess-technical-capacity",
-                    "assess-financial-capacity"
-                ],
-                ["awaiting-decision"] =
-                [
-                    "record-decision-rationale"
-                ]
-            });
+            now: now);
 
         // Additional Scotland item — submitted, unassigned.
         yield return Build(
@@ -290,18 +247,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
-            now: now,
-            completedTasks: new()
-            {
-                ["duly-made"] =
-                [
-                    "confirm-registration-fee-paid"
-                ],
-                ["assessment-in-progress"] =
-                [
-                    "review-compliance-history"
-                ]
-            });
+            now: now);
 
         // Additional Northern Ireland item — submitted, unassigned.
         yield return Build(
@@ -781,13 +727,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         string submittedBy,
         DateTime now,
         string? assignedToId = null,
-        string? assignedToName = null,
-        Dictionary<string, List<string>>? completedTasks = null)
+        string? assignedToName = null)
     {
         var submittedAt = now.AddDays(-submittedDaysAgo);
         var assignedAt = assignedToId is null ? (DateTime?)null : submittedAt.AddHours(2);
-        var lastModifiedAt = assignedAt
-            ?? (completedTasks is null ? submittedAt : submittedAt.AddHours(1));
+        var lastModifiedAt = assignedAt ?? submittedAt;
 
         // RA-175: derive nation from postcode using the same resolver as
         // ReAccreditationNationRoutingHook so the camelCase payload.nation
@@ -843,14 +787,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 : new WorkItemSlaClock { StartedAt = submittedAt.AddDays(1) },
             Payload = payload
         };
-
-        if (completedTasks is not null)
-        {
-            foreach (var (state, tasks) in completedTasks)
-            {
-                workItem.CompletedTaskIdsByState[state] = new HashSet<string>(tasks, StringComparer.OrdinalIgnoreCase);
-            }
-        }
 
         // RA-175: seed a realistic audit trail so the timeline view has
         // plausible history.  Mirrors what WorkItemService.SubmitAsync and

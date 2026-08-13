@@ -47,7 +47,7 @@ public interface IWorkItemPersistence
     Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Persist updates made by the engine (state transitions, task completions).
+    /// Persist updates made by the engine (state transitions, assignment, notes).
     /// Implementations replace the document in its entirety so callers can
     /// mutate any field on the supplied <see cref="WorkItem"/> before saving.
     /// </summary>

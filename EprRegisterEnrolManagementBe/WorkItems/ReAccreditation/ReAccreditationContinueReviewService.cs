@@ -86,11 +86,11 @@ internal sealed class ReAccreditationContinueReviewService(
                 $"Work item {workItemId} is in state '{workItem.StateId}' and cannot be continued from review.");
         }
 
-        // RA-372: shared with ReAccreditationTaskStateResolver so the action
-        // that moves the item on and the task list the regulator was just
-        // working through are resolved from exactly the same audit history —
-        // a caseworker can never complete one state's tasks and be carried
-        // into a different one.
+        // RA-410: shared with ReAccreditationOriginStateResolver so the action
+        // that moves the item on and the origin state reported on the wire are
+        // resolved from exactly the same audit history — a caseworker can
+        // never be offered one state's call to action and be carried into a
+        // different one.
         var continueActionId = ReAccreditationUpdatedOrigin.ResolveContinueActionId(workItem);
 
         if (continueActionId is null)
