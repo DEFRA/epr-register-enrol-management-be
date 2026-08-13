@@ -83,9 +83,6 @@ public class ReAccreditationStatusPushHookTests
     [Theory]
     [InlineData("payment-received", "assessment-in-progress", "duly-made")]
     [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress")]
-    [InlineData("submit-for-decision", "awaiting-decision", "assessment-in-progress")]
-    [InlineData("reject", "rejected", "awaiting-decision")]
-    [InlineData("approve", "approved", "awaiting-decision")]
     [InlineData("resume-during-duly-making", "updated", "queried")]
     [InlineData("continue-review-during-duly-making", "submitted", "updated")]
     public async Task OnActionAppliedAsync_pushes_status_for_non_excluded_actions(
@@ -102,22 +99,27 @@ public class ReAccreditationStatusPushHookTests
             actionId, Arg.Any<string>(), s_lastModifiedAt, ct);
     }
 
-    [Fact]
-    public async Task OnActionAppliedAsync_pushing_approve_reaches_the_adapter()
+    [Theory]
+    [InlineData("submit-for-decision", "awaiting-decision", "assessment-in-progress")]
+    [InlineData("approve", "approved", "awaiting-decision")]
+    [InlineData("reject", "rejected", "awaiting-decision")]
+    public async Task OnActionAppliedAsync_ignores_the_decision_actions(
+        string actionId, string toStateId, string fromStateId)
     {
-        // RA-368 §5 explicit requirement: approving a re-accreditation must
-        // fire the status push, even though "approve" is handled by the
-        // bespoke ReAccreditationApprovalService rather than the generic
-        // engine — the hook itself has no special case for it.
+        // epr-p86e / RA-410: the three decision actions are now owned by
+        // ReAccreditationLogDecisionService, which fires the operator-journey
+        // push ONCE as a pre-commit gate. This hook must NOT push for any of
+        // them, or the item double-pushes (submit-for-decision + approve/reject)
+        // — the bug that stranded applications in 'awaiting-decision' when the
+        // operator journey was down.
         var ct = TestContext.Current.CancellationToken;
         var (hook, adapter, _) = BuildSut();
-        var workItem = BuildWorkItem("approved", "approve", "Approve", "awaiting-decision");
+        var workItem = BuildWorkItem(toStateId, actionId, "Some action", fromStateId);
 
-        await hook.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, actionId, fromStateId, s_user, ct);
 
-        await adapter.Received(1).PushStatusChangedAsync(
-            workItem.Id, Arg.Any<Guid>(), "awaiting-decision", "approved", "Granted",
-            "approve", "Approve", s_lastModifiedAt, ct);
+        await adapter.DidNotReceiveWithAnyArgs().PushStatusChangedAsync(
+            default, default, default!, default!, default!, default!, default!, default, default);
     }
 
     [Theory]
@@ -152,10 +154,12 @@ public class ReAccreditationStatusPushHookTests
         // other module's transitions too.
         var ct = TestContext.Current.CancellationToken;
         var (hook, adapter, _) = BuildSut();
+        // A non-excluded action, so the guard under test is the TYPE guard —
+        // not the epr-p86e decision-action exclusion.
         var workItem = BuildWorkItem(
-            "rejected", "reject", "Reject", "awaiting-decision", typeId: "some-other-type");
+            "duly-made", "duly-make", "Mark as duly made", "submitted", typeId: "some-other-type");
 
-        await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         await adapter.DidNotReceiveWithAnyArgs().PushStatusChangedAsync(
             default, default, default!, default!, default!, default!, default!, default, default);
@@ -223,14 +227,14 @@ public class ReAccreditationStatusPushHookTests
         // instead of "Approve" / "Granted" in the audit trail.
         var ct = TestContext.Current.CancellationToken;
         var (hook, _, auditAppender) = BuildSut();
-        var workItem = BuildWorkItem("approved", "approve", "Approve", "awaiting-decision");
+        var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 
-        await hook.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         await auditAppender.Received(1).AppendAsync(
             workItem.Id, "status-push-sent", "Status sent to OJ",
             Arg.Is<Dictionary<string, string?>>(d =>
-                d["actionDisplayName"] == "Approve" && d["toStateDisplayName"] == "Granted"),
+                d["actionDisplayName"] == "Mark as duly made" && d["toStateDisplayName"] == "Duly made"),
             s_user, ct);
     }
 
@@ -244,9 +248,9 @@ public class ReAccreditationStatusPushHookTests
                 Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
-        var workItem = BuildWorkItem("rejected", "reject", "Reject", "awaiting-decision");
+        var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 
-        await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         // MBE-F5: skipped (deliberately disabled) must never look like a
         // failure — a distinct audit outcome, not status-push-failed.
@@ -268,9 +272,9 @@ public class ReAccreditationStatusPushHookTests
                 Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Failure("connection refused"));
-        var workItem = BuildWorkItem("rejected", "reject", "Reject", "awaiting-decision");
+        var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 
-        await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         await auditAppender.Received(1).AppendAsync(
             workItem.Id, "status-push-failed", "Status failed to send to OJ",
@@ -283,7 +287,7 @@ public class ReAccreditationStatusPushHookTests
     {
         var ct = TestContext.Current.CancellationToken;
         var (hook, adapter, auditAppender) = BuildSut();
-        var workItem = BuildWorkItem("rejected", "reject", "Reject", "awaiting-decision");
+        var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
         Guid? correlationIdPassedToAdapter = null;
         adapter
             .PushStatusChangedAsync(
@@ -292,7 +296,7 @@ public class ReAccreditationStatusPushHookTests
                 Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Success());
 
-        await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         Assert.NotNull(correlationIdPassedToAdapter);
         await auditAppender.Received(1).AppendAsync(
@@ -312,9 +316,9 @@ public class ReAccreditationStatusPushHookTests
                 Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
             .Returns<OperatorBackendPushResult>(_ => throw new InvalidOperationException("boom"));
-        var workItem = BuildWorkItem("rejected", "reject", "Reject", "awaiting-decision");
+        var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 
         // Should not throw.
-        await hook.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
     }
 }
