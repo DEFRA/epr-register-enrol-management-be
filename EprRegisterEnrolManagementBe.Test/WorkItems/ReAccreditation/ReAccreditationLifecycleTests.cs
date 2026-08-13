@@ -15,13 +15,18 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// <summary>
 /// Cheap proof that the re-accreditation module integrates with the framework
 /// engine: walk a freshly-submitted work item from <c>submitted</c> through
-/// to <c>approved</c> by completing every task and applying the declared
-/// actions, then assert the framework's audit log captured each step.
+/// to <c>approved</c> by applying the declared actions, then assert the
+/// framework's audit log captured each step.
+///
+/// RA-410: this used to also complete every state's task checklist along the
+/// way (hence the class's original name for the walk-through fact below) —
+/// the task framework is gone, so every state simply has no checklist to
+/// complete and the walk is that much shorter.
 /// </summary>
 public class ReAccreditationLifecycleTests
 {
     [Fact]
-    public async Task Walk_from_submitted_to_approved_completing_every_task_records_full_audit_trail()
+    public async Task Walk_from_submitted_to_approved_records_full_audit_trail()
     {
         var ct = TestContext.Current.CancellationToken;
         var type = new ReAccreditationType();
@@ -100,10 +105,9 @@ public class ReAccreditationLifecycleTests
             )
         );
 
-        // RA-316: 'submitted' has no tasks at all now. The regulator presses
-        // "Duly make" and supplies the payment date the SLA clock is anchored
-        // to, which is the only way out of 'submitted'.
-        Assert.Empty(type.GetTasksForState("submitted"));
+        // RA-316: the regulator presses "Duly make" and supplies the payment
+        // date the SLA clock is anchored to, which is the only way out of
+        // 'submitted'. RA-410: there is no task framework left to check.
         var paymentDate = new DateOnly(2027, 1, 20);
         Assert.True(
             (
@@ -116,17 +120,14 @@ public class ReAccreditationLifecycleTests
             workItem.SlaClock!.StartedAt
         );
 
-        await CompleteAll(engine, workItem.Id, type, "duly-made", user, ct);
         Assert.True(
             (await engine.ApplyActionAsync(workItem.Id, "payment-received", user, ct)).IsSuccess
         );
 
-        await CompleteAll(engine, workItem.Id, type, "assessment-in-progress", user, ct);
         Assert.True(
             (await engine.ApplyActionAsync(workItem.Id, "submit-for-decision", user, ct)).IsSuccess
         );
 
-        await CompleteAll(engine, workItem.Id, type, "awaiting-decision", user, ct);
         // RA-132: approve goes through the bespoke ReAccreditationApprovalService,
         // not the generic engine — the generic engine no longer registers the
         // approve transition so it cannot silently produce an item missing the
@@ -135,13 +136,12 @@ public class ReAccreditationLifecycleTests
 
         Assert.Equal("approved", workItem.StateId);
 
-        // RA-316: 'submitted' contributes no task-completed entries any more
-        // (it has no tasks), so the walk is two entries shorter than before.
+        // RA-410: no state contributes task-completed entries any more — the
+        // task framework is gone, so the walk is shorter than it used to be.
         // 1 action-applied:duly-make + 1 sla-clock-started
-        // + 1 task-completed (duly-made) + 1 action-applied:payment-received
-        // + 3 task-completed (assessment-in-progress) + 1 action-applied:submit-for-decision
-        // + 1 task-completed (awaiting-decision) + 3 approval entries = 12 total.
-        Assert.Equal(12, workItem.AuditLog.Count);
+        // + 1 action-applied:payment-received + 1 action-applied:submit-for-decision
+        // + 3 approval entries (action-applied, sla-clock-stopped, accreditation-issued) = 7 total.
+        Assert.Equal(7, workItem.AuditLog.Count);
         Assert.Contains(
             workItem.AuditLog,
             e =>
@@ -186,8 +186,8 @@ public class ReAccreditationLifecycleTests
         };
         persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
-        // Do not complete any tasks; withdraw should still succeed because
-        // the transition declares RequiresAllTasksComplete: false.
+        // RA-410: withdraw succeeds unconditionally now — there is no task
+        // framework left to gate it.
         var user = new ClaimsPrincipal(
             new ClaimsIdentity([new Claim("user:id", "alice-1")], "test")
         );
@@ -318,8 +318,8 @@ public class ReAccreditationLifecycleTests
         };
         persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
-        // Do not complete any tasks; query should still succeed because the
-        // transition declares RequiresAllTasksComplete: false.
+        // RA-410: query succeeds unconditionally now — there is no task
+        // framework left to gate it.
         var user = new ClaimsPrincipal(
             new ClaimsIdentity([new Claim("user:id", "alice-1")], "test")
         );
@@ -482,8 +482,7 @@ public class ReAccreditationLifecycleTests
 
         Assert.True(result.IsSuccess, result.Message);
         Assert.Equal("queried", workItem.StateId);
-        // No task had to be completed first: the query transitions all
-        // declare RequiresAllTasksComplete: false.
+        // RA-410: no task framework is left to gate the query transitions.
         Assert.Contains(
             workItem.AuditLog,
             e =>
@@ -505,21 +504,5 @@ public class ReAccreditationLifecycleTests
         Assert.False(second.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, second.FailureCode);
         Assert.Equal("queried", workItem.StateId);
-    }
-
-    private static async Task CompleteAll(
-        IWorkItemService engine,
-        Guid id,
-        ReAccreditationType type,
-        string stateId,
-        ClaimsPrincipal user,
-        CancellationToken ct
-    )
-    {
-        foreach (var task in type.GetTasksForState(stateId))
-        {
-            var result = await engine.CompleteTaskAsync(id, task.Id, user, ct);
-            Assert.True(result.IsSuccess, $"completing {task.Id} in {stateId}: {result.Message}");
-        }
     }
 }

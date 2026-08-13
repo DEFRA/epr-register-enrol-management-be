@@ -21,6 +21,5 @@ internal static class TestAssemblyInitializer
     internal static void Init()
     {
         MongoConventions.Register();
-        WorkItemBsonRegistration.Register();
     }
 }

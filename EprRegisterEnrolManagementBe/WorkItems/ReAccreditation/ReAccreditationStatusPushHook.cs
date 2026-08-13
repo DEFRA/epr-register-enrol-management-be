@@ -23,11 +23,19 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// is <c>queried</c> (query keeps its own richer <c>/query</c> push, see
 /// <see cref="ReAccreditationQueryPushHook"/>) or <c>withdrawn</c> (withdrawal
 /// is out of scope for RA-368 — CM's own caseworker-facing withdraw UI is
-/// being hidden by a separate, future ticket). Derived from
+/// being hidden by a separate, future ticket). Those are derived from
 /// <see cref="ReAccreditationType.Transitions"/> itself, rather than
 /// restating the individual action ids, so a future query/withdraw
 /// transition is excluded automatically instead of needing this hook
 /// updated in lockstep.
+///
+/// epr-p86e / RA-410: the three decision actions (<c>submit-for-decision</c>,
+/// <c>approve</c>, <c>reject</c>) are also excluded — see
+/// <see cref="BuildExcludedActionIds"/>. Their operator-journey push is owned
+/// by <see cref="ReAccreditationLogDecisionService"/>, which fires it exactly
+/// once as a pre-commit gate for the final outcome; this hook pushing again
+/// after each committed hop was the double-push that stranded applications in
+/// <c>awaiting-decision</c> when the operator journey was down.
 ///
 /// Never throws — a push failure must not unwind the already-persisted
 /// transition (the <see cref="IWorkItemPostActionHook"/> contract). Records
@@ -175,6 +183,21 @@ internal sealed class ReAccreditationStatusPushHook(
                 excluded.Add(transition.ActionId);
             }
         }
+
+        // epr-p86e / RA-410: the three decision actions are excluded here so
+        // this post-action hook never pushes for them. The operator-journey
+        // push for a decision is owned by ReAccreditationLogDecisionService,
+        // which fires it exactly ONCE as a pre-commit gate for the final
+        // outcome — before either internal hop is persisted. Left in, this
+        // hook would push again after each committed transition, which is the
+        // double-push (submit-for-decision + approve/reject) that stranded
+        // applications in 'awaiting-decision' when the operator journey was
+        // unreachable. 'approve' has no declared transition (it is handled by
+        // ReAccreditationApprovalService), so it must be listed literally
+        // rather than derived from the transition set.
+        excluded.Add("submit-for-decision");
+        excluded.Add("approve");
+        excluded.Add("reject");
         return excluded;
     }
 
