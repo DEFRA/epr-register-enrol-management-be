@@ -19,7 +19,6 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <see cref="EngineFactory.Persistence"/> and re-read for assertions.
 /// </summary>
 public class WorkItemEngineEndpointsTests
-    : IClassFixture<MongoIntegrationFixture>
 {
     private const string TypeId = "test-type";
     private readonly MongoIntegrationFixture _fixture;

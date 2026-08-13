@@ -15,7 +15,7 @@ namespace EprRegisterEnrolManagementBe.Test.Utils.Mongo;
 /// reconciling a conflict, and detecting the conflict by its code name.
 /// </summary>
 public sealed class MongoIndexReconcilerTests
-    : IClassFixture<MongoIntegrationFixture>, IDisposable
+    : IDisposable
 {
     private readonly TestMongoDbClientFactory _factory;
     private readonly string _databaseName;

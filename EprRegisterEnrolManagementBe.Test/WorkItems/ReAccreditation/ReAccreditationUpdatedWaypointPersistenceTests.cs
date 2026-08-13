@@ -37,8 +37,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// is the declared path through the state machine.
 /// </summary>
 public class ReAccreditationUpdatedWaypointPersistenceTests
-    : IClassFixture<MongoIntegrationFixture>,
-        IAsyncDisposable
+    : IAsyncDisposable
 {
     private static readonly ClaimsPrincipal s_user = new(
         new ClaimsIdentity(

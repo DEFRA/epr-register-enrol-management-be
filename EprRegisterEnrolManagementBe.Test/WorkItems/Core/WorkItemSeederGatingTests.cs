@@ -26,7 +26,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// persistence. (Surfaced by epr-mf7 — CI was slow enough to overlap
 /// these factories where local timing did not.)
 /// </summary>
-public class WorkItemSeederGatingTests : IClassFixture<MongoIntegrationFixture>
+public class WorkItemSeederGatingTests
 {
     private const string SeedFlagConfigKey = "WorkItems:SeedOnStartup";
     private readonly MongoIntegrationFixture _fixture;

@@ -14,7 +14,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// document fetched back from Mongo, not against the in-memory instance
 /// the test author handed to the engine.
 /// </summary>
-public class WorkItemServiceTests : IClassFixture<MongoIntegrationFixture>, IAsyncDisposable
+public class WorkItemServiceTests : IAsyncDisposable
 {
     private const string TypeId = "test-type";
     private static readonly DateTime InitialNow = new(2026, 4, 27, 10, 0, 0, DateTimeKind.Utc);
