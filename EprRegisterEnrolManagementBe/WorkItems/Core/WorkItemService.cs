@@ -5,9 +5,9 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
-/// Framework service object that drives task completion and state transitions
-/// for every work item type. Lives in core because the rules ("you cannot
-/// approve a work item with outstanding tasks", "you cannot invoke an action
+/// Framework service object that drives state transitions for every work
+/// item type. Lives in core because the rules ("you cannot act on a closed
+/// case", "you cannot invoke an action
 /// that does not apply to the current state", etc.) are universal across
 /// modules. Module-specific business logic belongs in module service objects
 /// that may be called before/after this engine.
@@ -20,7 +20,7 @@ public interface IWorkItemService
     /// submission timestamp from the injected <see cref="TimeProvider"/>,
     /// and appends a single <c>work-item-submitted</c> entry to the new
     /// work item's audit log so the audit timeline starts at the
-    /// document's birth event rather than the first task completion. The
+    /// document's birth event rather than the first state change. The
     /// audit entry and the document body are written in the same
     /// <see cref="IWorkItemPersistence.CreateAsync"/> call. Mutations
     /// require a <c>user:id</c> claim — calls without one return
@@ -33,39 +33,6 @@ public interface IWorkItemService
         string? submittedBy,
         ClaimsPrincipal user,
         IReadOnlyDictionary<string, string?>? submissionMetadata = null,
-        CancellationToken cancellationToken = default
-    );
-
-    Task<WorkItemActionResult> CompleteTaskAsync(
-        Guid workItemId,
-        string taskId,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken = default
-    );
-
-    /// <summary>
-    /// Set the lifecycle <see cref="WorkItemTaskStatus"/> of a single task
-    /// (epr-gl6). Generalises <see cref="CompleteTaskAsync"/> to the full
-    /// status set (NotStarted / InProgress / Blocked / Completed) while
-    /// keeping <see cref="WorkItem.CompletedTaskIdsByState"/> in sync so
-    /// older readers continue to work.
-    ///
-    /// Idempotent: if the task is already in the requested status the call
-    /// returns success without writing an audit entry, matching the
-    /// framework rule that no-ops do not record audit. On a real change
-    /// the engine appends a single <c>task-status-changed</c> entry whose
-    /// <c>Details</c> carry the task id and the from/to status names — no
-    /// separate <c>task-completed</c> entry is emitted when transitioning
-    /// to <see cref="WorkItemTaskStatus.Completed"/> via this call (the
-    /// status change is the canonical record). The legacy
-    /// <see cref="CompleteTaskAsync"/> path keeps emitting
-    /// <c>task-completed</c> for back-compat with existing audit consumers.
-    /// </summary>
-    Task<WorkItemActionResult> SetTaskStatusAsync(
-        Guid workItemId,
-        string taskId,
-        WorkItemTaskStatus status,
-        ClaimsPrincipal user,
         CancellationToken cancellationToken = default
     );
 
@@ -119,33 +86,8 @@ public interface IWorkItemService
     );
 
     /// <summary>
-    /// Atomic compound mutation: append a note AND mark a task complete in a
-    /// single document write so a partial failure cannot leave a work item
-    /// with an "orphan" note attached to an unfinished task (the bug behind
-    /// a workflow that called <see cref="AddNoteAsync"/> followed by
-    /// <see cref="CompleteTaskAsync"/> and saw the second call fail with
-    /// the first call already persisted). Both halves are validated before
-    /// any in-memory mutation happens; on any validation failure the
-    /// document is unchanged and no audit entries are written. On success
-    /// the framework writes one <c>note-added</c> audit entry plus — only
-    /// when the task was not already complete — one <c>task-completed</c>
-    /// entry, followed by exactly one
-    /// <see cref="IWorkItemPersistence.ReplaceAsync"/>. Re-completing an
-    /// already-complete task is treated as a no-op for the completion half
-    /// (consistent with <see cref="CompleteTaskAsync"/>); the note is still
-    /// appended because note writes are the caller's primary intent.
-    /// </summary>
-    Task<WorkItemActionResult> AddNoteAndCompleteTaskAsync(
-        Guid workItemId,
-        string taskId,
-        string noteText,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken = default
-    );
-
-    /// <summary>
-    /// Compute the task progress and currently-available actions for a work
-    /// item. Returns <c>null</c> when no work item exists with the supplied id.
+    /// Compute the currently-available actions for a work item. Returns
+    /// <c>null</c> when no work item exists with the supplied id.
     /// </summary>
     Task<WorkItemEngineProjection?> ProjectAsync(
         Guid workItemId,
@@ -160,15 +102,12 @@ public interface IWorkItemService
 public sealed record WorkItemEngineProjection(
     WorkItem WorkItem,
     string TemplateVersion,
-    IReadOnlyCollection<WorkItemTaskProgress> Tasks,
     IReadOnlyCollection<WorkItemTransition> AvailableActions,
-    // RA-372: the state whose checklist Tasks actually contains. Almost always
-    // WorkItem.StateId, but a module may redirect it (see
-    // IWorkItemTaskStateResolver), and without this a consumer cannot tell
-    // that Tasks has stopped describing StateId. Defaults to null so callers
-    // constructing a projection directly are unaffected; Project always
-    // populates it.
-    string? TaskStateId = null
+    // RA-410: the state this item returns to when its current waypoint
+    // discharges (see IWorkItemOriginStateResolver). Almost always
+    // WorkItem.StateId. Defaults to null so callers constructing a projection
+    // directly are unaffected; Project always populates it.
+    string? OriginStateId = null
 );
 
 public sealed class WorkItemService : IWorkItemService
@@ -186,31 +125,28 @@ public sealed class WorkItemService : IWorkItemService
     private readonly IWorkItemPersistence _persistence;
     private readonly ILogger<WorkItemService> _logger;
     private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
-    private readonly IReadOnlyCollection<IWorkItemPostTaskHook> _postTaskHooks;
     private readonly TimeProvider _timeProvider;
     private readonly IApplicationReferenceGenerator _referenceGenerator;
-    private readonly IReadOnlyCollection<IWorkItemTaskStateResolver> _taskStateResolvers;
+    private readonly IReadOnlyCollection<IWorkItemOriginStateResolver> _originStateResolvers;
 
     public WorkItemService(
         IWorkItemRegistry registry,
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
         TimeProvider? timeProvider = null,
-        IEnumerable<IWorkItemPostTaskHook>? postTaskHooks = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IApplicationReferenceGenerator? referenceGenerator = null,
-        IEnumerable<IWorkItemTaskStateResolver>? taskStateResolvers = null
+        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null
     )
     {
         this._registry = registry;
         this._persistence = persistence;
         this._logger = logger;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
-        _postTaskHooks = postTaskHooks?.ToArray() ?? Array.Empty<IWorkItemPostTaskHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
         _referenceGenerator = referenceGenerator ?? new ApplicationReferenceGenerator();
-        _taskStateResolvers =
-            taskStateResolvers?.ToArray() ?? Array.Empty<IWorkItemTaskStateResolver>();
+        _originStateResolvers =
+            originStateResolvers?.ToArray() ?? Array.Empty<IWorkItemOriginStateResolver>();
     }
 
     public async Task<WorkItemActionResult> SubmitAsync(
@@ -312,7 +248,7 @@ public sealed class WorkItemService : IWorkItemService
             };
 
             // Birth event: the audit timeline must start at submission rather
-            // than the first task completion. Appended to the in-memory list
+            // than the first state change. Appended to the in-memory list
             // before the single CreateAsync call so the document and its first
             // audit entry land in storage together.
             //
@@ -492,124 +428,6 @@ public sealed class WorkItemService : IWorkItemService
             StringComparison.OrdinalIgnoreCase
         ) == true;
 
-    public async Task<WorkItemActionResult> CompleteTaskAsync(
-        Guid workItemId,
-        string taskId,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken = default
-    )
-    {
-        if (RequireActorIdentity(user) is { } identityFailure)
-        {
-            return identityFailure;
-        }
-
-        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
-        if (failure is not null)
-        {
-            return failure;
-        }
-
-        // LoadAsync yields a non-null work item and template whenever it
-        // reports no failure. Bind once so the rest of the method reads
-        // without null-forgiving noise.
-        var workItem = loadedWorkItem!;
-
-        // RA-372: the task list — and the completion bucket it is scored
-        // against — belong to the *effective* task state, which is the item's
-        // own state unless a module redirects it (re-accreditation's
-        // 'updated' waypoint does). See ResolveTaskStateId.
-        var taskStateId = ResolveTaskStateId(workItem, template!);
-        var tasks = template!.GetTasksForState(taskStateId);
-        var task = tasks.FirstOrDefault(t =>
-            string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (task is null)
-        {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
-            );
-        }
-
-        var bucket = GetCompletedBucket(workItem, taskStateId);
-        if (!bucket.Add(task.Id))
-        {
-            // Already completed: idempotent replay. Persist nothing, write
-            // no audit entry, but tell the caller this was a no-op so they
-            // can render an appropriate UI state instead of a confusing
-            // "already done" error.
-            return WorkItemActionResult.IdempotentReplay(workItem);
-        }
-
-        // epr-gl6: dual-write — the per-task status map is the canonical
-        // source of truth for the new status set, but
-        // CompletedTaskIdsByState is retained for one release cycle so
-        // legacy readers continue to work. Keep them in lockstep.
-        var completedStateId = taskStateId;
-        SetTaskStatus(workItem, completedStateId, task.Id, WorkItemTaskStatus.Completed);
-
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-        workItem.LastModifiedAt = now;
-        AppendAudit(
-            workItem,
-            "task-completed",
-            "Task completed",
-            user,
-            now,
-            new()
-            {
-                ["taskId"] = task.Id,
-                ["taskDisplayName"] = task.DisplayName,
-                ["stateId"] = completedStateId,
-            }
-        );
-        try
-        {
-            await _persistence.ReplaceAsync(workItem, cancellationToken);
-        }
-        catch (WorkItemConcurrencyException)
-        {
-            return ConcurrencyConflict(workItem.Id);
-        }
-        _logger.LogInformation(
-            "Task {TaskId} marked complete on work item {WorkItemId} ({TypeId}) by {User}",
-            task.Id,
-            workItem.Id,
-            workItem.TypeId,
-            DescribeUser(user)
-        );
-
-        // RA-372: the state handed to post-task hooks is the effective task
-        // state, not the item's literal state. That is deliberate, and it is
-        // what makes the 'updated' waypoint safe rather than a trap.
-        //
-        // Concretely: re-accreditation auto-transitions submitted → duly-made
-        // from a post-task hook, and 'duly-make' is not a caller-invocable
-        // action — the hook is the only way an item leaves 'submitted'. If a
-        // caseworker finished the submitted-state tasks while the item sat in
-        // 'updated' and we suppressed the hook, continue-review would later
-        // drop the item into 'submitted' with every task already ticked and
-        // nothing left that could ever fire the hook again: a permanent dead
-        // end. Firing on the effective state instead means completing the last
-        // task has the same outcome it would have had if the query had never
-        // happened, which is exactly what RA-372 asks for. The waypoint is not
-        // skipped so much as discharged — its purpose (tell the caseworker a
-        // response arrived, let them act on it) has been served by the time
-        // the last task goes green.
-        if (!HasIncompleteTasks(template!, workItem, completedStateId))
-        {
-            await InvokeAllTasksCompletedHooksAsync(
-                workItem,
-                completedStateId,
-                user,
-                cancellationToken
-            );
-        }
-
-        return WorkItemActionResult.Success(workItem);
-    }
-
     public async Task<WorkItemActionResult> ApplyActionAsync(
         Guid workItemId,
         string actionId,
@@ -660,24 +478,6 @@ public sealed class WorkItemService : IWorkItemService
                 $"Action '{actionId}' moves work items from '{transition.FromStateId}', "
                     + $"but {workItemId} is in '{workItem.StateId}'."
             );
-        }
-
-// RA-346 + RA-372: one shared gate, asked about the checklist the
-        // caseworker is actually working. For nearly every item that is its
-        // own state; for one parked in a waypoint it is the redirected state.
-        var gatedTaskStateId = ResolveTaskStateId(workItem, template);
-        if (
-            transition.RequiresAllTasksComplete
-            && WorkItemEngineRules.RequireAllTasksComplete(
-                template,
-                workItem,
-                actionId,
-                gatedTaskStateId
-            ) is
-                { } incompleteTasksFailure
-        )
-        {
-            return incompleteTasksFailure;
         }
 
         var previousState = workItem.StateId;
@@ -1028,257 +828,6 @@ public sealed class WorkItemService : IWorkItemService
         return true;
     }
 
-    public async Task<WorkItemActionResult> AddNoteAndCompleteTaskAsync(
-        Guid workItemId,
-        string taskId,
-        string noteText,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken = default
-    )
-    {
-        if (RequireActorIdentity(user) is { } identityFailure)
-        {
-            return identityFailure;
-        }
-
-        // Validate the note up-front so the document is untouched on a bad
-        // request (parity with AddNoteAsync's contract).
-        if (ValidateNoteText(noteText, out var trimmed, out var noteFailure) is false)
-        {
-            return noteFailure!;
-        }
-
-        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
-        if (failure is not null)
-        {
-            return failure;
-        }
-
-        // LoadAsync yields a non-null work item and template whenever it
-        // reports no failure. Bind once so the rest of the method reads
-        // without null-forgiving noise.
-        var workItem = loadedWorkItem!;
-
-        // RA-372: see CompleteTaskAsync — tasks are scoped to the effective
-        // task state, which a module may redirect away from workItem.StateId.
-        var taskStateId = ResolveTaskStateId(workItem, template!);
-        var tasks = template!.GetTasksForState(taskStateId);
-        var task = tasks.FirstOrDefault(t =>
-            string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (task is null)
-        {
-            // Validation failure before any mutation: the document is
-            // unchanged, no note appended, no audit entries written.
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
-            );
-        }
-
-        // Capture before hooks may change it after the write.
-        var completedStateId = taskStateId;
-
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-
-        // Mutate in memory only — nothing is persisted until the single
-        // ReplaceAsync below, so an exception or a concurrency failure
-        // leaves the on-disk document untouched. This is the whole point
-        // of the compound method.
-        var note = new WorkItemNote
-        {
-            Text = trimmed!,
-            CreatedAt = now,
-            CreatedBy = ResolveActorUserId(user)!,
-            CreatedByName = user?.FindFirstValue("user:name"),
-        };
-        workItem.Notes.Add(note);
-        AppendAudit(
-            workItem,
-            "note-added",
-            "Note added",
-            user,
-            now,
-            new()
-            {
-                ["noteId"] = note.Id.ToString(),
-                // Snapshot the trimmed body so the audit log is self-describing —
-                // a reader does not need to cross-reference Notes by id to see
-                // what was written. Already capped by MaxNoteLength.
-                ["noteText"] = note.Text,
-            }
-        );
-
-        // Re-completing an already-complete task is a no-op for the
-        // completion half (matches CompleteTaskAsync's idempotency
-        // contract: no audit entry for the no-op). The note is still
-        // written — note writes are the caller's primary intent here.
-        var bucket = GetCompletedBucket(workItem, completedStateId);
-        var taskNewlyCompleted = bucket.Add(task.Id);
-        if (taskNewlyCompleted)
-        {
-            // epr-gl6: dual-write the per-task status map alongside the
-            // legacy CompletedTaskIdsByState bucket so both sources of
-            // truth stay in lockstep.
-            SetTaskStatus(workItem, completedStateId, task.Id, WorkItemTaskStatus.Completed);
-
-            AppendAudit(
-                workItem,
-                "task-completed",
-                "Task completed",
-                user,
-                now,
-                new()
-                {
-                    ["taskId"] = task.Id,
-                    ["taskDisplayName"] = task.DisplayName,
-                    ["stateId"] = completedStateId,
-                }
-            );
-        }
-
-        workItem.LastModifiedAt = now;
-
-        try
-        {
-            await _persistence.ReplaceAsync(workItem, cancellationToken);
-        }
-        catch (WorkItemConcurrencyException)
-        {
-            return ConcurrencyConflict(workItem.Id);
-        }
-
-        _logger.LogInformation(
-            "Note {NoteId} added and task {TaskId} {CompletionOutcome} on work item {WorkItemId} ({TypeId}) by {User}",
-            note.Id,
-            task.Id,
-            taskNewlyCompleted ? "marked complete" : "left as already-complete",
-            workItem.Id,
-            workItem.TypeId,
-            DescribeUser(user)
-        );
-
-        if (taskNewlyCompleted && !HasIncompleteTasks(template, workItem, completedStateId))
-        {
-            await InvokeAllTasksCompletedHooksAsync(
-                workItem,
-                completedStateId,
-                user,
-                cancellationToken
-            );
-        }
-
-        return WorkItemActionResult.Success(workItem);
-    }
-
-    public async Task<WorkItemActionResult> SetTaskStatusAsync(
-        Guid workItemId,
-        string taskId,
-        WorkItemTaskStatus status,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken = default
-    )
-    {
-        if (RequireActorIdentity(user) is { } identityFailure)
-        {
-            return identityFailure;
-        }
-
-        var (loadedWorkItem, template, failure) = await LoadAsync(workItemId, cancellationToken);
-        if (failure is not null)
-        {
-            return failure;
-        }
-
-        // LoadAsync yields a non-null work item and template whenever it
-        // reports no failure. Bind once so the rest of the method reads
-        // without null-forgiving noise.
-        var workItem = loadedWorkItem!;
-
-        // RA-372: see CompleteTaskAsync — tasks are scoped to the effective
-        // task state, which a module may redirect away from workItem.StateId.
-        var taskStateId = ResolveTaskStateId(workItem, template!);
-        var tasks = template!.GetTasksForState(taskStateId);
-        var task = tasks.FirstOrDefault(t =>
-            string.Equals(t.Id, taskId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (task is null)
-        {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.TaskNotApplicable,
-                $"Task '{taskId}' is not required for work item {workItemId} in state '{workItem.StateId}'."
-            );
-        }
-
-        var currentStatus = GetCurrentTaskStatus(workItem, taskStateId, task.Id);
-        if (currentStatus == status)
-        {
-            // Idempotent no-op: framework rule is that no-ops do not write
-            // an audit entry. Mirror CompleteTaskAsync's behaviour but use
-            // a plain Success rather than IdempotentReplay — the new API
-            // does not need to surface replay through a header.
-            return WorkItemActionResult.Success(workItem);
-        }
-
-        // epr-gl6: dual-write — keep CompletedTaskIdsByState in lockstep
-        // with TaskStatusesByState so legacy readers (which only consume
-        // the bucket) keep observing a consistent view.
-        var changedStateId = taskStateId;
-        SetTaskStatus(workItem, changedStateId, task.Id, status);
-
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-        workItem.LastModifiedAt = now;
-        AppendAudit(
-            workItem,
-            "task-status-changed",
-            "Task status changed",
-            user,
-            now,
-            new()
-            {
-                ["taskId"] = task.Id,
-                ["taskDisplayName"] = task.DisplayName,
-                ["stateId"] = changedStateId,
-                ["fromStatus"] = currentStatus.ToString(),
-                ["toStatus"] = status.ToString(),
-            }
-        );
-
-        try
-        {
-            await _persistence.ReplaceAsync(workItem, cancellationToken);
-        }
-        catch (WorkItemConcurrencyException)
-        {
-            return ConcurrencyConflict(workItem.Id);
-        }
-
-        _logger.LogInformation(
-            "Task {TaskId} on work item {WorkItemId} ({TypeId}) moved from {FromStatus} to {ToStatus} by {User}",
-            task.Id,
-            workItem.Id,
-            workItem.TypeId,
-            currentStatus,
-            status,
-            DescribeUser(user)
-        );
-
-        if (
-            status == WorkItemTaskStatus.Completed
-            && !HasIncompleteTasks(template!, workItem, changedStateId)
-        )
-        {
-            await InvokeAllTasksCompletedHooksAsync(
-                workItem,
-                changedStateId,
-                user,
-                cancellationToken
-            );
-        }
-
-        return WorkItemActionResult.Success(workItem);
-    }
-
     public async Task<WorkItemEngineProjection?> ProjectAsync(
         Guid workItemId,
         CancellationToken cancellationToken = default
@@ -1297,72 +846,24 @@ public sealed class WorkItemService : IWorkItemService
         {
             // The work item exists but its module is no longer registered and
             // no snapshot is on file (e.g. a legacy item). Render it as having
-            // no tasks and no available actions so callers can still display it.
+            // no available actions so callers can still display it.
             return new WorkItemEngineProjection(
                 workItem,
                 ResolveTemplateVersion(workItem),
-                Array.Empty<WorkItemTaskProgress>(),
                 Array.Empty<WorkItemTransition>(),
                 // No template means no resolver could have been consulted, so
-                // the empty task list describes the item's own state.
+                // the item is reported as its own origin.
                 workItem.StateId
             );
         }
 
-// RA-372: project the tasks of the *effective* task state. For nearly
-        // every item that is its own state; for a re-accreditation item
-        // parked in the 'updated' waypoint it is the state the query was
-        // raised from, so the regulator sees that state's checklist —
-        // including the boxes already ticked before the query — instead of an
-        // empty list. Progress has always been stored per state id, so
-        // reading the redirected state's bucket surfaces prior progress for
-        // free.
-        var taskStateId = ResolveTaskStateId(workItem, template);
-
-        // RA-346: read task status through the shared rules rather than
-        // re-implementing the canonical-map-then-legacy-bucket fallback here.
-        // This projection is what the management-fe gates its Approve CTA on,
-        // so it must agree with the engine and with the bespoke module
-        // services by construction, not by two copies happening to match.
-        var taskProgress = template
-            .GetTasksForState(taskStateId)
-            .Select(task =>
-            {
-                // RA-372: keyed on taskStateId, not workItem.StateId — status
-                // must come from the same state the task list did.
-                var status = WorkItemEngineRules.GetCurrentTaskStatus(
-                    workItem,
-                    taskStateId,
-                    task.Id
-                );
-                return new WorkItemTaskProgress(
-                    task.Id,
-                    task.DisplayName,
-                    IsComplete: status == WorkItemTaskStatus.Completed,
-                    Status: status
-                );
-            })
-            .ToList();
-
         var isTerminal = TerminalStates.Find(template, workItem.StateId) is not null;
 
-// RA-346: same gate the engine enforces in ApplyActionAsync, from the
-        // same helper — an action must never be offered that applying would
-        // reject. Hoisted out of the predicate so it is evaluated once rather
-        // than per candidate transition. RA-372: assessed against the
-        // effective task state so it asks exactly the question
-        // ApplyActionAsync will.
-        var allTasksComplete = !WorkItemEngineRules.HasIncompleteTasks(
-            template,
-            workItem,
-            taskStateId
-        );
-
-        // RA-372: available actions are matched on the item's ACTUAL state,
-        // never the effective task state. Which tasks are outstanding and
-        // where the item can move next are different questions — an item in
-        // 'updated' shows the originating state's checklist but only the
-        // transitions that genuinely leave 'updated'. Redirecting this too
+        // Available actions are matched on the item's ACTUAL state, never its
+        // origin state. Where an item can move next is a different question
+        // from where it came in from: an item in 'updated' reports the
+        // originating state via OriginStateId but only ever offers the
+        // transitions that genuinely leave 'updated'. Matching on the origin
         // would let a caller invoke an action from a state the item is not in.
         IReadOnlyCollection<WorkItemTransition> available = isTerminal
             ? Array.Empty<WorkItemTransition>()
@@ -1378,23 +879,22 @@ public sealed class WorkItemService : IWorkItemService
                 // would reject. Transitions declared CallerInvocable: false
                 // are reachable only through a module's own bespoke service
                 // resolving them server-side (re-accreditation's
-                // resume-during-* / continue-review-during-*), so listing
-                // them here advertised buttons that always failed — and,
-                // because each of those four shares a DisplayName and a
-                // FromStateId, rendered as four identical dead controls.
-                // This mirrors the guard in WorkItemEndpoints.Action; the
-                // bespoke services are unaffected because they call
-                // ApplyActionAsync directly and never consult AvailableActions.
+                // resume-during-* / continue-review-during-*, and since RA-410
+                // submit-for-decision / reject), so listing them here
+                // advertised buttons that always failed — and, because each of
+                // those four shares a DisplayName and a FromStateId, rendered
+                // as four identical dead controls. This mirrors the guard in
+                // WorkItemEndpoints.Action; the bespoke services are
+                // unaffected because they call ApplyActionAsync directly and
+                // never consult AvailableActions.
                 .Where(t => t.CallerInvocable)
-                .Where(t => !t.RequiresAllTasksComplete || allTasksComplete)
                 .ToList();
 
         return new WorkItemEngineProjection(
             workItem,
             template.TemplateVersion,
-            taskProgress,
             available,
-            taskStateId
+            ResolveOriginStateId(workItem, template)
         );
     }
 
@@ -1530,79 +1030,23 @@ public sealed class WorkItemService : IWorkItemService
         ?? _registry.Find(workItem.TypeId)?.TemplateVersion
         ?? "unknown";
 
-    private static HashSet<string> GetCompletedBucket(WorkItem workItem, string stateId)
-    {
-        if (!workItem.CompletedTaskIdsByState.TryGetValue(stateId, out var bucket))
-        {
-            bucket = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            workItem.CompletedTaskIdsByState[stateId] = bucket;
-        }
-        return bucket;
-    }
-
     /// <summary>
-    /// Resolve the current <see cref="WorkItemTaskStatus"/> of a single task
-    /// (epr-gl6). Prefers the per-task status map; falls back to the legacy
-    /// <see cref="WorkItem.CompletedTaskIdsByState"/> bucket for documents
-    /// written before the map existed.
-    /// </summary>
-    private static WorkItemTaskStatus GetCurrentTaskStatus(
-        WorkItem workItem,
-        string stateId,
-        string taskId
-    ) => WorkItemEngineRules.GetCurrentTaskStatus(workItem, stateId, taskId);
-
-    /// <summary>
-    /// Apply a status change to both <see cref="WorkItem.TaskStatusesByState"/>
-    /// (canonical) and <see cref="WorkItem.CompletedTaskIdsByState"/>
-    /// (legacy duplicate) so the two stay in lockstep on every write — see
-    /// epr-gl6. <see cref="WorkItemTaskStatus.Completed"/> adds the task to
-    /// the legacy bucket; any other status removes it.
-    /// </summary>
-    private static void SetTaskStatus(
-        WorkItem workItem,
-        string stateId,
-        string taskId,
-        WorkItemTaskStatus status
-    )
-    {
-        if (!workItem.TaskStatusesByState.TryGetValue(stateId, out var inner))
-        {
-            inner = new Dictionary<string, WorkItemTaskStatus>(StringComparer.OrdinalIgnoreCase);
-            workItem.TaskStatusesByState[stateId] = inner;
-        }
-        inner[taskId] = status;
-
-        var bucket = GetCompletedBucket(workItem, stateId);
-        if (status == WorkItemTaskStatus.Completed)
-        {
-            bucket.Add(taskId);
-        }
-        else
-        {
-            bucket.Remove(taskId);
-        }
-    }
-
-    /// <summary>
-    /// RA-372: the state whose task list applies to <paramref name="workItem"/>
-    /// right now. Normally the state the item is in, but a module may redirect
-    /// it via an <see cref="IWorkItemTaskStateResolver"/> — see that interface
-    /// for why. The first resolver with an opinion wins; a resolver that
-    /// returns null (or names a state the template does not declare) is
-    /// ignored, so an abstaining or stale resolver degrades to today's
-    /// behaviour rather than emptying an item's task list.
+    /// RA-410: the state <paramref name="workItem"/> returns to when its
+    /// current waypoint discharges. Normally the state the item is in, but a
+    /// module may name a different one via an
+    /// <see cref="IWorkItemOriginStateResolver"/> — see that interface for
+    /// why. The first resolver with an opinion wins; a resolver that returns
+    /// null (or names a state the template does not declare) is ignored, so an
+    /// abstaining or stale resolver degrades to reporting the item's own
+    /// state rather than reporting a state it was never in.
     ///
-    /// Every task-scoped code path in this engine goes through here — task
-    /// projection, task lookup, the per-state completion bucket, and the
-    /// "all tasks complete" gate — so the redirect is applied consistently to
-    /// reads and writes alike. Anything that is about where the item actually
-    /// *is* (which actions are available, terminality, transition from-state
-    /// matching) deliberately keeps using <see cref="WorkItem.StateId"/>.
+    /// This is a read projection only. Nothing about where the item actually
+    /// *is* — which actions are available, terminality, the transition
+    /// from-state guard — is resolved through here.
     /// </summary>
-    private string ResolveTaskStateId(WorkItem workItem, IWorkItemTemplate template)
+    private string ResolveOriginStateId(WorkItem workItem, IWorkItemTemplate template)
     {
-        foreach (var resolver in _taskStateResolvers)
+        foreach (var resolver in _originStateResolvers)
         {
             // Scope by type before consulting. Without this every resolver
             // would see every item, and "first non-null wins" would make the
@@ -1618,7 +1062,7 @@ public sealed class WorkItemService : IWorkItemService
             string? resolved;
             try
             {
-                resolved = resolver.ResolveTaskStateId(workItem, template);
+                resolved = resolver.ResolveOriginStateId(workItem, template);
             }
             catch (Exception ex)
             {
@@ -1627,7 +1071,7 @@ public sealed class WorkItemService : IWorkItemService
                 // real state, which is what the engine did before RA-372.
                 _logger.LogError(
                     ex,
-                    "Task state resolver {ResolverType} failed for work item {WorkItemId}; "
+                    "Origin state resolver {ResolverType} failed for work item {WorkItemId}; "
                         + "falling back to its actual state {StateId}",
                     resolver.GetType().FullName,
                     workItem.Id,
@@ -1648,7 +1092,7 @@ public sealed class WorkItemService : IWorkItemService
             )
             {
                 _logger.LogWarning(
-                    "Task state resolver {ResolverType} returned state '{ResolvedStateId}' for work "
+                    "Origin state resolver {ResolverType} returned state '{ResolvedStateId}' for work "
                         + "item {WorkItemId}, which its template does not declare; ignoring",
                     resolver.GetType().FullName,
                     resolved,
@@ -1662,12 +1106,6 @@ public sealed class WorkItemService : IWorkItemService
 
         return workItem.StateId;
     }
-
-    private static bool HasIncompleteTasks(
-        IWorkItemTemplate template,
-        WorkItem workItem,
-        string taskStateId
-    ) => WorkItemEngineRules.HasIncompleteTasks(template, workItem, taskStateId);
 
     /// <summary>
     /// Append a single entry to the work item's audit log (RA-97). Called
@@ -1834,30 +1272,4 @@ public sealed class WorkItemService : IWorkItemService
         }
     }
 
-    private async Task InvokeAllTasksCompletedHooksAsync(
-        WorkItem workItem,
-        string stateId,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken
-    )
-    {
-        foreach (var hook in _postTaskHooks)
-        {
-            try
-            {
-                await hook.OnAllTasksCompletedAsync(workItem, stateId, user, cancellationToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(
-                    ex,
-                    "Post-task hook {HookType} failed for work item {WorkItemId} state {StateId}",
-                    hook.GetType().FullName,
-                    workItem.Id,
-                    stateId
-                );
-                throw;
-            }
-        }
-    }
 }

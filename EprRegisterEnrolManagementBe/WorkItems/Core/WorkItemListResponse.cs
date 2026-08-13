@@ -29,9 +29,8 @@ public sealed record WorkItemListResponse(
 /// <c>Notes</c> and <c>AuditLog</c> collections are omitted entirely
 /// (the JSON properties do not exist on the wire — they are not
 /// emitted-as-null) so list responses stay small. Every other field —
-/// task progress, available actions, assignment snapshot, template
-/// version — is kept so a list view can render rich rows without a
-/// per-row round-trip.
+/// available actions, assignment snapshot, template version — is kept so
+/// a list view can render rich rows without a per-row round-trip.
 /// </summary>
 public sealed record WorkItemListItemResponse(
     Guid Id,
@@ -42,7 +41,6 @@ public sealed record WorkItemListItemResponse(
     string? SubmittedBy,
     string TemplateVersion,
     JsonElement Payload,
-    IReadOnlyCollection<WorkItemTaskProgress> Tasks,
     IReadOnlyCollection<WorkItemTransition> AvailableActions,
     string? AssignedToId = null,
     string? AssignedToName = null,
@@ -55,12 +53,9 @@ public sealed record WorkItemListItemResponse(
     // condition as SlaState/SlaRemaining — no SLA clock started yet. Additive +
     // nullable, so the list DTO stays backward-compatible.
     DateTime? SlaDueDate = null,
-    // RA-372: the id of the state whose checklist Tasks actually contains.
-    // Normally equal to StateId, but a work item type may declare that another
-    // state's tasks apply while an item passes through a waypoint state
-    // (re-accreditation's 'updated'). Tasks above is projected through that
-    // same redirect, so without this a list row carries one state's progress
-    // labelled with another's and no consumer can tell. Mirrors
-    // WorkItemResponse.TaskStateId so the single-item and list shapes agree.
+    // RA-410: the state this work item returns to when its current waypoint
+    // discharges. Equal to StateId for any item not in a waypoint state.
+    // Mirrors WorkItemResponse.OriginStateId so the single-item and list
+    // shapes agree — see that field for why a client cannot derive it.
     // Additive + nullable, so the list DTO stays backward-compatible.
-    string? TaskStateId = null);
+    string? OriginStateId = null);

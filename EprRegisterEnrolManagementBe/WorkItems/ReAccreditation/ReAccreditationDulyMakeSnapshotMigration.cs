@@ -4,18 +4,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
 /// RA-316: reinstates the <c>duly-make</c> transition on the frozen
-/// <see cref="WorkItemTemplateSnapshot"/> of every re-accreditation work item,
-/// clears the two now-deleted <c>submitted</c>-state tasks from it, and bumps
-/// <see cref="WorkItem.TemplateVersion"/> from <c>v10</c> to <c>v11</c>.
+/// <see cref="WorkItemTemplateSnapshot"/> of every re-accreditation work item
+/// and bumps <see cref="WorkItem.TemplateVersion"/> from <c>v10</c> to
+/// <c>v11</c>.
 ///
 /// <see cref="WorkItemService"/> matches an action against the work item's own
 /// frozen snapshot, not the live <see cref="ReAccreditationType"/>. Without this
 /// migration every existing work item would be stranded twice over: it would
 /// have no <c>duly-make</c> transition (so the new "Duly make" call to action
 /// could not be honoured, and — with the auto-transition hook deleted — nothing
-/// else could move it out of <c>submitted</c> either), and it would still
-/// project two checklist tasks that no longer do anything. Adding the transition
-/// to the live type alone only helps work items submitted after the deploy.
+/// else could move it out of <c>submitted</c> either). Adding the transition to
+/// the live type alone only helps work items submitted after the deploy.
 ///
 /// Note this migration REVERSES part of
 /// <see cref="ReAccreditationDulyMadeSnapshotMigration"/>, which strips
@@ -25,8 +24,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// gate the two would fight on every boot, each undoing the other and leaving a
 /// window in which no item could be duly made.
 ///
-/// The migration is idempotent: items already at <c>v11</c> — snapshot carrying
-/// <c>duly-make</c> and no <c>submitted</c> tasks — are skipped.
+/// The migration is idempotent: items whose snapshot already carries
+/// <c>duly-make</c> are skipped.
 /// </summary>
 internal sealed class ReAccreditationDulyMakeSnapshotMigration(
     ILogger<ReAccreditationDulyMakeSnapshotMigration> logger
@@ -43,16 +42,13 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
         "Duly make",
         "submitted",
         "duly-made",
-        RequiresAllTasksComplete: false,
         CallerInvocable: false
     );
 
     private const string TargetVersion = "v11";
-    private const string SubmittedStateId = "submitted";
 
     public string Name =>
-        "ReAccreditation: reinstate duly-make transition and clear submitted-state tasks "
-        + "in snapshot (v10 → v11)";
+        "ReAccreditation: reinstate duly-make transition in snapshot (v10 → v11)";
 
     public async Task ApplyAsync(
         IWorkItemPersistence persistence,
@@ -183,12 +179,9 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
             return false;
         }
 
-        var missingTransition = !snapshot.Transitions.Any(t =>
+        return !snapshot.Transitions.Any(t =>
             string.Equals(t.ActionId, s_dulyMakeTransition.ActionId, StringComparison.OrdinalIgnoreCase)
         );
-        var hasStaleSubmittedTasks = snapshot.GetTasksForState(SubmittedStateId).Count > 0;
-
-        return missingTransition || hasStaleSubmittedTasks;
     }
 
     private static void PatchSnapshot(WorkItem workItem)
@@ -206,58 +199,21 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
             .Append(s_dulyMakeTransition)
             .ToList();
 
-        // Rebuild rather than mutate in place: TasksByState is a shared mutable
-        // dictionary on the deserialised snapshot, and the original may be
-        // case-sensitive depending on how it round-tripped through BSON. An
-        // explicit OrdinalIgnoreCase copy matches WorkItemTemplateSnapshot.Capture.
-        //
-        // The `?? new(...)` is the same guard GetTasksForState carries, and for
-        // the same reason (epr-dtkw): a snapshot stored without tasksByState
-        // deserialises with TasksByState null, the Dictionary copy-constructor
-        // throws ArgumentNullException on a null source, and — because such a
-        // document also lacks the duly-make transition — it reaches HERE rather
-        // than being filtered out. Without this fallback that throw is caught by
-        // the batch's per-item guard and the document is never migrated, so it
-        // keeps failing every boot and duly making keeps refusing it: the exact
-        // symptom this migration exists to remove. Rebuilding onto an empty
-        // dictionary both migrates the document and replaces the null, so a
-        // later GetTasksForState on the migrated snapshot cannot trip either.
-        var tasksByState = new Dictionary<string, List<WorkItemTask>>(
-            snapshot.TasksByState ?? [],
-            StringComparer.OrdinalIgnoreCase
-        )
-        {
-            // Empty list, not a removed key: 'submitted' is still a declared
-            // state with a known (now empty) task list, and keeping the key
-            // makes that explicit rather than leaving readers to infer it from
-            // absence.
-            [SubmittedStateId] = [],
-        };
-
         workItem.TemplateSnapshot = new WorkItemTemplateSnapshot
         {
             TemplateVersion = TargetVersion,
             States = snapshot.States,
             Transitions = transitions,
-            TasksByState = tasksByState,
         };
         workItem.TemplateVersion = TargetVersion;
 
-        // Deliberately NOT touched:
-        //
-        // 1. Any recorded completion of the two deleted tasks in
-        //    WorkItem.TaskStatusesByState / CompletedTaskIdsByState. Those are a
-        //    record of work a regulator actually did. With the tasks gone from
-        //    the snapshot the projection returns an empty list for 'submitted'
-        //    and the stale bucket is inert, so deleting it would destroy history
-        //    to no benefit.
-        //
-        // 2. The item's state. An item sitting in 'submitted' with both former
-        //    tasks ticked is NOT auto-advanced to 'duly-made' here, even though
-        //    the old hook would have advanced it. Duly making now requires a
-        //    payment date that only the regulator can supply, and inventing one
-        //    (today's date, the submission date) would anchor the 12-week SLA to
-        //    a fiction. Such items simply present the "Duly make" call to action
-        //    like any other — which is the correct destination for them.
+        // Deliberately NOT touched: the item's state. An item sitting in
+        // 'submitted' is NOT auto-advanced to 'duly-made' here, even though the
+        // old hook would have advanced one whose checklist was complete. Duly
+        // making requires a payment date that only the regulator can supply,
+        // and inventing one (today's date, the submission date) would anchor
+        // the 12-week SLA to a fiction. Such items simply present the "Duly
+        // make" call to action like any other — which is the correct
+        // destination for them.
     }
 }

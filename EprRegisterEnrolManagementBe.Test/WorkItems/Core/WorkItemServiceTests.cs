@@ -55,10 +55,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             postActionHooks: [hook]
         );
 
-    private static TestWorkItemType BuildType(
-        WorkItemTransition[]? transitions = null,
-        Dictionary<string, IReadOnlyCollection<WorkItemTask>>? tasksByState = null
-    )
+    private static TestWorkItemType BuildType(WorkItemTransition[]? transitions = null)
     {
         var states = new[]
         {
@@ -71,14 +68,12 @@ public class WorkItemServiceTests : IAsyncDisposable
             "Test type",
             initialState: states[0],
             states: states,
-            tasksByState: tasksByState,
             transitions: transitions
         );
     }
 
     private async Task<WorkItem> SeedAsync(
         string stateId = "submitted",
-        Dictionary<string, HashSet<string>>? completed = null,
         Action<WorkItem>? configure = null
     )
     {
@@ -91,16 +86,6 @@ public class WorkItemServiceTests : IAsyncDisposable
             LastModifiedAt = InitialNow,
             SubmittedBy = "test-client",
         };
-        if (completed is not null)
-        {
-            foreach (var (state, tasks) in completed)
-            {
-                workItem.CompletedTaskIdsByState[state] = new HashSet<string>(
-                    tasks,
-                    StringComparer.OrdinalIgnoreCase
-                );
-            }
-        }
         configure?.Invoke(workItem);
         await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
         return workItem;
@@ -138,181 +123,25 @@ public class WorkItemServiceTests : IAsyncDisposable
         return new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
     }
 
+    // RA-410: CompleteTaskAsync and the whole task framework it drove
+    // (CompleteTask_records_task_against_current_state_and_persists,
+    // CompleteTask_is_idempotent_when_already_complete,
+    // CompleteTask_treats_existing_completion_as_idempotent_after_bson_round_trip_with_different_casing,
+    // CompleteTask_treats_existing_completion_as_idempotent_after_bson_round_trip_with_different_state_casing,
+    // CompleteTask_fails_when_task_does_not_apply_to_current_state,
+    // CompleteTask_returns_not_found_when_work_item_missing) are gone.
+
     [Fact]
-    public async Task CompleteTask_records_task_against_current_state_and_persists()
+    public async Task ApplyAction_succeeds_now_the_task_gate_is_removed()
     {
+        // RA-410: this used to assert IncompleteTasks because "approve" was
+        // gated on two outstanding tasks. The task framework (and the gate)
+        // are gone, so the same seed now simply succeeds — regression cover
+        // for the ungating.
         var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            }
-        );
-        var workItem = await SeedAsync();
-
-        var result = await BuildService(type)
-            .CompleteTaskAsync(
-                workItem.Id,
-                "check-eligibility",
-                User(),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.True(result.IsSuccess);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Contains("check-eligibility", fetched.CompletedTaskIdsByState["submitted"]);
-        Assert.Equal(TickedNow, fetched.LastModifiedAt);
-        Assert.Equal(1, fetched.Version);
-    }
-
-    [Fact]
-    public async Task CompleteTask_is_idempotent_when_already_complete()
-    {
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            }
-        );
-        var workItem = await SeedAsync(completed: new() { ["submitted"] = ["check-eligibility"] });
-
-        var result = await BuildService(type)
-            .CompleteTaskAsync(
-                workItem.Id,
-                "check-eligibility",
-                User(),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.True(result.IsSuccess);
-        Assert.True(
-            result.IsIdempotentReplay,
-            "Re-completing an already-complete task must be flagged as a replay so "
-                + "the endpoint can set X-Idempotent-Replay: true."
-        );
-
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal(InitialNow, fetched.LastModifiedAt);
-        Assert.Equal(0, fetched.Version);
-        Assert.DoesNotContain(fetched.AuditLog, a => a.Action == "task-completed");
-    }
-
-    [Fact]
-    public async Task CompleteTask_treats_existing_completion_as_idempotent_after_bson_round_trip_with_different_casing()
-    {
-        // Regression for epr-aq5: a task id written as "Task1" must be
-        // recognised as already-complete when re-completed as "task1" on a
-        // freshly-loaded (Mongo round-tripped) work item. The ephemeral
-        // MongoDB load IS the round-trip — no manual ToBsonDocument needed.
-        WorkItemBsonRegistration.Register();
-
-        var type = BuildType(
-            tasksByState: new() { ["submitted"] = [new WorkItemTask("task1", "Task one")] }
-        );
-        var workItem = await SeedAsync(
-            completed: new()
-            {
-                ["submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "Task1" },
-            }
-        );
-
-        var result = await BuildService(type)
-            .CompleteTaskAsync(workItem.Id, "task1", User(), TestContext.Current.CancellationToken);
-
-        Assert.True(result.IsSuccess);
-        Assert.True(
-            result.IsIdempotentReplay,
-            "Engine must recognise the already-complete task across casing differences "
-                + "after a Mongo round-trip."
-        );
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal(0, fetched.Version);
-    }
-
-    [Fact]
-    public async Task CompleteTask_treats_existing_completion_as_idempotent_after_bson_round_trip_with_different_state_casing()
-    {
-        // Regression for epr-aq5: the dictionary key (state id) must also
-        // match case-insensitively after a Mongo round-trip. A bucket
-        // recorded under "Submitted" must be found under "submitted".
-        WorkItemBsonRegistration.Register();
-
-        var type = BuildType(
-            tasksByState: new() { ["submitted"] = [new WorkItemTask("task1", "Task one")] }
-        );
-        var workItem = await SeedAsync(
-            stateId: "submitted",
-            completed: new()
-            {
-                ["Submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "task1" },
-            }
-        );
-
-        var result = await BuildService(type)
-            .CompleteTaskAsync(workItem.Id, "task1", User(), TestContext.Current.CancellationToken);
-
-        Assert.True(result.IsSuccess);
-        Assert.True(result.IsIdempotentReplay);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal(0, fetched.Version);
-    }
-
-    [Fact]
-    public async Task CompleteTask_fails_when_task_does_not_apply_to_current_state()
-    {
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            }
-        );
-        var workItem = await SeedAsync();
-
-        var result = await BuildService(type)
-            .CompleteTaskAsync(
-                workItem.Id,
-                "unknown-task",
-                User(),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.TaskNotApplicable, result.FailureCode);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal(0, fetched.Version);
-    }
-
-    [Fact]
-    public async Task CompleteTask_returns_not_found_when_work_item_missing()
-    {
-        var type = BuildType();
-
-        var result = await BuildService(type)
-            .CompleteTaskAsync(
-                Guid.NewGuid(),
-                "any",
-                User(),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
-    }
-
-    [Fact]
-    public async Task ApplyAction_blocks_approve_while_tasks_outstanding()
-    {
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] =
-                [
-                    new WorkItemTask("check-eligibility", "Check eligibility"),
-                    new WorkItemTask("verify-documents", "Verify documents"),
-                ],
-            },
             transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
         );
-        var workItem = await SeedAsync(completed: new() { ["submitted"] = ["check-eligibility"] });
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type)
             .ApplyActionAsync(
@@ -322,24 +151,19 @@ public class WorkItemServiceTests : IAsyncDisposable
                 TestContext.Current.CancellationToken
             );
 
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
+        Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
-        Assert.Equal("submitted", fetched.StateId);
-        Assert.Equal(0, fetched.Version);
+        Assert.Equal("approved", fetched.StateId);
+        Assert.Equal(1, fetched.Version);
     }
 
     [Fact]
     public async Task ApplyAction_transitions_when_all_tasks_complete()
     {
         var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            },
             transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
         );
-        var workItem = await SeedAsync(completed: new() { ["submitted"] = ["check-eligibility"] });
+        var workItem = await SeedAsync();
 
         var result = await BuildService(type)
             .ApplyActionAsync(
@@ -357,102 +181,16 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task ApplyAction_blocks_transition_when_only_canonical_map_marks_task_incomplete()
-    {
-        // epr-08y: HasIncompleteTasks must consult TaskStatusesByState
-        // first (canonical per epr-gl6) and only fall back to the legacy
-        // CompletedTaskIdsByState bucket. If a future code path writes
-        // only to the canonical map, gating must still respect it.
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            },
-            transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
-        );
-        var workItem = await SeedAsync(
-            completed: new()
-            {
-                // Stale legacy bucket says the task IS complete...
-                ["submitted"] = ["check-eligibility"],
-            },
-            configure: w =>
-            {
-                // ...but the canonical per-task status map says it is in progress.
-                w.TaskStatusesByState["submitted"] = new(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["check-eligibility"] = WorkItemTaskStatus.InProgress,
-                };
-            }
-        );
-
-        var result = await BuildService(type)
-            .ApplyActionAsync(
-                workItem.Id,
-                "approve",
-                User(),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.IncompleteTasks, result.FailureCode);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal("submitted", fetched.StateId);
-        Assert.Equal(0, fetched.Version);
-    }
-
-    [Fact]
-    public async Task ApplyAction_transitions_when_only_canonical_map_marks_task_complete()
-    {
-        // epr-08y: a v2 module that writes only to the canonical
-        // TaskStatusesByState (without dual-writing the legacy bucket)
-        // must still be allowed to transition once tasks are Completed.
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            },
-            transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
-        );
-        var workItem = await SeedAsync(configure: w =>
-        {
-            // Canonical only — legacy CompletedTaskIdsByState bucket left empty.
-            w.TaskStatusesByState["submitted"] = new(StringComparer.OrdinalIgnoreCase)
-            {
-                ["check-eligibility"] = WorkItemTaskStatus.Completed,
-            };
-        });
-
-        var result = await BuildService(type)
-            .ApplyActionAsync(
-                workItem.Id,
-                "approve",
-                User(),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.True(result.IsSuccess);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal("approved", fetched.StateId);
-        Assert.Equal(1, fetched.Version);
-    }
-
-    [Fact]
-    public async Task ApplyAction_allows_action_that_does_not_require_task_completion()
+    public async Task ApplyAction_transitions_via_a_different_declared_action()
     {
         var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            },
             transitions:
             [
                 new WorkItemTransition(
                     "withdraw",
                     "Withdraw",
                     "submitted",
-                    "rejected",
-                    RequiresAllTasksComplete: false
+                    "rejected"
                 ),
             ]
         );
@@ -507,31 +245,6 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task CompleteTask_returns_ConcurrencyConflict_when_persistence_throws()
-    {
-        // Real concurrency conflict via on-disk version race rather than
-        // a mocked exception (epr-efp).
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            }
-        );
-        var workItem = await SeedAsync();
-        var racingService = BuildRacingService(type, workItem.Id);
-
-        var result = await racingService.CompleteTaskAsync(
-            workItem.Id,
-            "check-eligibility",
-            User(),
-            TestContext.Current.CancellationToken
-        );
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
-    }
-
-    [Fact]
     public async Task ApplyAction_returns_ConcurrencyConflict_when_persistence_throws()
     {
         var type = BuildType(
@@ -541,8 +254,7 @@ public class WorkItemServiceTests : IAsyncDisposable
                     "approve",
                     "Approve",
                     "submitted",
-                    "approved",
-                    RequiresAllTasksComplete: false
+                    "approved"
                 ),
             ]
         );
@@ -558,31 +270,6 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
-    }
-
-    [Fact]
-    public async Task CompleteTask_returns_MissingActorIdentity_when_user_id_absent()
-    {
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            }
-        );
-        var workItem = await SeedAsync();
-
-        var result = await BuildService(type)
-            .CompleteTaskAsync(
-                workItem.Id,
-                "check-eligibility",
-                UserWithoutActorId(),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Equal(0, fetched.Version);
     }
 
     [Fact]
@@ -608,13 +295,14 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Project_lists_only_actions_whose_preconditions_are_met()
+    public async Task Project_lists_all_actions_now_the_task_gate_is_removed()
     {
+        // RA-410: this used to assert that only "withdraw" was available
+        // because "approve" and "reject" were gated on an outstanding task.
+        // The task framework (and the gate) are gone, so all three
+        // caller-invocable transitions from the current state are now
+        // listed — regression cover for the ungating.
         var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            },
             transitions:
             [
                 new WorkItemTransition("approve", "Approve", "submitted", "approved"),
@@ -623,8 +311,7 @@ public class WorkItemServiceTests : IAsyncDisposable
                     "withdraw",
                     "Withdraw",
                     "submitted",
-                    "rejected",
-                    RequiresAllTasksComplete: false
+                    "rejected"
                 ),
             ]
         );
@@ -643,11 +330,9 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var projection = BuildService(type).Project(workItem);
 
-        Assert.Single(projection.Tasks);
-        Assert.False(projection.Tasks.Single().IsComplete);
-
-        // Approve and reject are gated; withdraw is always available.
-        Assert.Equal(["withdraw"], projection.AvailableActions.Select(a => a.ActionId).ToArray());
+        Assert.Equal(
+            ["approve", "reject", "withdraw"],
+            projection.AvailableActions.Select(a => a.ActionId).OrderBy(a => a).ToArray());
     }
 
     [Fact]
@@ -661,14 +346,11 @@ public class WorkItemServiceTests : IAsyncDisposable
             transitions:
             [
                 new WorkItemTransition(
-                    "resume-a", "Resume", "submitted", "approved",
-                    RequiresAllTasksComplete: false, CallerInvocable: false),
+                    "resume-a", "Resume", "submitted", "approved", CallerInvocable: false),
                 new WorkItemTransition(
-                    "resume-b", "Resume", "submitted", "rejected",
-                    RequiresAllTasksComplete: false, CallerInvocable: false),
+                    "resume-b", "Resume", "submitted", "rejected", CallerInvocable: false),
                 new WorkItemTransition(
-                    "withdraw", "Withdraw", "submitted", "rejected",
-                    RequiresAllTasksComplete: false),
+                    "withdraw", "Withdraw", "submitted", "rejected"),
             ]
         );
         var workItem = new WorkItem
@@ -698,11 +380,9 @@ public class WorkItemServiceTests : IAsyncDisposable
             transitions:
             [
                 new WorkItemTransition(
-                    "approve", "Approve", "submitted", "approved",
-                    RequiresAllTasksComplete: false),
+                    "approve", "Approve", "submitted", "approved"),
                 new WorkItemTransition(
-                    "reject", "Reject", "submitted", "rejected",
-                    RequiresAllTasksComplete: false),
+                    "reject", "Reject", "submitted", "rejected"),
             ]
         );
         var workItem = new WorkItem
@@ -733,40 +413,6 @@ public class WorkItemServiceTests : IAsyncDisposable
             transitions:
             [
                 new WorkItemTransition(
-                    "resume-a", "Resume", "submitted", "approved",
-                    RequiresAllTasksComplete: false, CallerInvocable: false),
-            ]
-        );
-        var workItem = new WorkItem
-        {
-            Id = Guid.NewGuid(),
-            TypeId = TypeId,
-            StateId = "submitted",
-            SubmittedAt = InitialNow,
-            LastModifiedAt = InitialNow,
-            SubmittedBy = "test-client",
-        };
-
-        var projection = BuildService(type).Project(workItem);
-
-        Assert.Empty(projection.AvailableActions);
-        await Task.CompletedTask;
-    }
-
-    [Fact]
-    public async Task Project_excludes_non_invocable_transition_even_when_tasks_are_complete()
-    {
-        // Covers the interaction of the two predicates: a transition that
-        // passes the RequiresAllTasksComplete gate must still be dropped when
-        // it is not caller-invocable.
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            },
-            transitions:
-            [
-                new WorkItemTransition(
                     "resume-a", "Resume", "submitted", "approved", CallerInvocable: false),
             ]
         );
@@ -778,18 +424,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             SubmittedAt = InitialNow,
             LastModifiedAt = InitialNow,
             SubmittedBy = "test-client",
-            CompletedTaskIdsByState =
-            {
-                ["submitted"] = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-                {
-                    "check-eligibility",
-                },
-            },
         };
 
         var projection = BuildService(type).Project(workItem);
 
-        Assert.True(projection.Tasks.Single().IsComplete);
         Assert.Empty(projection.AvailableActions);
         await Task.CompletedTask;
     }
@@ -813,7 +451,6 @@ public class WorkItemServiceTests : IAsyncDisposable
         var projection = BuildService(type).Project(workItem);
 
         Assert.Empty(projection.AvailableActions);
-        Assert.Empty(projection.Tasks);
         await Task.CompletedTask;
     }
 
@@ -1526,83 +1163,12 @@ public class WorkItemServiceTests : IAsyncDisposable
             )
         );
 
-    [Fact]
-    public async Task Audit_CompleteTask_appends_entry_with_actor_and_task_details()
-    {
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            }
-        );
-        var workItem = await SeedAsync();
-
-        await BuildService(type)
-            .CompleteTaskAsync(
-                workItem.Id,
-                "check-eligibility",
-                AuditUser(),
-                TestContext.Current.CancellationToken
-            );
-
-        var fetched = await GetAsync(workItem.Id);
-        var entry = Assert.Single(fetched.AuditLog);
-        Assert.Equal("task-completed", entry.Action);
-        Assert.Equal("Task completed", entry.ActionDisplayName);
-        Assert.Equal("alice-1", entry.CreatedBy);
-        Assert.Equal("Alice Example", entry.CreatedByName);
-        Assert.Equal(TickedNow, entry.CreatedAt);
-        Assert.Equal("check-eligibility", entry.Details["taskId"]);
-        Assert.Equal("Check eligibility", entry.Details["taskDisplayName"]);
-        Assert.Equal("submitted", entry.Details["stateId"]);
-    }
-
-    [Fact]
-    public async Task Audit_CompleteTask_idempotent_call_does_not_append_a_second_entry()
-    {
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            }
-        );
-        var workItem = await SeedAsync(completed: new() { ["submitted"] = ["check-eligibility"] });
-
-        await BuildService(type)
-            .CompleteTaskAsync(
-                workItem.Id,
-                "check-eligibility",
-                AuditUser(),
-                TestContext.Current.CancellationToken
-            );
-
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Empty(fetched.AuditLog);
-    }
-
-    [Fact]
-    public async Task Audit_CompleteTask_failure_does_not_append_an_entry()
-    {
-        var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            }
-        );
-        var workItem = await SeedAsync();
-
-        var result = await BuildService(type)
-            .CompleteTaskAsync(
-                workItem.Id,
-                "unknown-task",
-                AuditUser(),
-                TestContext.Current.CancellationToken
-            );
-
-        Assert.False(result.IsSuccess);
-        var fetched = await GetAsync(workItem.Id);
-        Assert.Empty(fetched.AuditLog);
-    }
+    // RA-410: the CompleteTaskAsync audit coverage that used to live here
+    // (Audit_CompleteTask_appends_entry_with_actor_and_task_details,
+    // Audit_CompleteTask_idempotent_call_does_not_append_a_second_entry,
+    // Audit_CompleteTask_failure_does_not_append_an_entry) is gone along with
+    // the method itself. Audit_ApplyAction_* below covers the same
+    // append-on-success / no-entry-on-idempotent-or-failure contract.
 
     [Fact]
     public async Task Audit_ApplyAction_records_from_and_to_state()
@@ -1614,8 +1180,7 @@ public class WorkItemServiceTests : IAsyncDisposable
                     "withdraw",
                     "Withdraw",
                     "submitted",
-                    "rejected",
-                    RequiresAllTasksComplete: false
+                    "rejected"
                 ),
             ]
         );
@@ -1644,14 +1209,14 @@ public class WorkItemServiceTests : IAsyncDisposable
     [Fact]
     public async Task Audit_ApplyAction_invalid_transition_does_not_append_an_entry()
     {
+        // RA-410: this used to reach the failure via an outstanding task
+        // (IncompleteTasks), which no longer gates anything. A genuinely
+        // invalid transition — the action's FromStateId does not match the
+        // item's current state — still fails and must still write no entry.
         var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            },
             transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
         );
-        var workItem = await SeedAsync();
+        var workItem = await SeedAsync(stateId: "rejected");
 
         var result = await BuildService(type)
             .ApplyActionAsync(
@@ -1662,6 +1227,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             );
 
         Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
         var fetched = await GetAsync(workItem.Id);
         Assert.Empty(fetched.AuditLog);
     }
@@ -1806,11 +1372,11 @@ public class WorkItemServiceTests : IAsyncDisposable
     [Fact]
     public async Task Audit_log_is_chronological_across_a_sequence_of_actions()
     {
+        // RA-410: the middle step used to be CompleteTaskAsync; the task
+        // framework is gone, so AssignAsync stands in as the second of three
+        // distinct engine mutations — the ordering behaviour under test does
+        // not depend on which mutations they are.
         var type = BuildType(
-            tasksByState: new()
-            {
-                ["submitted"] = [new WorkItemTask("check-eligibility", "Check eligibility")],
-            },
             transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
         );
         var workItem = await SeedAsync();
@@ -1830,9 +1396,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             TestContext.Current.CancellationToken
         );
         time.Advance(TimeSpan.FromMinutes(1));
-        await service.CompleteTaskAsync(
+        await service.AssignAsync(
             workItem.Id,
-            "check-eligibility",
+            "alice-1",
+            "Alice Example",
             AuditUser(),
             TestContext.Current.CancellationToken
         );
@@ -1847,7 +1414,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         var fetched = await GetAsync(workItem.Id);
         Assert.Equal(3, fetched.AuditLog.Count);
         Assert.Equal(
-            ["note-added", "task-completed", "action-applied"],
+            ["note-added", "assigned", "action-applied"],
             fetched.AuditLog.Select(e => e.Action).ToArray()
         );
         // Strictly increasing timestamps — entries are appended in
