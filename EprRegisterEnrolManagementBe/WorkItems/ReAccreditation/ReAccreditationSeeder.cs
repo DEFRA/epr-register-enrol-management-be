@@ -287,6 +287,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorApplicationId"] = "app-full-payload-001",
                 ["operatorOrganisationId"] = "org-full-payload-001",
                 ["operatorRegistrationId"] = "reg-full-payload-001",
+                // RA-412: this item carries overseasSites/BES evidence below, so
+                // it must declare the real discriminator management-fe's
+                // isExporterApplication() now reads — without it the item reads
+                // as a Reprocessor and the BES/ORS sections stop rendering.
+                ["wasteProcessingType"] = "exporter",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
@@ -465,6 +470,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorApplicationId"] = "app-ors-interim-authority-001",
                 ["operatorOrganisationId"] = "org-ors-interim-authority-001",
                 ["operatorRegistrationId"] = "reg-ors-interim-authority-001",
+                // RA-412: see the same field on the full-payload-verification
+                // item above — this item's overseasSites/ORS sites need it too.
+                ["wasteProcessingType"] = "exporter",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
