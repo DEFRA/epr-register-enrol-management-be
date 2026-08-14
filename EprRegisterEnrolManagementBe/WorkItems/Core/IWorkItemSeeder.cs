@@ -7,7 +7,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// is empty — so seed data never clobbers a real environment.
 ///
 /// Modules opt in by registering an implementation of this interface from
-/// their <see cref="IWorkItemModule.RegisterServices(IServiceCollection)"/>.
+/// their <see cref="IWorkItemModule.RegisterServices(IServiceCollection, IConfiguration)"/>.
 /// </summary>
 public interface IWorkItemSeeder
 {

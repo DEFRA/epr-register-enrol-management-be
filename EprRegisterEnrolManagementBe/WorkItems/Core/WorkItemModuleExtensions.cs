@@ -73,13 +73,15 @@ public static class WorkItemModuleExtensions
     /// Register a single work item module: its type, its services, and itself
     /// as an <see cref="IWorkItemModule"/> so its endpoints can be mapped later.
     /// </summary>
-    public static IServiceCollection AddWorkItemModule<TModule>(this IServiceCollection services)
+    public static IServiceCollection AddWorkItemModule<TModule>(
+        this IServiceCollection services,
+        IConfiguration configuration)
         where TModule : class, IWorkItemModule, new()
     {
         var module = new TModule();
         services.AddSingleton<IWorkItemModule>(module);
         services.AddSingleton(module.Type);
-        module.RegisterServices(services);
+        module.RegisterServices(services, configuration);
         return services;
     }
 

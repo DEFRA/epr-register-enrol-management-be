@@ -9,6 +9,27 @@ namespace EprRegisterEnrolManagementBe.Notifications;
 public sealed class NotifyConfig
 {
     /// <summary>
+    /// RA-422: central master switch for ALL outbound Case Management email
+    /// (to operators and regulators) AND the <c>notification-*</c> audit-log
+    /// entries the notification flow writes. Defaults to <c>false</c> — emails
+    /// are off on every environment following regulator feedback. When
+    /// <c>false</c>, the no-op Notify client is registered (nothing is sent)
+    /// and the re-accreditation notification post-action hook is not registered
+    /// at all, so no <c>notification-sent/skipped/failed</c> audit entries are
+    /// written either. Re-enable later per environment with the
+    /// <c>Notify__Enabled=true</c> environment override (CDP injects env vars).
+    /// The gate is read once at startup via
+    /// <see cref="NotifyFeature.NotificationsEnabled"/>, which reads the raw
+    /// configuration key directly (the options graph is not yet built at service
+    /// registration). This bound property is the config model for that key and
+    /// carries the same value at runtime, but it is NOT what the
+    /// registration gate consults — treat <see cref="NotifyFeature"/> as the
+    /// authoritative switch rather than an injected
+    /// <c>IOptions&lt;NotifyConfig&gt;.Enabled</c>.
+    /// </summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>
     /// Optional override for the Notify base URI. Defaults to the
     /// production <c>https://api.notifications.service.gov.uk/</c> baked
     /// into the GovukNotify SDK when null/empty.

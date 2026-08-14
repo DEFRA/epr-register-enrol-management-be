@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 
@@ -16,7 +17,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
 
     public IWorkItemType Type => s_type;
 
-    public void RegisterServices(IServiceCollection services)
+    public void RegisterServices(IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton<INationResolver, NationResolver>();
         services.AddSingleton<IRegulatorMailboxResolver, RegulatorMailboxResolver>();
@@ -29,7 +30,16 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // establishes. The clock is started once, by
         // ReAccreditationDulyMakingService, and payment-received no longer
         // touches it.
-        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
+        // RA-422: outbound CM email + every notification-* audit entry flow
+        // through this one hook, so gating its registration on the central
+        // Notify:Enabled flag is the single chokepoint for both concerns. When
+        // notifications are disabled the hook is never registered, so no email
+        // is sent AND no notification-sent/skipped/failed audit entries are
+        // written. See NotifyFeature / ConfigureNotifications in Program.cs.
+        if (NotifyFeature.NotificationsEnabled(configuration))
+        {
+            services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
+        }
         // RA-311/MBE-1: pushes the query note + sections to the operator
         // backend whenever a query is raised.
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
