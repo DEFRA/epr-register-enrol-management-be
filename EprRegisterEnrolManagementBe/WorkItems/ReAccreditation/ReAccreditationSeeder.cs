@@ -58,6 +58,21 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// </summary>
     public const string OrsInterimAuthorityOrganisationName = "Overseas Reprocessing Verification Ltd";
 
+    /// <summary>
+    /// RA-412 fixture seed key. Its own key for the same reason as
+    /// <see cref="OrsInterimAuthoritySeedKey"/> — a new key is inserted on the
+    /// next boot regardless of what an already-seeded database has.
+    /// </summary>
+    public const string GlobalGlassExportsSeedKey = "global-glass-exports";
+
+    /// <summary>
+    /// Organisation name of the RA-412 fixture — org 50006 in the ticket's own
+    /// example. Unique across the seed set so an mgmt-tests search by
+    /// organisation name resolves to exactly one row, the same discipline as
+    /// <see cref="OrsInterimAuthorityOrganisationName"/>.
+    /// </summary>
+    public const string GlobalGlassExportsOrganisationName = "Global Glass Exports";
+
     public string TypeId => ReAccreditationType.Id;
 
     public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
@@ -710,6 +725,38 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         }
                     }
                 }
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // RA-412: a genuine Exporter organisation — org 50006 "Global Glass
+        // Exports" in the ticket's own example. Unlike
+        // full-payload-verification/ors-interim-authority above (which only
+        // need wasteProcessingType so their overseasSites data reads
+        // correctly), this item's whole point IS being a real Exporter
+        // application: it proves the work-items card label and the
+        // Applicant-type filter both resolve a genuine exporter, not just
+        // avoid mislabelling one that happens to carry overseas site data.
+        // Deliberately a plain item with no overseasSites/BES payload of its
+        // own — that positive case is already covered by the two fixtures
+        // above.
+        yield return Build(
+            seedKey: GlobalGlassExportsSeedKey,
+            postcode: "M1 1AE",
+            submittedDaysAgo: 7,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = GlobalGlassExportsOrganisationName,
+                ["registrationNumber"] = "EPR-100506",
+                ["operatorRegistrationId"] = "reg-050006",
+                ["wasteProcessingType"] = "exporter",
+                ["material"] = "glass",
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "global.glass.exports@example.com",
+                ["siteAddressPostcode"] = "M1 1AE",
+                ["chargeAmountPence"] = 54600,
             },
             submittedBy: "stub-portal-client",
             now: now);

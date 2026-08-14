@@ -666,5 +666,61 @@ public class ReAccreditationSeederTests
         // the framework stamps on all of them.
         Assert.All(items, i => Assert.True(i.Payload.Contains("applicationReference")));
     }
+
+    // ── RA-412: genuine Exporter organisation fixture ─────────────────────────
+
+    /// <summary>
+    /// The RA-412 fixture, located the way mgmt-tests locates it — by the
+    /// organisation name the work-items list is searchable on.
+    /// </summary>
+    private static WorkItem BuildGlobalGlassExportsFixture()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        return items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.GlobalGlassExportsOrganisationName);
+    }
+
+    [Fact]
+    public void Build_ra412_fixture_organisation_name_is_unique_across_the_seed_set()
+    {
+        // mgmt-tests reaches this item by searching the work-items list on the
+        // organisation name and asserting exactly one row. A duplicate here
+        // would make that search ambiguous and the spec flaky.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var matches = items.Count(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.GlobalGlassExportsOrganisationName);
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
+    public void Build_ra412_fixture_has_its_own_seed_key_so_it_lands_in_already_seeded_databases()
+    {
+        // Seeding is CreateIfAbsentAsync keyed by a deterministic id: it
+        // inserts, it never updates. A new key is inserted on the next boot
+        // regardless of what an already-seeded database has.
+        var expectedId = WorkItemSeed.DeterministicId(
+            ReAccreditationType.Id, ReAccreditationSeeder.GlobalGlassExportsSeedKey);
+
+        Assert.Equal(expectedId, BuildGlobalGlassExportsFixture().Id);
+    }
+
+    [Fact]
+    public void Build_ra412_fixture_carries_wasteProcessingType_exporter()
+    {
+        // The whole point of this fixture: a genuine exporter application the
+        // card label and the Applicant-type filter can both resolve, proving
+        // the positive case rather than just the "don't mislabel a Reprocessor
+        // that happens to carry overseas data" case the other two RA-412
+        // payload["wasteProcessingType"] edits cover.
+        var fixture = BuildGlobalGlassExportsFixture();
+
+        Assert.Equal("exporter", fixture.Payload["wasteProcessingType"].AsString);
+    }
 }
 
