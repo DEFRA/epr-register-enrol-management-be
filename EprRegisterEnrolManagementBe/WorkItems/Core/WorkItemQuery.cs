@@ -42,6 +42,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <see cref="EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.Nation"/>
 /// enum members (e.g. <c>England</c>, <c>NorthernIreland</c>).
 /// </param>
+/// <param name="WasteProcessingTypes">
+/// Restrict to items whose <c>payload.wasteProcessingType</c> matches one of
+/// these values (case-insensitive exact match, e.g. <c>exporter</c>,
+/// <c>reprocessor</c>). Empty/null means "any type". There is no backend
+/// enum for this field — it is written verbatim by the submitting caller
+/// (RA-314) — so, unlike <paramref name="Nations"/>, values are matched as
+/// free-form strings rather than canonicalised against a known set.
+/// </param>
 /// <param name="IncludeArchived">
 /// When <c>false</c> (the default), items whose <see cref="WorkItem.StateId"/>
 /// is <c>"approved"</c> are excluded from the results. The approved state is the
@@ -61,6 +69,7 @@ public sealed record WorkItemQuery(
     int PageSize = 20,
     string? SubmittedBy = null,
     IReadOnlyCollection<string>? Nations = null,
+    IReadOnlyCollection<string>? WasteProcessingTypes = null,
     bool IncludeArchived = false,
     string? OrgId = null,
     string? RegistrationId = null,

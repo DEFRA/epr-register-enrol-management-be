@@ -421,4 +421,74 @@ public class WorkItemPersistenceBuildFilterTests
 
         Assert.Equal(new BsonDocument(), doc);
     }
+
+    // ───────────────────────── WasteProcessingType (RA-412) ─────────────────────────
+
+    [Fact]
+    public void SingleWasteProcessingTypeRendersAsAnchoredCaseInsensitiveRegex()
+    {
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }));
+
+        var regex = doc["payload.wasteProcessingType"].AsBsonRegularExpression;
+        Assert.Equal("^exporter$", regex.Pattern);
+        Assert.Equal("i", regex.Options);
+    }
+
+    [Fact]
+    public void WasteProcessingTypeMatchIsCaseInsensitive()
+    {
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "Exporter" }));
+
+        var regex = doc["payload.wasteProcessingType"].AsBsonRegularExpression;
+        Assert.Equal("^Exporter$", regex.Pattern);
+        Assert.Equal("i", regex.Options);
+    }
+
+    [Fact]
+    public void MultipleWasteProcessingTypesRenderAsOrOfAnchoredRegexes()
+    {
+        var doc = Render(new WorkItemQuery(
+            WasteProcessingTypes: new[] { "exporter", "reprocessor" }));
+
+        var or = doc["$or"].AsBsonArray;
+        Assert.Equal(2, or.Count);
+        Assert.Equal("^exporter$", or[0]["payload.wasteProcessingType"].AsBsonRegularExpression.Pattern);
+        Assert.Equal("^reprocessor$", or[1]["payload.wasteProcessingType"].AsBsonRegularExpression.Pattern);
+    }
+
+    [Fact]
+    public void WasteProcessingTypeEscapesRegexMetacharacters()
+    {
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "a.b" }));
+
+        var pattern = doc["payload.wasteProcessingType"].AsBsonRegularExpression.Pattern;
+        Assert.Equal(@"^a\.b$", pattern);
+    }
+
+    [Fact]
+    public void EmptyWasteProcessingTypesIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: Array.Empty<string>()));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void NullWasteProcessingTypesIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: null));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void WasteProcessingTypesAndTypeIdsCombineCorrectly()
+    {
+        var doc = Render(new WorkItemQuery(
+            TypeIds: new[] { "re-accreditation" },
+            WasteProcessingTypes: new[] { "exporter" }));
+
+        Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
+        Assert.Equal("^exporter$", doc["payload.wasteProcessingType"].AsBsonRegularExpression.Pattern);
+    }
 }

@@ -347,6 +347,24 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
                 : builder.Or(materialClauses));
         }
 
+        // RA-412: applicant-type filter. payload.wasteProcessingType has no
+        // backend enum (it is written verbatim by the submitting caller, see
+        // AccreditationIdGenerator / ApplicationReferenceGenerator), so match
+        // each requested value case-insensitively as an exact token, same as
+        // the Materials clause above, and OR multiple selections together.
+        if (query.WasteProcessingTypes is { Count: > 0 } wasteProcessingTypes)
+        {
+            var wasteProcessingTypeClauses = wasteProcessingTypes
+                .Select(t => builder.Regex(
+                    "payload.wasteProcessingType",
+                    new MongoDB.Bson.BsonRegularExpression(
+                        $"^{System.Text.RegularExpressions.Regex.Escape(t)}$", "i")))
+                .ToList();
+            clauses.Add(wasteProcessingTypeClauses.Count == 1
+                ? wasteProcessingTypeClauses[0]
+                : builder.Or(wasteProcessingTypeClauses));
+        }
+
         var assigneeId = query.NormalisedAssigneeId;
         if (assigneeId is not null && query.UnassignedOnly)
         {
