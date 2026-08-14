@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "embedded",
-  "dolt_database": "epr_register_enrol_management_be",
-  "project_id": "18058fb3-88f5-4432-81b6-0eee9d58aaf4"
-}
