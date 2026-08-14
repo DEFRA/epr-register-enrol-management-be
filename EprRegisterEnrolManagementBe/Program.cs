@@ -209,7 +209,7 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
                     configuration.GetValue<string>("OPERATOR_SERVICE_BASE_URL") ?? string.Empty
         );
     services.AddSingleton<ISlaService, SlaService>();
-    services.AddWorkItemModule<ReAccreditationModule>();
+    services.AddWorkItemModule<ReAccreditationModule>(builder.Configuration);
     services.AddHostedService<SlaBreachBackgroundService>();
     services.AddHostedService<ArchiveBackgroundService>();
 
@@ -413,7 +413,6 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
 {
     MongoExtensions.Register();
     MongoConventions.Register();
-    WorkItemBsonRegistration.Register();
 
     services
         .AddOptions<MongoConfig>()
@@ -522,7 +521,13 @@ static void ConfigureNotifications(IServiceCollection services, IConfiguration c
 
     var apiKey = configuration.GetValue<string>("NOTIFY_API_KEY");
 
-    if (string.IsNullOrWhiteSpace(apiKey))
+    // RA-422: outbound CM email is centrally disabled via Notify:Enabled
+    // (default false). Register the no-op client when notifications are
+    // disabled OR no API key is configured — belt-and-braces, so no real email
+    // can leave even if something resolves INotifyClient directly. The
+    // notification post-action hook (which also writes the notification-* audit
+    // entries) is gated on the same flag in ReAccreditationModule.
+    if (!NotifyFeature.NotificationsEnabled(configuration) || string.IsNullOrWhiteSpace(apiKey))
     {
         services.AddSingleton<INotifyClient, NoOpNotifyClient>();
         return;
@@ -645,8 +650,10 @@ static void LogNotifyClientRegistration(WebApplication app)
         app.Configuration.GetValue<string>("NOTIFY_API_KEY")
     );
     app.Logger.LogInformation(
-        "Notify integration: client={NotifyClientType} apiKeyConfigured={ApiKeyConfigured} "
-            + "baseUri={NotifyBaseUri} timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
+        "Notify integration: enabled={NotificationsEnabled} client={NotifyClientType} "
+            + "apiKeyConfigured={ApiKeyConfigured} baseUri={NotifyBaseUri} "
+            + "timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
+        NotifyFeature.NotificationsEnabled(app.Configuration),
         notifyClient.GetType().FullName,
         apiKeyConfigured,
         string.IsNullOrWhiteSpace(notifyOptions.BaseUri) ? "<sdk-default>" : notifyOptions.BaseUri,

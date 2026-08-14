@@ -289,6 +289,50 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
+    public async Task Submit_does_not_bind_OperatorEmail_from_a_misnamed_email_field()
+    {
+        // RA-123 regression guard. The operator address must arrive under
+        // `operatorEmail`; a field-name mismatch (e.g. the frontend posting
+        // `email`) must leave OperatorEmail null rather than silently binding,
+        // so the notification flow skips rather than emailing the wrong value.
+        //
+        // This is the negative half of the contract the mgmt-tests
+        // re-accreditation-operator-email-contract e2e spec used to observe via
+        // the "Submission confirmation email sent" audit row. RA-422 disabled
+        // that row (Notify:Enabled default false), so the contract is now pinned
+        // here at the deserialisation boundary: the positive case is covered by
+        // Submit_persists_every_field_from_a_real_operator_submission_payload
+        // above; this test proves the wrong field name does not bind.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var body = new
+        {
+            typeId = ReAccreditationType.Id,
+            source = "operator-fe",
+            payload = new
+            {
+                organisationName = "Contract Test Organisation",
+                registrationNumber = "EPR-100024",
+                material = "plastic",
+                // Deliberately the wrong field name — the RA-123 bug.
+                email = "wrong-field@example.com",
+            },
+        };
+
+        var response = await client.PostAsJsonAsync("/work-items", body, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var persisted = await factory.Persistence.GetByIdAsync(created!.Id, cancellationToken);
+        Assert.NotNull(persisted);
+
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(persisted!.Payload);
+        Assert.Null(payload.OperatorEmail);
+    }
+
+    [Fact]
     public async Task Submit_round_trips_ra292_ors_interim_and_authoriser_fields_to_the_get_response()
     {
         // RA-292: AC01-AC04 are rendered by the case management frontend from
@@ -488,21 +532,22 @@ public class ReAccreditationEndpointTests
         Assert.False(authorisers[2].TryGetProperty("isNew", out _));
     }
 
-    // -------------------- RecordDecisionRationale (atomicity) --------------------
+    // -------------------- RecordDecisionRationale --------------------
 
     [Fact]
-    public async Task RecordDecisionRationale_persists_note_and_completion_in_a_single_write()
+    public async Task RecordDecisionRationale_persists_a_note()
     {
+        // RA-410: this endpoint used to also tick the record-decision-rationale
+        // task in the same atomic write, gating approve/reject. The task
+        // framework (and the gate) are gone, so the endpoint is now purely a
+        // note write — see ReAccreditationEndpoints.RecordDecisionRationale.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        // RA-346: this test exercises the not-started -> completed path,
-        // so it must seed an outstanding task rather than take the
-        // builder's approve-oriented default.
         await factory.SeedAsync(
-            BuildAwaitingDecision(id, TenantClientId, completeTasks: false),
+            BuildAwaitingDecision(id, TenantClientId),
             cancellationToken
         );
 
@@ -518,28 +563,14 @@ public class ReAccreditationEndpointTests
         Assert.NotNull(persisted);
         var note = Assert.Single(persisted!.Notes);
         Assert.StartsWith("[decision-rationale] ", note.Text);
-        Assert.Contains(
-            "record-decision-rationale",
-            persisted.CompletedTaskIdsByState["awaiting-decision"]
-        );
-        // Atomicity: WorkItemPersistence.ReplaceAsync bumps Version by 1
-        // per write — exactly one write happened.
         Assert.Equal(1, persisted.Version);
-        Assert.Equal(2, persisted.AuditLog.Count);
-        Assert.Contains(
-            persisted.AuditLog,
-            a => a.Action == "note-added" && a.CreatedBy == DefaultUserId
-        );
-        Assert.Contains(
-            persisted.AuditLog,
-            a =>
-                a.Action == "task-completed"
-                && a.Details.GetValueOrDefault("taskId") == "record-decision-rationale"
-        );
+        var auditEntry = Assert.Single(persisted.AuditLog);
+        Assert.Equal("note-added", auditEntry.Action);
+        Assert.Equal(DefaultUserId, auditEntry.CreatedBy);
     }
 
     [Fact]
-    public async Task RecordDecisionRationale_concurrency_conflict_persists_neither_half()
+    public async Task RecordDecisionRationale_concurrency_conflict_persists_no_note()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var id = Guid.NewGuid();
@@ -548,11 +579,8 @@ public class ReAccreditationEndpointTests
         await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
         using var client = factory.CreateClient();
 
-        // RA-346: this test exercises the not-started -> completed path,
-        // so it must seed an outstanding task rather than take the
-        // builder's approve-oriented default.
         await factory.SeedAsync(
-            BuildAwaitingDecision(id, TenantClientId, completeTasks: false),
+            BuildAwaitingDecision(id, TenantClientId),
             cancellationToken
         );
 
@@ -567,7 +595,6 @@ public class ReAccreditationEndpointTests
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.NotNull(persisted);
         Assert.Empty(persisted!.Notes);
-        Assert.False(persisted.CompletedTaskIdsByState.TryGetValue("awaiting-decision", out _));
         // The competing race writer bumps Version once; the engine's
         // failed write does not bump it again.
         Assert.Equal(1, persisted.Version);
@@ -688,11 +715,8 @@ public class ReAccreditationEndpointTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        // RA-346: this test exercises the not-started -> completed path,
-        // so it must seed an outstanding task rather than take the
-        // builder's approve-oriented default.
         await factory.SeedAsync(
-            BuildAwaitingDecision(id, "other-tenant", completeTasks: false),
+            BuildAwaitingDecision(id, "other-tenant"),
             cancellationToken
         );
 
@@ -2084,20 +2108,10 @@ public class ReAccreditationEndpointTests
         };
     }
 
-    /// <summary>
-    /// RA-346: approval requires every <c>awaiting-decision</c> task to be
-    /// complete, so the builder marks them complete by default. Pass
-    /// <paramref name="completeTasks"/> = <c>false</c> to seed an item whose
-    /// <c>record-decision-rationale</c> task is still outstanding.
-    /// </summary>
-    private static WorkItem BuildAwaitingDecision(
-        Guid id,
-        string submittedBy,
-        bool completeTasks = true
-    )
+    private static WorkItem BuildAwaitingDecision(Guid id, string submittedBy)
     {
         var type = new ReAccreditationType();
-        var workItem = new WorkItem
+        return new WorkItem
         {
             Id = id,
             TypeId = ReAccreditationType.Id,
@@ -2106,20 +2120,6 @@ public class ReAccreditationEndpointTests
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
             TemplateVersion = type.TemplateVersion,
         };
-
-        if (completeTasks)
-        {
-            workItem.TaskStatusesByState["awaiting-decision"] = type.GetTasksForState(
-                    "awaiting-decision"
-                )
-                .ToDictionary(
-                    t => t.Id,
-                    _ => WorkItemTaskStatus.Completed,
-                    StringComparer.OrdinalIgnoreCase
-                );
-        }
-
-        return workItem;
     }
 
     private static WorkItem BuildAssessmentInProgress(Guid id, string submittedBy)
@@ -2413,26 +2413,23 @@ public class ReAccreditationEndpointTests
     }
 
     /// <summary>
-    /// RA-346 / AC2: the bespoke approve endpoint sits outside the generic
-    /// engine, so it never met the <c>RequiresAllTasksComplete</c> gate and a
-    /// caseworker could approve while <c>record-decision-rationale</c> was
-    /// still outstanding. It must now fail with the identical
-    /// <c>IncompleteTasks</c> contract the framework's
-    /// <c>/actions/{actionId}</c> endpoint returns: HTTP 409 and the same
-    /// detail string.
+    /// RA-346 / AC2 (superseded by RA-410): the bespoke approve endpoint sits
+    /// outside the generic engine, so it never met the framework's
+    /// task-completeness gate and used to enforce an equivalent IncompleteTasks
+    /// check of its own, refusing a caseworker with 409 while
+    /// <c>record-decision-rationale</c> was still outstanding. The task
+    /// framework (and the gate) are gone, so the identical seed now simply
+    /// succeeds — regression cover for the ungating.
     /// </summary>
     [Fact]
-    public async Task Approve_returns_conflict_when_decision_rationale_task_is_incomplete()
+    public async Task Approve_succeeds_now_the_task_gate_is_removed()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            BuildAwaitingDecision(id, TenantClientId, completeTasks: false),
-            cancellationToken
-        );
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
 
         var response = await client.PostAsync(
             $"/work-items/re-accreditation/{id}/approve",
@@ -2440,41 +2437,259 @@ public class ReAccreditationEndpointTests
             cancellationToken
         );
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
-        Assert.NotNull(problem);
-        Assert.Equal("Could not approve re-accreditation", problem!.Title);
-        Assert.Equal(
-            "Action 'approve' requires every task for state 'awaiting-decision' to be complete first.",
-            problem.Detail
-        );
-
-        // No side effects: no state change, no accreditation id, no SLA clock
-        // stop, and no audit entry for a decision that never happened.
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.NotNull(persisted);
-        Assert.Equal("awaiting-decision", persisted!.StateId);
-        Assert.Empty(persisted.AuditLog);
-        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(persisted.Payload);
-        Assert.True(string.IsNullOrEmpty(payload.AccreditationId));
-        Assert.Null(payload.SlaClock?.StoppedAt);
+        Assert.Equal("approved", persisted!.StateId);
     }
 
+    // --------------------------- RA-410: single-call decision ---------------------------
+
     /// <summary>
-    /// RA-346 / AC1: <c>submit-for-decision</c> uses the default
-    /// <c>RequiresAllTasksComplete: true</c>, so it must be filtered out of
-    /// <c>availableActions</c> while any assessment task is outstanding and
-    /// appear once they are all complete. Pinned here so a future template
-    /// edit cannot silently un-gate the button.
+    /// AC03 / the whole point of the story: one call carries an application
+    /// from <c>assessment-in-progress</c> to <c>approved</c>, discharging the
+    /// <c>awaiting-decision</c> hop on the way, and the bespoke approval
+    /// workflow still runs — an accreditation id is issued.
     /// </summary>
     [Fact]
-    public async Task SubmitForDecision_is_only_offered_once_all_assessment_tasks_are_complete()
+    public async Task Decision_approves_in_one_call_from_assessment_and_issues_an_accreditation_id()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
 
-        var type = new ReAccreditationType();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        Assert.Equal("approved", persisted!.StateId);
+        Assert.True(persisted.Payload.TryGetValue("accreditationId", out var accreditationId));
+        Assert.False(string.IsNullOrWhiteSpace(accreditationId.AsString));
+
+        // The intermediate hop is invisible to the user but must remain a real
+        // declared edge in the audit trail — start and end states look
+        // identical whether the waypoint was discharged or jumped across.
+        var actions = persisted
+            .AuditLog.Where(e => e.Action == "action-applied")
+            .Select(e => e.Details.GetValueOrDefault("actionId"))
+            .ToList();
+        Assert.Contains("submit-for-decision", actions);
+        Assert.Contains("approve", actions);
+    }
+
+    [Fact]
+    public async Task Decision_rejects_in_one_call_from_assessment()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "rejected" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("rejected", persisted!.StateId);
+    }
+
+    /// <summary>
+    /// An application already parked in <c>awaiting-decision</c> — by the
+    /// pre-RA-410 two-step flow, or by a failure between the two hops — is
+    /// finished by the identical call rather than needing a rescue path.
+    /// </summary>
+    [Fact]
+    public async Task Decision_completes_an_application_stranded_in_awaiting_decision()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("approved", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task Decision_replay_is_idempotent_and_flags_the_replay()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var first = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var issued = (await factory.Persistence.GetByIdAsync(id, cancellationToken))!
+            .Payload.GetValue("accreditationId")
+            .AsString;
+
+        var replay = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.True(replay.Headers.Contains(WorkItemEndpoints.IdempotentReplayHeader));
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("approved", persisted!.StateId);
+        // The accreditation id must not be re-issued on a replay.
+        Assert.Equal(issued, persisted.Payload.GetValue("accreditationId").AsString);
+    }
+
+    /// <summary>
+    /// The opposite outcome on a decided application is a conflict, never
+    /// last-write-wins: reporting success would tell a caseworker their
+    /// refusal landed on an application that is in fact approved.
+    /// </summary>
+    [Fact]
+    public async Task Decision_with_a_conflicting_outcome_is_refused_and_changes_nothing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+        await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "rejected" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("approved", persisted!.StateId);
+    }
+
+    [Theory]
+    [InlineData("refused")]
+    [InlineData("")]
+    [InlineData(null)]
+    public async Task Decision_rejects_an_unrecognised_outcome_with_a_bindable_error_code(
+        string? outcome
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("invalid-outcome", problem.GetProperty("errorCode").GetString());
+        Assert.Equal("outcome", problem.GetProperty("field").GetString());
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task Decision_is_refused_from_a_state_that_cannot_be_decided()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    /// <summary>
+    /// The mirror image of the frontend's own guard: a client older than v12
+    /// does not know <c>reject</c> stopped being caller-invocable and can
+    /// still post it. Only this server-side check stops a caseworker refusing
+    /// an application without ever seeing the decision page, so it must refuse
+    /// before any transition is applied.
+    /// </summary>
+    [Fact]
+    public async Task Reject_is_rejected_server_side_as_not_caller_invocable()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/actions/reject",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.True((int)response.StatusCode >= 400);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("awaiting-decision", persisted!.StateId);
+    }
+
+    /// <summary>
+    /// RA-346 / AC1 (superseded by RA-410): <c>submit-for-decision</c> used to
+    /// be filtered out of <c>availableActions</c> while any assessment task
+    /// was outstanding. The task framework (and the gate) are gone, and
+    /// <c>submit-for-decision</c> is now also <c>CallerInvocable: false</c>
+    /// (RA-410 v12 — a decision is one call to <c>POST .../decision</c>), so
+    /// it is never offered at all, gated or not.
+    /// </summary>
+    [Fact]
+    public async Task SubmitForDecision_is_never_offered_as_a_caller_invocable_action()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
         var id = Guid.NewGuid();
         await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
 
@@ -2487,32 +2702,20 @@ public class ReAccreditationEndpointTests
             pending!.AvailableActions,
             a => a.ActionId == "submit-for-decision"
         );
-
-        foreach (var task in type.GetTasksForState("assessment-in-progress"))
-        {
-            var completed = await client.PostAsync(
-                $"/work-items/{id}/tasks/{task.Id}/complete",
-                content: null,
-                cancellationToken
-            );
-            Assert.Equal(HttpStatusCode.OK, completed.StatusCode);
-        }
-
-        var ready = await client.GetFromJsonAsync<WorkItemResponse>(
-            $"/work-items/{id}",
-            cancellationToken
-        );
-        Assert.NotNull(ready);
-        Assert.Contains(ready!.AvailableActions, a => a.ActionId == "submit-for-decision");
     }
 
     /// <summary>
-    /// RA-346 / AC1: hiding the action is not the gate — a hand-crafted POST
-    /// straight at the generic action endpoint must be rejected server-side
-    /// too, and leave the work item untouched.
+    /// RA-346 / AC1 (superseded by RA-410): hiding the action is not the gate
+    /// — a hand-crafted POST straight at the generic action endpoint must be
+    /// rejected server-side too, and leave the work item untouched. Before
+    /// RA-410 this was refused because assessment tasks were outstanding
+    /// (409 IncompleteTasks); now it is refused because
+    /// <c>submit-for-decision</c> is <c>CallerInvocable: false</c> — the
+    /// same 400/"not declared" rejection the endpoint gives any caller who
+    /// tries to invoke a non-invocable transition directly (RA-364/RA-311).
     /// </summary>
     [Fact]
-    public async Task SubmitForDecision_is_rejected_server_side_while_assessment_tasks_pending()
+    public async Task SubmitForDecision_is_rejected_server_side_as_not_caller_invocable()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
@@ -2527,11 +2730,10 @@ public class ReAccreditationEndpointTests
             cancellationToken
         );
 
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
         Assert.Equal(
-            "Action 'submit-for-decision' requires every task for state "
-                + "'assessment-in-progress' to be complete first.",
+            "Action 'submit-for-decision' is not declared by work item type 're-accreditation'.",
             problem!.Detail
         );
 
