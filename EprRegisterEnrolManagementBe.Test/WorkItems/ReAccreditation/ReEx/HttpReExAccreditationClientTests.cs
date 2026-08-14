@@ -54,7 +54,7 @@ public class HttpReExAccreditationClientTests
 
     [Theory]
     [InlineData("up_to_500", "UpTo500")]
-    [InlineData("up_to_1000", "UpTo1000")]
+    [InlineData("up_to_5000", "UpTo5000")]
     [InlineData("up_to_10000", "UpTo10000")]
     [InlineData("over_10000", "Over10000")]
     [InlineData("UP_TO_500", "UpTo500")]

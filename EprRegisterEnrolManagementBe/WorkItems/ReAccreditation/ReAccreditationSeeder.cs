@@ -304,7 +304,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 },
                 ["prns"] = new BsonDocument
                 {
-                    ["plannedTonnageBand"] = "UpTo1000",
+                    ["plannedTonnageBand"] = "UpTo5000",
                     ["authorisers"] = new BsonArray
                     {
                         new BsonDocument
@@ -482,7 +482,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // AC03: authority-to-issue contacts, one of each flag state.
                 ["prns"] = new BsonDocument
                 {
-                    ["plannedTonnageBand"] = "UpTo1000",
+                    ["plannedTonnageBand"] = "UpTo5000",
                     ["authorisers"] = new BsonArray
                     {
                         new BsonDocument
