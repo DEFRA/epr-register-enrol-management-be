@@ -61,10 +61,14 @@ The MongoDB connection is configured in
 and can be overridden via the `Mongo__DatabaseUri` and `Mongo__DatabaseName`
 environment variables.
 
-To send real notifications via GOV.UK Notify, set `NOTIFY_API_KEY` to a key
-from the [Notify dashboard](https://www.notifications.service.gov.uk/). Without
-it the service starts normally but uses a no-op client — notification calls are
-logged and no HTTP traffic is sent to Notify.
+Outbound GOV.UK Notify email is disabled by default (RA-422): the master switch
+`Notify__Enabled` defaults to `false`, so the notification hook is not registered
+and a no-op client is used — nothing is sent and no `notification-*` audit
+entries are written. To send real notifications you need **both**
+`Notify__Enabled=true` **and** a `NOTIFY_API_KEY` from the
+[Notify dashboard](https://www.notifications.service.gov.uk/); with the flag on
+but no key the service still starts and uses the no-op client (calls logged, no
+HTTP traffic to Notify).
 
 If you do not have MongoDB installed locally, start just the database from
 the Compose stack:

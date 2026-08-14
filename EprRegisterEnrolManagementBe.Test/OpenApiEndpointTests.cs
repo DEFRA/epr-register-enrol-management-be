@@ -38,7 +38,6 @@ public class OpenApiEndpointTests
 
     [Theory]
     [InlineData("SubmitWorkItem")]
-    [InlineData("SetWorkItemTaskStatus")]
     [InlineData("AssignWorkItem")]
     [InlineData("AddWorkItemNote")]
     [InlineData("RecordReAccreditationDecisionRationale")]

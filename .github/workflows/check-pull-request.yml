@@ -15,24 +15,70 @@ jobs:
   pr-validator:
     name: Run Pull Request Checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     steps:
       - name: Check out code
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             10.0
       - name: Lint (dotnet format)
         run: dotnet format style --verify-no-changes
-      - name: Test
-        run: dotnet test
+      - name: Test with coverage
+        run: dotnet test --collect:"XPlat Code Coverage" --results-directory ./coverage
+
+      # Baseline as measured on 2026-08-13 (RA-437): 89.7% line / 79.8% branch.
+      # Fails the job on regression; raise as coverage improves.
+      - name: Enforce coverage threshold and report on PR
+        if: always()
+        run: |
+          FILE=$(find ./coverage -name 'coverage.cobertura.xml' | head -1)
+          if [ -z "$FILE" ]; then
+            echo "::error::No coverage report found — did dotnet test run?"
+            exit 1
+          fi
+          LINE_RATE=$(grep -o 'line-rate="[0-9.]*"' "$FILE" | head -1 | grep -o '[0-9.]*')
+          BRANCH_RATE=$(grep -o 'branch-rate="[0-9.]*"' "$FILE" | head -1 | grep -o '[0-9.]*')
+          LINE_PCT=$(awk "BEGIN {printf \"%.2f\", $LINE_RATE*100}")
+          BRANCH_PCT=$(awk "BEGIN {printf \"%.2f\", $BRANCH_RATE*100}")
+          LINE_THRESHOLD=89
+          BRANCH_THRESHOLD=79
+
+          {
+            echo "### Test coverage — epr-register-enrol-management-be"
+            echo "| Metric | Coverage | Threshold |"
+            echo "|---|---|---|"
+            echo "| Line | ${LINE_PCT}% | ${LINE_THRESHOLD}% |"
+            echo "| Branch | ${BRANCH_PCT}% | ${BRANCH_THRESHOLD}% |"
+          } > /tmp/coverage-comment.md
+
+          FAIL=0
+          if awk "BEGIN {exit !($LINE_PCT < $LINE_THRESHOLD)}"; then
+            echo "::error::Line coverage ${LINE_PCT}% is below threshold ${LINE_THRESHOLD}%"
+            FAIL=1
+          fi
+          if awk "BEGIN {exit !($BRANCH_PCT < $BRANCH_THRESHOLD)}"; then
+            echo "::error::Branch coverage ${BRANCH_PCT}% is below threshold ${BRANCH_THRESHOLD}%"
+            FAIL=1
+          fi
+          exit $FAIL
+
+      - name: Comment coverage on PR
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: coverage
+          path: /tmp/coverage-comment.md
 
   test-e2e:
     name: Run E2E Tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Check for matching e2e test branch
         id: e2e-branch
