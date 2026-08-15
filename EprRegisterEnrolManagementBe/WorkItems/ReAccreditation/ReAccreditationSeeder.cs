@@ -304,6 +304,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorApplicationId"] = "app-full-payload-001",
                 ["operatorOrganisationId"] = "org-full-payload-001",
                 ["operatorRegistrationId"] = "reg-full-payload-001",
+                // RA-434-processortype: this item carries an overseasSites BES
+                // fixture below, so it must be a genuine exporter — management-fe
+                // now gates the BES/ORS sections on this field rather than on
+                // overseasSites presence.
+                ["wasteProcessingType"] = "exporter",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
@@ -488,6 +493,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorApplicationId"] = "app-ors-interim-authority-001",
                 ["operatorOrganisationId"] = "org-ors-interim-authority-001",
                 ["operatorRegistrationId"] = "reg-ors-interim-authority-001",
+                // RA-434-processortype: this is the RA-292 ORS/BES fixture, so it
+                // must be a genuine exporter — management-fe now gates the
+                // BES/ORS sections on this field rather than on overseasSites
+                // presence.
+                ["wasteProcessingType"] = "exporter",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
