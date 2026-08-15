@@ -75,6 +75,27 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// </summary>
     public const string AdditionalInformationExporterOrganisationName = "Continental Exports Verification Ltd";
 
+    /// <summary>
+    /// RA-434-processortype fixture seed key. The Additional information
+    /// tab's "absent wasteProcessingType defaults to reprocessor" branch was
+    /// originally covered by reusing <see cref="AdditionalInformationExporterSeedKey"/>'s
+    /// sibling, <c>full-payload-verification</c> — which carried no
+    /// <c>wasteProcessingType</c> at the time. RA-434-processortype gave
+    /// <c>full-payload-verification</c> an explicit <c>wasteProcessingType:
+    /// "exporter"</c> (its BES/ORS fixture requires it, now that the frontend
+    /// gates those sections on the real field rather than on
+    /// <c>overseasSites</c> presence), which leaves no seed item without the
+    /// field. This key exists purely to keep that branch covered.
+    /// </summary>
+    public const string AdditionalInformationReprocessorSeedKey = "additional-information-reprocessor";
+
+    /// <summary>
+    /// Organisation name of the RA-434-processortype reprocessor fixture.
+    /// Unique across the seed set for the same reason as
+    /// <see cref="OrsInterimAuthorityOrganisationName"/>.
+    /// </summary>
+    public const string AdditionalInformationReprocessorOrganisationName = "Thames Reprocessing Verification Ltd";
+
     public string TypeId => ReAccreditationType.Id;
 
     public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
@@ -775,6 +796,45 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["companyRegisteredAddress"] = "1 Continental Way, Dover, Kent",
                 ["companyRegisterAddressPostcode"] = "CT16 1AA",
                 ["permitNumbers"] = new BsonArray { "WML123456", "PPC456789" },
+                ["chargeAmountPence"] = 218400,
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // RA-434-processortype: the reprocessor counterpart to
+        // AdditionalInformationExporterSeedKey above. Genuinely carries NO
+        // wasteProcessingType key at all — that absence is the point, so the
+        // Additional information tab's Site address row exercises the
+        // "defaults to reprocessor" branch. Also gives the tab's other RA-434
+        // fields (companiesHouseNumber, companyRegisteredAddress,
+        // permitNumbers) a fixture that stays reprocessor-shaped even after
+        // full-payload-verification became an explicit exporter for its own
+        // BES/ORS fixture.
+        yield return Build(
+            seedKey: AdditionalInformationReprocessorSeedKey,
+            postcode: "SE1 9GF",
+            submittedDaysAgo: 4,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = AdditionalInformationReprocessorOrganisationName,
+                ["registrationNumber"] = "EPR-100435",
+                ["operatorApplicationId"] = "app-additional-info-reprocessor-001",
+                ["operatorOrganisationId"] = "org-additional-info-reprocessor-001",
+                ["operatorRegistrationId"] = "reg-additional-info-reprocessor-001",
+                ["material"] = "plastic",
+                ["accreditationYear"] = 2026,
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "thames.reprocessing@example.com",
+                ["companiesHouseNumber"] = "13579246",
+                // Deliberately DIFFERENT from siteAddress below — a template
+                // that accidentally aliases the two fields would otherwise
+                // pass unnoticed (same reasoning as the exporter fixture).
+                ["companyRegisteredAddress"] = "200 Registered Office Road, London, SE1 9AA",
+                ["siteAddress"] = "1 Thames Reprocessing Way, London",
+                ["siteAddressPostcode"] = "SE1 9GF",
+                ["permitNumbers"] = new BsonArray { "WML135792", "PPC468024" },
                 ["chargeAmountPence"] = 218400,
             },
             submittedBy: "stub-portal-client",
