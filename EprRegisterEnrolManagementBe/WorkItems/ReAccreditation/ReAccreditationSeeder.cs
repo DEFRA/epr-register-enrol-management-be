@@ -58,6 +58,23 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// </summary>
     public const string OrsInterimAuthorityOrganisationName = "Overseas Reprocessing Verification Ltd";
 
+    /// <summary>
+    /// RA-434 fixture seed key. The "Additional information" tab's Site
+    /// address row falls back to the registered address for exporters
+    /// (re-ex has no site for an exporter), and that fallback has no
+    /// fixture to exercise it without a payload that is genuinely
+    /// <c>wasteProcessingType: "exporter"</c> and carries no
+    /// <c>siteAddress</c> at all. A new key rather than enriching an
+    /// existing seed for the same reason as <see cref="OrsInterimAuthoritySeedKey"/>.
+    /// </summary>
+    public const string AdditionalInformationExporterSeedKey = "additional-information-exporter";
+
+    /// <summary>
+    /// Organisation name of the RA-434 exporter fixture. Unique across the
+    /// seed set for the same reason as <see cref="OrsInterimAuthorityOrganisationName"/>.
+    /// </summary>
+    public const string AdditionalInformationExporterOrganisationName = "Continental Exports Verification Ltd";
+
     public string TypeId => ReAccreditationType.Id;
 
     public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
@@ -292,8 +309,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "full.payload@example.com",
+                // RA-434: distinct from siteAddress on purpose, so a template
+                // that accidentally aliases the two fields is caught by any
+                // assertion comparing them.
+                ["companiesHouseNumber"] = "12345678",
+                ["companyRegisteredAddress"] = "100 Registered Office Road, London, EC1A 1AB",
                 ["siteAddress"] = "1 Full Payload Lane, London",
                 ["siteAddressPostcode"] = "EC1A 1BB",
+                ["permitNumbers"] = new BsonArray { "WML999000", "PPC888777" },
                 ["chargeAmountPence"] = 327600,
                 ["paymentReference"] = "PAY-FULL-PAYLOAD-001",
                 ["submittedBy"] = new BsonDocument
@@ -702,6 +725,47 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         }
                     }
                 }
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // RA-434: an Exporter-type item, carrying the three fields new to the
+        // "Additional information" tab (companiesHouseNumber,
+        // companyRegisteredAddress, permitNumbers) and — the point of this
+        // fixture — NO siteAddress at all. Re-ex has no site for an exporter,
+        // so the CM frontend falls back to companyRegisteredAddress for the
+        // Site address row; every other seed item is reprocessor-shaped
+        // (siteAddress present) and cannot exercise that branch.
+        //
+        // companyRegisterAddressPostcode (note: no 'd' — the existing,
+        // postcode-only key AccreditationIdGenerator / ApplicationReferenceGenerator
+        // already read for an exporter's regulator postcode) is set alongside
+        // the new full-address companyRegisteredAddress key so this fixture is
+        // a realistic exporter payload, not just enough to pass the new tab's
+        // tests.
+        yield return Build(
+            seedKey: AdditionalInformationExporterSeedKey,
+            postcode: "CT16 1AA",
+            submittedDaysAgo: 4,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = AdditionalInformationExporterOrganisationName,
+                ["registrationNumber"] = "EPR-100434",
+                ["operatorApplicationId"] = "app-additional-info-exporter-001",
+                ["operatorOrganisationId"] = "org-additional-info-exporter-001",
+                ["operatorRegistrationId"] = "reg-additional-info-exporter-001",
+                ["material"] = "plastic",
+                ["accreditationYear"] = 2026,
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "continental.exports@example.com",
+                ["wasteProcessingType"] = "exporter",
+                ["companiesHouseNumber"] = "09876543",
+                ["companyRegisteredAddress"] = "1 Continental Way, Dover, Kent",
+                ["companyRegisterAddressPostcode"] = "CT16 1AA",
+                ["permitNumbers"] = new BsonArray { "WML123456", "PPC456789" },
+                ["chargeAmountPence"] = 218400,
             },
             submittedBy: "stub-portal-client",
             now: now);

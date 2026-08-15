@@ -435,7 +435,10 @@ This is deliberate, not a defect: seeds that silently mutated under a running
 environment would be far worse than seeds that only ever appear. The
 `ReAccreditationSeeder` RA-292 fixture is the worked example — it got its own
 `seedKey` rather than enriching `full-payload-verification` precisely so it
-would reach already-seeded environments.
+would reach already-seeded environments. RA-434's `additional-information-exporter`
+fixture is the same pattern applied a second time: it needed its own new
+`seedKey` because it exercises a shape (`wasteProcessingType: "exporter"`
+with no `siteAddress`) that no existing fixture covers.
 
 ## Example: re-accreditation module (RA-98)
 

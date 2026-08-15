@@ -666,5 +666,106 @@ public class ReAccreditationSeederTests
         // the framework stamps on all of them.
         Assert.All(items, i => Assert.True(i.Payload.Contains("applicationReference")));
     }
+
+    // ── RA-434: "Additional information" tab seed fields ────────────────────
+
+    [Fact]
+    public void Build_full_payload_fixture_carries_the_new_additional_information_fields()
+    {
+        // RA-434: the full-payload fixture is meant to carry every field a
+        // real operator submission can send, so the three fields new to the
+        // "Additional information" tab belong here too.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var fullPayload = items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString == "Full Payload Verification Ltd");
+
+        Assert.Equal("12345678", fullPayload.Payload["companiesHouseNumber"].AsString);
+        Assert.Equal(
+            "100 Registered Office Road, London, EC1A 1AB",
+            fullPayload.Payload["companyRegisteredAddress"].AsString);
+
+        var permitNumbers = fullPayload.Payload["permitNumbers"].AsBsonArray;
+        Assert.Equal(["WML999000", "PPC888777"], permitNumbers.Select(p => p.AsString));
+
+        // companyRegisteredAddress and siteAddress are deliberately different
+        // values — a template that accidentally aliases the two fields would
+        // otherwise pass unnoticed.
+        Assert.NotEqual(
+            fullPayload.Payload["companyRegisteredAddress"].AsString,
+            fullPayload.Payload["siteAddress"].AsString);
+    }
+
+    /// <summary>
+    /// The RA-434 exporter fixture, located by organisation name like the
+    /// RA-292 fixture above.
+    /// </summary>
+    private static WorkItem BuildExporterFixture()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        return items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.AdditionalInformationExporterOrganisationName);
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_organisation_name_is_unique_across_the_seed_set()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var matches = items.Count(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.AdditionalInformationExporterOrganisationName);
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_has_its_own_seed_key_so_it_lands_in_already_seeded_databases()
+    {
+        // Seeding is insert-only by deterministic id, so a new fixture needs
+        // its own seedKey to reach an environment that has already seeded —
+        // see docs/work-items.md.
+        var expectedId = WorkItemSeed.DeterministicId(
+            ReAccreditationType.Id, ReAccreditationSeeder.AdditionalInformationExporterSeedKey);
+
+        Assert.Equal(expectedId, BuildExporterFixture().Id);
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_is_flagged_as_an_exporter()
+    {
+        var exporter = BuildExporterFixture();
+
+        Assert.Equal("exporter", exporter.Payload["wasteProcessingType"].AsString);
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_has_no_site_address()
+    {
+        // The point of this fixture: re-ex has no site for an exporter, so
+        // the CM frontend's Site address row must fall back to
+        // companyRegisteredAddress. That fallback has no coverage without a
+        // seed item that is genuinely missing siteAddress.
+        var exporter = BuildExporterFixture();
+
+        Assert.False(exporter.Payload.Contains("siteAddress"));
+        Assert.False(exporter.Payload.Contains("siteAddressPostcode"));
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_carries_the_new_additional_information_fields()
+    {
+        var exporter = BuildExporterFixture();
+
+        Assert.False(string.IsNullOrWhiteSpace(exporter.Payload["companiesHouseNumber"].AsString));
+        Assert.False(string.IsNullOrWhiteSpace(exporter.Payload["companyRegisteredAddress"].AsString));
+
+        var permitNumbers = exporter.Payload["permitNumbers"].AsBsonArray;
+        Assert.True(permitNumbers.Count > 1, "Needs more than one permit number to exercise the comma-joined rendering.");
+        Assert.All(permitNumbers, p => Assert.False(string.IsNullOrWhiteSpace(p.AsString)));
+    }
 }
 
