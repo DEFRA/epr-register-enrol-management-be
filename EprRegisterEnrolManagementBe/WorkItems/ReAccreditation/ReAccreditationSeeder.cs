@@ -307,6 +307,15 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // isExporterApplication() now reads — without it the item reads
                 // as a Reprocessor and the BES/ORS sections stop rendering.
                 ["wasteProcessingType"] = "exporter",
+                // RA-412 (self-review): AccreditationIdGenerator and
+                // ApplicationReferenceGenerator both require this on the
+                // Exporter branch (the registered-office postcode, per
+                // RA-314 AC01/AC02 — an Exporter's regulator is resolved from
+                // here, not the site address). Deliberately a different
+                // postcode/nation from siteAddressPostcode below so approving
+                // this fixture actually exercises that distinction instead of
+                // accidentally passing either way.
+                ["companyRegisterAddressPostcode"] = "G2 1AL",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
@@ -488,6 +497,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // RA-412: see the same field on the full-payload-verification
                 // item above — this item's overseasSites/ORS sites need it too.
                 ["wasteProcessingType"] = "exporter",
+                // RA-412 (self-review): see the same field on
+                // full-payload-verification above for why it's required.
+                ["companyRegisterAddressPostcode"] = "SA1 1AA",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
@@ -751,6 +763,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["registrationNumber"] = "EPR-100506",
                 ["operatorRegistrationId"] = "reg-050006",
                 ["wasteProcessingType"] = "exporter",
+                // RA-412 (self-review): see the same field on
+                // full-payload-verification above for why it's required.
+                ["companyRegisterAddressPostcode"] = "CF10 1AA",
                 ["material"] = "glass",
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,

@@ -43,12 +43,15 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// enum members (e.g. <c>England</c>, <c>NorthernIreland</c>).
 /// </param>
 /// <param name="WasteProcessingTypes">
-/// Restrict to items whose <c>payload.wasteProcessingType</c> matches one of
-/// these values (case-insensitive exact match, e.g. <c>exporter</c>,
-/// <c>reprocessor</c>). Empty/null means "any type". There is no backend
-/// enum for this field — it is written verbatim by the submitting caller
-/// (RA-314) — so, unlike <paramref name="Nations"/>, values are matched as
-/// free-form strings rather than canonicalised against a known set.
+/// Restrict to items by applicant type. Empty/null means "any type".
+/// A collection containing <c>exporter</c> (case-insensitive) restricts to
+/// items whose <c>payload.wasteProcessingType</c> literally equals
+/// <c>exporter</c>; any other supplied value is treated as
+/// <c>reprocessor</c>, which matches everything else — including an ABSENT
+/// field, the documented pre-RA-314 fallback (see
+/// <see cref="WorkItemPersistence.BuildFilter"/> for why that matters).
+/// Supplying both buckets is equivalent to supplying neither: every item
+/// matches exactly one, so the filter becomes "any type".
 /// </param>
 /// <param name="IncludeArchived">
 /// When <c>false</c> (the default), items whose <see cref="WorkItem.StateId"/>

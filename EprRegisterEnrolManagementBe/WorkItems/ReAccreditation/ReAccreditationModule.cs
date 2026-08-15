@@ -62,6 +62,15 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             ReAccreditationDulyMadeSlaClockBackfillMigration
         >();
         services.AddSingleton<IWorkItemMigration, ReAccreditationMaterialBackfillMigration>();
+        // RA-412 (self-review): backfills wasteProcessingType/
+        // companyRegisterAddressPostcode on the two overseas-sites seed
+        // fixtures for any environment that seeded before those fields were
+        // added — CreateIfAbsentAsync never updates an already-seeded id.
+        // No ordering dependency on any other migration.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationExporterFixtureBackfillMigration
+        >();
         // RA-311/MBE-1: adds the resume-during-* transitions to every
         // existing work item's frozen template snapshot (v6 → v7).
         services.AddSingleton<IWorkItemMigration, ReAccreditationResumeSnapshotMigration>();
