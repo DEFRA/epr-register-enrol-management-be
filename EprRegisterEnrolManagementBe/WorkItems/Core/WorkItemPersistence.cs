@@ -337,14 +337,46 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         if (query.Materials is { Count: > 0 } materials)
         {
             var materialClauses = materials
-                .Select(m => builder.Regex(
-                    "payload.material",
-                    new MongoDB.Bson.BsonRegularExpression(
-                        $"^{System.Text.RegularExpressions.Regex.Escape(m)}$", "i")))
+                .Select(m => CaseInsensitiveExactMatch(builder, "payload.material", m))
                 .ToList();
             clauses.Add(materialClauses.Count == 1
                 ? materialClauses[0]
                 : builder.Or(materialClauses));
+        }
+
+        // RA-412 (self-review): applicant-type filter. payload.wasteProcessingType
+        // has no backend enum, but it is NOT an open value set either — every
+        // producer writes exactly "exporter" or "reprocessor"
+        // (AccreditationIdGenerator.ResolveOperatorType / ApplicationReferenceGenerator
+        // both branch on nothing else), and critically every other reader of
+        // this field treats an ABSENT value as "reprocessor" — the documented
+        // pre-RA-314 fallback that preserves on-screen behaviour for old data.
+        // A naive per-value regex match on the literal stored string (the
+        // original version of this clause) does not: Mongo's $regex never
+        // matches a missing field, so filtering by Reprocessor would silently
+        // exclude every pre-RA-314 item and 9 of the 11 seeded fixtures —
+        // disagreeing with what the card label and every ID generator already
+        // decide for those same items.
+        //
+        // So "exporter" is a positive, case-insensitive match on the literal
+        // value; "reprocessor" is everything else — $not the exporter match,
+        // which Mongo defines to include a missing/differently-typed field,
+        // not just a literal "reprocessor" string. Selecting both collapses to
+        // no restriction, which is correct: between the two buckets every item
+        // matches exactly one.
+        if (query.WasteProcessingTypes is { Count: > 0 } wasteProcessingTypes)
+        {
+            var wantsExporter = wasteProcessingTypes.Any(t =>
+                t.Equals("exporter", StringComparison.OrdinalIgnoreCase));
+            var wantsReprocessor = wasteProcessingTypes.Any(t =>
+                !t.Equals("exporter", StringComparison.OrdinalIgnoreCase));
+
+            if (wantsExporter != wantsReprocessor)
+            {
+                var exporterFilter = CaseInsensitiveExactMatch(
+                    builder, "payload.wasteProcessingType", "exporter");
+                clauses.Add(wantsExporter ? exporterFilter : builder.Not(exporterFilter));
+            }
         }
 
         var assigneeId = query.NormalisedAssigneeId;
@@ -403,6 +435,20 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
 
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
+
+    /// <summary>
+    /// Case-insensitive exact-token match on a single BSON field: an anchored
+    /// regex so casing differences never hide a match without matching
+    /// substrings of a longer value. Shared by the <c>Materials</c> and
+    /// <c>WasteProcessingTypes</c> filter clauses above, which both need this
+    /// exact idiom.
+    /// </summary>
+    private static FilterDefinition<WorkItem> CaseInsensitiveExactMatch(
+        FilterDefinitionBuilder<WorkItem> builder, string field, string value) =>
+        builder.Regex(
+            field,
+            new MongoDB.Bson.BsonRegularExpression(
+                $"^{System.Text.RegularExpressions.Regex.Escape(value)}$", "i"));
 
     [ExcludeFromCodeCoverage]
     public async Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)

@@ -316,6 +316,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         string organisationName,
         string? operatorOrganisationId = null,
         string? material = null,
+        string? wasteProcessingType = null,
         string stateId = "submitted",
         int submittedMinutesAgo = 0,
         WorkItemSlaClock? slaClock = null)
@@ -329,6 +330,10 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         if (material is not null)
         {
             payload["material"] = material;
+        }
+        if (wasteProcessingType is not null)
+        {
+            payload["wasteProcessingType"] = wasteProcessingType;
         }
         var item = new WorkItem
         {
@@ -543,6 +548,54 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             new WorkItemQuery(Materials: new[] { "plastic", "glass" }, Sort: "organisation"), ct);
 
         Assert.Equal(new[] { "g", "p" }, OrgOrder(page));
+    }
+
+    // RA-412 (self-review): a real-Mongo round trip for the applicant-type
+    // filter, specifically to prove the "absent field means Reprocessor"
+    // semantics that a render-only test (WorkItemPersistenceBuildFilterTests)
+    // cannot — $regex/$not behaviour against a genuinely missing field is
+    // exactly what the original version of this filter got wrong.
+
+    [Fact]
+    public async Task QueryAsync_exporter_filter_matches_only_the_literal_value()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("Exporter Co", wasteProcessingType: "exporter");
+        await SeedAsync("Reprocessor Co", wasteProcessingType: "reprocessor");
+        await SeedAsync("No Field Co");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }), ct);
+
+        Assert.Equal("Exporter Co", Assert.Single(page.Items).Payload["organisationName"].AsString);
+    }
+
+    [Fact]
+    public async Task QueryAsync_reprocessor_filter_includes_items_with_no_wasteProcessingType_field()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("Exporter Co", wasteProcessingType: "exporter");
+        await SeedAsync("Reprocessor Co", wasteProcessingType: "reprocessor");
+        await SeedAsync("No Field Co");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(WasteProcessingTypes: new[] { "reprocessor" }, Sort: "organisation"), ct);
+
+        // Both the explicit "reprocessor" item AND the item with no field at
+        // all match — the pre-RA-314 fallback every other reader applies.
+        Assert.Equal(new[] { "No Field Co", "Reprocessor Co" }, OrgOrder(page));
+    }
+
+    [Fact]
+    public async Task QueryAsync_wasteProcessingType_filter_matches_case_insensitively()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedAsync("Exporter Co", wasteProcessingType: "Exporter");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }), ct);
+
+        Assert.Single(page.Items);
     }
 
     [Fact]
