@@ -106,6 +106,16 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // advertising the old two-step decision path. Runs after the v10 → v11
         // migration above so an older item reaches v11 first.
         services.AddSingleton<IWorkItemMigration, ReAccreditationDecisionSnapshotMigration>();
+        // RA-351: adds the queried sla-extend self-loop to every existing
+        // work item's frozen template snapshot (v12 → v13). No ordering
+        // dependency on the migrations above — it only appends a single
+        // self-contained transition, keyed off an sla-extend transition
+        // whose from-state is 'queried' (a v12 snapshot already carries the
+        // assessment-in-progress sla-extend self-loop).
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationSlaExtendQuerySnapshotMigration
+        >();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply
