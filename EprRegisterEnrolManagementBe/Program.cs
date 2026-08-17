@@ -166,7 +166,8 @@ static void ConfigureServices(WebApplicationBuilder builder)
         // are deliberately disjoint so a downed dependency cannot recycle
         // the pod and a wedged process cannot keep serving traffic.
         .AddCheck<LivenessHealthCheck>("threadpool", tags: ["live"])
-        .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"]);
+        .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"])
+        .AddCheck<RequiredConfigHealthCheck>("required-config", tags: ["ready"]);
 
     ConfigureWorkItems(builder);
 
