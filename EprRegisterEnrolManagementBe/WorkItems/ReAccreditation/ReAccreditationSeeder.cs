@@ -97,7 +97,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// Organisation name of the RA-434 exporter fixture. Unique across the
     /// seed set for the same reason as <see cref="OrsInterimAuthorityOrganisationName"/>.
     /// </summary>
-    public const string AdditionalInformationExporterOrganisationName = "Continental Exports Verification Ltd";
+    public const string AdditionalInformationExporterOrganisationName =
+        "Continental Exports Verification Ltd";
 
     /// <summary>
     /// RA-434-processortype fixture seed key. The Additional information
@@ -111,14 +112,16 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// <c>overseasSites</c> presence), which leaves no seed item without the
     /// field. This key exists purely to keep that branch covered.
     /// </summary>
-    public const string AdditionalInformationReprocessorSeedKey = "additional-information-reprocessor";
+    public const string AdditionalInformationReprocessorSeedKey =
+        "additional-information-reprocessor";
 
     /// <summary>
     /// Organisation name of the RA-434-processortype reprocessor fixture.
     /// Unique across the seed set for the same reason as
     /// <see cref="OrsInterimAuthorityOrganisationName"/>.
     /// </summary>
-    public const string AdditionalInformationReprocessorOrganisationName = "Thames Reprocessing Verification Ltd";
+    public const string AdditionalInformationReprocessorOrganisationName =
+        "Thames Reprocessing Verification Ltd";
 
     public string TypeId => ReAccreditationType.Id;
 
@@ -380,11 +383,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // accidentally passing either way.
                 ["companyRegisterAddressPostcode"] = "G2 1AL",
                 ["material"] = "plastic",
-                // RA-434-processortype: application-summary.js's isExporterApplication()
-                // now gates the ORS/BES rows on this field rather than on overseasSites
-                // presence — this item seeds overseasSites below, so it must also claim
-                // to be an exporter or those rows silently stop rendering.
-                ["wasteProcessingType"] = "exporter",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
@@ -581,10 +579,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // full-payload-verification above for why it's required.
                 ["companyRegisterAddressPostcode"] = "SA1 1AA",
                 ["material"] = "plastic",
-                // RA-434-processortype: see the matching comment on the
-                // full-payload-verification seed item above — this item also seeds
-                // overseasSites and needs the same claim to render the ORS/BES rows.
-                ["wasteProcessingType"] = "exporter",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
@@ -821,87 +815,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             now: now
         );
 
-        // RA-434: the "Additional information" tab's two fixtures, covering its
-        // one real conditional — the Site address row's reprocessor/exporter
-        // fallback. Values mirrored in mgmt-tests' test/support/ra-434-seed.js;
-        // keep the two in sync.
-        yield return Build(
-            seedKey: "additional-information-reprocessor",
-            postcode: "SE1 9GF",
-            submittedDaysAgo: 3,
-            stateId: "submitted",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Thames Reprocessing Verification Ltd",
-                ["registrationNumber"] = "EPR-100434",
-                ["operatorApplicationId"] = "app-additional-info-reprocessor-001",
-                ["operatorOrganisationId"] = "org-additional-info-reprocessor-001",
-                ["operatorRegistrationId"] = "reg-additional-info-reprocessor-001",
-                ["material"] = "plastic",
-                // Deliberately ABSENT: RA-434-processortype's "absent defaults to
-                // reprocessor" branch, which this fixture exists to prove — do
-                // not add a wasteProcessingType key here.
-                ["companiesHouseNumber"] = "13579246",
-                // Deliberately DIFFERENT from siteAddress below — a template
-                // that accidentally aliases the two fields would otherwise pass
-                // unnoticed.
-                ["companyRegisteredAddress"] = "200 Registered Office Road, London, SE1 9AA",
-                ["accreditationYear"] = 2026,
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "thames.reprocessing@example.com",
-                ["siteAddress"] = "1 Thames Reprocessing Way",
-                ["siteAddressPostcode"] = "SE1 9GF",
-                ["chargeAmountPence"] = 218400,
-                ["permitNumbers"] = new BsonArray { "WML135792", "PPC468024" },
-                ["submittedBy"] = new BsonDocument
-                {
-                    ["fullName"] = "Harriet Osei",
-                    ["jobTitle"] = "Compliance Officer",
-                    ["email"] = "harriet.osei@example.com",
-                },
-            },
-            submittedBy: "stub-portal-client",
-            now: now
-        );
-
-        yield return Build(
-            seedKey: "additional-information-exporter",
-            postcode: "SE1 9GF",
-            submittedDaysAgo: 3,
-            stateId: "submitted",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Continental Exports Verification Ltd",
-                ["registrationNumber"] = "EPR-100435",
-                ["operatorApplicationId"] = "app-additional-info-exporter-001",
-                ["operatorOrganisationId"] = "org-additional-info-exporter-001",
-                ["operatorRegistrationId"] = "reg-additional-info-exporter-001",
-                ["material"] = "plastic",
-                ["wasteProcessingType"] = "exporter",
-                ["companiesHouseNumber"] = "09876543",
-                ["companyRegisteredAddress"] = "1 Continental Way, Dover, Kent",
-                // Deliberately ABSENT, both keys: re-ex has no site for an
-                // exporter, so the Additional information tab's Site address
-                // row must fall back to the registered address — the point of
-                // this fixture. Do not add siteAddress / siteAddressPostcode.
-                ["accreditationYear"] = 2026,
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "continental.exports@example.com",
-                ["chargeAmountPence"] = 327600,
-                ["permitNumbers"] = new BsonArray { "WML123456", "PPC456789" },
-                ["submittedBy"] = new BsonDocument
-                {
-                    ["fullName"] = "Marcus Webb",
-                    ["jobTitle"] = "Export Compliance Lead",
-                    ["email"] = "marcus.webb@example.com",
-                },
-            },
-            submittedBy: "stub-portal-client",
-            now: now);
-
-
         // RA-412: a genuine Exporter organisation — org 50006 "Global Glass
         // Exports" in the ticket's own example. Unlike
         // full-payload-verification/ors-interim-authority above (which only
@@ -935,7 +848,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["chargeAmountPence"] = 54600,
             },
             submittedBy: "stub-portal-client",
-            now: now);
+            now: now
+        );
 
         // RA-434: an Exporter-type item, carrying the three fields new to the
         // "Additional information" tab (companiesHouseNumber,
@@ -976,7 +890,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["chargeAmountPence"] = 218400,
             },
             submittedBy: "stub-portal-client",
-            now: now);
+            now: now
+        );
 
         // RA-434-processortype: the reprocessor counterpart to
         // AdditionalInformationExporterSeedKey above. Genuinely carries NO
@@ -1015,7 +930,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["chargeAmountPence"] = 218400,
             },
             submittedBy: "stub-portal-client",
-            now: now);
+            now: now
+        );
     }
 
     /// <summary>
