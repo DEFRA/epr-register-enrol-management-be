@@ -761,6 +761,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorEmail"] = "thames.reprocessing@example.com",
                 ["siteAddress"] = "1 Thames Reprocessing Way",
                 ["siteAddressPostcode"] = "SE1 9GF",
+                ["chargeAmountPence"] = 218400,
                 ["permitNumbers"] = new BsonArray { "WML135792", "PPC468024" },
                 ["submittedBy"] = new BsonDocument
                 {
@@ -797,6 +798,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "continental.exports@example.com",
+                ["chargeAmountPence"] = 327600,
                 ["permitNumbers"] = new BsonArray { "WML123456", "PPC456789" },
                 ["submittedBy"] = new BsonDocument
                 {
