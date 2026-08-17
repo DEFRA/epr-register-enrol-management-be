@@ -303,6 +303,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorOrganisationId"] = "org-full-payload-001",
                 ["operatorRegistrationId"] = "reg-full-payload-001",
                 ["material"] = "plastic",
+                // RA-434-processortype: application-summary.js's isExporterApplication()
+                // now gates the ORS/BES rows on this field rather than on overseasSites
+                // presence — this item seeds overseasSites below, so it must also claim
+                // to be an exporter or those rows silently stop rendering.
+                ["wasteProcessingType"] = "exporter",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
@@ -485,6 +490,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorOrganisationId"] = "org-ors-interim-authority-001",
                 ["operatorRegistrationId"] = "reg-ors-interim-authority-001",
                 ["material"] = "plastic",
+                // RA-434-processortype: see the matching comment on the
+                // full-payload-verification seed item above — this item also seeds
+                // overseasSites and needs the same claim to render the ORS/BES rows.
+                ["wasteProcessingType"] = "exporter",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
