@@ -729,6 +729,85 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             now: now
         );
+
+        // RA-434: the "Additional information" tab's two fixtures, covering its
+        // one real conditional — the Site address row's reprocessor/exporter
+        // fallback. Values mirrored in mgmt-tests' test/support/ra-434-seed.js;
+        // keep the two in sync.
+        yield return Build(
+            seedKey: "additional-information-reprocessor",
+            postcode: "SE1 9GF",
+            submittedDaysAgo: 3,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Thames Reprocessing Verification Ltd",
+                ["registrationNumber"] = "EPR-100434",
+                ["operatorApplicationId"] = "app-additional-info-reprocessor-001",
+                ["operatorOrganisationId"] = "org-additional-info-reprocessor-001",
+                ["operatorRegistrationId"] = "reg-additional-info-reprocessor-001",
+                ["material"] = "plastic",
+                // Deliberately ABSENT: RA-434-processortype's "absent defaults to
+                // reprocessor" branch, which this fixture exists to prove — do
+                // not add a wasteProcessingType key here.
+                ["companiesHouseNumber"] = "13579246",
+                // Deliberately DIFFERENT from siteAddress below — a template
+                // that accidentally aliases the two fields would otherwise pass
+                // unnoticed.
+                ["companyRegisteredAddress"] = "200 Registered Office Road, London, SE1 9AA",
+                ["accreditationYear"] = 2026,
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "thames.reprocessing@example.com",
+                ["siteAddress"] = "1 Thames Reprocessing Way",
+                ["siteAddressPostcode"] = "SE1 9GF",
+                ["permitNumbers"] = new BsonArray { "WML135792", "PPC468024" },
+                ["submittedBy"] = new BsonDocument
+                {
+                    ["fullName"] = "Harriet Osei",
+                    ["jobTitle"] = "Compliance Officer",
+                    ["email"] = "harriet.osei@example.com",
+                },
+            },
+            submittedBy: "stub-portal-client",
+            now: now
+        );
+
+        yield return Build(
+            seedKey: "additional-information-exporter",
+            postcode: "SE1 9GF",
+            submittedDaysAgo: 3,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Continental Exports Verification Ltd",
+                ["registrationNumber"] = "EPR-100435",
+                ["operatorApplicationId"] = "app-additional-info-exporter-001",
+                ["operatorOrganisationId"] = "org-additional-info-exporter-001",
+                ["operatorRegistrationId"] = "reg-additional-info-exporter-001",
+                ["material"] = "plastic",
+                ["wasteProcessingType"] = "exporter",
+                ["companiesHouseNumber"] = "09876543",
+                ["companyRegisteredAddress"] = "1 Continental Way, Dover, Kent",
+                // Deliberately ABSENT, both keys: re-ex has no site for an
+                // exporter, so the Additional information tab's Site address
+                // row must fall back to the registered address — the point of
+                // this fixture. Do not add siteAddress / siteAddressPostcode.
+                ["accreditationYear"] = 2026,
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "continental.exports@example.com",
+                ["permitNumbers"] = new BsonArray { "WML123456", "PPC456789" },
+                ["submittedBy"] = new BsonDocument
+                {
+                    ["fullName"] = "Marcus Webb",
+                    ["jobTitle"] = "Export Compliance Lead",
+                    ["email"] = "marcus.webb@example.com",
+                },
+            },
+            submittedBy: "stub-portal-client",
+            now: now
+        );
     }
 
     /// <summary>
