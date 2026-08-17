@@ -337,10 +337,7 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         if (query.Materials is { Count: > 0 } materials)
         {
             var materialClauses = materials
-                .Select(m => builder.Regex(
-                    "payload.material",
-                    new MongoDB.Bson.BsonRegularExpression(
-                        $"^{System.Text.RegularExpressions.Regex.Escape(m)}$", "i")))
+                .Select(m => CaseInsensitiveExactMatch(builder, "payload.material", m))
                 .ToList();
             clauses.Add(materialClauses.Count == 1
                 ? materialClauses[0]
@@ -376,9 +373,8 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
 
             if (wantsExporter != wantsReprocessor)
             {
-                var exporterFilter = builder.Regex(
-                    "payload.wasteProcessingType",
-                    new MongoDB.Bson.BsonRegularExpression("^exporter$", "i"));
+                var exporterFilter = CaseInsensitiveExactMatch(
+                    builder, "payload.wasteProcessingType", "exporter");
                 clauses.Add(wantsExporter ? exporterFilter : builder.Not(exporterFilter));
             }
         }
@@ -439,6 +435,20 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
 
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
+
+    /// <summary>
+    /// Case-insensitive exact-token match on a single BSON field: an anchored
+    /// regex so casing differences never hide a match without matching
+    /// substrings of a longer value. Shared by the <c>Materials</c> and
+    /// <c>WasteProcessingTypes</c> filter clauses above, which both need this
+    /// exact idiom.
+    /// </summary>
+    private static FilterDefinition<WorkItem> CaseInsensitiveExactMatch(
+        FilterDefinitionBuilder<WorkItem> builder, string field, string value) =>
+        builder.Regex(
+            field,
+            new MongoDB.Bson.BsonRegularExpression(
+                $"^{System.Text.RegularExpressions.Regex.Escape(value)}$", "i"));
 
     [ExcludeFromCodeCoverage]
     public async Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)

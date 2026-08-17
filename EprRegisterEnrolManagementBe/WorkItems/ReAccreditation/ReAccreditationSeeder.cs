@@ -41,6 +41,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     private const string SubmittedStateId = "submitted";
 
     /// <summary>
+    /// RA-254 fixture seed key. Referenced by name (rather than repeating the
+    /// literal) by <see cref="ReAccreditationExporterFixtureBackfillMigration"/>
+    /// so a future rename of the key fails to compile there instead of
+    /// silently making <c>GetByIdAsync</c> return null for the fixture.
+    /// </summary>
+    public const string FullPayloadVerificationSeedKey = "full-payload-verification";
+
+    /// <summary>
     /// RA-292 fixture seed key. Its own key rather than an enrichment of
     /// <c>full-payload-verification</c> on purpose:
     /// <see cref="IWorkItemPersistence.CreateIfAbsentAsync"/> inserts by
@@ -291,7 +299,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // to verify the Application details page renders the full payload
         // rather than just the subset the other seed items happen to cover.
         yield return Build(
-            seedKey: "full-payload-verification",
+            seedKey: FullPayloadVerificationSeedKey,
             postcode: "EC1A 1BB",
             submittedDaysAgo: 4,
             stateId: "submitted",

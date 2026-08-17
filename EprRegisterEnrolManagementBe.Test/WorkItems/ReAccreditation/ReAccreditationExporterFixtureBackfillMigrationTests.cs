@@ -9,8 +9,8 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 public class ReAccreditationExporterFixtureBackfillMigrationTests
 {
-    private static readonly Guid s_fullPayloadId =
-        WorkItemSeed.DeterministicId(ReAccreditationType.Id, "full-payload-verification");
+    private static readonly Guid s_fullPayloadId = WorkItemSeed.DeterministicId(
+        ReAccreditationType.Id, ReAccreditationSeeder.FullPayloadVerificationSeedKey);
 
     private static readonly Guid s_orsInterimAuthorityId = WorkItemSeed.DeterministicId(
         ReAccreditationType.Id, ReAccreditationSeeder.OrsInterimAuthoritySeedKey);
@@ -79,8 +79,29 @@ public class ReAccreditationExporterFixtureBackfillMigrationTests
     }
 
     [Fact]
-    public async Task ApplyAsync_skips_a_fixture_that_already_has_wasteProcessingType()
+    public async Task ApplyAsync_skips_a_fixture_that_already_has_both_fields()
     {
+        var ct = TestContext.Current.CancellationToken;
+        var fullPayload = BuildItem(s_fullPayloadId, new BsonDocument
+        {
+            ["organisationName"] = "Full Payload Verification Ltd",
+            ["wasteProcessingType"] = "exporter",
+            ["companyRegisterAddressPostcode"] = "G2 1AL"
+        });
+        var persistence = BuildPersistence(fullPayload);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_backfills_only_the_postcode_when_wasteProcessingType_is_already_set()
+    {
+        // Regression: the two fields used to be gated together, so a fixture
+        // that already had wasteProcessingType but was missing the postcode
+        // (e.g. a partially-applied prior run) was skipped entirely and the
+        // postcode was never backfilled.
         var ct = TestContext.Current.CancellationToken;
         var fullPayload = BuildItem(s_fullPayloadId, new BsonDocument
         {
@@ -91,7 +112,31 @@ public class ReAccreditationExporterFixtureBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.Received(1).ReplaceAsync(fullPayload, Arg.Any<CancellationToken>());
+        Assert.Equal("G2 1AL", fullPayload.Payload["companyRegisterAddressPostcode"].AsString);
+        var entry = fullPayload.AuditLog.Single(e => e.Action == "waste-processing-type-backfilled");
+        Assert.False(entry.Details.ContainsKey("wasteProcessingType"));
+        Assert.Equal("G2 1AL", entry.Details["companyRegisterAddressPostcode"]);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_backfills_only_wasteProcessingType_when_postcode_is_already_set()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var fullPayload = BuildItem(s_fullPayloadId, new BsonDocument
+        {
+            ["organisationName"] = "Full Payload Verification Ltd",
+            ["companyRegisterAddressPostcode"] = "G2 1AL"
+        });
+        var persistence = BuildPersistence(fullPayload);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        await persistence.Received(1).ReplaceAsync(fullPayload, Arg.Any<CancellationToken>());
+        Assert.Equal("exporter", fullPayload.Payload["wasteProcessingType"].AsString);
+        var entry = fullPayload.AuditLog.Single(e => e.Action == "waste-processing-type-backfilled");
+        Assert.False(entry.Details.ContainsKey("companyRegisterAddressPostcode"));
+        Assert.Equal("exporter", entry.Details["wasteProcessingType"]);
     }
 
     [Fact]

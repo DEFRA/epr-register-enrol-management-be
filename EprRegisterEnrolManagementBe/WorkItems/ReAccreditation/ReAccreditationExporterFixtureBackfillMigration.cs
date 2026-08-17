@@ -6,7 +6,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// Back-fills <c>payload.wasteProcessingType = "exporter"</c> (and
 /// <c>payload.companyRegisterAddressPostcode</c>) onto the two seeded
 /// fixtures that carry <c>overseasSites</c>/BES evidence
-/// (<c>full-payload-verification</c> and
+/// (<see cref="ReAccreditationSeeder.FullPayloadVerificationSeedKey"/> and
 /// <see cref="ReAccreditationSeeder.OrsInterimAuthoritySeedKey"/>) but predate
 /// RA-412's addition of those fields to <see cref="ReAccreditationSeeder"/>.
 ///
@@ -28,9 +28,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// known for certain, because it is declared right there in
 /// <see cref="ReAccreditationSeeder.Build"/> — are safe to touch here.
 ///
-/// Idempotent: an id that already carries <c>wasteProcessingType</c> is
-/// skipped, as is either id that does not exist (a from-scratch environment
-/// that seeded after the RA-412 change already has both fields).
+/// Idempotent: <c>wasteProcessingType</c> and <c>companyRegisterAddressPostcode</c>
+/// are backfilled independently, so an id that already carries one but not
+/// the other (e.g. a partially-applied prior run) still gets the missing
+/// field rather than being skipped outright. An id that already carries both,
+/// or does not exist (a from-scratch environment that seeded after the
+/// RA-412 change already has both fields), is skipped entirely.
 /// </summary>
 internal sealed class ReAccreditationExporterFixtureBackfillMigration(
     ILogger<ReAccreditationExporterFixtureBackfillMigration> logger,
@@ -40,7 +43,7 @@ internal sealed class ReAccreditationExporterFixtureBackfillMigration(
 
     private static readonly (string SeedKey, string CompanyRegisterAddressPostcode)[] s_fixtures =
     [
-        ("full-payload-verification", "G2 1AL"),
+        (ReAccreditationSeeder.FullPayloadVerificationSeedKey, "G2 1AL"),
         (ReAccreditationSeeder.OrsInterimAuthoritySeedKey, "SA1 1AA"),
     ];
 
@@ -57,14 +60,35 @@ internal sealed class ReAccreditationExporterFixtureBackfillMigration(
             var id = WorkItemSeed.DeterministicId(ReAccreditationType.Id, seedKey);
             var item = await persistence.GetByIdAsync(id, cancellationToken);
 
-            if (item is null || AlreadyExporter(item.Payload))
+            if (item is null)
             {
                 skipped++;
                 continue;
             }
 
-            item.Payload["wasteProcessingType"] = "exporter";
-            item.Payload["companyRegisterAddressPostcode"] = companyRegisterAddressPostcode;
+            var needsWasteProcessingType = !AlreadyExporter(item.Payload);
+            var needsPostcode = !AlreadyHasPostcode(item.Payload);
+
+            if (!needsWasteProcessingType && !needsPostcode)
+            {
+                skipped++;
+                continue;
+            }
+
+            var details = new Dictionary<string, string?>();
+
+            if (needsWasteProcessingType)
+            {
+                item.Payload["wasteProcessingType"] = "exporter";
+                details["wasteProcessingType"] = "exporter";
+            }
+
+            if (needsPostcode)
+            {
+                item.Payload["companyRegisterAddressPostcode"] = companyRegisterAddressPostcode;
+                details["companyRegisterAddressPostcode"] = companyRegisterAddressPostcode;
+            }
+
             item.AuditLog.Add(new WorkItemAuditEntry
             {
                 Action = "waste-processing-type-backfilled",
@@ -72,10 +96,7 @@ internal sealed class ReAccreditationExporterFixtureBackfillMigration(
                 CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
                 CreatedBy = "migration",
                 CreatedByName = "Migration",
-                Details = new Dictionary<string, string?>
-                {
-                    ["wasteProcessingType"] = "exporter"
-                }
+                Details = details
             });
 
             try
@@ -101,4 +122,9 @@ internal sealed class ReAccreditationExporterFixtureBackfillMigration(
         payload.TryGetValue("wasteProcessingType", out var value) &&
         value.IsString &&
         string.Equals(value.AsString, "exporter", StringComparison.OrdinalIgnoreCase);
+
+    private static bool AlreadyHasPostcode(MongoDB.Bson.BsonDocument payload) =>
+        payload.TryGetValue("companyRegisterAddressPostcode", out var value) &&
+        value.IsString &&
+        !string.IsNullOrWhiteSpace(value.AsString);
 }
