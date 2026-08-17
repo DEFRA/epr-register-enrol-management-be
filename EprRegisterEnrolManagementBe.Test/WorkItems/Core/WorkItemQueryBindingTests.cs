@@ -235,6 +235,39 @@ public class WorkItemQueryBindingTests
         Assert.Null(query.Organisation);
     }
 
+    // ───────────────────────── WasteProcessingType (RA-412) ─────────────────────────
+
+    [Fact]
+    public void SingleWasteProcessingTypeIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("wasteProcessingType", "exporter")));
+
+        Assert.NotNull(query.WasteProcessingTypes);
+        Assert.Equal(new[] { "exporter" }, query.WasteProcessingTypes!);
+    }
+
+    [Fact]
+    public void RepeatedWasteProcessingTypeParamsAreAllBound()
+    {
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["wasteProcessingType"] = new Microsoft.Extensions.Primitives.StringValues(
+                new[] { "exporter", "reprocessor" })
+        };
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.Equal(new[] { "exporter", "reprocessor" }, query.WasteProcessingTypes!);
+    }
+
+    [Fact]
+    public void MissingWasteProcessingTypeDefaultsToNull()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.WasteProcessingTypes);
+    }
+
     [Theory]
     [InlineData("organisation")]
     [InlineData("status")]

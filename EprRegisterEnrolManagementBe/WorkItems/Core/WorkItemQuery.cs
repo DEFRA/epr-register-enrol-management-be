@@ -42,6 +42,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <see cref="EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.Nation"/>
 /// enum members (e.g. <c>England</c>, <c>NorthernIreland</c>).
 /// </param>
+/// <param name="WasteProcessingTypes">
+/// Restrict to items by applicant type. Empty/null means "any type".
+/// A collection containing <c>exporter</c> (case-insensitive) restricts to
+/// items whose <c>payload.wasteProcessingType</c> literally equals
+/// <c>exporter</c>; any other supplied value is treated as
+/// <c>reprocessor</c>, which matches everything else — including an ABSENT
+/// field, the documented pre-RA-314 fallback (see
+/// <see cref="WorkItemPersistence.BuildFilter"/> for why that matters).
+/// Supplying both buckets is equivalent to supplying neither: every item
+/// matches exactly one, so the filter becomes "any type".
+/// </param>
 /// <param name="IncludeArchived">
 /// When <c>false</c> (the default), items whose <see cref="WorkItem.StateId"/>
 /// is <c>"approved"</c> are excluded from the results. The approved state is the
@@ -61,6 +72,7 @@ public sealed record WorkItemQuery(
     int PageSize = 20,
     string? SubmittedBy = null,
     IReadOnlyCollection<string>? Nations = null,
+    IReadOnlyCollection<string>? WasteProcessingTypes = null,
     bool IncludeArchived = false,
     string? OrgId = null,
     string? RegistrationId = null,

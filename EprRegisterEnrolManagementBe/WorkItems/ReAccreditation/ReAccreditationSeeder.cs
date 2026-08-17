@@ -41,6 +41,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     private const string SubmittedStateId = "submitted";
 
     /// <summary>
+    /// RA-254 fixture seed key. Referenced by name (rather than repeating the
+    /// literal) by <see cref="ReAccreditationExporterFixtureBackfillMigration"/>
+    /// so a future rename of the key fails to compile there instead of
+    /// silently making <c>GetByIdAsync</c> return null for the fixture.
+    /// </summary>
+    public const string FullPayloadVerificationSeedKey = "full-payload-verification";
+
+    /// <summary>
     /// RA-292 fixture seed key. Its own key rather than an enrichment of
     /// <c>full-payload-verification</c> on purpose:
     /// <see cref="IWorkItemPersistence.CreateIfAbsentAsync"/> inserts by
@@ -57,6 +65,59 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// resolves to exactly one row.
     /// </summary>
     public const string OrsInterimAuthorityOrganisationName = "Overseas Reprocessing Verification Ltd";
+
+    /// <summary>
+    /// RA-412 fixture seed key. Its own key for the same reason as
+    /// <see cref="OrsInterimAuthoritySeedKey"/> — a new key is inserted on the
+    /// next boot regardless of what an already-seeded database has.
+    /// </summary>
+    public const string GlobalGlassExportsSeedKey = "global-glass-exports";
+
+    /// <summary>
+    /// Organisation name of the RA-412 fixture — org 50006 in the ticket's own
+    /// example. Unique across the seed set so an mgmt-tests search by
+    /// organisation name resolves to exactly one row, the same discipline as
+    /// <see cref="OrsInterimAuthorityOrganisationName"/>.
+    /// </summary>
+    public const string GlobalGlassExportsOrganisationName = "Global Glass Exports";
+
+    /// <summary>
+    /// RA-434 fixture seed key. The "Additional information" tab's Site
+    /// address row falls back to the registered address for exporters
+    /// (re-ex has no site for an exporter), and that fallback has no
+    /// fixture to exercise it without a payload that is genuinely
+    /// <c>wasteProcessingType: "exporter"</c> and carries no
+    /// <c>siteAddress</c> at all. A new key rather than enriching an
+    /// existing seed for the same reason as <see cref="OrsInterimAuthoritySeedKey"/>.
+    /// </summary>
+    public const string AdditionalInformationExporterSeedKey = "additional-information-exporter";
+
+    /// <summary>
+    /// Organisation name of the RA-434 exporter fixture. Unique across the
+    /// seed set for the same reason as <see cref="OrsInterimAuthorityOrganisationName"/>.
+    /// </summary>
+    public const string AdditionalInformationExporterOrganisationName = "Continental Exports Verification Ltd";
+
+    /// <summary>
+    /// RA-434-processortype fixture seed key. The Additional information
+    /// tab's "absent wasteProcessingType defaults to reprocessor" branch was
+    /// originally covered by reusing <see cref="AdditionalInformationExporterSeedKey"/>'s
+    /// sibling, <c>full-payload-verification</c> — which carried no
+    /// <c>wasteProcessingType</c> at the time. RA-434-processortype gave
+    /// <c>full-payload-verification</c> an explicit <c>wasteProcessingType:
+    /// "exporter"</c> (its BES/ORS fixture requires it, now that the frontend
+    /// gates those sections on the real field rather than on
+    /// <c>overseasSites</c> presence), which leaves no seed item without the
+    /// field. This key exists purely to keep that branch covered.
+    /// </summary>
+    public const string AdditionalInformationReprocessorSeedKey = "additional-information-reprocessor";
+
+    /// <summary>
+    /// Organisation name of the RA-434-processortype reprocessor fixture.
+    /// Unique across the seed set for the same reason as
+    /// <see cref="OrsInterimAuthorityOrganisationName"/>.
+    /// </summary>
+    public const string AdditionalInformationReprocessorOrganisationName = "Thames Reprocessing Verification Ltd";
 
     public string TypeId => ReAccreditationType.Id;
 
@@ -276,7 +337,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // to verify the Application details page renders the full payload
         // rather than just the subset the other seed items happen to cover.
         yield return Build(
-            seedKey: "full-payload-verification",
+            seedKey: FullPayloadVerificationSeedKey,
             postcode: "EC1A 1BB",
             submittedDaysAgo: 4,
             stateId: "submitted",
@@ -287,13 +348,35 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorApplicationId"] = "app-full-payload-001",
                 ["operatorOrganisationId"] = "org-full-payload-001",
                 ["operatorRegistrationId"] = "reg-full-payload-001",
+                // RA-412: this item carries overseasSites/BES evidence below, so
+                // it must declare the real discriminator management-fe's
+                // isExporterApplication() now reads — without it the item reads
+                // as a Reprocessor and the BES/ORS sections stop rendering.
+                // RA-434-processortype independently relies on the same field
+                // for the same reason (its BES/ORS fixture).
+                ["wasteProcessingType"] = "exporter",
+                // RA-412 (self-review): AccreditationIdGenerator and
+                // ApplicationReferenceGenerator both require this on the
+                // Exporter branch (the registered-office postcode, per
+                // RA-314 AC01/AC02 — an Exporter's regulator is resolved from
+                // here, not the site address). Deliberately a different
+                // postcode/nation from siteAddressPostcode below so approving
+                // this fixture actually exercises that distinction instead of
+                // accidentally passing either way.
+                ["companyRegisterAddressPostcode"] = "G2 1AL",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "full.payload@example.com",
+                // RA-434: distinct from siteAddress on purpose, so a template
+                // that accidentally aliases the two fields is caught by any
+                // assertion comparing them.
+                ["companiesHouseNumber"] = "12345678",
+                ["companyRegisteredAddress"] = "100 Registered Office Road, London, EC1A 1AB",
                 ["siteAddress"] = "1 Full Payload Lane, London",
                 ["siteAddressPostcode"] = "EC1A 1BB",
+                ["permitNumbers"] = new BsonArray { "WML999000", "PPC888777" },
                 ["chargeAmountPence"] = 327600,
                 ["paymentReference"] = "PAY-FULL-PAYLOAD-001",
                 ["submittedBy"] = new BsonDocument
@@ -465,6 +548,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["operatorApplicationId"] = "app-ors-interim-authority-001",
                 ["operatorOrganisationId"] = "org-ors-interim-authority-001",
                 ["operatorRegistrationId"] = "reg-ors-interim-authority-001",
+                // RA-412: see the same field on the full-payload-verification
+                // item above — this item's overseasSites/ORS sites need it too.
+                // RA-434-processortype independently relies on the same field
+                // for the same reason (this is the RA-292 ORS/BES fixture).
+                ["wasteProcessingType"] = "exporter",
+                // RA-412 (self-review): see the same field on
+                // full-payload-verification above for why it's required.
+                ["companyRegisterAddressPostcode"] = "SA1 1AA",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
@@ -702,6 +793,121 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         }
                     }
                 }
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // RA-412: a genuine Exporter organisation — org 50006 "Global Glass
+        // Exports" in the ticket's own example. Unlike
+        // full-payload-verification/ors-interim-authority above (which only
+        // need wasteProcessingType so their overseasSites data reads
+        // correctly), this item's whole point IS being a real Exporter
+        // application: it proves the work-items card label and the
+        // Applicant-type filter both resolve a genuine exporter, not just
+        // avoid mislabelling one that happens to carry overseas site data.
+        // Deliberately a plain item with no overseasSites/BES payload of its
+        // own — that positive case is already covered by the two fixtures
+        // above.
+        yield return Build(
+            seedKey: GlobalGlassExportsSeedKey,
+            postcode: "M1 1AE",
+            submittedDaysAgo: 7,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = GlobalGlassExportsOrganisationName,
+                ["registrationNumber"] = "EPR-100506",
+                ["operatorRegistrationId"] = "reg-050006",
+                ["wasteProcessingType"] = "exporter",
+                // RA-412 (self-review): see the same field on
+                // full-payload-verification above for why it's required.
+                ["companyRegisterAddressPostcode"] = "CF10 1AA",
+                ["material"] = "glass",
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "global.glass.exports@example.com",
+                ["siteAddressPostcode"] = "M1 1AE",
+                ["chargeAmountPence"] = 54600,
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // RA-434: an Exporter-type item, carrying the three fields new to the
+        // "Additional information" tab (companiesHouseNumber,
+        // companyRegisteredAddress, permitNumbers) and — the point of this
+        // fixture — NO siteAddress at all. Re-ex has no site for an exporter,
+        // so the CM frontend falls back to companyRegisteredAddress for the
+        // Site address row; every other seed item is reprocessor-shaped
+        // (siteAddress present) and cannot exercise that branch.
+        //
+        // companyRegisterAddressPostcode (note: no 'd' — the existing,
+        // postcode-only key AccreditationIdGenerator / ApplicationReferenceGenerator
+        // already read for an exporter's regulator postcode) is set alongside
+        // the new full-address companyRegisteredAddress key so this fixture is
+        // a realistic exporter payload, not just enough to pass the new tab's
+        // tests.
+        yield return Build(
+            seedKey: AdditionalInformationExporterSeedKey,
+            postcode: "CT16 1AA",
+            submittedDaysAgo: 4,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = AdditionalInformationExporterOrganisationName,
+                ["registrationNumber"] = "EPR-100434",
+                ["operatorApplicationId"] = "app-additional-info-exporter-001",
+                ["operatorOrganisationId"] = "org-additional-info-exporter-001",
+                ["operatorRegistrationId"] = "reg-additional-info-exporter-001",
+                ["material"] = "plastic",
+                ["accreditationYear"] = 2026,
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "continental.exports@example.com",
+                ["wasteProcessingType"] = "exporter",
+                ["companiesHouseNumber"] = "09876543",
+                ["companyRegisteredAddress"] = "1 Continental Way, Dover, Kent",
+                ["companyRegisterAddressPostcode"] = "CT16 1AA",
+                ["permitNumbers"] = new BsonArray { "WML123456", "PPC456789" },
+                ["chargeAmountPence"] = 218400,
+            },
+            submittedBy: "stub-portal-client",
+            now: now);
+
+        // RA-434-processortype: the reprocessor counterpart to
+        // AdditionalInformationExporterSeedKey above. Genuinely carries NO
+        // wasteProcessingType key at all — that absence is the point, so the
+        // Additional information tab's Site address row exercises the
+        // "defaults to reprocessor" branch. Also gives the tab's other RA-434
+        // fields (companiesHouseNumber, companyRegisteredAddress,
+        // permitNumbers) a fixture that stays reprocessor-shaped even after
+        // full-payload-verification became an explicit exporter for its own
+        // BES/ORS fixture.
+        yield return Build(
+            seedKey: AdditionalInformationReprocessorSeedKey,
+            postcode: "SE1 9GF",
+            submittedDaysAgo: 4,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = AdditionalInformationReprocessorOrganisationName,
+                ["registrationNumber"] = "EPR-100435",
+                ["operatorApplicationId"] = "app-additional-info-reprocessor-001",
+                ["operatorOrganisationId"] = "org-additional-info-reprocessor-001",
+                ["operatorRegistrationId"] = "reg-additional-info-reprocessor-001",
+                ["material"] = "plastic",
+                ["accreditationYear"] = 2026,
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "thames.reprocessing@example.com",
+                ["companiesHouseNumber"] = "13579246",
+                // Deliberately DIFFERENT from siteAddress below — a template
+                // that accidentally aliases the two fields would otherwise
+                // pass unnoticed (same reasoning as the exporter fixture).
+                ["companyRegisteredAddress"] = "200 Registered Office Road, London, SE1 9AA",
+                ["siteAddress"] = "1 Thames Reprocessing Way, London",
+                ["siteAddressPostcode"] = "SE1 9GF",
+                ["permitNumbers"] = new BsonArray { "WML135792", "PPC468024" },
+                ["chargeAmountPence"] = 218400,
             },
             submittedBy: "stub-portal-client",
             now: now);
