@@ -230,7 +230,7 @@ public class ReAccreditationEndpointTests
                 },
                 prns = new
                 {
-                    plannedTonnageBand = "UpTo1000",
+                    plannedTonnageBand = "UpTo5000",
                     authorisers = new[]
                     {
                         new { fullName = "Bob Jones", email = "bob@example.com" },
@@ -286,6 +286,50 @@ public class ReAccreditationEndpointTests
         Assert.Equal("12345", payload.OperatorOrganisationId);
         Assert.Equal("reg-001", payload.OperatorRegistrationId);
         Assert.Equal("jane@example.com", payload.OperatorEmail);
+    }
+
+    [Fact]
+    public async Task Submit_does_not_bind_OperatorEmail_from_a_misnamed_email_field()
+    {
+        // RA-123 regression guard. The operator address must arrive under
+        // `operatorEmail`; a field-name mismatch (e.g. the frontend posting
+        // `email`) must leave OperatorEmail null rather than silently binding,
+        // so the notification flow skips rather than emailing the wrong value.
+        //
+        // This is the negative half of the contract the mgmt-tests
+        // re-accreditation-operator-email-contract e2e spec used to observe via
+        // the "Submission confirmation email sent" audit row. RA-422 disabled
+        // that row (Notify:Enabled default false), so the contract is now pinned
+        // here at the deserialisation boundary: the positive case is covered by
+        // Submit_persists_every_field_from_a_real_operator_submission_payload
+        // above; this test proves the wrong field name does not bind.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var body = new
+        {
+            typeId = ReAccreditationType.Id,
+            source = "operator-fe",
+            payload = new
+            {
+                organisationName = "Contract Test Organisation",
+                registrationNumber = "EPR-100024",
+                material = "plastic",
+                // Deliberately the wrong field name — the RA-123 bug.
+                email = "wrong-field@example.com",
+            },
+        };
+
+        var response = await client.PostAsJsonAsync("/work-items", body, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var persisted = await factory.Persistence.GetByIdAsync(created!.Id, cancellationToken);
+        Assert.NotNull(persisted);
+
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(persisted!.Payload);
+        Assert.Null(payload.OperatorEmail);
     }
 
     [Fact]
@@ -786,7 +830,7 @@ public class ReAccreditationEndpointTests
         var stubData = new PriorYearAccreditationDto
         {
             Year = 2024,
-            TonnageBand = "UpTo1000",
+            TonnageBand = "UpTo5000",
             Authorisers =
             [
                 new PriorYearAuthoriserDto
@@ -830,7 +874,7 @@ public class ReAccreditationEndpointTests
         );
         Assert.NotNull(body);
         Assert.Equal(2024, body!.Year);
-        Assert.Equal("UpTo1000", body.TonnageBand);
+        Assert.Equal("UpTo5000", body.TonnageBand);
         Assert.Single(body.Authorisers);
         Assert.Equal("Alice Smith", body.Authorisers[0].FullName);
         Assert.Equal("alice@example.com", body.Authorisers[0].Email);

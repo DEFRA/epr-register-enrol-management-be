@@ -21,7 +21,7 @@ internal sealed class StubReExAccreditationClient : IReExAccreditationClient
         return Task.FromResult<PriorYearAccreditationDto?>(new PriorYearAccreditationDto
         {
             Year = priorYear,
-            TonnageBand = "UpTo1000",
+            TonnageBand = "UpTo5000",
             Authorisers =
             [
                 new PriorYearAuthoriserDto

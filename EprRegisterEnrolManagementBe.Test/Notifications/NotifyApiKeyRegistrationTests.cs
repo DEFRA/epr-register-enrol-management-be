@@ -1,5 +1,7 @@
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EprRegisterEnrolManagementBe.Test.Notifications;
@@ -15,14 +17,19 @@ internal static class NotifyTestConstants
 }
 
 /// <summary>
-/// Verifies that ConfigureNotifications registers the correct INotifyClient
-/// implementation depending on whether NOTIFY_API_KEY is set.
+/// RA-422: the central <c>Notify:Enabled</c> flag (default false) gates BOTH
+/// the outbound <see cref="INotifyClient"/> AND the re-accreditation
+/// notification post-action hook — the single hook that both sends CM email
+/// and writes every <c>notification-*</c> audit entry. These tests pin the
+/// full wiring matrix (flag × API-key) for the registered client and for the
+/// presence of <see cref="ReAccreditationNotificationHook"/> in the
+/// <see cref="IWorkItemPostActionHook"/> fan-out, so disabling the flag can
+/// never leak an email or an audit entry.
 ///
 /// Config-key tests use UseSetting and are safe for parallel execution.
 /// Env-var tests mutate the process environment and are placed in the
 /// env-var-mutation collection (DisableParallelization = true) to prevent
-/// races with other WebApplicationFactory spin-ups — same reasoning as
-/// WorkItemSeederGatingTests.
+/// races with other WebApplicationFactory spin-ups.
 /// </summary>
 public class NotifyApiKeyRegistrationTests
 {
@@ -31,41 +38,76 @@ public class NotifyApiKeyRegistrationTests
     public NotifyApiKeyRegistrationTests(MongoIntegrationFixture fixture) => _fixture = fixture;
 
     [Fact]
-    public void GovukNotifyClient_is_registered_when_NOTIFY_API_KEY_is_set()
+    public void Default_flag_absent_registers_noop_client_and_omits_notification_hook()
     {
-        using var factory = NewFactory(NotifyTestConstants.FakeApiKey);
+        // No Notify:Enabled override at all: the shipped appsettings default
+        // (false) applies, so even a configured API key yields the no-op
+        // client and the notification hook is never registered.
+        using var factory = new EphemeralMongoTestFactory(
+            _fixture,
+            "notify-default",
+            settings: new Dictionary<string, string?>
+            {
+                ["NOTIFY_API_KEY"] = NotifyTestConstants.FakeApiKey,
+            });
 
-        var client = factory.Services.GetRequiredService<INotifyClient>();
-
-        Assert.IsType<GovukNotifyClient>(client);
+        Assert.IsType<NoOpNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
+        Assert.DoesNotContain(Hooks(factory), h => h is ReAccreditationNotificationHook);
     }
 
     [Fact]
-    public void NoOpNotifyClient_is_registered_when_NOTIFY_API_KEY_is_absent()
+    public void Explicitly_disabled_registers_noop_client_and_omits_notification_hook()
     {
-        using var factory = NewFactory(apiKey: null);
+        using var factory = NewFactory(NotifyTestConstants.FakeApiKey, enabled: false);
 
-        var client = factory.Services.GetRequiredService<INotifyClient>();
-
-        Assert.IsType<NoOpNotifyClient>(client);
+        Assert.IsType<NoOpNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
+        Assert.DoesNotContain(Hooks(factory), h => h is ReAccreditationNotificationHook);
     }
 
     [Fact]
-    public void NoOpNotifyClient_is_registered_when_NOTIFY_API_KEY_is_empty()
+    public void Enabled_with_api_key_registers_govuk_client_and_notification_hook()
     {
-        using var factory = NewFactory(apiKey: "");
+        using var factory = NewFactory(NotifyTestConstants.FakeApiKey, enabled: true);
 
-        var client = factory.Services.GetRequiredService<INotifyClient>();
-
-        Assert.IsType<NoOpNotifyClient>(client);
+        Assert.IsType<GovukNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
+        Assert.Contains(Hooks(factory), h => h is ReAccreditationNotificationHook);
     }
 
-    // Always set NOTIFY_API_KEY explicitly so an ambient value in the test
-    // runner's environment cannot influence the no-key test cases.
-    private EphemeralMongoTestFactory NewFactory(string? apiKey) =>
+    [Fact]
+    public void Enabled_without_api_key_registers_noop_client_but_keeps_notification_hook()
+    {
+        // Dev/e2e can still watch the audit trail with a NoOp send: whenever
+        // the flag is on the hook runs (and writes notification-* entries),
+        // regardless of whether a real API key is configured.
+        using var factory = NewFactory(apiKey: null, enabled: true);
+
+        Assert.IsType<NoOpNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
+        Assert.Contains(Hooks(factory), h => h is ReAccreditationNotificationHook);
+    }
+
+    [Fact]
+    public void Non_notification_hooks_stay_registered_when_disabled()
+    {
+        // The gate is scoped to the notification hook alone: nation-routing,
+        // query-push and status-push are not email and stay registered.
+        using var factory = NewFactory(NotifyTestConstants.FakeApiKey, enabled: false);
+        var hooks = Hooks(factory);
+
+        Assert.Contains(hooks, h => h is ReAccreditationNationRoutingHook);
+        Assert.Contains(hooks, h => h is ReAccreditationQueryPushHook);
+        Assert.Contains(hooks, h => h is ReAccreditationStatusPushHook);
+    }
+
+    private static IReadOnlyList<IWorkItemPostActionHook> Hooks(EphemeralMongoTestFactory factory) =>
+        factory.Services.GetServices<IWorkItemPostActionHook>().ToList();
+
+    // Always set NOTIFY_API_KEY and Notify:Enabled explicitly so an ambient
+    // value in the test runner's environment cannot influence the outcome.
+    private EphemeralMongoTestFactory NewFactory(string? apiKey, bool enabled) =>
         new(_fixture, "notify-key", settings: new Dictionary<string, string?>
         {
             ["NOTIFY_API_KEY"] = apiKey ?? string.Empty,
+            ["Notify:Enabled"] = enabled ? "true" : "false",
         });
 }
 
@@ -81,7 +123,8 @@ public sealed class EnvVarMutationCollection
 
 /// <summary>
 /// Verifies that the NOTIFY_API_KEY environment variable is picked up by
-/// Program.cs and drives the same INotifyClient registration decision.
+/// Program.cs and drives the same INotifyClient registration decision. With
+/// the RA-422 flag on, the key dimension alone selects the client.
 /// </summary>
 [Collection(EnvVarMutationCollection.Name)]
 public class NotifyApiKeyEnvVarRegistrationTests
@@ -98,7 +141,7 @@ public class NotifyApiKeyEnvVarRegistrationTests
         {
             Environment.SetEnvironmentVariable("NOTIFY_API_KEY", NotifyTestConstants.FakeApiKey);
 
-            using var factory = new EphemeralMongoTestFactory(_fixture, "notify-key-env");
+            using var factory = EnabledFactory("notify-key-env");
             Assert.IsType<GovukNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
         }
         finally
@@ -115,7 +158,7 @@ public class NotifyApiKeyEnvVarRegistrationTests
         {
             Environment.SetEnvironmentVariable("NOTIFY_API_KEY", null);
 
-            using var factory = new EphemeralMongoTestFactory(_fixture, "notify-key-env");
+            using var factory = EnabledFactory("notify-key-env");
             Assert.IsType<NoOpNotifyClient>(factory.Services.GetRequiredService<INotifyClient>());
         }
         finally
@@ -123,4 +166,12 @@ public class NotifyApiKeyEnvVarRegistrationTests
             Environment.SetEnvironmentVariable("NOTIFY_API_KEY", previous);
         }
     }
+
+    // Notifications enabled so the key dimension alone drives the decision;
+    // the RA-422 flag gate is covered by NotifyApiKeyRegistrationTests.
+    private EphemeralMongoTestFactory EnabledFactory(string prefix) =>
+        new(_fixture, prefix, settings: new Dictionary<string, string?>
+        {
+            ["Notify:Enabled"] = "true",
+        });
 }

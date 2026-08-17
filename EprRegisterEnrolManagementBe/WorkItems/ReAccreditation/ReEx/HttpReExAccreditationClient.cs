@@ -25,7 +25,7 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
         new(StringComparer.OrdinalIgnoreCase)
         {
             ["up_to_500"] = "UpTo500",
-            ["up_to_1000"] = "UpTo1000",
+            ["up_to_5000"] = "UpTo5000",
             ["up_to_10000"] = "UpTo10000",
             ["over_10000"] = "Over10000",
         };

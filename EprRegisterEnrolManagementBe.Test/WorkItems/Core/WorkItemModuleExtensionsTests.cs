@@ -1,19 +1,25 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
 public class WorkItemModuleExtensionsTests
 {
+    // AddWorkItemModule now threads IConfiguration into RegisterServices
+    // (RA-422). These tests don't exercise any config-gated registration, so
+    // an empty configuration suffices.
+    private static readonly IConfiguration s_config = new ConfigurationBuilder().Build();
+
     [Fact]
     public void AddWorkItemModule_registers_module_type_and_calls_register_services()
     {
         var services = new ServiceCollection();
 
         services.AddWorkItemFramework();
-        services.AddWorkItemModule<RecordingModule>();
+        services.AddWorkItemModule<RecordingModule>(s_config);
 
         var provider = services.BuildServiceProvider();
 
@@ -30,8 +36,8 @@ public class WorkItemModuleExtensionsTests
     {
         var services = new ServiceCollection();
         services.AddWorkItemFramework();
-        services.AddWorkItemModule<RecordingModule>();
-        services.AddWorkItemModule<EndpointModule>();
+        services.AddWorkItemModule<RecordingModule>(s_config);
+        services.AddWorkItemModule<EndpointModule>(s_config);
 
         var provider = services.BuildServiceProvider();
 
@@ -47,8 +53,8 @@ public class WorkItemModuleExtensionsTests
         var services = new ServiceCollection();
         services.AddRouting();
         services.AddWorkItemFramework();
-        services.AddWorkItemModule<EndpointModule>();
-        services.AddWorkItemModule<RecordingModule>();
+        services.AddWorkItemModule<EndpointModule>(s_config);
+        services.AddWorkItemModule<RecordingModule>(s_config);
 
         var provider = services.BuildServiceProvider();
         var endpoints = new TestEndpointRouteBuilder(provider);
@@ -74,7 +80,7 @@ public class WorkItemModuleExtensionsTests
     {
         public IWorkItemType Type { get; } = new TestWorkItemType("recording", "Recording");
 
-        public void RegisterServices(IServiceCollection services) => services.AddSingleton<Marker>();
+        public void RegisterServices(IServiceCollection services, IConfiguration configuration) => services.AddSingleton<Marker>();
 
         public void MapEndpoints(IEndpointRouteBuilder endpoints)
         {
@@ -87,7 +93,7 @@ public class WorkItemModuleExtensionsTests
     {
         public IWorkItemType Type { get; } = new TestWorkItemType("endpoint", "Endpoint");
 
-        public void RegisterServices(IServiceCollection services)
+        public void RegisterServices(IServiceCollection services, IConfiguration configuration)
         {
         }
 

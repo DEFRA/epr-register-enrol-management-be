@@ -16,9 +16,12 @@ public interface IWorkItemModule
     /// <summary>
     /// Register the module's service objects with DI. Called once during startup.
     /// Implementations must not register anything that conflicts with another
-    /// module's registrations (use module-scoped interfaces).
+    /// module's registrations (use module-scoped interfaces). The application
+    /// <paramref name="configuration"/> is supplied so a module can gate its
+    /// own registrations on config (e.g. RA-422's <c>Notify:Enabled</c> flag)
+    /// without reaching outside its folder.
     /// </summary>
-    void RegisterServices(IServiceCollection services);
+    void RegisterServices(IServiceCollection services, IConfiguration configuration);
 
     /// <summary>
     /// Map the module's HTTP endpoints. Called after the framework has built its
