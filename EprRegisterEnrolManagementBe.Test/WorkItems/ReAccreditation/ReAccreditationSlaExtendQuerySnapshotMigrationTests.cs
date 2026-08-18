@@ -153,18 +153,31 @@ public class ReAccreditationSlaExtendQuerySnapshotMigrationTests
     public async Task ApplyAsync_swallows_concurrency_exception_and_continues()
     {
         var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem();
+        // Two items need migrating; the first loses a concurrency race on save.
+        // The exception must be swallowed AND the second item still migrated —
+        // one item losing the race must not abort the whole migration.
+        var conflicted = BuildItem();
+        var succeeding = BuildItem();
         var persistence = Substitute.For<IWorkItemPersistence>();
-        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
-        persistence.GetByIdAsync(item.Id, ct).Returns(item);
         persistence
-            .ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>())
+            .QueryAsync(Arg.Any<WorkItemQuery>(), ct)
+            .Returns(SinglePage(conflicted, succeeding));
+        persistence.GetByIdAsync(conflicted.Id, ct).Returns(conflicted);
+        persistence.GetByIdAsync(succeeding.Id, ct).Returns(succeeding);
+        persistence
+            .ReplaceAsync(conflicted, Arg.Any<CancellationToken>())
             .Returns(
-                Task.FromException(new WorkItemConcurrencyException(item.Id, expectedVersion: 0))
+                Task.FromException(
+                    new WorkItemConcurrencyException(conflicted.Id, expectedVersion: 0)
+                )
             );
 
-        // Should not throw
         await BuildSut().ApplyAsync(persistence, ct);
+
+        // The concurrency loss is swallowed (no throw) and the next item is
+        // still migrated and saved.
+        await persistence.Received(1).ReplaceAsync(succeeding, ct);
+        Assert.Contains(succeeding.TemplateSnapshot!.Transitions, IsQueriedSlaExtend);
     }
 
     [Fact]
