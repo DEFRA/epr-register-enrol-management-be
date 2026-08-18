@@ -1,9 +1,7 @@
 using System.Security.Claims;
 using System.Xml;
-using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 
@@ -23,20 +21,12 @@ public class SlaServiceTests
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private SlaService BuildService(int maxExtensionDays = 31) =>
+    private SlaService BuildService() =>
         new(
             _persistence,
             NullLogger<SlaService>.Instance,
-            BuildOptions(maxExtensionDays),
             _time,
             [_hook]);
-
-    private static IOptionsMonitor<SlaConfig> BuildOptions(int maxDays = 31)
-    {
-        var monitor = Substitute.For<IOptionsMonitor<SlaConfig>>();
-        monitor.CurrentValue.Returns(new SlaConfig { MaxExtensionDays = maxDays });
-        return monitor;
-    }
 
     private static ClaimsPrincipal TeamLeader(string userId = "tl-1") =>
         new(new ClaimsIdentity(
@@ -152,7 +142,7 @@ public class SlaServiceTests
 
         var entry = Assert.Single(result.WorkItem!.AuditLog);
         Assert.Equal("sla-extended", entry.Action);
-        Assert.Equal("SLA extended", entry.ActionDisplayName);
+        Assert.Equal("Determination deadline extended", entry.ActionDisplayName);
         Assert.Equal("tl-alice", entry.CreatedBy);
         Assert.Equal(UtcNow, entry.CreatedAt);
         Assert.Equal("Needs more time", entry.Details["reason"]);
@@ -245,25 +235,16 @@ public class SlaServiceTests
     }
 
     [Fact]
-    public async Task ExtendAsync_returns_invalid_request_when_duration_exceeds_max()
+    public async Task ExtendAsync_allows_any_duration_with_no_upper_cap()
     {
-        var result = await BuildService(maxExtensionDays: 7).ExtendAsync(
-            Guid.NewGuid(), TimeSpan.FromDays(8), "reason",
-            TeamLeader(), TestContext.Current.CancellationToken);
-
-        Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
-        Assert.Contains("7", result.Message);
-    }
-
-    [Fact]
-    public async Task ExtendAsync_accepts_duration_exactly_at_max()
-    {
+        // RA-447/CM6: MaxExtensionDays has been removed entirely — a
+        // caseworker may extend by any positive duration.
         var workItem = WorkItemWithClock();
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
             .Returns(workItem);
 
-        var result = await BuildService(maxExtensionDays: 7).ExtendAsync(
-            workItem.Id, TimeSpan.FromDays(7), "reason",
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(365), "reason",
             TeamLeader(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
@@ -429,7 +410,7 @@ public class SlaServiceTests
             .Returns(workItem);
 
         // BA confirmed (RA-131): no cap on override — regulators agree offline.
-        var result = await BuildService(maxExtensionDays: 7).OverrideAsync(
+        var result = await BuildService().OverrideAsync(
             workItem.Id, TimeSpan.FromDays(365), null, "Long regulatory extension",
             TeamLeader(), TestContext.Current.CancellationToken);
 

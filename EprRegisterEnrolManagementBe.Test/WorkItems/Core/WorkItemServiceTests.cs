@@ -1615,6 +1615,33 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Submit_stamps_paymentReference_to_match_the_generated_applicationReference()
+    {
+        // RA-447/CM3: paymentReference used to stay null forever (the operator
+        // backend cannot know applicationReference before management-be
+        // generates it). Now that the reference is generated here, it is
+        // stamped as the payment reference too.
+        var type = BuildType();
+
+        var result = await BuildService(type)
+            .SubmitAsync(
+                type,
+                new BsonDocument(),
+                "test-client",
+                AuditUser(),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        Assert.True(fetched.Payload.Contains("paymentReference"));
+        Assert.Equal(
+            fetched.Payload["applicationReference"].AsString,
+            fetched.Payload["paymentReference"].AsString
+        );
+    }
+
+    [Fact]
     public async Task Submit_ignores_any_client_supplied_applicationReference_in_the_payload()
     {
         // RA-219: a value the client smuggles into the payload body must be

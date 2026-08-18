@@ -1,9 +1,7 @@
 using System.Security.Claims;
 using System.Text.Json;
-using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
@@ -124,12 +122,9 @@ public class WorkItemSlaDueDateTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         persistence.GetByIdAsync(item.Id, Arg.Any<CancellationToken>())
             .Returns(item);
-        var options = Substitute.For<IOptionsMonitor<SlaConfig>>();
-        options.CurrentValue.Returns(new SlaConfig { MaxExtensionDays = 31 });
         var service = new SlaService(
             persistence,
             NullLogger<SlaService>.Instance,
-            options,
             new FixedTimeProvider(s_startedAt.AddDays(10)));
 
         var result = await service.ExtendAsync(
@@ -161,12 +156,9 @@ public class WorkItemSlaDueDateTests
         var persistence = Substitute.For<IWorkItemPersistence>();
         persistence.GetByIdAsync(item.Id, Arg.Any<CancellationToken>())
             .Returns(item);
-        var options = Substitute.For<IOptionsMonitor<SlaConfig>>();
-        options.CurrentValue.Returns(new SlaConfig { MaxExtensionDays = 31 });
         var service = new SlaService(
             persistence,
             NullLogger<SlaService>.Instance,
-            options,
             new FixedTimeProvider(s_startedAt.AddDays(60)));
 
         var result = await service.OverrideAsync(
