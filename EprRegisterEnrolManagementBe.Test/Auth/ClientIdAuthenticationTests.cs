@@ -417,6 +417,88 @@ public class ClientIdAuthenticationTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
+    [Fact]
+    public async Task Signature_required_malformed_timestamp_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, "not-a-valid-timestamp", "nonce-malformed");
+        client.DefaultRequestHeaders.Add(
+            "x-cdp-auth-signature",
+            ClientIdAuthenticationHandler.ComputeSignature(
+                Secret, ClientId, null, null, "not-a-valid-timestamp", "nonce-malformed"));
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var challenge = response.Headers.WwwAuthenticate.ToString();
+        Assert.Contains("Malformed", challenge);
+    }
+
+    [Fact]
+    public async Task Signature_required_missing_signature_header_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, factory.FakeTime.GetUtcNow().ToString("O"), "nonce-no-sig");
+        // No x-cdp-auth-signature header at all.
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var challenge = response.Headers.WwwAuthenticate.ToString();
+        Assert.Contains("Missing x-cdp-auth-signature", challenge);
+    }
+
+    [Fact]
+    public async Task Signature_required_whitespace_only_nonce_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-timestamp", timestamp);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", "   ");
+        client.DefaultRequestHeaders.Add(
+            "x-cdp-auth-signature",
+            ClientIdAuthenticationHandler.ComputeSignature(Secret, ClientId, null, null, timestamp, "   "));
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var challenge = response.Headers.WwwAuthenticate.ToString();
+        Assert.Contains("Missing x-cdp-auth-nonce", challenge);
+    }
+
+    [Fact]
+    public async Task Signature_required_whitespace_only_timestamp_is_401()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-timestamp", "   ");
+        client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", "nonce-blank-ts");
+        client.DefaultRequestHeaders.Add(
+            "x-cdp-auth-signature",
+            ClientIdAuthenticationHandler.ComputeSignature(Secret, ClientId, null, null, "   ", "nonce-blank-ts"));
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var challenge = response.Headers.WwwAuthenticate.ToString();
+        Assert.Contains("Missing x-cdp-auth-timestamp", challenge);
+    }
+
     private static void AddTimestampAndNonce(HttpClient client, string timestamp, string nonce)
     {
         client.DefaultRequestHeaders.Add("x-cdp-auth-timestamp", timestamp);
