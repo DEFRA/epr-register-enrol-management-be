@@ -610,6 +610,169 @@ public class GovukNotifyClientTests
     }
 
     [Fact]
+    public async Task SendEmailAsync_returns_failure_when_configured_template_id_is_whitespace()
+    {
+        // TryGetValue succeeds (the key IS registered) but the configured
+        // value is blank — a distinct misconfiguration from a missing key
+        // entirely, and a separate branch in the guard's `||`.
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        var config = ConfigWithTemplates(("DulyMade", "   "));
+        var sut = BuildSut(inner, config);
+
+        var result = await sut.SendEmailAsync(
+            templateKey: "DulyMade",
+            toEmail: "op@ex.com",
+            personalisation: new Dictionary<string, string>(),
+            reference: "ref",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains("DulyMade", result.ErrorMessage);
+        await inner.DidNotReceiveWithAnyArgs().SendEmailAsync(default!, default!, default, default);
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_succeeds_using_the_production_retry_pipeline_when_request_timeout_is_disabled()
+    {
+        // Exercises the real (non-test-substituted) BuildRetryPipeline with
+        // RequestTimeoutSeconds <= 0, which skips AddTimeout entirely — the
+        // false branch of `if (requestTimeoutSeconds > 0)`.
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>()
+            )
+            .Returns(new EmailNotificationResponse { id = "no-timeout-id" });
+
+        var config = ConfigWithTemplates(("DulyMade", "t-id"));
+        config.RequestTimeoutSeconds = 0;
+
+        // No retryPipeline override: forces the constructor to build the
+        // real production pipeline via BuildRetryPipeline.
+        var sut = new GovukNotifyClient(
+            inner,
+            Options.Create(config),
+            Substitute.For<IStructuredLogger<GovukNotifyClient>>()
+        );
+
+        var result = await sut.SendEmailAsync(
+            "DulyMade",
+            "op@ex.com",
+            new Dictionary<string, string>(),
+            "ref-no-timeout",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("no-timeout-id", result.ProviderMessageId);
+    }
+
+    // ─────── ExtractEmailDomain branch coverage ───────
+
+    [Fact]
+    public async Task SendEmailAsync_logs_null_recipient_domain_when_to_email_is_blank()
+    {
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>()
+            )
+            .Returns(new EmailNotificationResponse { id = "x" });
+
+        var log = Substitute.For<IStructuredLogger<GovukNotifyClient>>();
+        var sut = BuildSut(inner, log: log);
+
+        await sut.SendEmailAsync(
+            "DulyMade",
+            string.Empty,
+            new Dictionary<string, string>(),
+            "ref-blank-email",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        log.Received(1)
+            .Log(
+                LogLevel.Information,
+                "Notify send starting",
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p => p["notify.recipient_domain"] == null),
+                null
+            );
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_logs_null_recipient_domain_when_to_email_has_no_at_sign()
+    {
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>()
+            )
+            .Returns(new EmailNotificationResponse { id = "x" });
+
+        var log = Substitute.For<IStructuredLogger<GovukNotifyClient>>();
+        var sut = BuildSut(inner, log: log);
+
+        await sut.SendEmailAsync(
+            "DulyMade",
+            "not-an-email",
+            new Dictionary<string, string>(),
+            "ref-no-at",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        log.Received(1)
+            .Log(
+                LogLevel.Information,
+                "Notify send starting",
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p => p["notify.recipient_domain"] == null),
+                null
+            );
+    }
+
+    [Fact]
+    public async Task SendEmailAsync_logs_null_recipient_domain_when_at_sign_is_the_last_character()
+    {
+        var inner = Substitute.For<IAsyncNotificationClient>();
+        inner
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, dynamic>>(),
+                Arg.Any<string>()
+            )
+            .Returns(new EmailNotificationResponse { id = "x" });
+
+        var log = Substitute.For<IStructuredLogger<GovukNotifyClient>>();
+        var sut = BuildSut(inner, log: log);
+
+        await sut.SendEmailAsync(
+            "DulyMade",
+            "trailing@",
+            new Dictionary<string, string>(),
+            "ref-trailing-at",
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        log.Received(1)
+            .Log(
+                LogLevel.Information,
+                "Notify send starting",
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p => p["notify.recipient_domain"] == null),
+                null
+            );
+    }
+
+    [Fact]
     public async Task SendEmailAsync_emits_ecs_success_log_on_happy_path()
     {
         var inner = Substitute.For<IAsyncNotificationClient>();

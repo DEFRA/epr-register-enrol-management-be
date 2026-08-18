@@ -65,6 +65,35 @@ public class HttpOperatorBackendPushAdapterTests
             })
             .Build();
 
+    /// <summary>
+    /// Builds an adapter using the REAL production <c>BuildRetryPipeline</c>
+    /// (no injected test pipeline) so its own branches — the
+    /// requestTimeoutSeconds > 0 guard, the OnRetry "has a result?" ternary,
+    /// and the ShouldHandle predicate for each exception type — actually get
+    /// exercised. Uses a short base delay so the (real, jittered exponential)
+    /// backoff doesn't slow the suite down materially.
+    /// </summary>
+    private static (HttpOperatorBackendPushAdapter Adapter, FakeHttpMessageHandler Handler) BuildSutWithRealPipeline(
+        int requestTimeoutSeconds = 15, string? url = BaseUrl)
+    {
+        var handler = new FakeHttpMessageHandler();
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("DefaultClient").Returns(new HttpClient(handler));
+
+        var config = Options.Create(new OperatorBackendApiConfig
+        {
+            Url = url ?? string.Empty,
+            ClientId = "epr-register-enrol-management-be",
+            RequestTimeoutSeconds = requestTimeoutSeconds,
+        });
+
+        // No retryPipeline argument: forces the constructor to call the
+        // real, private BuildRetryPipeline.
+        var adapter = new HttpOperatorBackendPushAdapter(
+            httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance);
+        return (adapter, handler);
+    }
+
     [Fact]
     public async Task PushQueryRaisedAsync_fails_fast_when_url_is_not_configured()
     {
@@ -264,6 +293,97 @@ public class HttpOperatorBackendPushAdapterTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(3, handler.CallCount); // 1 initial attempt + 2 retries
+    }
+
+    // ─────── real (non-test-substituted) BuildRetryPipeline branch coverage ───────
+    //
+    // The tests above all inject FastRetryPipeline, so the adapter's own
+    // private BuildRetryPipeline (its requestTimeoutSeconds > 0 guard, its
+    // OnRetry "did this attempt produce a result?" ternary, and its
+    // ShouldHandle predicate per exception type) is otherwise never
+    // exercised. These tests omit the retryPipeline override so the real
+    // pipeline runs, at the cost of real (short) backoff delays.
+
+    [Fact]
+    public async Task PushQueryRaisedAsync_succeeds_via_the_real_pipeline_when_the_per_attempt_timeout_is_disabled()
+    {
+        // RequestTimeoutSeconds = 0 takes the false branch of
+        // `if (requestTimeoutSeconds > 0)`, skipping AddTimeout entirely.
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSutWithRealPipeline(requestTimeoutSeconds: 0);
+        handler.Respond(HttpStatusCode.OK);
+
+        var result = await adapter.PushQueryRaisedAsync(Guid.NewGuid(), Guid.NewGuid(), "why", s_sectionKeys, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushQueryRaisedAsync_real_pipeline_retries_a_5xx_result_and_recovers()
+    {
+        // Exercises OnRetry's `args.Outcome.Result is { } result` TRUE
+        // branch (a result was produced, just an unacceptable one) and the
+        // HandleResult(>= 500) predicate.
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSutWithRealPipeline();
+        handler.RespondSequence(
+            (HttpStatusCode.InternalServerError, "boom"),
+            (HttpStatusCode.OK, string.Empty));
+
+        var result = await adapter.PushQueryRaisedAsync(Guid.NewGuid(), Guid.NewGuid(), "why", s_sectionKeys, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushQueryRaisedAsync_real_pipeline_retries_a_transport_exception_and_recovers()
+    {
+        // Exercises OnRetry's `args.Outcome.Result is { } result` FALSE
+        // branch (attempt threw rather than returning a result) and the
+        // ShouldHandle .Handle<HttpRequestException>() predicate.
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSutWithRealPipeline();
+        handler.ThrowOnSendForFirstNCalls = 1;
+        handler.Respond(HttpStatusCode.OK);
+
+        var result = await adapter.PushQueryRaisedAsync(Guid.NewGuid(), Guid.NewGuid(), "why", s_sectionKeys, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushQueryRaisedAsync_real_pipeline_retries_a_task_canceled_exception_and_recovers()
+    {
+        // Exercises the ShouldHandle .Handle<TaskCanceledException>()
+        // predicate specifically (distinct from HttpRequestException).
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSutWithRealPipeline();
+        handler.ThrowTaskCanceledForFirstNCalls = 1;
+        handler.Respond(HttpStatusCode.OK);
+
+        var result = await adapter.PushQueryRaisedAsync(Guid.NewGuid(), Guid.NewGuid(), "why", s_sectionKeys, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushQueryRaisedAsync_real_pipeline_exhausts_retries_when_every_attempt_times_out()
+    {
+        // Exercises the ShouldHandle .Handle<TimeoutRejectedException>()
+        // predicate: every attempt exceeds the 1s per-attempt timeout, so
+        // AddTimeout cancels it, Polly retries twice, then gives up.
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSutWithRealPipeline(requestTimeoutSeconds: 1);
+        handler.DelayBeforeResponding = TimeSpan.FromSeconds(3);
+
+        var result = await adapter.PushQueryRaisedAsync(Guid.NewGuid(), Guid.NewGuid(), "why", s_sectionKeys, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(3, handler.CallCount); // 1 initial attempt + 2 retries, all timing out
     }
 
     [Fact]
@@ -485,7 +605,9 @@ public class HttpOperatorBackendPushAdapterTests
         public string? LastRequestBody { get; private set; }
         public Exception? ThrowOnSend { get; set; }
         public int ThrowOnSendForFirstNCalls { get; set; }
+        public int ThrowTaskCanceledForFirstNCalls { get; set; }
         public int CallCount { get; private set; }
+        public TimeSpan? DelayBeforeResponding { get; set; }
 
         private readonly Queue<(HttpStatusCode Status, string Content)> _responses = new();
         private (HttpStatusCode Status, string Content) _lastResponse = (HttpStatusCode.OK, string.Empty);
@@ -524,6 +646,17 @@ public class HttpOperatorBackendPushAdapterTests
             if (CallCount <= ThrowOnSendForFirstNCalls)
             {
                 throw new HttpRequestException("connection refused");
+            }
+            if (CallCount <= ThrowTaskCanceledForFirstNCalls)
+            {
+                throw new TaskCanceledException("simulated client-side cancellation");
+            }
+            if (DelayBeforeResponding is { } delay)
+            {
+                // Respects cancellationToken so Polly's per-attempt timeout
+                // strategy can actually cancel a slow attempt, letting tests
+                // exercise the TimeoutRejectedException retry branch.
+                await Task.Delay(delay, cancellationToken);
             }
 
             var (status, content) = _responses.Count > 0 ? _responses.Dequeue() : _lastResponse;
