@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v12", _type.TemplateVersion);
+        Assert.Equal("v13", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -98,6 +98,23 @@ public class ReAccreditationTypeTests
         Assert.NotNull(transition);
         Assert.Equal(fromStateId, transition!.FromStateId);
         Assert.Equal(toStateId, transition.ToStateId);
+    }
+
+    [Fact]
+    public void Declares_a_second_sla_extend_self_loop_on_queried()
+    {
+        // RA-351: there are now two sla-extend transitions sharing the action
+        // id — the original assessment-in-progress self-loop and the new
+        // queried self-loop. The parameterised test above keys on action id
+        // and only sees the first, so assert the queried one explicitly.
+        var queriedSlaExtend = _type.Transitions.SingleOrDefault(t =>
+            t.ActionId == "sla-extend" && t.FromStateId == "queried"
+        );
+
+        Assert.NotNull(queriedSlaExtend);
+        Assert.Equal("queried", queriedSlaExtend!.ToStateId);
+        Assert.Equal("Extend SLA", queriedSlaExtend.DisplayName);
+        Assert.True(queriedSlaExtend.CallerInvocable);
     }
 
     [Fact]

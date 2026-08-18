@@ -57,19 +57,35 @@ public class ReAccreditationAvailableActionsTests
         );
 
     [Fact]
-    public void Queried_offers_only_withdraw_and_no_duplicate_resume_buttons()
+    public void Queried_offers_withdraw_and_sla_extend_and_no_duplicate_resume_buttons()
     {
         var projection = ProjectInState("queried");
 
+        // RA-351: queried now also projects sla-extend (the queried self-loop)
+        // so the regulator can Extend/Override the SLA of a paused application.
         Assert.Equal(
-            ["withdraw-during-query"],
-            projection.AvailableActions.Select(a => a.ActionId).ToArray());
+            ["sla-extend", "withdraw-during-query"],
+            projection.AvailableActions.Select(a => a.ActionId).OrderBy(id => id).ToArray());
 
         // The actual reported symptom: four controls all labelled "Resume".
         Assert.DoesNotContain(projection.AvailableActions, a => a.DisplayName == "Resume");
         Assert.DoesNotContain(
             projection.AvailableActions,
             a => a.ActionId.StartsWith("resume-during-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Queried_projects_sla_extend_as_a_caller_invocable_action()
+    {
+        // RA-351 AC1: a queried work item must advertise sla-extend in its
+        // availableActions, caller-invocable, so the generic action endpoint
+        // accepts it and the FE can derive the Extend/Override SLA links.
+        var projection = ProjectInState("queried");
+
+        var slaExtend = Assert.Single(
+            projection.AvailableActions.Where(a => a.ActionId == "sla-extend"));
+        Assert.True(slaExtend.CallerInvocable);
+        Assert.Equal("Extend SLA", slaExtend.DisplayName);
     }
 
     [Fact]

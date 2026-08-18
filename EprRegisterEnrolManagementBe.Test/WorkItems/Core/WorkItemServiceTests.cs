@@ -244,6 +244,81 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
     }
 
+    // RA-351: an action id can be declared on more than one state (e.g.
+    // `sla-extend` self-loops on both `assessment-in-progress` and `queried`).
+    // ApplyActionAsync must resolve to the transition whose FromStateId matches
+    // the work item's CURRENT state, not the first one declared — otherwise the
+    // generic action endpoint rejects the action from every state after the
+    // first, even though Project() advertises it.
+    [Fact]
+    public async Task ApplyAction_resolves_a_multi_state_action_to_the_current_state()
+    {
+        var stateA = new WorkItemState("state-a", "State A");
+        var stateB = new WorkItemState("state-b", "State B");
+        var type = new TestWorkItemType(
+            TypeId,
+            "Test type",
+            initialState: stateA,
+            states: [stateA, stateB],
+            transitions:
+            [
+                // Same action id declared twice; the current-state match is the
+                // SECOND declaration, so a first-declaration-wins resolution
+                // would wrongly reject it.
+                new WorkItemTransition("ping", "Ping", "state-a", "state-a"),
+                new WorkItemTransition("ping", "Ping", "state-b", "state-b"),
+            ]
+        );
+        var workItem = await SeedAsync(stateId: "state-b");
+
+        var result = await BuildService(type)
+            .ApplyActionAsync(
+                workItem.Id,
+                "ping",
+                User(),
+                TestContext.Current.CancellationToken
+            );
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("state-b", fetched.StateId);
+    }
+
+    // RA-351: the fallback must not swallow a genuinely invalid request — an
+    // action declared only on other states is still rejected with
+    // InvalidTransition (not UnknownAction) when applied from a state it does
+    // not cover.
+    [Fact]
+    public async Task ApplyAction_fails_InvalidTransition_when_multi_state_action_not_valid_here()
+    {
+        var stateA = new WorkItemState("state-a", "State A");
+        var stateB = new WorkItemState("state-b", "State B");
+        var stateC = new WorkItemState("state-c", "State C");
+        var type = new TestWorkItemType(
+            TypeId,
+            "Test type",
+            initialState: stateA,
+            states: [stateA, stateB, stateC],
+            transitions:
+            [
+                new WorkItemTransition("ping", "Ping", "state-a", "state-a"),
+                new WorkItemTransition("ping", "Ping", "state-b", "state-b"),
+            ]
+        );
+        var workItem = await SeedAsync(stateId: "state-c");
+
+        var result = await BuildService(type)
+            .ApplyActionAsync(
+                workItem.Id,
+                "ping",
+                User(),
+                TestContext.Current.CancellationToken
+            );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+    }
+
     [Fact]
     public async Task ApplyAction_returns_ConcurrencyConflict_when_persistence_throws()
     {
