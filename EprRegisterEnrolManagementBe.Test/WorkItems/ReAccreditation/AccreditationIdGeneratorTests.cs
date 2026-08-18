@@ -242,4 +242,100 @@ public class AccreditationIdGeneratorTests
         await Assert.ThrowsAsync<ArgumentNullException>(
             () => sut.GenerateAsync(null!, 2027, TestContext.Current.CancellationToken));
     }
+
+    [Fact]
+    public async Task GenerateAsync_exporter_uses_registered_office_postcode()
+    {
+        var sut = Build();
+        // Exporter postcode is companyRegisterAddressPostcode, not the site
+        // postcode — use different values so we can tell which was used.
+        var payload = Payload(
+            wasteProcessingType: "exporter",
+            siteAddressPostcode: "SW1A 1AA",
+            companyRegisterAddressPostcode: "EH1 1AA");
+
+        var id = await sut.GenerateAsync(payload, 2027, TestContext.Current.CancellationToken);
+
+        Assert.Equal('S', id[3]); // Scotland agency letter, from EH1 not SW1A.
+        Assert.Equal('X', id[4]); // exporter operator-type letter.
+        Assert.Equal("1AA", id[11..14]);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_exporter_with_no_registered_office_postcode_falls_open_to_England()
+    {
+        var sut = Build();
+        var payload = Payload(
+            wasteProcessingType: "exporter",
+            siteAddressPostcode: "AB10 1AA", // would be Scotland if used, but must not be
+            companyRegisterAddressPostcode: null);
+
+        var id = await sut.GenerateAsync(payload, 2027, TestContext.Current.CancellationToken);
+
+        Assert.Equal('E', id[3]);
+        Assert.Equal('X', id[4]);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_reads_the_site_postcode_from_a_nested_siteAddress_document()
+    {
+        var sut = Build();
+        var payload = Payload(siteAddressPostcode: null);
+        payload["siteAddress"] = new BsonDocument { ["postcode"] = "CF10 1AA" };
+
+        var id = await sut.GenerateAsync(payload, 2027, TestContext.Current.CancellationToken);
+
+        Assert.Equal('W', id[3]); // Wales
+    }
+
+    [Fact]
+    public async Task GenerateAsync_treats_a_non_document_siteAddress_as_no_postcode()
+    {
+        var sut = Build();
+        var payload = Payload(siteAddressPostcode: null);
+        payload["siteAddress"] = "1 Example Street";
+
+        var id = await sut.GenerateAsync(payload, 2027, TestContext.Current.CancellationToken);
+
+        Assert.Equal('E', id[3]); // default England fallback.
+    }
+
+    [Fact]
+    public async Task GenerateAsync_uses_organisation_id_unchanged_when_exactly_six_characters()
+    {
+        var sut = Build();
+        var payload = Payload(operatorOrganisationId: "ABC123");
+
+        var id = await sut.GenerateAsync(payload, 2027, TestContext.Current.CancellationToken);
+
+        Assert.Equal("ABC123", id[5..11]);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_uses_postcode_suffix_unchanged_when_exactly_three_characters()
+    {
+        var sut = Build();
+        var payload = Payload(siteAddressPostcode: "AB1"); // compacts to exactly 3 chars.
+
+        var id = await sut.GenerateAsync(payload, 2027, TestContext.Current.CancellationToken);
+
+        Assert.Equal("AB1", id[11..14]);
+    }
+
+    [Fact]
+    public async Task GenerateAsync_disambiguates_on_the_final_permitted_attempt()
+    {
+        var lookup = Substitute.For<IAccreditationIdLookup>();
+        // MaxAttempts is 5: four collisions, then success on the fifth probe.
+        lookup.ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(
+                Task.FromResult(true), Task.FromResult(true), Task.FromResult(true),
+                Task.FromResult(true), Task.FromResult(false));
+        var sut = Build(lookup);
+
+        var id = await sut.GenerateAsync(Payload(), 2027, TestContext.Current.CancellationToken);
+
+        Assert.Equal('5', id[^1]);
+        await lookup.Received(5).ExistsAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
 }
