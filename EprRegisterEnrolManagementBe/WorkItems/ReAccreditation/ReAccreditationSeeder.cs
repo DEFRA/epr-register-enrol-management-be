@@ -159,20 +159,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "SW1A 1AA",
             submittedDaysAgo: 1,
             stateId: "submitted",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Acme Recycling Ltd",
-                ["registrationNumber"] = "EPR-100023",
-                ["operatorRegistrationId"] = "reg-001",
-                ["material"] = "plastic",
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "acme.recycling@example.com",
-                ["companiesHouseNumber"] = "02345678",
-                ["siteAddress"] = "1 Acme Way, London",
-                ["siteAddressPostcode"] = "SW1A 1AA",
-                ["chargeAmountPence"] = 54600,
-            },
+            payload: SimpleSeedPayload("Acme Recycling Ltd", "EPR-100023", "reg-001", "plastic", 2025, 0, "acme.recycling@example.com", "02345678", "1 Acme Way, London", "SW1A 1AA", 54600),
             submittedBy: "stub-portal-client",
             now: now
         );
@@ -184,20 +171,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "EH1 3BN",
             submittedDaysAgo: 3,
             stateId: "submitted",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Northern Plastics Co-op",
-                ["registrationNumber"] = "EPR-100087",
-                ["operatorRegistrationId"] = "reg-002",
-                ["material"] = "plastic",
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 1,
-                ["operatorEmail"] = "northern.plastics@example.com",
-                ["companiesHouseNumber"] = "03456789",
-                ["siteAddress"] = "1 Northern Plastics Court, Edinburgh",
-                ["siteAddressPostcode"] = "EH1 3BN",
-                ["chargeAmountPence"] = 218400,
-            },
+            payload: SimpleSeedPayload("Northern Plastics Co-op", "EPR-100087", "reg-002", "plastic", 2025, 1, "northern.plastics@example.com", "03456789", "1 Northern Plastics Court, Edinburgh", "EH1 3BN", 218400),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-standard-1",
             assignedToName: "Stub Standard User",
@@ -210,23 +184,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "CF10 1AA",
             submittedDaysAgo: 9,
             stateId: "assessment-in-progress",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Riverside Glass Recovery",
-                ["registrationNumber"] = "EPR-099812",
-                ["operatorRegistrationId"] = "reg-003",
-                ["material"] = "glass",
-                // RA-307: e2e coverage for the "Glass - Remelt" display suffix
-                // (see mgmt-tests glass-recycling-process.e2e.js).
-                ["glassRecyclingProcess"] = "glass_re_melt",
-                ["previousAccreditationYear"] = 2024,
-                ["complianceIssuesReported"] = 2,
-                ["operatorEmail"] = "riverside.glass@example.com",
-                ["companiesHouseNumber"] = "04567890",
-                ["siteAddress"] = "1 Riverside Way, Cardiff",
-                ["siteAddressPostcode"] = "CF10 1AA",
-                ["chargeAmountPence"] = 327600,
-            },
+            payload: SimpleSeedPayload("Riverside Glass Recovery", "EPR-099812", "reg-003", "glass", 2024, 2, "riverside.glass@example.com", "04567890", "1 Riverside Way, Cardiff", "CF10 1AA", 327600, glassRecyclingProcess: "glass_re_melt"),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
@@ -241,20 +199,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "BT1 1AA",
             submittedDaysAgo: 15,
             stateId: "awaiting-decision",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Coastal Materials Group",
-                ["registrationNumber"] = "EPR-098774",
-                ["operatorRegistrationId"] = "reg-004",
-                ["material"] = "plastic",
-                ["previousAccreditationYear"] = 2024,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "coastal.materials@example.com",
-                ["companiesHouseNumber"] = "05678901",
-                ["siteAddress"] = "1 Coastal Materials Quay, Belfast",
-                ["siteAddressPostcode"] = "BT1 1AA",
-                ["chargeAmountPence"] = 396500,
-            },
+            payload: SimpleSeedPayload("Coastal Materials Group", "EPR-098774", "reg-004", "plastic", 2024, 0, "coastal.materials@example.com", "05678901", "1 Coastal Materials Quay, Belfast", "BT1 1AA", 396500),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
@@ -268,20 +213,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "BS1 4DJ",
             submittedDaysAgo: 32,
             stateId: "approved",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Heritage Paper Mills",
-                ["registrationNumber"] = "EPR-097215",
-                ["operatorRegistrationId"] = "reg-005",
-                ["material"] = "paper",
-                ["previousAccreditationYear"] = 2024,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "heritage.paper@example.com",
-                ["companiesHouseNumber"] = "06789012",
-                ["siteAddress"] = "1 Heritage Paper Mill Road, Bristol",
-                ["siteAddressPostcode"] = "BS1 4DJ",
-                ["chargeAmountPence"] = 360400,
-            },
+            payload: SimpleSeedPayload("Heritage Paper Mills", "EPR-097215", "reg-005", "paper", 2024, 0, "heritage.paper@example.com", "06789012", "1 Heritage Paper Mill Road, Bristol", "BS1 4DJ", 360400),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
@@ -294,20 +226,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "G1 1AA",
             submittedDaysAgo: 5,
             stateId: "submitted",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Clyde Composites Ltd",
-                ["registrationNumber"] = "EPR-100134",
-                ["operatorRegistrationId"] = "reg-006",
-                ["material"] = "plastic",
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "clyde.composites@example.com",
-                ["companiesHouseNumber"] = "07890123",
-                ["siteAddress"] = "1 Clyde Composites Way, Glasgow",
-                ["siteAddressPostcode"] = "G1 1AA",
-                ["chargeAmountPence"] = 54600,
-            },
+            payload: SimpleSeedPayload("Clyde Composites Ltd", "EPR-100134", "reg-006", "plastic", 2025, 0, "clyde.composites@example.com", "07890123", "1 Clyde Composites Way, Glasgow", "G1 1AA", 54600),
             submittedBy: "stub-portal-client",
             now: now
         );
@@ -318,23 +237,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "SA1 1AA",
             submittedDaysAgo: 11,
             stateId: "assessment-in-progress",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Swansea Textiles Recovery",
-                ["registrationNumber"] = "EPR-099441",
-                ["operatorRegistrationId"] = "reg-007",
-                ["material"] = "glass",
-                // RA-307: e2e coverage for the "Glass - Other" display suffix
-                // (see mgmt-tests glass-recycling-process.e2e.js).
-                ["glassRecyclingProcess"] = "glass_other",
-                ["previousAccreditationYear"] = 2024,
-                ["complianceIssuesReported"] = 1,
-                ["operatorEmail"] = "swansea.textiles@example.com",
-                ["companiesHouseNumber"] = "08901234",
-                ["siteAddress"] = "1 Swansea Textiles Court, Swansea",
-                ["siteAddressPostcode"] = "SA1 1AA",
-                ["chargeAmountPence"] = 218400,
-            },
+            payload: SimpleSeedPayload("Swansea Textiles Recovery", "EPR-099441", "reg-007", "glass", 2024, 1, "swansea.textiles@example.com", "08901234", "1 Swansea Textiles Court, Swansea", "SA1 1AA", 218400, glassRecyclingProcess: "glass_other"),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
@@ -347,20 +250,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "BT7 1AA",
             submittedDaysAgo: 2,
             stateId: "submitted",
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Belfast Fibres Co",
-                ["registrationNumber"] = "EPR-100198",
-                ["operatorRegistrationId"] = "reg-008",
-                ["material"] = "paper",
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "belfast.fibres@example.com",
-                ["companiesHouseNumber"] = "10111213",
-                ["siteAddress"] = "1 Belfast Fibres Way, Belfast",
-                ["siteAddressPostcode"] = "BT7 1AA",
-                ["chargeAmountPence"] = 396500,
-            },
+            payload: SimpleSeedPayload("Belfast Fibres Co", "EPR-100198", "reg-008", "paper", 2025, 0, "belfast.fibres@example.com", "10111213", "1 Belfast Fibres Way, Belfast", "BT7 1AA", 396500),
             submittedBy: "stub-portal-client",
             now: now
         );
@@ -1099,6 +989,53 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         }
 
         return workItem;
+    }
+
+    /// <summary>
+    /// Builds the payload for the eight simple, single-field-varying seed
+    /// items (Acme Recycling through Belfast Fibres). Factored into one
+    /// call per item, rather than eight near-identical
+    /// <c>BsonDocument</c> initializers, because the repeated multi-line
+    /// shape tripped SonarCloud's duplicate-code gate on new code once
+    /// RA-447/CM4 added companiesHouseNumber/siteAddress to all eight.
+    /// <paramref name="glassRecyclingProcess"/> is null except for the two
+    /// glass items (RA-307).
+    /// </summary>
+    private static BsonDocument SimpleSeedPayload(
+        string organisationName,
+        string registrationNumber,
+        string operatorRegistrationId,
+        string material,
+        int previousAccreditationYear,
+        int complianceIssuesReported,
+        string operatorEmail,
+        string companiesHouseNumber,
+        string siteAddress,
+        string siteAddressPostcode,
+        int chargeAmountPence,
+        string? glassRecyclingProcess = null)
+    {
+        var payload = new BsonDocument
+        {
+            ["organisationName"] = organisationName,
+            ["registrationNumber"] = registrationNumber,
+            ["operatorRegistrationId"] = operatorRegistrationId,
+            ["material"] = material,
+        };
+        if (glassRecyclingProcess is not null)
+        {
+            // RA-307: e2e coverage for the "Glass - Remelt" / "Glass - Other"
+            // display suffix (see mgmt-tests glass-recycling-process.e2e.js).
+            payload["glassRecyclingProcess"] = glassRecyclingProcess;
+        }
+        payload["previousAccreditationYear"] = previousAccreditationYear;
+        payload["complianceIssuesReported"] = complianceIssuesReported;
+        payload["operatorEmail"] = operatorEmail;
+        payload["companiesHouseNumber"] = companiesHouseNumber;
+        payload["siteAddress"] = siteAddress;
+        payload["siteAddressPostcode"] = siteAddressPostcode;
+        payload["chargeAmountPence"] = chargeAmountPence;
+        return payload;
     }
 
     private static string GenerateDeterministicReference(string seedKey)
