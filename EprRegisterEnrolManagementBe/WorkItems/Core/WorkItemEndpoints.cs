@@ -403,8 +403,25 @@ public static class WorkItemEndpoints
         // resolves the transition from) so this rejects using the exact
         // rules the item was submitted under.
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        var transition = workItem?.TemplateSnapshot?.Transitions.FirstOrDefault(t =>
-            string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase));
+        // RA-351: an action id can be declared on more than one state (e.g.
+        // `sla-extend` self-loops on both `assessment-in-progress` and
+        // `queried`). Resolve the CallerInvocable check against the transition
+        // for the item's CURRENT state — matching on action id alone would
+        // test the first-declared transition, which can differ in
+        // CallerInvocable from the one that actually applies here.
+        var actionTransitions = workItem
+            ?.TemplateSnapshot?.Transitions.Where(t =>
+                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
+            )
+            .ToList();
+        var transition =
+            actionTransitions?.FirstOrDefault(t =>
+                string.Equals(
+                    t.FromStateId,
+                    workItem!.StateId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            ) ?? actionTransitions?.FirstOrDefault();
         if (transition is { CallerInvocable: false })
         {
             return ToHttpResult(

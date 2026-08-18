@@ -83,6 +83,10 @@ public class ReAccreditationStatusPushHookTests
     [Theory]
     [InlineData("payment-received", "assessment-in-progress", "duly-made")]
     [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress")]
+    // RA-351: the queried sla-extend self-loop is a status change, not a move
+    // onto queried, so it is pushed — sharing the action id with the
+    // assessment self-loop must not drag it into the excluded set.
+    [InlineData("sla-extend", "queried", "queried")]
     [InlineData("resume-during-duly-making", "updated", "queried")]
     [InlineData("continue-review-during-duly-making", "submitted", "updated")]
     public async Task OnActionAppliedAsync_pushes_status_for_non_excluded_actions(
