@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -1269,6 +1270,76 @@ public class ReAccreditationEndpointTests : IClassFixture<MongoIntegrationFixtur
             ["business-plan", "prn-tonnage"],
             latestSections["sectionKeys"].AsBsonArray.Select(v => v.AsString)
         );
+    }
+
+    // RA-413: the resubmitted section values and SI file references must land
+    // in the canonical payload fields the regulator "Application details" page
+    // reads (payload.prns.*, payload.businessPlan, payload.samplingPlan.files),
+    // not just the inert payload.latestSections side-channel. Exercised through
+    // real Mongo so the whole-document SetPayloadField writes are verified to
+    // round-trip.
+    [Fact]
+    public async Task ResumeFromQuery_merges_resubmitted_values_into_the_canonical_payload()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildQueried(id, TenantClientId, "query-during-assessment"),
+            cancellationToken
+        );
+
+        var body = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["prn-tonnage", "authority-to-issue", "business-plan", "sampling-and-inspection-plan"],
+            new Dictionary<string, JsonElement>
+            {
+                ["prn-tonnage"] = JsonDocument
+                    .Parse("""{"plannedTonnageBand":"OneThousandToFiveThousand"}""")
+                    .RootElement,
+                ["authority-to-issue"] = JsonDocument
+                    .Parse("""{"authorisers":[{"fullName":"New Auth","email":"na@example.com"}]}""")
+                    .RootElement,
+                ["business-plan"] = JsonDocument
+                    .Parse("""{"newInfrastructurePercent":42}""")
+                    .RootElement,
+            },
+            FileReferences:
+            [
+                new SectionFileReference(
+                    "sampling-and-inspection-plan",
+                    "si-9",
+                    "si-plan-v2.pdf",
+                    "sampling-plans/x/si-9.pdf"
+                ),
+            ]
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query",
+            body,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        var payload = persisted!.Payload!;
+
+        var prns = payload["prns"].AsBsonDocument;
+        Assert.Equal("OneThousandToFiveThousand", prns["plannedTonnageBand"].AsString);
+        var authoriser = Assert.Single(prns["authorisers"].AsBsonArray).AsBsonDocument;
+        Assert.Equal("New Auth", authoriser["fullName"].AsString);
+
+        Assert.Equal(42, payload["businessPlan"]["newInfrastructurePercent"].AsInt32);
+
+        var file = Assert.Single(payload["samplingPlan"]["files"].AsBsonArray).AsBsonDocument;
+        Assert.Equal("si-9", file["fileId"].AsString);
+        Assert.Equal("si-plan-v2.pdf", file["filename"].AsString);
+        Assert.Equal("sampling-plans/x/si-9.pdf", file["s3Key"].AsString);
     }
 
     [Fact]

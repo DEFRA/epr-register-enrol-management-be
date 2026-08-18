@@ -105,7 +105,9 @@ public class ReAccreditationResumeServiceTests
         BsonValue? stamped = null;
         harness.Persistence
             .SetPayloadFieldAsync(
-                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Do<BsonValue>(v => stamped = v),
+                Arg.Any<Guid>(),
+                ReAccreditationResumeService.LatestSectionsPayloadField,
+                Arg.Do<BsonValue>(v => stamped = v),
                 Arg.Any<CancellationToken>())
             .Returns(true);
 
@@ -121,6 +123,217 @@ public class ReAccreditationResumeServiceTests
         Assert.Equal("file-1", fileRef["fileId"].AsString);
         Assert.Equal(s_now.UtcDateTime, doc["respondedAt"].ToUniversalTime());
         Assert.Equal("alice-1", doc["respondedBy"].AsString);
+    }
+
+    // --------------------- RA-413 canonical payload merge ----------------------
+
+    private static ResumeFromQueryRequest ResumeRequest(
+        IReadOnlyList<string> sectionKeys,
+        Dictionary<string, JsonElement>? sections = null,
+        IReadOnlyList<SectionFileReference>? fileReferences = null) =>
+        new(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            sectionKeys,
+            sections,
+            fileReferences);
+
+    private static Dictionary<string, BsonValue> CaptureCanonicalWrites(Harness harness)
+    {
+        var writes = new Dictionary<string, BsonValue>(StringComparer.Ordinal);
+        harness.Persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<BsonValue>(),
+                Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                writes[(string)ci[1]!] = (BsonValue)ci[2]!;
+                return true;
+            });
+        return writes;
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_merges_prn_tonnage_and_authority_into_canonical_prns()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var writes = CaptureCanonicalWrites(harness);
+
+        var request = ResumeRequest(
+            ["prn-tonnage", "authority-to-issue"],
+            new Dictionary<string, JsonElement>
+            {
+                ["prn-tonnage"] = JsonDocument.Parse("""{"plannedTonnageBand":"OneThousandToFiveThousand"}""").RootElement,
+                ["authority-to-issue"] = JsonDocument.Parse("""{"authorisers":[{"fullName":"New Auth","email":"na@example.com"}]}""").RootElement,
+            });
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        var prns = Assert.Contains(ReAccreditationResumeService.PrnsPayloadField, writes).AsBsonDocument;
+        Assert.Equal("OneThousandToFiveThousand", prns["plannedTonnageBand"].AsString);
+        var authoriser = Assert.Single(prns["authorisers"].AsBsonArray).AsBsonDocument;
+        Assert.Equal("New Auth", authoriser["fullName"].AsString);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_merges_only_resubmitted_prns_fields_and_preserves_siblings()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        // Pre-query prns carries both a band and an authoriser; only the band
+        // is resubmitted, so the authoriser must survive untouched.
+        harness.WorkItem.Payload["prns"] = new BsonDocument
+        {
+            ["plannedTonnageBand"] = "UpTo1000",
+            ["authorisers"] = new BsonArray
+            {
+                new BsonDocument { ["fullName"] = "Original Auth", ["email"] = "orig@example.com" },
+            },
+        };
+        var writes = CaptureCanonicalWrites(harness);
+
+        var request = ResumeRequest(
+            ["prn-tonnage"],
+            new Dictionary<string, JsonElement>
+            {
+                ["prn-tonnage"] = JsonDocument.Parse("""{"plannedTonnageBand":"OneThousandToFiveThousand"}""").RootElement,
+            });
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        var prns = Assert.Contains(ReAccreditationResumeService.PrnsPayloadField, writes).AsBsonDocument;
+        Assert.Equal("OneThousandToFiveThousand", prns["plannedTonnageBand"].AsString);
+        var authoriser = Assert.Single(prns["authorisers"].AsBsonArray).AsBsonDocument;
+        Assert.Equal("Original Auth", authoriser["fullName"].AsString);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_writes_the_business_plan_section_to_canonical_business_plan()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var writes = CaptureCanonicalWrites(harness);
+
+        var request = ResumeRequest(
+            ["business-plan"],
+            new Dictionary<string, JsonElement>
+            {
+                ["business-plan"] = JsonDocument.Parse("""{"newInfrastructurePercent":42,"newInfrastructureDetail":"Updated plan"}""").RootElement,
+            });
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        var businessPlan = Assert.Contains(ReAccreditationResumeService.BusinessPlanPayloadField, writes).AsBsonDocument;
+        Assert.Equal(42, businessPlan["newInfrastructurePercent"].AsInt32);
+        Assert.Equal("Updated plan", businessPlan["newInfrastructureDetail"].AsString);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_rebuilds_sampling_plan_files_from_file_references()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var writes = CaptureCanonicalWrites(harness);
+
+        var request = ResumeRequest(
+            ["sampling-and-inspection-plan"],
+            fileReferences:
+            [
+                new SectionFileReference(
+                    "sampling-and-inspection-plan", "si-1", "sampling-plan-v2.pdf", "sampling-plans/x/si-1.pdf"),
+                // A file reference for a different section must not leak into
+                // payload.samplingPlan.files.
+                new SectionFileReference("prn-tonnage", "prn-1", "prn.pdf", "prns/x/prn-1.pdf"),
+            ]);
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        var samplingPlan = Assert.Contains(ReAccreditationResumeService.SamplingPlanPayloadField, writes).AsBsonDocument;
+        var file = Assert.Single(samplingPlan["files"].AsBsonArray).AsBsonDocument;
+        Assert.Equal("si-1", file["fileId"].AsString);
+        Assert.Equal("sampling-plan-v2.pdf", file["filename"].AsString);
+        Assert.Equal("sampling-plans/x/si-1.pdf", file["s3Key"].AsString);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_replaces_sampling_files_but_preserves_other_sampling_fields()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.WorkItem.Payload["samplingPlan"] = new BsonDocument
+        {
+            ["someOtherField"] = "keep-me",
+            ["files"] = new BsonArray
+            {
+                new BsonDocument { ["fileId"] = "old-file", ["filename"] = "old.pdf", ["s3Key"] = "old/key" },
+            },
+        };
+        var writes = CaptureCanonicalWrites(harness);
+
+        var request = ResumeRequest(
+            ["sampling-and-inspection-plan"],
+            fileReferences:
+            [
+                new SectionFileReference(
+                    "sampling-and-inspection-plan", "new-file", "new.pdf", "new/key"),
+            ]);
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        var samplingPlan = Assert.Contains(ReAccreditationResumeService.SamplingPlanPayloadField, writes).AsBsonDocument;
+        Assert.Equal("keep-me", samplingPlan["someOtherField"].AsString);
+        var file = Assert.Single(samplingPlan["files"].AsBsonArray).AsBsonDocument;
+        Assert.Equal("new-file", file["fileId"].AsString);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_does_not_touch_canonical_fields_for_unsubmitted_sections()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var writes = CaptureCanonicalWrites(harness);
+
+        // Only prn-tonnage resubmitted: businessPlan and samplingPlan must not
+        // be written at all.
+        var request = ResumeRequest(
+            ["prn-tonnage"],
+            new Dictionary<string, JsonElement>
+            {
+                ["prn-tonnage"] = JsonDocument.Parse("""{"plannedTonnageBand":"UpTo1000"}""").RootElement,
+            });
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.True(writes.ContainsKey(ReAccreditationResumeService.PrnsPayloadField));
+        Assert.False(writes.ContainsKey(ReAccreditationResumeService.BusinessPlanPayloadField));
+        Assert.False(writes.ContainsKey(ReAccreditationResumeService.SamplingPlanPayloadField));
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_canonical_merge_writes_before_transitioning()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-duly-making");
+
+        var request = ResumeRequest(
+            ["business-plan"],
+            new Dictionary<string, JsonElement>
+            {
+                ["business-plan"] = JsonDocument.Parse("""{"newInfrastructurePercent":1}""").RootElement,
+            });
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, request, harness.User, ct);
+
+        Received.InOrder(() =>
+        {
+            harness.Persistence.SetPayloadFieldAsync(
+                harness.WorkItem.Id,
+                ReAccreditationResumeService.BusinessPlanPayloadField,
+                Arg.Any<BsonValue>(),
+                ct);
+            harness.Engine.ApplyActionAsync(
+                harness.WorkItem.Id, "resume-during-duly-making", harness.User, ct);
+        });
     }
 
     // ------------------------------- idempotency -------------------------------
