@@ -380,6 +380,37 @@ public class SlaServiceTests
     }
 
     [Fact]
+    public async Task OverrideAsync_preserves_an_already_utc_started_at_without_converting()
+    {
+        var workItem = WorkItemWithClock();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+        var utcTime = DateTime.SpecifyKind(UtcNow.AddDays(-5), DateTimeKind.Utc);
+
+        var result = await BuildService().OverrideAsync(
+            workItem.Id, TimeSpan.FromDays(84), utcTime, "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(utcTime, result.WorkItem!.SlaClock!.StartedAt);
+        Assert.Equal(DateTimeKind.Utc, result.WorkItem.SlaClock.StartedAt.Kind);
+    }
+
+    [Fact]
+    public async Task OverrideAsync_accepts_a_started_at_of_exactly_now()
+    {
+        var workItem = WorkItemWithClock();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().OverrideAsync(
+            workItem.Id, TimeSpan.FromDays(84), UtcNow, "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
     public async Task OverrideAsync_writes_sla_overridden_audit_entry()
     {
         var workItem = WorkItemWithClock(

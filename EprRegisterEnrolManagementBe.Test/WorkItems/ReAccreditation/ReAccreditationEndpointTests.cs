@@ -19,6 +19,7 @@ using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using NSubstitute;
 using EprRegisterEnrolManagementBe.Auth;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
@@ -922,6 +923,175 @@ public class ReAccreditationEndpointTests
         Assert.Equal("org-77", capturedOrgId);
         Assert.Equal("reg-88", capturedRegId);
         Assert.Equal(2023, capturedYear);
+    }
+
+    // -------------------- Malformed-payload / branch-coverage gaps --------------------
+
+    [Fact]
+    public async Task Recommendation_returns_problem_when_payload_fails_to_deserialise()
+    {
+        // The JsonException branch: a payload field whose stored BSON type
+        // cannot bind onto the strongly-typed ReAccreditationPayload model
+        // (a string where PreviousAccreditationYear expects an int) must
+        // surface as a 400 ProblemDetails, not an unhandled 500.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = ReAccreditationType.Id,
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+                Payload = new BsonDocument
+                {
+                    ["previousAccreditationYear"] = "not-a-number",
+                },
+            },
+            cancellationToken
+        );
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{id}/recommendation",
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Invalid re-accreditation payload", problem!.Title);
+    }
+
+    [Fact]
+    public async Task PriorYear_returns_problem_when_payload_fails_to_deserialise()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = ReAccreditationType.Id,
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+                Payload = new BsonDocument { ["accreditationYear"] = "not-a-number" },
+            },
+            cancellationToken
+        );
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{id}/prior-year",
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Invalid re-accreditation payload", problem!.Title);
+    }
+
+    [Fact]
+    public async Task PriorYear_derives_the_prior_year_from_AccreditationYear_when_PreviousAccreditationYear_is_absent()
+    {
+        // Older work items only carry AccreditationYear (Year N); the
+        // prior-year lookup must derive Year - 1 rather than passing null.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        int? capturedYear = null;
+        factory
+            .ReExClient.GetPriorYearAsync(
+                Arg.Any<string?>(),
+                Arg.Any<string?>(),
+                Arg.Do<int?>(v => capturedYear = v),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = ReAccreditationType.Id,
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+                Payload = new BsonDocument { ["accreditationYear"] = 2026 },
+            },
+            cancellationToken
+        );
+
+        await client.GetAsync($"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
+
+        Assert.Equal(2025, capturedYear);
+    }
+
+    [Fact]
+    public async Task PriorYear_passes_a_null_year_when_neither_year_field_is_present()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        int? capturedYear = -1; // sentinel distinct from null so we can tell it was overwritten
+        factory
+            .ReExClient.GetPriorYearAsync(
+                Arg.Any<string?>(),
+                Arg.Any<string?>(),
+                Arg.Do<int?>(v => capturedYear = v),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = ReAccreditationType.Id,
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+                Payload = new BsonDocument(),
+            },
+            cancellationToken
+        );
+
+        await client.GetAsync($"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
+
+        Assert.Null(capturedYear);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    public async Task RecordDecisionRationale_null_or_whitespace_rationale_is_rejected(
+        string? rationale
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision-rationale",
+            new DecisionRationaleRequest(rationale!),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal(
+            "'rationale' is required and must not be whitespace.",
+            problem!.Detail
+        );
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Null(persisted);
     }
 
     // ------------------------------ Helpers ------------------------------
@@ -2094,6 +2264,620 @@ public class ReAccreditationEndpointTests
         Assert.Null(entry.CreatedBy);
     }
 
+    // -------------------- RA-252: Withdraw endpoint --------------------
+
+    private static WithdrawApplicationRequest WithdrawBody(
+        string? reason = "The operator no longer wishes to proceed with this application."
+    ) => new(reason);
+
+    [Theory]
+    [InlineData("submitted")]
+    [InlineData("duly-made")]
+    [InlineData("assessment-in-progress")]
+    [InlineData("awaiting-decision")]
+    [InlineData("queried")]
+    [InlineData("updated")]
+    public async Task Withdraw_moves_the_application_to_withdrawn_and_records_the_reason_as_a_note(
+        string stateId
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, stateId, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        Assert.Equal("withdrawn", persisted!.StateId);
+        Assert.Contains(
+            persisted.Notes,
+            n => n.Text == "The operator no longer wishes to proceed with this application."
+        );
+    }
+
+    [Fact]
+    public async Task Withdraw_is_idempotent_when_the_application_is_already_withdrawn()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "withdrawn", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("withdrawn", persisted!.StateId);
+    }
+
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Withdraw_returns_conflict_for_a_decided_outcome(string stateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, stateId, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(stateId, persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task Withdraw_returns_not_found_when_the_work_item_is_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/withdraw",
+            WithdrawBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Withdraw_returns_bad_request_for_a_work_item_of_another_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = "some-other-type",
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Withdraw_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task Withdraw_succeeds_for_a_work_item_not_submitted_by_the_caller()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildInState(id, "submitted", "a-different-tenant"),
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData(null, "Enter a reason for the withdrawal")]
+    [InlineData("   ", "Enter a reason for the withdrawal")]
+    public async Task Withdraw_rejects_an_invalid_body_before_touching_the_work_item(
+        string? reason,
+        string expectedDetail
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(reason),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal(expectedDetail, problem!.Detail);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task Withdraw_enforces_the_two_hundred_word_reason_cap()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(string.Join(' ', Enumerable.Repeat("word", 201))),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal(ReAccreditationWithdrawValidator.ReasonTooLongMessage, problem!.Detail);
+    }
+
+    [Fact]
+    public async Task Withdraw_returns_conflict_when_another_writer_wins_the_race()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw",
+            WithdrawBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    // -------------------- DulyMake: remaining failure-code branches --------------------
+
+    [Fact]
+    public async Task DulyMake_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMakeCandidate(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/duly-make",
+            new { paymentDate = "2026-07-15" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task DulyMake_returns_bad_request_with_wrong_work_item_type_error_code_for_another_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = "some-other-type",
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/duly-make",
+            new { paymentDate = "2026-07-15" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("wrong-work-item-type", problem.GetProperty("errorCode").GetString());
+    }
+
+    [Fact]
+    public async Task DulyMake_returns_conflict_when_another_writer_wins_the_race()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(BuildDulyMakeCandidate(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/duly-make",
+            new { paymentDate = "2026-07-15" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task DulyMake_treats_a_null_request_body_as_a_missing_payment_date()
+    {
+        // request is nullable ([FromBody] DulyMakeRequest?) precisely so a
+        // JSON 'null' body reaches the endpoint's own validation instead of
+        // failing model binding — exercises the request?.PaymentDate branch.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMakeCandidate(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync<object?>(
+            $"/work-items/re-accreditation/{id}/duly-make",
+            null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("payment-date-required", problem.GetProperty("errorCode").GetString());
+    }
+
+    // -------------------- Approve: remaining failure-code branches --------------------
+
+    [Fact]
+    public async Task Approve_returns_conflict_when_another_writer_wins_the_race()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/approve",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("awaiting-decision", persisted!.StateId);
+    }
+
+    // -------------------- LogDecision: remaining failure-code branches --------------------
+
+    [Fact]
+    public async Task Decision_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+    }
+
+    [Fact]
+    public async Task Decision_returns_bad_request_with_wrong_work_item_type_error_code_for_another_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = "some-other-type",
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("wrong-work-item-type", problem.GetProperty("errorCode").GetString());
+    }
+
+    [Fact]
+    public async Task Decision_returns_internal_server_error_when_the_operator_journey_push_fails()
+    {
+        // epr-p86e / RA-410: the decision push is a hard pre-commit gate. When
+        // it cannot be delivered the decision is abandoned before anything is
+        // persisted, and the caller gets a generic 500 with no state change.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var failingPushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
+        failingPushAdapter
+            .PushDecisionStatusChangedAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<DateTime>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                Task.FromResult(
+                    OperatorBackendPushResult.Failure("operator journey unreachable")
+                )
+            );
+
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            pushAdapter: failingPushAdapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "action-applied");
+    }
+
+    [Fact]
+    public async Task Decision_returns_not_found_for_missing_work_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Decision_treats_a_null_request_body_as_an_invalid_outcome()
+    {
+        // request is nullable ([FromBody] LogDecisionRequest?) so a JSON
+        // 'null' body reaches TryParseOutcome's request?.Outcome branch
+        // rather than failing model binding.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync<object?>(
+            $"/work-items/re-accreditation/{id}/decision",
+            null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("invalid-outcome", problem.GetProperty("errorCode").GetString());
+    }
+
+    // -------------------- ResumeFromQuery / ContinueReview / SiteAdded: wrong-type + race --------------------
+
+    [Fact]
+    public async Task ResumeFromQuery_returns_bad_request_for_a_work_item_of_another_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = "some-other-type",
+                StateId = "queried",
+                SubmittedBy = TenantClientId,
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query",
+            ResumeBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ContinueReview_returns_bad_request_for_a_work_item_of_another_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = "some-other-type",
+                StateId = "updated",
+                SubmittedBy = TenantClientId,
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/continue-review",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SiteAdded_returns_bad_request_for_a_work_item_of_another_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = "some-other-type",
+                StateId = "assessment-in-progress",
+                SubmittedBy = TenantClientId,
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/site-added",
+            OrsBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SiteAdded_returns_conflict_when_another_writer_wins_the_race()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(
+            BuildInState(id, "assessment-in-progress", TenantClientId),
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/site-added",
+            OrsBody(),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.DoesNotContain(persisted!.AuditLog, a => a.Action == "site-added");
+    }
+
     private static WorkItem BuildInState(Guid id, string stateId, string submittedBy)
     {
         var type = new ReAccreditationType();
@@ -2851,6 +3635,7 @@ public class ReAccreditationEndpointTests
         private readonly string? _userId;
         private readonly string _userName;
         private readonly Guid? _raceWorkItemId;
+        private readonly IOperatorBackendPushAdapter? _pushAdapter;
 
         public IReAccreditationDecisionService DecisionService { get; } =
             Substitute.For<IReAccreditationDecisionService>();
@@ -2863,7 +3648,8 @@ public class ReAccreditationEndpointTests
             string clientId = TenantClientId,
             string? userId = DefaultUserId,
             string userName = DefaultUserName,
-            Guid? raceWorkItemId = null
+            Guid? raceWorkItemId = null,
+            IOperatorBackendPushAdapter? pushAdapter = null
         )
         {
             _fixture = fixture;
@@ -2871,6 +3657,7 @@ public class ReAccreditationEndpointTests
             _userId = userId;
             _userName = userName;
             _raceWorkItemId = raceWorkItemId;
+            _pushAdapter = pushAdapter;
         }
 
         public IWorkItemPersistence Persistence =>
@@ -2943,6 +3730,12 @@ public class ReAccreditationEndpointTests
 
                 services.AddSingleton(DecisionService);
                 services.AddSingleton(ReExClient);
+
+                if (_pushAdapter is not null)
+                {
+                    services.RemoveAll<IOperatorBackendPushAdapter>();
+                    services.AddSingleton(_pushAdapter);
+                }
             });
         }
 
