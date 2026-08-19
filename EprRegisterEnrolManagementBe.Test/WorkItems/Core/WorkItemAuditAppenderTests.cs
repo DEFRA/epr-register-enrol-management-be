@@ -75,6 +75,8 @@ public class WorkItemAuditAppenderTests
         Assert.Equal("DulyMade", entry.Details?["templateKey"]);
         Assert.Equal("user-1", entry.CreatedBy);
         Assert.Equal("Alice", entry.CreatedByName);
+        // epr-rr9s: out-of-band appends snapshot the work item's current state.
+        Assert.Equal("submitted", entry.StateId);
     }
 
     [Fact]

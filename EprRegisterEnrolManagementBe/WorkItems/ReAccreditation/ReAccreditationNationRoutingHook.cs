@@ -96,7 +96,12 @@ internal sealed class ReAccreditationNationRoutingHook(
                 },
                 CreatedAt = now,
                 CreatedBy = user.FindFirstValue("user:id"),
-                CreatedByName = user.FindFirstValue("user:name")
+                CreatedByName = user.FindFirstValue("user:name"),
+                // epr-rr9s: snapshot the work item's state at routing time
+                // (the post-submission initial state). Previously this entry
+                // recorded no state, so the history UI had nothing historical
+                // to show for "Routed to nation".
+                StateId = item.StateId
             });
 
             try

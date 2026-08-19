@@ -86,5 +86,9 @@ public sealed record WorkItemAuditEntryResponse(
     IReadOnlyDictionary<string, string?> Details,
     DateTime CreatedAt,
     string? CreatedBy,
-    string? CreatedByName
+    string? CreatedByName,
+    // epr-rr9s: work item state as of this event (serialises to stateId).
+    // Null for pre-epr-rr9s entries with no snapshot; the frontend omits the
+    // State row in that case.
+    string? StateId = null
 );
