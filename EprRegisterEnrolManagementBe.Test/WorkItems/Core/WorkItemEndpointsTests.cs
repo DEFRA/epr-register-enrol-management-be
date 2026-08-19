@@ -319,10 +319,15 @@ public class WorkItemEndpointsTests
         Assert.NotNull(persisted);
         // RA-219: even with no client payload the engine stamps the
         // server-generated applicationReference, so the payload is no longer
-        // empty — it carries exactly that one field.
-        var field = Assert.Single(persisted!.Payload.Names);
-        Assert.Equal("applicationReference", field);
+        // empty. RA-447/CM3: it also stamps paymentReference (the same
+        // value) at creation, so exactly those two fields are present.
+        Assert.Equal(
+            new[] { "applicationReference", "paymentReference" },
+            persisted!.Payload.Names);
         Assert.Matches(@"^AP\d{2}EA$", persisted.Payload["applicationReference"].AsString);
+        Assert.Equal(
+            persisted.Payload["applicationReference"].AsString,
+            persisted.Payload["paymentReference"].AsString);
     }
 
     [Fact]

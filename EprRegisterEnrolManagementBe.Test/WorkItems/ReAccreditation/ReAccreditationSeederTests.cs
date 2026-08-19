@@ -667,6 +667,62 @@ public class ReAccreditationSeederTests
         Assert.All(items, i => Assert.True(i.Payload.Contains("applicationReference")));
     }
 
+    // ── RA-447/CM4: companiesHouseNumber / siteAddress never null in dev ────
+
+    /// <summary>
+    /// RA-447 (CM4) regression guard. The seeder used to leave
+    /// companiesHouseNumber unset entirely, so every non-production
+    /// environment rendered the Additional information tab's Companies House
+    /// number row as absent — the opposite of the field being genuinely
+    /// optional, since the operator backend always supplies it on a real
+    /// submission.
+    /// </summary>
+    [Fact]
+    public void Every_seeded_item_carries_a_companies_house_number()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.NotEmpty(items);
+        Assert.All(items, item =>
+        {
+            Assert.True(
+                item.Payload.Contains("companiesHouseNumber"),
+                $"Item {item.Id} missing 'companiesHouseNumber' in payload.");
+            Assert.False(
+                string.IsNullOrWhiteSpace(item.Payload["companiesHouseNumber"].AsString),
+                $"Item {item.Id} has blank companiesHouseNumber.");
+        });
+    }
+
+    /// <summary>
+    /// RA-447 (CM4) regression guard, the site-address half of the fix. Only 3
+    /// of the original seed items carried a full siteAddress; the rest
+    /// rendered a dash on any tab that reads it. Exporter-type items are
+    /// excluded on purpose — re-ex has no site for an exporter, so those
+    /// fixtures (<see cref="AdditionalInformationExporterSeedKey"/> and the
+    /// RA-412 fixture) deliberately omit siteAddress to exercise the
+    /// registered-address fallback.
+    /// </summary>
+    [Fact]
+    public void Every_non_exporter_seeded_item_carries_a_site_address()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var nonExporters = items.Where(i =>
+            !i.Payload.Contains("wasteProcessingType") ||
+            i.Payload["wasteProcessingType"].AsString != "exporter").ToList();
+
+        Assert.NotEmpty(nonExporters);
+        Assert.All(nonExporters, item =>
+        {
+            Assert.True(
+                item.Payload.Contains("siteAddress"),
+                $"Item {item.Id} missing 'siteAddress' in payload.");
+            Assert.False(
+                string.IsNullOrWhiteSpace(item.Payload["siteAddress"].AsString),
+                $"Item {item.Id} has blank siteAddress.");
+        });
+    }
+
     // ── RA-412: genuine Exporter organisation fixture ─────────────────────────
 
     /// <summary>
