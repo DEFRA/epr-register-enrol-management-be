@@ -91,7 +91,7 @@ public class SlaServiceTests
         // `postActionHooks?.ToArray() ?? Array.Empty<...>()` branches, which
         // BuildService() above never exercises because it always supplies
         // both explicitly.
-        var service = new SlaService(_persistence, NullLogger<SlaService>.Instance, BuildOptions());
+        var service = new SlaService(_persistence, NullLogger<SlaService>.Instance);
 
         var workItem = WorkItemWithClock();
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
