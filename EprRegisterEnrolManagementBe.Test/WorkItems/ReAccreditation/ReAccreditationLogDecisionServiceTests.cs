@@ -17,6 +17,24 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// </summary>
 public class ReAccreditationLogDecisionServiceTests
 {
+    [Fact]
+    public void Constructor_defaults_time_provider_when_omitted()
+    {
+        // Covers the `timeProvider ?? TimeProvider.System` branch, which the
+        // Harness below never exercises because it always supplies a
+        // FakeTimeProvider explicitly. The assignment runs at construction,
+        // so merely building the service exercises the branch.
+        var service = new ReAccreditationLogDecisionService(
+            Substitute.For<IWorkItemPersistence>(),
+            Substitute.For<IWorkItemService>(),
+            Substitute.For<IReAccreditationApprovalService>(),
+            Substitute.For<IOperatorBackendPushAdapter>(),
+            Substitute.For<IWorkItemAuditAppender>(),
+            NullLogger<ReAccreditationLogDecisionService>.Instance);
+
+        Assert.NotNull(service);
+    }
+
     // --------------------------- the two-hop happy paths ---------------------------
 
     [Fact]
@@ -195,6 +213,30 @@ public class ReAccreditationLogDecisionServiceTests
         await harness.AuditAppender.Received(1).AppendAsync(
             harness.WorkItem.Id, "status-push-sent", "Status sent to OJ",
             Arg.Any<Dictionary<string, string?>>(), harness.User, ct);
+    }
+
+    [Fact]
+    public async Task A_decision_still_succeeds_when_the_status_push_audit_entry_fails_to_persist()
+    {
+        // Covers AppendStatusPushAuditAsync's `if (!appended)` warning
+        // branch: the decision itself must not fail just because the
+        // follow-up audit write did.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+        harness.AuditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Approved,
+            harness.User,
+            ct
+        );
+
+        Assert.True(result.IsSuccess);
     }
 
     /// <summary>

@@ -26,6 +26,43 @@ public class ReAccreditationMaterialBackfillMigrationTests
         new(NullLogger<ReAccreditationMaterialBackfillMigration>.Instance, clock);
 
     [Fact]
+    public async Task ApplyAsync_skips_an_item_whose_full_document_has_disappeared_by_the_time_it_is_refetched()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
+        persistence.GetByIdAsync(item.Id, ct).Returns((WorkItem?)null);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_pages_through_all_results()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item1 = BuildItem();
+        var item2 = BuildItem();
+        const int pageSize = WorkItemQuery.MaxPageSize;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .QueryAsync(Arg.Is<WorkItemQuery>(q => q.Page == 1), ct)
+            .Returns(new WorkItemPage([item1], pageSize + 1, 1, pageSize));
+        persistence
+            .QueryAsync(Arg.Is<WorkItemQuery>(q => q.Page == 2), ct)
+            .Returns(new WorkItemPage([item2], pageSize + 1, 2, pageSize));
+        persistence.GetByIdAsync(item1.Id, ct).Returns(item1);
+        persistence.GetByIdAsync(item2.Id, ct).Returns(item2);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        Assert.Equal("plastic", item1.Payload["material"].AsString);
+        Assert.Equal("plastic", item2.Payload["material"].AsString);
+    }
+
+    [Fact]
     public async Task ApplyAsync_copies_first_materialsHandled_entry_into_material()
     {
         var ct = TestContext.Current.CancellationToken;

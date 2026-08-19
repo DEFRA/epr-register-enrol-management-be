@@ -138,6 +138,31 @@ public class SlaBreachBackgroundServiceTests
     }
 
     [Fact]
+    public async Task RunOnceAsync_repairs_the_breached_flag_when_the_audit_entry_already_exists()
+    {
+        // Idempotency-repair branch: the audit trail already records
+        // sla-breached (e.g. a previous run wrote the entry but crashed
+        // before persisting the flag flip) but SlaClock.Breached is still
+        // false. The job must set the flag without writing a second entry.
+        var item = BreachedItem();
+        item.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "sla-breached",
+            ActionDisplayName = "SLA breached",
+            CreatedAt = s_fixedNow.UtcDateTime,
+            CreatedBy = "system",
+            Details = new Dictionary<string, string?>(),
+        });
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(item.SlaClock!.Breached);
+        Assert.Single(item.AuditLog, e => e.Action == "sla-breached");
+        await sut.Persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
     public async Task RunOnceAsync_skips_items_with_remaining_time()
     {
         // Clock started 10 days ago with 84-day target → 74 days remaining.

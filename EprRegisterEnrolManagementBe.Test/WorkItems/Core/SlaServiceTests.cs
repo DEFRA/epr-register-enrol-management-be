@@ -92,6 +92,32 @@ public class SlaServiceTests
         public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
     }
 
+    // ── Constructor defaults ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Constructor_defaults_time_provider_and_hooks_when_omitted()
+    {
+        // Covers the `timeProvider ?? TimeProvider.System` and
+        // `postActionHooks?.ToArray() ?? Array.Empty<...>()` branches, which
+        // BuildService() above never exercises because it always supplies
+        // both explicitly.
+        var service = new SlaService(_persistence, NullLogger<SlaService>.Instance, BuildOptions());
+
+        var workItem = WorkItemWithClock();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await service.ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(7), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        // LastModifiedAt should be close to real wall-clock time, proving
+        // TimeProvider.System (not a fixed fake) was used.
+        Assert.True(
+            Math.Abs((DateTime.UtcNow - result.WorkItem!.LastModifiedAt).TotalMinutes) < 5);
+    }
+
     // ── ExtendAsync — success path ────────────────────────────────────────────
 
     [Fact]

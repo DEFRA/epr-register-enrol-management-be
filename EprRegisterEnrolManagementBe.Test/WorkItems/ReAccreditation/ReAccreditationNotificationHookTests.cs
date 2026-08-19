@@ -829,6 +829,31 @@ public class ReAccreditationNotificationHookTests
             .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
+    [Fact]
+    public async Task OnActionAppliedAsync_skips_non_re_accreditation_work_items()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+
+        var workItem = new WorkItem
+        {
+            TypeId = "some-other-type",
+            StateId = "submitted",
+            Payload = new BsonDocument { ["operatorEmail"] = "op@example.com" },
+        };
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "approve", fromStateId: "submitted", s_user, ct);
+
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
+        await auditAppender
+            .DidNotReceiveWithAnyArgs()
+            .AppendAsync(default, default!, default!, default!, default!, ct);
+    }
+
     // RA-211: unlike assign/unassign (never mapped), reject was previously
     // mapped to the Decision template — this asserts the mapping was
     // actively removed, not just "never existed", so a future accidental
@@ -1429,6 +1454,50 @@ public class ReAccreditationNotificationHookTests
                 s_user,
                 ct
             );
+    }
+
+    [Fact]
+    public async Task OnSubmittedAsync_logs_a_warning_when_the_skipped_audit_entry_fails_to_persist()
+    {
+        // Covers SendRegulatorEmailAsync's `if (!skipAppended)` branch: the
+        // audit-append itself can fail (e.g. a concurrent mutation lost the
+        // race), and the hook must swallow that rather than throwing —
+        // the missing-mailbox skip is otherwise indistinguishable from the
+        // happy skip path above.
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("op-msg"));
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(false);
+
+        var workItem = BuildWorkItem(includeNation: true, nation: Nation.Scotland);
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning(null),
+            persistedWorkItem: workItem
+        );
+
+        // Must not throw despite the failed audit append.
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
     }
 
     [Fact]

@@ -31,9 +31,9 @@ jobs:
       - name: Test with coverage
         run: dotnet test --collect:"XPlat Code Coverage" --results-directory ./coverage
 
-      # Baseline as measured on 2026-08-18 (RA-437 branch-coverage follow-up):
-      # 92.7% line / 83.6% branch. Fails the job on regression; raise as
-      # coverage improves.
+      # Baseline as measured on 2026-08-19 (RA-437 branch-coverage follow-up,
+      # second pass): 93.89% line / 88.24% branch. Fails the job on
+      # regression; raise as coverage improves.
       - name: Enforce coverage threshold and report on PR
         if: always()
         run: |
@@ -46,8 +46,8 @@ jobs:
           BRANCH_RATE=$(grep -o 'branch-rate="[0-9.]*"' "$FILE" | head -1 | grep -o '[0-9.]*')
           LINE_PCT=$(awk "BEGIN {printf \"%.2f\", $LINE_RATE*100}")
           BRANCH_PCT=$(awk "BEGIN {printf \"%.2f\", $BRANCH_RATE*100}")
-          LINE_THRESHOLD=91
-          BRANCH_THRESHOLD=82
+          LINE_THRESHOLD=92
+          BRANCH_THRESHOLD=87
 
           {
             echo "### Test coverage — epr-register-enrol-management-be"

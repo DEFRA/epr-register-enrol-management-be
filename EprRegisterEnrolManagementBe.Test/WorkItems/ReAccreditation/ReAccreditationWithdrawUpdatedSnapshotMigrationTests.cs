@@ -49,6 +49,34 @@ public class ReAccreditationWithdrawUpdatedSnapshotMigrationTests
         new(NullLogger<ReAccreditationWithdrawUpdatedSnapshotMigration>.Instance);
 
     [Fact]
+    public async Task ApplyAsync_skips_an_item_with_no_snapshot()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem();
+        item.TemplateSnapshot = null;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_skips_an_item_whose_full_document_has_disappeared_by_the_time_it_is_refetched()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
+        persistence.GetByIdAsync(item.Id, ct).Returns((WorkItem?)null);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+    }
+
+    [Fact]
     public async Task ApplyAsync_adds_the_withdraw_during_updated_transition_to_the_snapshot()
     {
         var ct = TestContext.Current.CancellationToken;

@@ -88,6 +88,20 @@ public class ReAccreditationAccreditationIdFormatMigrationTests
         return persistence;
     }
 
+    [Fact]
+    public void Constructor_defaults_time_provider_when_omitted()
+    {
+        // Covers the `timeProvider ?? TimeProvider.System` branch, which
+        // BuildSut above never exercises because it always supplies a
+        // FakeTimeProvider explicitly. The assignment runs at construction.
+        var migration = new ReAccreditationAccreditationIdFormatMigration(
+            Config(enabled: false),
+            ServiceProviderWith(NewFormatGenerator()),
+            NullLogger<ReAccreditationAccreditationIdFormatMigration>.Instance);
+
+        Assert.NotNull(migration);
+    }
+
     // ── Gate 1: off by default ───────────────────────────────────────────────
 
     [Fact]
@@ -197,6 +211,88 @@ public class ReAccreditationAccreditationIdFormatMigrationTests
         await BuildSut(Config()).ApplyAsync(persistence, ct);
 
         await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_skips_items_whose_payload_lacks_an_accreditationId_key_entirely()
+    {
+        // Covers NeedsBackfill's `!payload.TryGetValue(...)` true arm,
+        // distinct from the key-present-but-BsonNull case above.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem();
+        item.Payload.Remove("accreditationId");
+        var persistence = PersistenceWith(item);
+
+        await BuildSut(Config()).ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_skips_items_already_in_the_new_fixed_width_format()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(accreditationId: "A25ER1234561BBPL");
+        Assert.Equal(16, item.Payload["accreditationId"].AsString.Length);
+        var persistence = PersistenceWith(item);
+
+        await BuildSut(Config()).ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_falls_back_to_the_current_year_when_accreditationYear_is_absent()
+    {
+        // Covers NeedsBackfill's `payload.TryGetValue("accreditationYear", ...) && yearValue.IsNumeric`
+        // false arm.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem();
+        item.Payload.Remove("accreditationYear");
+        var persistence = PersistenceWith(item);
+
+        await BuildSut(Config(), NewFormatGenerator("A25ER1234561BBPL")).ApplyAsync(persistence, ct);
+
+        await persistence.Received(1).ReplaceAsync(item, ct);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_skips_an_item_whose_full_document_has_disappeared_by_the_time_it_is_refetched()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([item], 1, 1, WorkItemQuery.MaxPageSize));
+        persistence.GetByIdAsync(item.Id, Arg.Any<CancellationToken>()).Returns((WorkItem?)null);
+
+        await BuildSut(Config()).ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_continues_to_a_second_page_when_more_items_remain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = BuildItem();
+        var second = BuildItem();
+        const int pageSize = WorkItemQuery.MaxPageSize;
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .QueryAsync(Arg.Is<WorkItemQuery>(q => q.Page == 1), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([first], pageSize + 1, 1, pageSize));
+        persistence
+            .QueryAsync(Arg.Is<WorkItemQuery>(q => q.Page == 2), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([second], pageSize + 1, 2, pageSize));
+        persistence.GetByIdAsync(first.Id, Arg.Any<CancellationToken>()).Returns(first);
+        persistence.GetByIdAsync(second.Id, Arg.Any<CancellationToken>()).Returns(second);
+
+        await BuildSut(Config(), NewFormatGenerator("A25ER1234561BBPL")).ApplyAsync(persistence, ct);
+
+        await persistence.Received(1).ReplaceAsync(first, ct);
+        await persistence.Received(1).ReplaceAsync(second, ct);
     }
 
     [Fact]
