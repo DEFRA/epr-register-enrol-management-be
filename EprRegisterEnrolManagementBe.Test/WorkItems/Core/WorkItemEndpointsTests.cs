@@ -550,6 +550,114 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Post_returns_problem_when_body_is_not_a_json_object()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory();
+        using var client = factory.CreateClient();
+
+        var content = new StringContent("[1,2,3]", System.Text.Encoding.UTF8, "application/json");
+        var response = await client.PostAsync("/work-items", content, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Invalid request", problem?.Title);
+    }
+
+    [Fact]
+    public async Task Submit_rethrows_when_the_engine_throws_an_unhandled_exception()
+    {
+        // The Submit handler logs the exception at Error level and then
+        // rethrows unchanged rather than mapping it to a ProblemDetails —
+        // an unexpected engine failure should surface as a 500, not be
+        // disguised as a client error.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var type = new TestWorkItemType(TypeId, "Test type");
+        var registry = new WorkItemRegistry([type]);
+        var engine = Substitute.For<IWorkItemService>();
+        engine
+            .SubmitAsync(
+                Arg.Any<IWorkItemType>(),
+                Arg.Any<MongoDB.Bson.BsonDocument>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromException<WorkItemActionResult>(new InvalidOperationException("boom")));
+
+        var body = JsonDocument.Parse($"{{\"typeId\":\"{TypeId}\"}}").RootElement;
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
+        };
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            WorkItemEndpoints.Submit(
+                body,
+                httpContext,
+                registry,
+                engine,
+                Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(),
+                cancellationToken
+            ));
+    }
+
+    [Fact]
+    public async Task Submit_maps_an_unrecognised_failure_code_to_a_generic_400_problem()
+    {
+        // Every WorkItemActionFailureCode SubmitAsync can plausibly return is
+        // MissingActorIdentity or ApplicationReferenceExhausted, each with
+        // its own named switch arm; this exercises the fallback arm that
+        // catches anything else.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var type = new TestWorkItemType(TypeId, "Test type");
+        var registry = new WorkItemRegistry([type]);
+        var engine = Substitute.For<IWorkItemService>();
+        engine
+            .SubmitAsync(
+                Arg.Any<IWorkItemType>(),
+                Arg.Any<MongoDB.Bson.BsonDocument>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.UnknownAction,
+                    "Something else went wrong."
+                )
+            );
+
+        var body = JsonDocument.Parse($"{{\"typeId\":\"{TypeId}\"}}").RootElement;
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
+        };
+
+        var result = await WorkItemEndpoints.Submit(
+            body,
+            httpContext,
+            registry,
+            engine,
+            Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(),
+            cancellationToken
+        );
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(
+            Microsoft.AspNetCore.Http.StatusCodes.Status400BadRequest,
+            problem.StatusCode
+        );
+        Assert.Equal("Invalid request", problem.ProblemDetails.Title);
+    }
+
+    [Fact]
     public async Task Get_list_rejects_page_above_cap_with_400()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

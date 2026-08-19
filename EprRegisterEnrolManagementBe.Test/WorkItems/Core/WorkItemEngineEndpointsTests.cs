@@ -114,6 +114,51 @@ public class WorkItemEngineEndpointsTests
     }
 
     [Fact]
+    public async Task Action_rejects_a_non_caller_invocable_transition_without_reaching_the_engine()
+    {
+        // RA-311/MBE-1: a transition declared CallerInvocable: false on the
+        // item's own frozen snapshot must be refused by the endpoint itself
+        // — before ApplyActionAsync ever runs — so a caller cannot pick a
+        // module's server-resolved-only target state directly.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new EngineFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var snapshotType = new TestWorkItemType(
+            TypeId,
+            "Test type",
+            states:
+            [
+                new WorkItemState("submitted", "Submitted"),
+                new WorkItemState("approved", "Approved", IsTerminal: true)
+            ],
+            transitions:
+            [
+                new WorkItemTransition("resume-a", "Resume", "submitted", "approved", CallerInvocable: false)
+            ]);
+        var workItemId = Guid.NewGuid();
+        await factory.SeedAsync(new WorkItem
+        {
+            Id = workItemId,
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedBy = "test-client",
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(snapshotType),
+        }, cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{workItemId}/actions/resume-a", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+
+        // The engine's real ApplyActionAsync never ran, so the item is
+        // unchanged and carries no audit entry for the blocked action.
+        var persisted = await factory.Persistence.GetByIdAsync(workItemId, cancellationToken);
+        Assert.Equal("submitted", persisted!.StateId);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Fact]
     public async Task Get_by_id_projects_engine_state_in_response()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
