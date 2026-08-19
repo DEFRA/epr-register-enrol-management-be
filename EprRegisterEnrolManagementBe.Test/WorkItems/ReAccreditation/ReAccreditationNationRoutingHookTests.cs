@@ -62,6 +62,21 @@ public class ReAccreditationNationRoutingHookTests
             retryDelay);
     }
 
+    [Fact]
+    public void Constructor_defaults_time_provider_and_retry_delay_when_omitted()
+    {
+        // Covers the `timeProvider ?? TimeProvider.System` and
+        // `retryDelay ?? TimeSpan.FromMilliseconds(50)` branches, which
+        // BuildSut above never exercises because it always supplies both
+        // explicitly. Both assignments run at construction.
+        var hook = new ReAccreditationNationRoutingHook(
+            new NationResolver(),
+            Substitute.For<IWorkItemPersistence>(),
+            NullLogger<ReAccreditationNationRoutingHook>.Instance);
+
+        Assert.NotNull(hook);
+    }
+
     // ─────────────────────────── OnSubmittedAsync ───────────────────────────
 
     [Theory]
@@ -105,6 +120,73 @@ public class ReAccreditationNationRoutingHookTests
         var ct = TestContext.Current.CancellationToken;
         var workItem = BuildWorkItem(postcode: null);
         var freshCopy = BuildWorkItem(postcode: null);
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.GetByIdAsync(workItem.Id, ct).Returns(freshCopy);
+
+        var sut = BuildSut(persistence);
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        await persistence.Received(1).ReplaceAsync(
+            Arg.Is<WorkItem>(w => w.Payload["nation"].AsString == "England"), ct);
+    }
+
+    [Fact]
+    public async Task OnSubmittedAsync_defaults_to_England_when_siteAddress_is_not_a_document()
+    {
+        // Covers ExtractPostcode's `!siteAddress.IsBsonDocument` true arm.
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            Payload = new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                [ReAccreditationNationRoutingHook.SiteAddressKey] = "not-a-document",
+            },
+        };
+        var freshCopy = new WorkItem
+        {
+            Id = workItem.Id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            Payload = new BsonDocument(workItem.Payload),
+        };
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.GetByIdAsync(workItem.Id, ct).Returns(freshCopy);
+
+        var sut = BuildSut(persistence);
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        await persistence.Received(1).ReplaceAsync(
+            Arg.Is<WorkItem>(w => w.Payload["nation"].AsString == "England"), ct);
+    }
+
+    [Fact]
+    public async Task OnSubmittedAsync_defaults_to_England_when_postcode_value_is_bson_null()
+    {
+        // Covers ExtractPostcode's `element.IsBsonNull` true arm.
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            Payload = new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                [ReAccreditationNationRoutingHook.SiteAddressKey] = new BsonDocument
+                {
+                    [ReAccreditationNationRoutingHook.PostcodeKey] = BsonNull.Value,
+                },
+            },
+        };
+        var freshCopy = new WorkItem
+        {
+            Id = workItem.Id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            Payload = new BsonDocument(workItem.Payload),
+        };
         var persistence = Substitute.For<IWorkItemPersistence>();
         persistence.GetByIdAsync(workItem.Id, ct).Returns(freshCopy);
 
@@ -170,6 +252,33 @@ public class ReAccreditationNationRoutingHookTests
             });
 
         var sut = BuildSut(persistence);
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        await persistence.Received(2).ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task OnSubmittedAsync_waits_out_a_jittered_backoff_before_retrying()
+    {
+        // Covers the `_retryDelay > TimeSpan.Zero` true arm — every other
+        // retry test uses BuildSut's TimeSpan.Zero default to stay fast.
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = BuildWorkItem("G1 1AA");
+        var persistence = Substitute.For<IWorkItemPersistence>();
+
+        var callCount = 0;
+        persistence.GetByIdAsync(workItem.Id, ct).Returns(_ => BuildWorkItem("G1 1AA"));
+        persistence.When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
+            .Do(_ =>
+            {
+                callCount++;
+                if (callCount < 2)
+                {
+                    throw new WorkItemConcurrencyException(workItem.Id, 0);
+                }
+            });
+
+        var sut = BuildSut(persistence, retryDelay: TimeSpan.FromMilliseconds(5));
         await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         await persistence.Received(2).ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());

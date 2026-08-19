@@ -52,6 +52,63 @@ public class ReAccreditationDulyMadeSnapshotMigrationTests
         new(NullLogger<ReAccreditationDulyMadeSnapshotMigration>.Instance, clock);
 
     [Fact]
+    public async Task ApplyAsync_skips_an_item_whose_full_document_has_disappeared_by_the_time_it_is_refetched()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
+        persistence.GetByIdAsync(item.Id, ct).Returns((WorkItem?)null);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_treats_a_missing_template_version_as_pre_v5()
+    {
+        // Covers IsPreV5's `IsNullOrWhiteSpace` true arm — every other test
+        // supplies a "v4"-shaped version.
+        var ct = TestContext.Current.CancellationToken;
+        var snapshot = BuildV4Snapshot();
+        var item = BuildItem(snapshot: new WorkItemTemplateSnapshot
+        {
+            TemplateVersion = null!,
+            States = snapshot.States,
+            Transitions = snapshot.Transitions,
+        });
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
+        persistence.GetByIdAsync(item.Id, ct).Returns(item);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        Assert.Equal("v5", item.TemplateVersion);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_treats_an_unparseable_template_version_as_pre_v5()
+    {
+        // Covers IsPreV5's `!int.TryParse(...)` true arm.
+        var ct = TestContext.Current.CancellationToken;
+        var snapshot = BuildV4Snapshot();
+        var item = BuildItem(snapshot: new WorkItemTemplateSnapshot
+        {
+            TemplateVersion = "not-a-version",
+            States = snapshot.States,
+            Transitions = snapshot.Transitions,
+        });
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence.QueryAsync(Arg.Any<WorkItemQuery>(), ct).Returns(SinglePage(item));
+        persistence.GetByIdAsync(item.Id, ct).Returns(item);
+
+        await BuildSut().ApplyAsync(persistence, ct);
+
+        Assert.Equal("v5", item.TemplateVersion);
+    }
+
+    [Fact]
     public async Task ApplyAsync_strips_duly_make_from_snapshot()
     {
         var ct = TestContext.Current.CancellationToken;

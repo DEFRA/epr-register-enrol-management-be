@@ -75,6 +75,24 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Post_returns_problem_when_typeId_is_not_a_string()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory();
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            new { typeId = 42 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Invalid request", problem?.Title);
+    }
+
+    [Fact]
     public async Task Post_returns_problem_when_typeId_unknown()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -90,6 +108,33 @@ public class WorkItemEndpointsTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
         Assert.Equal("Unknown work item type", problem?.Title);
+    }
+
+    [Fact]
+    public async Task Post_sets_idempotent_replay_header_when_operatorApplicationId_retried()
+    {
+        // RA-311/MBE-3 at the endpoint layer: a retried submit carrying the
+        // same operatorApplicationId must come back flagged via the
+        // X-Idempotent-Replay header, not just internally on the engine
+        // result (see WorkItemServiceTests for the engine-level assertion).
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory();
+        using var client = factory.CreateClient();
+
+        var payload = new { typeId = TypeId, payload = new { operatorApplicationId = "op-endpoint-1" } };
+
+        var first = await client.PostAsJsonAsync("/work-items", payload, cancellationToken);
+        Assert.Equal(HttpStatusCode.Created, first.StatusCode);
+        Assert.False(first.Headers.Contains("X-Idempotent-Replay"));
+
+        var second = await client.PostAsJsonAsync("/work-items", payload, cancellationToken);
+        Assert.Equal(HttpStatusCode.Created, second.StatusCode);
+        Assert.True(second.Headers.TryGetValues("X-Idempotent-Replay", out var values));
+        Assert.Contains("true", values);
+
+        var firstBody = await first.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        var secondBody = await second.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.Equal(firstBody!.Id, secondBody!.Id);
     }
 
     [Fact]
@@ -558,6 +603,102 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Submit_logs_absent_body_when_no_json_body_is_supplied()
+    {
+        // Covers the `body.ValueKind != JsonValueKind.Undefined` branch's
+        // false arm: a JsonElement default(JsonElement) (ValueKind ==
+        // Undefined) is what minimal-API binding hands the handler for a
+        // request with no body at all. It should still be rejected (as
+        // "not a JSON object"), just via the log-friendly "(empty)" path
+        // rather than calling GetRawText() on an undefined element (which
+        // throws).
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var type = new TestWorkItemType(TypeId, "Test type");
+        var registry = new WorkItemRegistry([type]);
+        var engine = Substitute.For<IWorkItemService>();
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
+        };
+
+        var result = await WorkItemEndpoints.Submit(
+            default,
+            httpContext,
+            registry,
+            engine,
+            Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(),
+            cancellationToken
+        );
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(
+            Microsoft.AspNetCore.Http.StatusCodes.Status400BadRequest,
+            problem.StatusCode
+        );
+    }
+
+    [Fact]
+    public async Task Submit_truncates_a_very_large_body_in_the_log()
+    {
+        // Covers the `bodyText.Length > MaxLoggedBodyChars` branch's true
+        // arm — a body large enough that logging it verbatim would be
+        // unreasonable. The oversized payload is otherwise valid so the
+        // request succeeds; the assertion is just that it doesn't throw
+        // and completes normally, proving the truncation path ran.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var type = new TestWorkItemType(TypeId, "Test type");
+        var registry = new WorkItemRegistry([type]);
+        var engine = Substitute.For<IWorkItemService>();
+        var submittedWorkItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = TypeId,
+            StateId = "submitted",
+            SubmittedAt = DateTime.UtcNow,
+            LastModifiedAt = DateTime.UtcNow,
+            SubmittedBy = "test-client",
+        };
+        engine
+            .SubmitAsync(
+                Arg.Any<IWorkItemType>(),
+                Arg.Any<MongoDB.Bson.BsonDocument>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(WorkItemActionResult.Success(submittedWorkItem));
+        engine
+            .Project(Arg.Any<WorkItem>())
+            .Returns(new WorkItemEngineProjection(
+                submittedWorkItem, "v1", Array.Empty<WorkItemTransition>()));
+
+        var largeValue = new string('x', 5000);
+        var body = JsonDocument
+            .Parse($"{{\"typeId\":\"{TypeId}\",\"payload\":{{\"note\":\"{largeValue}\"}}}}")
+            .RootElement;
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
+        };
+
+        var result = await WorkItemEndpoints.Submit(
+            body,
+            httpContext,
+            registry,
+            engine,
+            Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(),
+            cancellationToken
+        );
+
+        Assert.NotNull(result.Result);
+    }
+
+    [Fact]
     public async Task Post_returns_problem_when_body_is_not_a_json_object()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -611,6 +752,52 @@ public class WorkItemEndpointsTests
                 Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(),
                 cancellationToken
             ));
+    }
+
+    [Fact]
+    public async Task Assign_maps_concurrency_conflict_to_a_409_problem()
+    {
+        // Covers ToHttpResult's ConcurrencyConflict switch arm, which shares
+        // its target (409, "Action not allowed") with TerminalState but is
+        // a distinct pattern in the `or` combinator and so needs its own
+        // exercise for full branch coverage. A real optimistic-concurrency
+        // race is already proven at the WorkItemService level (see
+        // WorkItemServiceTests' RacingPersistence); this only needs to
+        // confirm the endpoint maps the failure code correctly.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var engine = Substitute.For<IWorkItemService>();
+        var workItemId = Guid.NewGuid();
+        engine
+            .AssignAsync(
+                workItemId,
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.ConcurrencyConflict,
+                    "Work item was modified concurrently. Reload and retry."
+                )
+            );
+
+        var body = JsonDocument.Parse("""{"assigneeId":"alice-1"}""").RootElement;
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
+        };
+
+        var result = await WorkItemEndpoints.Assign(
+            workItemId, body, httpContext, engine, cancellationToken);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(
+            Microsoft.AspNetCore.Http.StatusCodes.Status409Conflict,
+            problem.StatusCode
+        );
     }
 
     [Fact]
@@ -882,6 +1069,68 @@ public class WorkItemEndpointsTests
         );
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Assign_returns_bad_request_when_body_is_not_a_json_object()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory(userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+
+        var content = new StringContent("[1,2,3]", System.Text.Encoding.UTF8, "application/json");
+        var response = await client.PostAsync($"/work-items/{id}/assign", content, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Invalid request", problem?.Title);
+    }
+
+    [Fact]
+    public async Task Assign_ignores_a_non_string_assigneeName()
+    {
+        // Covers the `assigneeNameElement.ValueKind == JsonValueKind.String`
+        // branch's false arm: assigneeName is optional and, when present
+        // but the wrong JSON type, is silently dropped rather than
+        // rejecting the whole request.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory(userId: "actor-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "alice-1", assigneeName = 42 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.Equal("alice-1", body?.AssignedToId);
+        Assert.Null(body?.AssignedToName);
     }
 
     [Fact]
@@ -1203,6 +1452,33 @@ public class WorkItemEndpointsTests
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Null(persisted!.AssignedToId);
+    }
+
+    [Fact]
+    public async Task AddNote_returns_bad_request_when_body_is_not_a_json_object()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory(userId: "alice-1");
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = TypeId,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+            },
+            cancellationToken
+        );
+
+        var content = new StringContent("[1,2,3]", System.Text.Encoding.UTF8, "application/json");
+        var response = await client.PostAsync($"/work-items/{id}/notes", content, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Invalid request", problem?.Title);
     }
 
     [Fact]

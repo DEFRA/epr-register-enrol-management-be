@@ -529,6 +529,86 @@ public class WorkItemServiceTests : IAsyncDisposable
         await Task.CompletedTask;
     }
 
+    [Fact]
+    public async Task ProjectAsync_returns_null_when_work_item_missing()
+    {
+        var type = BuildType();
+
+        var projection = await BuildService(type)
+            .ProjectAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        Assert.Null(projection);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_returns_projection_for_an_existing_work_item()
+    {
+        var type = BuildType(
+            transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
+        );
+        var workItem = await SeedAsync();
+
+        var projection = await BuildService(type)
+            .ProjectAsync(workItem.Id, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(projection);
+        Assert.Equal(workItem.Id, projection!.WorkItem.Id);
+        Assert.Contains("approve", projection.AvailableActions.Select(a => a.ActionId));
+    }
+
+    [Fact]
+    public async Task ApplyAction_fails_when_type_is_unregistered_and_has_no_template_snapshot()
+    {
+        // Distinct from ApplyAction_fails_when_action_unknown (a registered
+        // type rejecting an unknown action id): this covers LoadAsync's own
+        // template-resolution guard, reached when the work item's type has
+        // been de-registered (or was never registered) AND it predates
+        // template snapshots, so WorkItemEngineRules.ResolveTemplate has
+        // nothing to fall back on.
+        var registeredType = BuildType();
+        var orphanTypeId = "no-longer-registered-type";
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = orphanTypeId,
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client",
+            TemplateSnapshot = null,
+        };
+        await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
+
+        var result = await BuildService(registeredType)
+            .ApplyActionAsync(
+                workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+        Assert.Contains(orphanTypeId, result.Message);
+    }
+
+    [Fact]
+    public async Task AssignAsync_returns_missing_actor_identity_when_user_id_claim_is_whitespace()
+    {
+        // Covers ResolveActorUserId's `string.IsNullOrWhiteSpace(id)` branch
+        // for a claim that is *present* but blank, distinct from the
+        // claim-absent case already covered above.
+        var type = BuildType();
+        var workItem = await SeedAsync();
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("client_id", "test-client"),
+            new Claim("user:id", "   "),
+        ], "test"));
+
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", user, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+    }
+
     // ---------------------- Assignment ----------------------
 
     [Fact]
@@ -737,6 +817,42 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal(InitialNow, fetched.AssignedAt);
         Assert.Equal("old-actor", fetched.AssignedBy);
         Assert.Equal(0, fetched.Version);
+    }
+
+    [Fact]
+    public async Task AssignAsync_returns_missing_actor_identity_when_no_user_id_claim()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync();
+
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", UserWithoutActorId(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Null(fetched.AssignedToId);
+    }
+
+    [Fact]
+    public async Task UnassignAsync_returns_missing_actor_identity_when_no_user_id_claim()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+
+        var result = await BuildService(type).UnassignAsync(
+            workItem.Id, UserWithoutActorId(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("alice-1", fetched.AssignedToId);
     }
 
     // ---- RA-358: assignment is refused on a closed (terminal) case ----
@@ -999,6 +1115,18 @@ public class WorkItemServiceTests : IAsyncDisposable
         var actor = UserWithRoles("actor-1", "assign");
         var result = await BuildService(type).AssignAsync(
             Guid.NewGuid(), "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task Unassign_returns_not_found_when_work_item_missing()
+    {
+        var type = BuildType();
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).UnassignAsync(
+            Guid.NewGuid(), actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);

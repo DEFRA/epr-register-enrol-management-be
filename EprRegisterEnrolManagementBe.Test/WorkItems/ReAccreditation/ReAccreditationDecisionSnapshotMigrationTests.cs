@@ -92,6 +92,55 @@ public class ReAccreditationDecisionSnapshotMigrationTests
         await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
     }
 
+    [Fact]
+    public async Task It_skips_an_item_whose_full_document_has_disappeared_by_the_time_it_is_refetched()
+    {
+        // Covers the `full is null` arm of the re-fetch guard: the listing
+        // query's projection said the item needed migrating, but the item
+        // was deleted (or otherwise vanished) between that list read and the
+        // full-document re-fetch immediately before patching.
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = BuildWorkItem();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(_ => new WorkItemPage([workItem], 1, 1, WorkItemQuery.MaxPageSize));
+        persistence
+            .GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns((WorkItem?)null);
+
+        await BuildMigration().ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task It_continues_to_a_second_page_when_more_items_remain()
+    {
+        // Covers the `processed >= result.TotalCount` false arm: the first
+        // page does not account for every item, so the loop must fetch a
+        // second page rather than stopping after the first.
+        var ct = TestContext.Current.CancellationToken;
+        var first = BuildWorkItem();
+        var second = BuildWorkItem();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .QueryAsync(
+                Arg.Is<WorkItemQuery>(q => q.Page == 1), Arg.Any<CancellationToken>())
+            .Returns(_ => new WorkItemPage([first], 2, 1, 1));
+        persistence
+            .QueryAsync(
+                Arg.Is<WorkItemQuery>(q => q.Page == 2), Arg.Any<CancellationToken>())
+            .Returns(_ => new WorkItemPage([second], 2, 2, 1));
+        persistence.GetByIdAsync(first.Id, Arg.Any<CancellationToken>()).Returns(first);
+        persistence.GetByIdAsync(second.Id, Arg.Any<CancellationToken>()).Returns(second);
+
+        await BuildMigration().ApplyAsync(persistence, ct);
+
+        await persistence.Received(1).ReplaceAsync(first, ct);
+        await persistence.Received(1).ReplaceAsync(second, ct);
+    }
+
     private static ReAccreditationDecisionSnapshotMigration BuildMigration() =>
         new(NullLogger<ReAccreditationDecisionSnapshotMigration>.Instance);
 

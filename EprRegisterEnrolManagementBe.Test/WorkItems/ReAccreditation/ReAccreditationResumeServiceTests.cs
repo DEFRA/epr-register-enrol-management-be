@@ -32,6 +32,63 @@ public class ReAccreditationResumeServiceTests
 
     private static readonly DateTimeOffset s_now = new(2026, 7, 20, 9, 30, 0, TimeSpan.Zero);
 
+    [Fact]
+    public async Task Constructor_defaults_time_provider_when_omitted()
+    {
+        // Covers the `timeProvider ?? TimeProvider.System` branch, which the
+        // Harness below never exercises because it always supplies a
+        // FakeTimeProvider explicitly.
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var engine = Substitute.For<IWorkItemService>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = ReAccreditationType.Id,
+            StateId = "queried",
+            SubmittedBy = TenantClientId,
+            Payload = new BsonDocument(),
+            AuditLog =
+            [
+                new WorkItemAuditEntry
+                {
+                    Action = ReAccreditationQueryService.AuditAction,
+                    ActionDisplayName = "Queried",
+                    CreatedAt = DateTime.UtcNow,
+                    CreatedBy = "alice-1",
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["actionId"] = "query-during-assessment",
+                    },
+                },
+            ],
+        };
+        persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<BsonValue>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        engine
+            .ApplyActionAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(WorkItemActionResult.Success(workItem));
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>())
+            .Returns(true);
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("user:id", "alice-1"), new Claim("client_id", TenantClientId)], "test"));
+        var service = new ReAccreditationResumeService(
+            persistence, engine, auditAppender, NullLogger<ReAccreditationResumeService>.Instance);
+
+        var result = await service.ResumeFromQueryAsync(
+            workItem.Id, s_request, user, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+    }
+
     // --------------------------- happy path per state ---------------------------
 
     [Theory]
@@ -73,6 +130,112 @@ public class ReAccreditationResumeServiceTests
                 && d["responderEmail"] == "jane@example.com"
                 && d["responderRole"] == "Manager"
                 && d["fileReferences"] == "prn-tonnage:file-1:evidence.pdf"),
+            harness.User,
+            ct);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_merges_a_canonical_section_onto_its_top_level_payload_field()
+    {
+        // RA-291 regression: a resubmitted section whose key matches
+        // s_canonicalPayloadFieldBySectionKey (e.g. "BusinessPlan") must also
+        // be merged onto payload.businessPlan, not just latestSections.
+        // s_request's own "business-plan" key is deliberately kebab-case (a
+        // ReAccreditationQuerySections key, not this canonical map's key), so
+        // this needs its own request.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["business-plan"],
+            new Dictionary<string, JsonElement>
+            {
+                ["BusinessPlan"] = JsonDocument.Parse("""{"newInfrastructurePercent":20}""").RootElement,
+            },
+            []);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id, "businessPlan", Arg.Any<BsonValue>(), ct);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_reports_not_found_when_the_canonical_field_write_finds_no_item()
+    {
+        // Covers the canonical-field SetPayloadFieldAsync's own `!canonicalMatched`
+        // guard, distinct from the final latestSections write's not-found guard
+        // covered by ResumeFromQueryAsync_reports_not_found_when_the_item_vanishes_before_the_stamp.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.Persistence
+            .SetPayloadFieldAsync(
+                harness.WorkItem.Id, "businessPlan", Arg.Any<BsonValue>(), ct)
+            .Returns(false);
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["business-plan"],
+            new Dictionary<string, JsonElement>
+            {
+                ["BusinessPlan"] = JsonDocument.Parse("""{"newInfrastructurePercent":20}""").RootElement,
+            },
+            []);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+        await harness.Engine.DidNotReceiveWithAnyArgs()
+            .ApplyActionAsync(default, default!, default!, default);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_falls_back_to_the_engine_result_when_the_post_update_reread_finds_nothing()
+    {
+        // Covers the final `refreshed is null` arm: the item existed for the
+        // initial load and the transition succeeded, but vanished (e.g.
+        // concurrently archived) before the closing re-read that normally
+        // picks up the query-responded audit entry.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.Persistence
+            .GetByIdAsync(harness.WorkItem.Id, ct)
+            .Returns(harness.WorkItem, (WorkItem?)null);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, s_request, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Same(harness.WorkItem, result.WorkItem);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_accepts_a_minimal_request_with_no_sections_or_responder_details()
+    {
+        // Every field on ResumeFromQueryRequest is nullable (validated
+        // separately by ReAccreditationResumeValidator at the endpoint);
+        // this covers the service's own null-coalescing fallbacks for
+        // SectionKeys, Sections, ResponderContactDetails and FileReferences.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var request = new ResumeFromQueryRequest(null, null, null, null);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.AuditAppender.Received(1).AppendAsync(
+            harness.WorkItem.Id,
+            ReAccreditationResumeService.AuditAction,
+            ReAccreditationResumeService.AuditActionDisplayName,
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["sectionKeys"] == ""
+                && d["responderFullName"] == null
+                && d["responderEmail"] == null
+                && d["responderRole"] == null),
             harness.User,
             ct);
     }
