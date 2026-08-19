@@ -315,6 +315,44 @@ public class ReAccreditationNotificationHookTests
             );
     }
 
+    /// <summary>
+    /// RA-447/CM5: the "SLA" → "Determination Deadline" rewording extends to
+    /// the audit strings this hook composes as "{description} email sent" —
+    /// not just <see cref="SlaService"/>'s own "sla-extended" audit entry.
+    /// </summary>
+    [Fact]
+    public async Task OnActionAppliedAsync_records_determination_deadline_extended_wording_for_sla_extend()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-id"));
+
+        var workItem = BuildWorkItem();
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(workItem, "sla-extend", fromStateId: "assessment-in-progress", s_user, ct);
+
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-sent",
+                "Determination deadline extended email sent",
+                Arg.Any<Dictionary<string, string?>>(),
+                s_user,
+                ct
+            );
+    }
+
     // ─────── RA-211: region resolved from payload.Nation ───────
 
     [Fact]
