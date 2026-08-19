@@ -128,7 +128,10 @@ internal sealed class ArchiveBackgroundService(
                     {
                         ["enteredStateAt"] = enteredTerminalStateAt.ToString("O"),
                         ["archivedAt"] = now.ToString("O")
-                    }
+                    },
+                    // epr-rr9s: snapshot the terminal state the item was
+                    // archived from.
+                    StateId = full.StateId
                 });
 
                 try

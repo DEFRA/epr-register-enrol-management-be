@@ -320,7 +320,11 @@ public sealed class SlaService : ISlaService
             Details = details,
             CreatedAt = createdAt,
             CreatedBy = ResolveActorUserId(user),
-            CreatedByName = user.FindFirstValue("user:name")
+            CreatedByName = user.FindFirstValue("user:name"),
+            // epr-rr9s: snapshot the state as of this event. SLA actions do
+            // not mutate StateId, so this is the state the item was in when
+            // the deadline was extended or overridden.
+            StateId = workItem.StateId
         });
     }
 

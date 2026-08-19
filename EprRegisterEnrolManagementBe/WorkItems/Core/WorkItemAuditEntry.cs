@@ -63,4 +63,25 @@ public sealed class WorkItemAuditEntry
     /// lookup.
     /// </summary>
     public string? CreatedByName { get; init; }
+
+    /// <summary>
+    /// Work item state code as of this event — the state the item was in
+    /// immediately AFTER the event's mutation (epr-rr9s). Persisting a
+    /// per-event snapshot lets a UI render each historical entry with the
+    /// state it was actually in at the time, instead of stapling the live
+    /// current state onto every row.
+    ///
+    /// Nullable by design: audit entries written before epr-rr9s carry no
+    /// snapshot and leave this null. That is the defined fallback — the
+    /// frontend omits the State row when this is null. There is deliberately
+    /// no backfill migration.
+    ///
+    /// Every runtime producer stamps this, so on current data null means
+    /// "written before epr-rr9s" and nothing else. Keep it that way: if you
+    /// add a new site that constructs a WorkItemAuditEntry, set StateId from
+    /// the work item AFTER any state mutation. The one deliberate exception
+    /// is the ReAccreditation backfill migrations, whose entries record a
+    /// data-repair event rather than a caseworker-visible state change.
+    /// </summary>
+    public string? StateId { get; init; }
 }

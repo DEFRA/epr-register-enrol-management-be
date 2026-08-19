@@ -104,6 +104,10 @@ public class SlaBreachBackgroundServiceTests
         var breachEntry = item.AuditLog.FirstOrDefault(e => e.Action == "sla-breached");
         Assert.NotNull(breachEntry);
         Assert.Equal("84", breachEntry!.Details["targetDays"]);
+        // epr-rr9s: the entry snapshots the state the item was in when the
+        // deadline was breached, so the history row can render it.
+        Assert.Equal(item.StateId, breachEntry.StateId);
+        Assert.NotNull(breachEntry.StateId);
     }
 
     [Fact]

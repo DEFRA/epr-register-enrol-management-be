@@ -98,7 +98,10 @@ internal sealed class SlaBreachBackgroundService(
                     ["startedAt"] = full.SlaClock.StartedAt.ToString("O"),
                     ["targetDays"] = full.SlaClock.TargetDuration.TotalDays.ToString(),
                     ["detectedAt"] = now.ToString("O")
-                }
+                },
+                // epr-rr9s: snapshot the state the item was in when the
+                // deadline was breached.
+                StateId = full.StateId
             });
 
             try
