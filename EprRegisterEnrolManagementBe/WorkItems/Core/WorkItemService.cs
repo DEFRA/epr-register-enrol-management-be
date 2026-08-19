@@ -242,6 +242,16 @@ public sealed class WorkItemService : IWorkItemService
             var applicationReference = _referenceGenerator.Generate(payload, attempt);
             payload["applicationReference"] = applicationReference;
 
+            // RA-447/CM3: the operator backend cannot know applicationReference
+            // before management-be generates it, so paymentReference is always
+            // null on initial submit (RA-316, deliberate). Now that the
+            // reference exists, stamp it as the payment reference too — the
+            // application reference *is* the payment reference for this
+            // service, so this is a real persisted value (not a display-time
+            // fallback) that never changes after creation. No backfill: only
+            // work items created from this point on carry it.
+            payload["paymentReference"] = applicationReference;
+
             workItem = new WorkItem
             {
                 TypeId = type.TypeId,

@@ -1,18 +1,16 @@
 using System.Globalization;
 using System.Security.Claims;
 using System.Xml;
-using EprRegisterEnrolManagementBe.Config;
-using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
 /// RA-131: framework service that handles SLA extension and manual
 /// override for any work item type. Lives in core because the rules
-/// (max-extension cap, non-empty reason, audit composition,
-/// operator-notify-on-extend) are universal across modules. RA-323: any
-/// authenticated caseworker may extend or override — there is no
-/// team-leader gate any more.
+/// (non-empty reason, audit composition, operator-notify-on-extend) are
+/// universal across modules. RA-323: any authenticated caseworker may
+/// extend or override — there is no team-leader gate any more. RA-447/CM6:
+/// extend has no upper limit any more (SlaConfig.MaxExtensionDays removed).
 /// </summary>
 public interface ISlaService
 {
@@ -23,7 +21,7 @@ public interface ISlaService
     /// supplied reason, and fans out to every registered
     /// <see cref="IWorkItemPostActionHook"/> with an <c>sla-extend</c>
     /// action id so per-module notification hooks (e.g. the operator
-    /// "SLA extended" email) fire automatically.
+    /// "Determination deadline extended" email) fire automatically.
     /// </summary>
     Task<SlaActionResult> ExtendAsync(
         Guid workItemId,
@@ -99,18 +97,15 @@ public sealed class SlaService : ISlaService
     private readonly ILogger<SlaService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
-    private readonly IOptionsMonitor<SlaConfig> _config;
 
     public SlaService(
         IWorkItemPersistence persistence,
         ILogger<SlaService> logger,
-        IOptionsMonitor<SlaConfig> config,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null)
     {
         _persistence = persistence;
         _logger = logger;
-        _config = config;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
     }
@@ -125,20 +120,17 @@ public sealed class SlaService : ISlaService
         if (RequireActorIdentity(user) is { } identityFailure) return identityFailure;
         if (RequireReason(reason) is { } reasonFailure) return reasonFailure;
 
-        var maxExtension = TimeSpan.FromDays(_config.CurrentValue.MaxExtensionDays);
         if (additionalDuration <= TimeSpan.Zero)
         {
             return SlaActionResult.Failure(
                 SlaActionFailureCode.InvalidRequest,
                 "'additionalDuration' must be a positive ISO-8601 duration (e.g. 'P14D').");
         }
-        if (additionalDuration > maxExtension)
-        {
-            return SlaActionResult.Failure(
-                SlaActionFailureCode.InvalidRequest,
-                $"'additionalDuration' exceeds the configured maximum of " +
-                $"{_config.CurrentValue.MaxExtensionDays} day(s) per call.");
-        }
+
+        // RA-447/CM6: no upper limit on an extension — the requirement is that
+        // it must be an extension, not a reduction, which the guard above
+        // already enforces. The old MaxExtensionDays cap (SlaConfig) has been
+        // removed entirely rather than left unused.
 
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
@@ -163,7 +155,7 @@ public sealed class SlaService : ISlaService
         AppendAuditEntry(
             workItem,
             action: "sla-extended",
-            actionDisplayName: "SLA extended",
+            actionDisplayName: "Determination deadline extended",
             user,
             now,
             reason,
