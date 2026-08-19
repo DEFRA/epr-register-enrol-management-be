@@ -75,6 +75,13 @@ public sealed class WorkItemAuditEntry
     /// snapshot and leave this null. That is the defined fallback — the
     /// frontend omits the State row when this is null. There is deliberately
     /// no backfill migration.
+    ///
+    /// Every runtime producer stamps this, so on current data null means
+    /// "written before epr-rr9s" and nothing else. Keep it that way: if you
+    /// add a new site that constructs a WorkItemAuditEntry, set StateId from
+    /// the work item AFTER any state mutation. The one deliberate exception
+    /// is the ReAccreditation backfill migrations, whose entries record a
+    /// data-repair event rather than a caseworker-visible state change.
     /// </summary>
     public string? StateId { get; init; }
 }

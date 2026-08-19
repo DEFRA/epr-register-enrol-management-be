@@ -946,6 +946,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 CreatedAt = submittedAt,
                 CreatedBy = submittedBy,
                 CreatedByName = null,
+                // epr-rr9s: mirror the real submit path — the birth entry
+                // carries the initial state.
+                StateId = stateId,
             }
         );
 
@@ -963,6 +966,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 CreatedAt = submittedAt.AddSeconds(1),
                 CreatedBy = null,
                 CreatedByName = null,
+                // epr-rr9s: mirror ReAccreditationNationRoutingHook — routing
+                // snapshots the post-submission initial state.
+                StateId = stateId,
             }
         );
 
@@ -984,6 +990,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     CreatedAt = assignedAt.Value,
                     CreatedBy = SeederAssignedBy,
                     CreatedByName = null,
+                    // epr-rr9s: mirror WorkItemService.AssignAsync — the
+                    // assignment entry snapshots the item's state at the time.
+                    StateId = stateId,
                 }
             );
         }
