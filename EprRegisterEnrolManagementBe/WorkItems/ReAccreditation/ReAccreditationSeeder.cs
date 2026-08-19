@@ -938,7 +938,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 Details = new Dictionary<string, string?>
                 {
                     ["typeId"] = ReAccreditationType.Id,
-                    ["stateId"] = stateId,
+                    // The state AT SUBMISSION, which is always the type's
+                    // initial state -- NOT the seed's terminal `stateId`.
+                    // This feeds the entry's own "Initial state" row.
+                    ["stateId"] = SubmittedStateId,
                     ["source"] = "seeder",
                     ["clientId"] = submittedBy,
                     ["applicationReference"] = applicationReference,
@@ -947,8 +950,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 CreatedBy = submittedBy,
                 CreatedByName = null,
                 // epr-rr9s: mirror the real submit path — the birth entry
-                // carries the initial state.
-                StateId = stateId,
+                // carries the initial state. NOT the seed's terminal
+                // `stateId`: stamping that would put the current state on a
+                // historical entry, which is the exact bug epr-rr9s fixes.
+                StateId = SubmittedStateId,
             }
         );
 
@@ -967,8 +972,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 CreatedBy = null,
                 CreatedByName = null,
                 // epr-rr9s: mirror ReAccreditationNationRoutingHook — routing
-                // snapshots the post-submission initial state.
-                StateId = stateId,
+                // happens immediately after submission, so it snapshots the
+                // initial state, not the seed's terminal one.
+                StateId = SubmittedStateId,
             }
         );
 
@@ -992,7 +998,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     CreatedByName = null,
                     // epr-rr9s: mirror WorkItemService.AssignAsync — the
                     // assignment entry snapshots the item's state at the time.
-                    StateId = stateId,
+                    // The seeded timeline puts assignment two hours after
+                    // submission and models no transition before it, so that
+                    // state is the initial one rather than the terminal
+                    // `stateId`.
+                    StateId = SubmittedStateId,
                 }
             );
         }
