@@ -108,6 +108,10 @@ public class ReAccreditationNationRoutingHookTests
         Assert.Equal("user-1", entry.CreatedBy);
         Assert.Equal("Alice", entry.CreatedByName);
         Assert.Equal(s_now, entry.CreatedAt);
+        // epr-rr9s: the routed-to-nation entry now snapshots the work item's
+        // state at routing time (the post-submission initial state) so the
+        // history UI can render it against its own state, not the live one.
+        Assert.Equal("submitted", entry.StateId);
     }
 
     [Fact]

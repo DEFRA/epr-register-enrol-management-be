@@ -255,6 +255,8 @@ public class ArchiveBackgroundServiceTests
         Assert.Equal(s_fixedNow.UtcDateTime.ToString("O"), entry.Details["archivedAt"]);
         // The legacy approved-only key must be gone.
         Assert.False(entry.Details.ContainsKey("approvedAt"));
+        // epr-rr9s: the entry snapshots the terminal state it was archived from.
+        Assert.Equal("rejected", entry.StateId);
     }
 
     [Fact]

@@ -216,9 +216,17 @@ public class WorkItemEndpointsTests
         Assert.Equal(persisted.SubmittedAt, entry.CreatedAt);
         Assert.Equal(TypeId, entry.Details["typeId"]);
         Assert.Equal("submitted", entry.Details["stateId"]);
+        Assert.Equal("submitted", entry.StateId);
         // Birth event was part of the original CreateAsync (no follow-up
         // ReplaceAsync), so Version is still 0.
         Assert.Equal(0, persisted.Version);
+
+        // epr-rr9s: the per-event state snapshot must also survive the wire
+        // projection so the FE can render each entry against its own state.
+        Assert.NotNull(body.AuditLog);
+        var wireEntry = Assert.Single(body.AuditLog!);
+        Assert.Equal("work-item-submitted", wireEntry.Action);
+        Assert.Equal("submitted", wireEntry.StateId);
     }
 
     [Fact]

@@ -173,6 +173,10 @@ public class SlaServiceTests
         Assert.Equal(UtcNow, entry.CreatedAt);
         Assert.Equal("Needs more time", entry.Details["reason"]);
         Assert.Equal("tl-alice", entry.Details["actorUserId"]);
+        // epr-rr9s: the entry snapshots the state as of this event. Extending
+        // the deadline does not move the item, so it is the state it was in.
+        Assert.Equal(result.WorkItem!.StateId, entry.StateId);
+        Assert.NotNull(entry.StateId);
         // Before snapshot
         Assert.Equal(
             XmlConvert.ToString(TimeSpan.FromDays(84)),

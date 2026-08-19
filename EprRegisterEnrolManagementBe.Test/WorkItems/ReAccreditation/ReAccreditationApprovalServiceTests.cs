@@ -203,6 +203,12 @@ public class ReAccreditationApprovalServiceTests
         Assert.Equal("accreditation-issued", workItem.AuditLog[2].Action);
         Assert.Equal("ACC-2025-A-12345678", workItem.AuditLog[2].Details["accreditationId"]);
         Assert.Equal("2025", workItem.AuditLog[2].Details["accreditationYear"]);
+        // epr-rr9s: every entry this path writes snapshots the state as of the
+        // event — the post-transition 'approved' — so the auxiliary
+        // sla-clock-stopped / accreditation-issued rows are not state-less.
+        Assert.Equal(
+            ["approved", "approved", "approved"],
+            workItem.AuditLog.Select(e => e.StateId).ToArray());
 
         await sut.Persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
         await sut.Queue.Received(1).QueueAsync(

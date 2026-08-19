@@ -1407,6 +1407,9 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal("rejected", entry.Details["toStateId"]);
         Assert.Equal("alice-1", entry.CreatedBy);
         Assert.Equal(TickedNow, entry.CreatedAt);
+        // epr-rr9s: the entry snapshots the state AS OF the event — the
+        // resulting post-transition state, not the item's live state.
+        Assert.Equal("rejected", entry.StateId);
     }
 
     [Fact]
@@ -1624,6 +1627,16 @@ public class WorkItemServiceTests : IAsyncDisposable
         // chronological (insertion) order on disk.
         Assert.True(fetched.AuditLog[0].CreatedAt < fetched.AuditLog[1].CreatedAt);
         Assert.True(fetched.AuditLog[1].CreatedAt < fetched.AuditLog[2].CreatedAt);
+        // epr-rr9s: each entry snapshots the state AS OF its own event. The
+        // note + assign happened while the item was still 'submitted'; only
+        // the action-applied entry carries the post-transition 'approved'.
+        // This is the regression the bug was about: earlier entries must NOT
+        // inherit the live current state.
+        Assert.Equal("approved", fetched.StateId);
+        Assert.Equal(
+            ["submitted", "submitted", "approved"],
+            fetched.AuditLog.Select(e => e.StateId).ToArray()
+        );
     }
 
     private sealed class MutableTimeProvider(DateTime initial) : TimeProvider
@@ -1696,6 +1709,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal(TypeId, entry.Details["typeId"]);
         Assert.Equal("submitted", entry.Details["stateId"]);
         Assert.Equal("v1", entry.Details["templateVersion"]);
+        // epr-rr9s: the birth entry snapshots the initial state.
+        Assert.Equal("submitted", entry.StateId);
     }
 
     [Fact]
