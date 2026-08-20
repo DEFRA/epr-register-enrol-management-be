@@ -1168,6 +1168,12 @@ public sealed class WorkItemService : IWorkItemService
                 CreatedAt = createdAt,
                 CreatedBy = ResolveActorUserId(user)!,
                 CreatedByName = user?.FindFirstValue("user:name"),
+                // epr-rr9s: snapshot the state as of this event. Every
+                // AppendAudit caller invokes this AFTER any state mutation
+                // (submit sets the initial state, action-applied assigns
+                // transition.ToStateId first), so workItem.StateId is the
+                // resulting post-mutation state for this entry.
+                StateId = workItem.StateId,
             }
         );
     }

@@ -102,6 +102,57 @@ public class ReAccreditationSeederTests
     }
 
     [Fact]
+    public void Build_historical_audit_entries_carry_the_state_as_of_the_event()
+    {
+        // epr-rr9s. The seed's `stateId` is the item's TERMINAL state. The
+        // submitted / routed-to-nation / assigned events all fire before any
+        // transition, so their per-entry snapshot must be the initial state.
+        // Stamping the terminal state here would reproduce, in seed data, the
+        // very bug epr-rr9s fixes -- and would do it invisibly, because the
+        // journey spec only asserts that a State row EXISTS, not its value.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var progressed = items.Where(i => i.StateId != "submitted").ToList();
+
+        Assert.NotEmpty(progressed);
+        Assert.All(
+            progressed,
+            item =>
+            {
+                foreach (var action in new[] { "work-item-submitted", "routed-to-nation" })
+                {
+                    var entry = Assert.Single(item.AuditLog, e => e.Action == action);
+                    Assert.Equal("submitted", entry.StateId);
+                    Assert.NotEqual(item.StateId, entry.StateId);
+                }
+
+                var assigned = item.AuditLog.SingleOrDefault(e => e.Action == "assigned");
+                if (assigned is not null)
+                {
+                    Assert.Equal("submitted", assigned.StateId);
+                }
+            }
+        );
+    }
+
+    [Fact]
+    public void Build_submitted_entry_details_state_is_the_initial_state()
+    {
+        // The birth entry's own Details["stateId"] renders as its "Initial
+        // state" row, so it too must be the state at submission rather than
+        // the seed's terminal state.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(
+            items,
+            item =>
+            {
+                var entry = Assert.Single(item.AuditLog, e => e.Action == "work-item-submitted");
+                Assert.Equal("submitted", entry.Details["stateId"]);
+            }
+        );
+    }
+
+    [Fact]
     public void Build_assigned_items_have_assigned_audit_entry()
     {
         // Mirrors WorkItemService.AssignAsync — assigned items need an

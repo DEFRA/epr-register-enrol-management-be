@@ -233,6 +233,11 @@ public class ReAccreditationDulyMakingServiceTests
         var slaStarted = Assert.Single(workItem.AuditLog, e => e.Action == "sla-clock-started");
         Assert.Equal("payment-date", slaStarted.Details["anchoredTo"]);
         Assert.Equal("84", slaStarted.Details["targetDays"]);
+
+        // epr-rr9s: both entries snapshot the state as of the event — the
+        // post-transition 'duly-made', not a null that the UI would drop.
+        Assert.Equal("duly-made", applied.StateId);
+        Assert.Equal("duly-made", slaStarted.StateId);
     }
 
     // --------------------------- the updated waypoint ---------------------------

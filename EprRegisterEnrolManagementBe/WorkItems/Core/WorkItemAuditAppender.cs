@@ -43,7 +43,9 @@ internal sealed class WorkItemAuditAppender(
                 Details = details,
                 CreatedAt = now,
                 CreatedBy = user.FindFirstValue("user:id"),
-                CreatedByName = user.FindFirstValue("user:name")
+                CreatedByName = user.FindFirstValue("user:name"),
+                // epr-rr9s: snapshot the work item's current state at append time.
+                StateId = workItem.StateId
             });
 
             try

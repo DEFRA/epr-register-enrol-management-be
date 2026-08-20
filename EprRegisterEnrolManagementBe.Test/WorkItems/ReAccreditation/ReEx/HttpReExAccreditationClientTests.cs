@@ -69,6 +69,36 @@ public class HttpReExAccreditationClientTests
     }
 
     [Fact]
+    public async Task Returns_a_result_with_empty_defaults_when_prnIssuance_is_absent()
+    {
+        // Covers the `prn?.` null-conditional chain's null-prn arm (tonnage
+        // band, authorisers, business plan) — every other test supplies a
+        // populated prnIssuance object.
+        const string json = """
+            {
+              "registrations": [
+                { "id": "reg-1", "accreditationId": "acc-1" }
+              ],
+              "accreditations": [
+                {
+                  "id": "acc-1",
+                  "validFrom": "2025-04-01",
+                  "prnIssuance": null
+                }
+              ]
+            }
+            """;
+        var client = CreateClient(json);
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.NotNull(result);
+        Assert.Null(result!.TonnageBand);
+        Assert.Empty(result.Authorisers);
+        Assert.NotNull(result.BusinessPlan);
+    }
+
+    [Fact]
     public async Task Unrecognised_tonnage_band_falls_back_to_raw_value_and_logs_a_warning()
     {
         var client = CreateClient(OrganisationJson("some_future_band"), out var logger);

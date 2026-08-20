@@ -51,6 +51,34 @@ public class WorkItemQueryBindingTests
     }
 
     [Fact]
+    public void SubmittedByIsNullWhenTheQueryValueIsWhitespace()
+    {
+        // Covers ReadString's `IsNullOrWhiteSpace` true arm — every other
+        // test supplies a real value.
+        var query = WorkItemQueryBinding.FromQueryString(Q(("submittedBy", "   ")));
+
+        Assert.Null(query.SubmittedBy);
+    }
+
+    [Fact]
+    public void PageFallsBackToTheDefaultWhenTheQueryValueIsNotAnInteger()
+    {
+        // Covers ReadInt's `int.TryParse` false arm.
+        var query = WorkItemQueryBinding.FromQueryString(Q(("page", "not-a-number")));
+
+        Assert.Equal(1, query.Page);
+    }
+
+    [Fact]
+    public void UnassignedIsFalseWhenTheQueryValueIsWhitespace()
+    {
+        // Covers ReadBool's `IsNullOrWhiteSpace` true arm.
+        var query = WorkItemQueryBinding.FromQueryString(Q(("unassigned", "   ")));
+
+        Assert.False(query.UnassignedOnly);
+    }
+
+    [Fact]
     public void EmptyQueryProducesNullSubmittedBy()
     {
         var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());

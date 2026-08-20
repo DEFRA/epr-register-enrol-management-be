@@ -640,7 +640,9 @@ public static class WorkItemEndpoints
                     x.Entry.Details,
                     x.Entry.CreatedAt,
                     x.Entry.CreatedBy,
-                    x.Entry.CreatedByName
+                    x.Entry.CreatedByName,
+                    // epr-rr9s: per-event state snapshot (null for pre-change entries).
+                    x.Entry.StateId
                 ))
                 .ToList(),
             slaRemaining,

@@ -75,6 +75,44 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         return persistence;
     }
 
+    [Fact]
+    public async Task It_skips_an_item_whose_full_document_has_disappeared_by_the_time_it_is_refetched()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([item], 1, 1, WorkItemQuery.MaxPageSize));
+        persistence.GetByIdAsync(item.Id, Arg.Any<CancellationToken>()).Returns((WorkItem?)null);
+
+        await BuildMigration().ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task It_continues_to_a_second_page_when_more_items_remain()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var first = BuildItem();
+        var second = BuildItem();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .QueryAsync(Arg.Is<WorkItemQuery>(q => q.Page == 1), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([first], 2, 1, 1));
+        persistence
+            .QueryAsync(Arg.Is<WorkItemQuery>(q => q.Page == 2), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([second], 2, 2, 1));
+        persistence.GetByIdAsync(first.Id, Arg.Any<CancellationToken>()).Returns(first);
+        persistence.GetByIdAsync(second.Id, Arg.Any<CancellationToken>()).Returns(second);
+
+        await BuildMigration().ApplyAsync(persistence, ct);
+
+        await persistence.Received(1).ReplaceAsync(first, ct);
+        await persistence.Received(1).ReplaceAsync(second, ct);
+    }
+
     // ------------------------- one bad document must not stop the batch -------------------------
 
     /// <summary>

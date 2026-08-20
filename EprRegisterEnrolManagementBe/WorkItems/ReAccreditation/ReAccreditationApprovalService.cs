@@ -593,6 +593,10 @@ internal sealed class ReAccreditationApprovalService(
                 CreatedAt = createdAt,
                 CreatedBy = user.FindFirstValue("user:id"),
                 CreatedByName = user.FindFirstValue("user:name"),
+                // epr-rr9s: snapshot the state as of this event. Callers invoke
+                // this AFTER any state mutation, so workItem.StateId is the
+                // resulting post-mutation state for this entry.
+                StateId = workItem.StateId,
             }
         );
     }
