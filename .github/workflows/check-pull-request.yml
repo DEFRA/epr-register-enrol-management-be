@@ -70,7 +70,7 @@ jobs:
 
       - name: Comment coverage on PR
         if: always()
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3
         with:
           header: coverage
           path: /tmp/coverage-comment.md
@@ -121,12 +121,8 @@ jobs:
           management-fe: ${{ steps.build-fe.outputs.tag }}
           branch: ${{ steps.e2e-branch.outputs.ref }}
 
-    ## SonarCloud
-    ## Uncomment to unable SonarCloud scan
-    ## Requires project to be set up in SonarCloud
-    ## and the SonarCloud token to be set in the repository secrets
-#   sonarcloud-scan:
-#     name: CDP SonarCloud Scan
-#     uses: ./.github/workflows/sonarcloud.yml
-#     needs: pr-validator
-#     secrets: inherit
+  sonarcloud-scan:
+    name: CDP SonarCloud Scan
+    uses: ./.github/workflows/sonarcloud.yml
+    needs: pr-validator
+    secrets: inherit
