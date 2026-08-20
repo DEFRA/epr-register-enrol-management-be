@@ -29,7 +29,7 @@ jobs:
       - name: Lint (dotnet format)
         run: dotnet format style --verify-no-changes
       - name: Test with coverage
-        run: dotnet test --collect:"XPlat Code Coverage" --results-directory ./coverage
+        run: dotnet test --coverage --coverage-output-format cobertura --results-directory ./coverage
 
       # Baseline as measured on 2026-08-19 (RA-437 branch-coverage follow-up,
       # second pass): 93.89% line / 88.24% branch. Fails the job on
@@ -37,7 +37,7 @@ jobs:
       - name: Enforce coverage threshold and report on PR
         if: always()
         run: |
-          FILE=$(find ./coverage -name 'coverage.cobertura.xml' | head -1)
+          FILE=$(find ./coverage -name '*.cobertura.xml' | head -1)
           if [ -z "$FILE" ]; then
             echo "::error::No coverage report found — did dotnet test run?"
             exit 1
