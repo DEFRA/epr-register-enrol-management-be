@@ -5,6 +5,7 @@ using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
@@ -45,8 +46,16 @@ public class ReAccreditationLifecycleTests
         var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
         pushAdapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+                Arg.Any<Guid>(),
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<DateTime>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(OperatorBackendPushResult.Skipped("test"));
         var statusPushHook = new ReAccreditationStatusPushHook(
             pushAdapter,
@@ -68,14 +77,25 @@ public class ReAccreditationLifecycleTests
             persistence,
             NullLogger<WorkItemService>.Instance
         );
-        var idGenerator = Substitute.For<IAccreditationIdGenerator>();
-        idGenerator
-            .GenerateAsync(Arg.Any<BsonDocument>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns("ACC-2027-X-TEST0000");
+        // RA-448 phase 2: the accreditation number now comes from
+        // IAccreditationNumberAdapter (a real backend call), not a local
+        // generator.
+        var numberAdapter = Substitute.For<IAccreditationNumberAdapter>();
+        numberAdapter
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Nation>(),
+                Arg.Any<int>(),
+                Arg.Any<int>(),
+                Arg.Any<bool>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(AccreditationNumberResult.Success("A27ER5000270036WO"));
         var approvalService = new ReAccreditationApprovalService(
             persistence,
             new WorkItemRegistry([type]),
-            idGenerator,
+            numberAdapter,
             Substitute.For<IBackgroundTaskQueue>(),
             [],
             NullLogger<ReAccreditationApprovalService>.Instance,
@@ -88,6 +108,14 @@ public class ReAccreditationLifecycleTests
             TypeId = ReAccreditationType.Id,
             StateId = type.InitialState.Id,
             SubmittedBy = tenantClientId,
+            // RA-448 phase 2: required for the approval step's call to
+            // IAccreditationNumberAdapter.
+            Payload = new BsonDocument
+            {
+                ["operatorOrganisationId"] = "500027",
+                ["operatorRegistrationId"] = "APP-500027",
+                ["nation"] = "England",
+            },
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
             TemplateVersion = type.TemplateVersion,
         };

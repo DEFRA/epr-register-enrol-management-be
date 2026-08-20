@@ -540,6 +540,13 @@ internal static class ReAccreditationEndpoints
             WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
             WorkItemActionFailureCode.TerminalState
             or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            // RA-448 phase 2: the backend accreditation-number call failed
+            // (or timed out) before anything was persisted — a transient
+            // server-side dependency problem, not a malformed request, so
+            // this maps to a generic 500 like LogDecision's own upstream
+            // push failure does, not a 4xx.
+            WorkItemActionFailureCode.UpstreamNotificationFailed =>
+                StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
         };
 
@@ -637,7 +644,8 @@ internal static class ReAccreditationEndpoints
             // request itself was well-formed — this is a server-side dependency
             // being unreachable — so it maps to a generic 500, not a 4xx. No
             // errorCode is attached: the frontend shows a generic try-again.
-            WorkItemActionFailureCode.UpstreamNotificationFailed => StatusCodes.Status500InternalServerError,
+            WorkItemActionFailureCode.UpstreamNotificationFailed =>
+                StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
         };
 
