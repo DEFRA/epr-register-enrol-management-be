@@ -1,12 +1,12 @@
-# EPR Register Case Management Backend (PoC)
+# EPR Register Enrol Management Backend
 
-A proof-of-concept .NET 10 backend API for the EPR Register case management
-service. Built from
+A .NET 10 backend API for the EPR Register case management service. Built
+from
 [cdp-dotnet-backend-template](https://github.com/DEFRA/cdp-dotnet-backend-template).
 
 The backend exposes a JSON HTTP API and persists data in MongoDB. It is
 designed to run alongside the
-[`epr-register-case-management-frontend-poc`](../epr-register-case-management-frontend-poc/)
+[`epr-register-enrol-management-fe`](../epr-register-enrol-management-fe/)
 service.
 
 - [Requirements](#requirements)
@@ -187,13 +187,13 @@ Bypass in an emergency with `git commit --no-verify`.
 ## Frontend integration
 
 The companion frontend
-([`epr-register-case-management-frontend-poc`](../epr-register-case-management-frontend-poc/))
+([`epr-register-enrol-management-fe`](../epr-register-enrol-management-fe/))
 calls this API server-to-server. With both services running locally the
 frontend at `http://localhost:3000/backend-status` reports the backend's
 `/health` response, providing an end-to-end smoke test.
 
 To run both services together via Docker Compose, see the
-[frontend README](../epr-register-case-management-frontend-poc/README.md#running-the-full-stack).
+[frontend README](../epr-register-enrol-management-fe/README.md#running-the-full-stack).
 
 ## Deployment
 
