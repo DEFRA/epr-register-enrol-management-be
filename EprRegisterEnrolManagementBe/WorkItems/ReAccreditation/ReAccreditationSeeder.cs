@@ -366,7 +366,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // none of the items above populate. Used by the mgmt-tests e2e suite
         // to verify the Application details page renders the full payload
         // rather than just the subset the other seed items happen to cover.
-        yield return Build(
+        var fullPayloadVerificationItem = Build(
             seedKey: FullPayloadVerificationSeedKey,
             postcode: "EC1A 1BB",
             submittedDaysAgo: 4,
@@ -376,10 +376,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = "Full Payload Verification Ltd",
                 ["registrationNumber"] = "EPR-100999",
                 ["operatorApplicationId"] = "app-full-payload-001",
-                // RA-448 phase 2: must be numeric (IAccreditationNumberAdapter
-                // parses it as int) for this fixture to be approvable end-to-end.
-                ["operatorOrganisationId"] = "500009",
-                ["operatorRegistrationId"] = "reg-full-payload-001",
                 // RA-412: this item carries overseasSites/BES evidence below, so
                 // it must declare the real discriminator management-fe's
                 // isExporterApplication() now reads — without it the item reads
@@ -535,6 +531,12 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             now: now
         );
+        SetAccreditationNumberFields(
+            fullPayloadVerificationItem.Payload,
+            "500009",
+            "reg-full-payload-001"
+        );
+        yield return fullPayloadVerificationItem;
 
         // RA-292: the ORS / interim-site / authority-to-issue fixture.
         //
@@ -572,7 +574,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // BOOLEAN. `coordinates` is a string, not a lat/long object. Optional
         // fields are absent KEYS, never nulls — the producer serialises with
         // WhenWritingNull.
-        yield return Build(
+        var orsInterimAuthorityItem = Build(
             seedKey: OrsInterimAuthoritySeedKey,
             postcode: "EC2A 2BB",
             submittedDaysAgo: 6,
@@ -582,10 +584,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = OrsInterimAuthorityOrganisationName,
                 ["registrationNumber"] = "EPR-100292",
                 ["operatorApplicationId"] = "app-ors-interim-authority-001",
-                // RA-448 phase 2: must be numeric for this fixture to be
-                // approvable end-to-end.
-                ["operatorOrganisationId"] = "500010",
-                ["operatorRegistrationId"] = "reg-ors-interim-authority-001",
                 // RA-412: see the same field on the full-payload-verification
                 // item above — this item's overseasSites/ORS sites need it too.
                 // RA-434-processortype independently relies on the same field
@@ -831,6 +829,12 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             now: now
         );
+        SetAccreditationNumberFields(
+            orsInterimAuthorityItem.Payload,
+            "500010",
+            "reg-ors-interim-authority-001"
+        );
+        yield return orsInterimAuthorityItem;
 
         // RA-412: a genuine Exporter organisation — org 50006 "Global Glass
         // Exports" in the ticket's own example. Unlike
@@ -843,7 +847,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // Deliberately a plain item with no overseasSites/BES payload of its
         // own — that positive case is already covered by the two fixtures
         // above.
-        yield return Build(
+        var globalGlassExportsItem = Build(
             seedKey: GlobalGlassExportsSeedKey,
             postcode: "M1 1AE",
             submittedDaysAgo: 7,
@@ -852,10 +856,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = GlobalGlassExportsOrganisationName,
                 ["registrationNumber"] = "EPR-100506",
-                ["operatorRegistrationId"] = "reg-050006",
-                // RA-448 phase 2: required, and must be numeric, for this
-                // fixture to be approvable end-to-end.
-                ["operatorOrganisationId"] = "500011",
                 ["wasteProcessingType"] = "exporter",
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
@@ -871,6 +871,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             now: now
         );
+        SetAccreditationNumberFields(globalGlassExportsItem.Payload, "500011", "reg-050006");
+        yield return globalGlassExportsItem;
 
         // RA-434: an Exporter-type item, carrying the three fields new to the
         // "Additional information" tab (companiesHouseNumber,
@@ -886,7 +888,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // the new full-address companyRegisteredAddress key so this fixture is
         // a realistic exporter payload, not just enough to pass the new tab's
         // tests.
-        yield return Build(
+        var additionalInformationExporterItem = Build(
             seedKey: AdditionalInformationExporterSeedKey,
             postcode: "CT16 1AA",
             submittedDaysAgo: 4,
@@ -896,10 +898,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = AdditionalInformationExporterOrganisationName,
                 ["registrationNumber"] = "EPR-100434",
                 ["operatorApplicationId"] = "app-additional-info-exporter-001",
-                // RA-448 phase 2: must be numeric for this fixture to be
-                // approvable end-to-end.
-                ["operatorOrganisationId"] = "500012",
-                ["operatorRegistrationId"] = "reg-additional-info-exporter-001",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
@@ -915,6 +913,12 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             now: now
         );
+        SetAccreditationNumberFields(
+            additionalInformationExporterItem.Payload,
+            "500012",
+            "reg-additional-info-exporter-001"
+        );
+        yield return additionalInformationExporterItem;
 
         // RA-434-processortype: the reprocessor counterpart to
         // AdditionalInformationExporterSeedKey above. Genuinely carries NO
@@ -925,7 +929,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // permitNumbers) a fixture that stays reprocessor-shaped even after
         // full-payload-verification became an explicit exporter for its own
         // BES/ORS fixture.
-        yield return Build(
+        var additionalInformationReprocessorItem = Build(
             seedKey: AdditionalInformationReprocessorSeedKey,
             postcode: "SE1 9GF",
             submittedDaysAgo: 4,
@@ -935,10 +939,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = AdditionalInformationReprocessorOrganisationName,
                 ["registrationNumber"] = "EPR-100435",
                 ["operatorApplicationId"] = "app-additional-info-reprocessor-001",
-                // RA-448 phase 2: must be numeric for this fixture to be
-                // approvable end-to-end.
-                ["operatorOrganisationId"] = "500013",
-                ["operatorRegistrationId"] = "reg-additional-info-reprocessor-001",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
@@ -957,6 +957,12 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             submittedBy: "stub-portal-client",
             now: now
         );
+        SetAccreditationNumberFields(
+            additionalInformationReprocessorItem.Payload,
+            "500013",
+            "reg-additional-info-reprocessor-001"
+        );
+        yield return additionalInformationReprocessorItem;
     }
 
     /// <summary>
@@ -1178,6 +1184,32 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         payload["siteAddressPostcode"] = siteAddressPostcode;
         payload["chargeAmountPence"] = chargeAmountPence;
         return payload;
+    }
+
+    /// <summary>
+    /// RA-448 phase 2: stamps the numeric Org ID and registration id every
+    /// accreditation-number request needs onto one of the five special-case
+    /// fixtures below (FullPayloadVerification, OrsInterimAuthority,
+    /// GlobalGlassExports, AdditionalInformationExporter,
+    /// AdditionalInformationReprocessor). Each of those five is a bespoke
+    /// <c>BsonDocument</c> literal too irregular in shape to share
+    /// <see cref="SimpleSeedPayload"/>, but the repeated two-line
+    /// operatorOrganisationId/operatorRegistrationId shape across all five
+    /// tripped SonarCloud's duplicate-code gate the same way the eight simple
+    /// items did before <see cref="SimpleSeedPayload"/> existed — same fix,
+    /// applied here. Mutates the already-built item's payload in place
+    /// (BsonDocument is a reference type) rather than the pre-Build literal,
+    /// so the surrounding fixture bodies below stay untouched instead of
+    /// being reindented.
+    /// </summary>
+    private static void SetAccreditationNumberFields(
+        BsonDocument payload,
+        string operatorOrganisationId,
+        string operatorRegistrationId
+    )
+    {
+        payload["operatorOrganisationId"] = operatorOrganisationId;
+        payload["operatorRegistrationId"] = operatorRegistrationId;
     }
 
     private static string GenerateDeterministicReference(string seedKey)
