@@ -46,7 +46,7 @@
        transitive packages pulled in by GovukNotify / MongoDB.Driver. -->
   <ItemGroup>
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
-    <PackageReference Include="SharpCompress" Version="0.48.1" />
+    <PackageReference Include="SharpCompress" Version="0.50.4" />
     <PackageReference Include="Snappier" Version="1.3.1" />
   </ItemGroup>
 
