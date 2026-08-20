@@ -27,11 +27,25 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// body (the backend returns the full, camelCase-serialised
 /// AccreditationApplicationModel).
 ///
-/// Retries transient failures (5xx / transport exceptions) up to twice with
-/// jittered exponential backoff, same shape as
-/// <see cref="HttpOperatorBackendPushAdapter"/>'s best-effort pipeline —
-/// never retries a 4xx, since that is most likely a systemic auth/contract
-/// problem a retry would not fix.
+/// Checks <see cref="OperatorBackendApiConfig.Enabled"/>, not just
+/// <see cref="OperatorBackendApiConfig.Url"/> — unlike the best-effort push
+/// adapter's real-vs-no-op DI selection (<c>ConfigureOperatorBackendPush</c>),
+/// this adapter is registered unconditionally (there is no safe no-op for a
+/// call approval depends on), so it has to enforce the Enabled=false
+/// behaviour-neutral invariant (MBE-F5) itself: an environment that has Url
+/// pre-populated ahead of turning Enabled on (a normal rollout sequence)
+/// must not have this adapter start firing real signed HTTP calls anyway.
+///
+/// Retries transient failures (5xx / transport exceptions) with a firm,
+/// capped worst-case budget (<see cref="MaxRetryAttempts"/> attempts,
+/// <see cref="PerAttemptTimeoutSeconds"/>s each, backoff capped at
+/// <see cref="s_maxBackoff"/>) — deliberately NOT sourced from
+/// <see cref="OperatorBackendApiConfig.RequestTimeoutSeconds"/>, the
+/// shared/uncapped knob <see cref="HttpOperatorBackendPushAdapter"/>'s
+/// best-effort pipeline uses: this call sits on a synchronous, user-facing
+/// approval request, so its worst case must stay small and predictable
+/// rather than drifting if that shared setting is ever tuned for the
+/// unrelated best-effort push. Never retries a 4xx.
 /// </summary>
 internal sealed class HttpAccreditationNumberAdapter(
     IHttpClientFactory httpClientFactory,
@@ -43,6 +57,13 @@ internal sealed class HttpAccreditationNumberAdapter(
     private const string RelativePathTemplate =
         "/api/v1/accreditation-applications/{0}/{1}/accreditation-number";
 
+    // Deliberately local to this adapter, not read from OperatorBackendApiConfig
+    // — see the class doc comment for why this budget must stay firm and
+    // decoupled from the best-effort push's shared timeout knob.
+    private const int MaxRetryAttempts = 2;
+    private const int PerAttemptTimeoutSeconds = 5;
+    private static readonly TimeSpan s_maxBackoff = TimeSpan.FromSeconds(2);
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -51,7 +72,7 @@ internal sealed class HttpAccreditationNumberAdapter(
 
     private readonly OperatorBackendApiConfig _config = config.Value;
     private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline =
-        retryPipeline ?? BuildRetryPipeline(logger, config.Value.RequestTimeoutSeconds);
+        retryPipeline ?? BuildRetryPipeline(logger);
 
     public async Task<AccreditationNumberResult> GenerateOrUpdateAccreditationNumberAsync(
         string organisationId,
@@ -60,9 +81,15 @@ internal sealed class HttpAccreditationNumberAdapter(
         int orgId,
         int year,
         bool regenerate,
+        Guid correlationId,
         CancellationToken cancellationToken = default
     )
     {
+        if (!_config.Enabled)
+        {
+            return AccreditationNumberResult.Failure("OperatorBackendApi:Enabled is false.");
+        }
+
         if (string.IsNullOrWhiteSpace(_config.Url))
         {
             return AccreditationNumberResult.Failure("OperatorBackendApi:Url is not configured.");
@@ -77,13 +104,15 @@ internal sealed class HttpAccreditationNumberAdapter(
 
         logger.LogInformation(
             "Requesting accreditation number for organisation {OrganisationId} application "
-                + "{ApplicationId} from {Endpoint} (nation {Nation}, year {Year}, regenerate {Regenerate})",
+                + "{ApplicationId} from {Endpoint} (nation {Nation}, year {Year}, regenerate {Regenerate}, "
+                + "correlation {CorrelationId})",
             organisationId,
             applicationId,
             endpoint,
             nation,
             year,
-            regenerate
+            regenerate,
+            correlationId
         );
 
         var body = new GenerateOrUpdateRegulatoryNumberRequest(
@@ -101,7 +130,7 @@ internal sealed class HttpAccreditationNumberAdapter(
                     // Rebuilt on every attempt (retry included): request content
                     // can only be sent once, and a fresh timestamp/nonce per
                     // attempt is correct anyway (signature window).
-                    using var request = BuildRequest(endpoint, body);
+                    using var request = BuildRequest(endpoint, correlationId, body);
                     var client = httpClientFactory.CreateClient("DefaultClient");
                     return await client.SendAsync(request, ct);
                 },
@@ -113,11 +142,12 @@ internal sealed class HttpAccreditationNumberAdapter(
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 logger.LogError(
                     "Backend returned {Status} from {Endpoint} for organisation {OrganisationId} "
-                        + "application {ApplicationId}: {Body}",
+                        + "application {ApplicationId} (correlation {CorrelationId}): {Body}",
                     (int)response.StatusCode,
                     endpoint,
                     organisationId,
                     applicationId,
+                    correlationId,
                     responseBody
                 );
                 return AccreditationNumberResult.Failure(
@@ -134,11 +164,12 @@ internal sealed class HttpAccreditationNumberAdapter(
             {
                 logger.LogError(
                     "Backend returned a success status from {Endpoint} for organisation "
-                        + "{OrganisationId} application {ApplicationId} but the response carried no "
-                        + "accreditationReference.",
+                        + "{OrganisationId} application {ApplicationId} (correlation {CorrelationId}) but the "
+                        + "response carried no accreditationReference.",
                     endpoint,
                     organisationId,
-                    applicationId
+                    applicationId,
+                    correlationId
                 );
                 return AccreditationNumberResult.Failure(
                     "Backend response did not include an accreditation reference."
@@ -146,27 +177,39 @@ internal sealed class HttpAccreditationNumberAdapter(
             }
 
             logger.LogInformation(
-                "Accreditation number resolved for organisation {OrganisationId} application {ApplicationId}.",
+                "Accreditation number resolved for organisation {OrganisationId} application "
+                    + "{ApplicationId} (correlation {CorrelationId}).",
                 organisationId,
-                applicationId
+                applicationId,
+                correlationId
             );
             return AccreditationNumberResult.Success(payload.AccreditationReference);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            // The caller's own token was cancelled (request aborted, upstream
+            // timeout) — this is not a backend failure, so it must propagate
+            // as a cancellation rather than being reported as an
+            // AccreditationNumberResult.Failure the caller would otherwise
+            // treat as a definite, retriable business outcome.
+            throw;
         }
         catch (Exception ex)
         {
             logger.LogError(
                 ex,
                 "Failed to resolve accreditation number for organisation {OrganisationId} application "
-                    + "{ApplicationId} from {Endpoint}",
+                    + "{ApplicationId} from {Endpoint} (correlation {CorrelationId})",
                 organisationId,
                 applicationId,
-                endpoint
+                endpoint,
+                correlationId
             );
             return AccreditationNumberResult.Failure(ex.Message);
         }
     }
 
-    private HttpRequestMessage BuildRequest<TBody>(string endpoint, TBody body)
+    private HttpRequestMessage BuildRequest<TBody>(string endpoint, Guid correlationId, TBody body)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
@@ -174,6 +217,7 @@ internal sealed class HttpAccreditationNumberAdapter(
         };
 
         request.Headers.Add("x-cdp-client-id", _config.ClientId);
+        request.Headers.Add("X-Correlation-Id", correlationId.ToString());
 
         if (!string.IsNullOrEmpty(_config.SharedSecret))
         {
@@ -197,50 +241,48 @@ internal sealed class HttpAccreditationNumberAdapter(
     }
 
     /// <summary>
-    /// Same shape as <see cref="HttpOperatorBackendPushAdapter"/>'s
-    /// best-effort pipeline: 2 retries, jittered exponential backoff, each
-    /// attempt bounded by <paramref name="requestTimeoutSeconds"/>. Retries
-    /// transport exceptions, per-attempt timeouts, and 5xx responses only —
-    /// never a 4xx.
+    /// <see cref="MaxRetryAttempts"/> retries, jittered exponential backoff
+    /// capped at <see cref="s_maxBackoff"/>, each attempt bounded by
+    /// <see cref="PerAttemptTimeoutSeconds"/>. Retries transport exceptions,
+    /// per-attempt timeouts, and 5xx responses only — never a 4xx, which is
+    /// most likely a systemic auth/contract problem a retry would not fix.
+    /// Firm worst case: (MaxRetryAttempts + 1) * PerAttemptTimeoutSeconds +
+    /// MaxRetryAttempts * s_maxBackoff ≈ 3*5s + 2*2s = 19s — the case
+    /// management frontend's timeout for this call must exceed that.
     /// </summary>
-    private static ResiliencePipeline<HttpResponseMessage> BuildRetryPipeline(
-        ILogger logger,
-        int requestTimeoutSeconds
-    )
+    private static ResiliencePipeline<HttpResponseMessage> BuildRetryPipeline(ILogger logger)
     {
-        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>().AddRetry(
-            new RetryStrategyOptions<HttpResponseMessage>
-            {
-                MaxRetryAttempts = 2,
-                BackoffType = DelayBackoffType.Exponential,
-                UseJitter = true,
-                Delay = TimeSpan.FromMilliseconds(500),
-                ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
-                    .Handle<HttpRequestException>()
-                    .Handle<TaskCanceledException>()
-                    .Handle<TimeoutRejectedException>()
-                    .HandleResult(response => (int)response.StatusCode >= 500),
-                OnRetry = args =>
+        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>()
+            .AddRetry(
+                new RetryStrategyOptions<HttpResponseMessage>
                 {
-                    logger.LogWarning(
-                        "Accreditation number request attempt {Attempt} failed{StatusInfo}; retrying in {DelayMs}ms.",
-                        args.AttemptNumber + 1,
-                        args.Outcome.Result is { } result
-                            ? $" (HTTP {(int)result.StatusCode})"
-                            : string.Empty,
-                        (long)args.RetryDelay.TotalMilliseconds
-                    );
-                    return ValueTask.CompletedTask;
-                },
-            }
-        );
-
-        if (requestTimeoutSeconds > 0)
-        {
-            builder.AddTimeout(
+                    MaxRetryAttempts = MaxRetryAttempts,
+                    BackoffType = DelayBackoffType.Exponential,
+                    UseJitter = true,
+                    Delay = TimeSpan.FromMilliseconds(500),
+                    MaxDelay = s_maxBackoff,
+                    ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
+                        .Handle<HttpRequestException>()
+                        .Handle<TimeoutRejectedException>()
+                        .HandleResult(response => (int)response.StatusCode >= 500),
+                    OnRetry = args =>
+                    {
+                        logger.LogWarning(
+                            "Accreditation number request attempt {Attempt} failed{StatusInfo}; retrying in {DelayMs}ms.",
+                            args.AttemptNumber + 1,
+                            args.Outcome.Result is { } result
+                                ? $" (HTTP {(int)result.StatusCode})"
+                                : string.Empty,
+                            (long)args.RetryDelay.TotalMilliseconds
+                        );
+                        return ValueTask.CompletedTask;
+                    },
+                }
+            )
+            .AddTimeout(
                 new TimeoutStrategyOptions
                 {
-                    Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
+                    Timeout = TimeSpan.FromSeconds(PerAttemptTimeoutSeconds),
                     OnTimeout = args =>
                     {
                         logger.LogWarning(
@@ -251,7 +293,6 @@ internal sealed class HttpAccreditationNumberAdapter(
                     },
                 }
             );
-        }
 
         return builder.Build();
     }

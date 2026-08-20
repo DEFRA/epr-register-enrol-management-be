@@ -11,27 +11,32 @@ public enum WorkItemActionFailureCode
     UnknownAction,
     InvalidTransition,
     TerminalState,
+
     /// <summary>
     /// The caller is not allowed to perform this assignment (e.g. a standard
     /// user trying to assign someone else, or to take an item that is already
     /// assigned to a different user).
     /// </summary>
     NotAuthorized,
+
     /// <summary>
     /// The assign request was structurally invalid (e.g. blank assignee id).
     /// </summary>
     InvalidAssignment,
+
     /// <summary>
     /// A request to add a note was structurally invalid (e.g. blank text or
     /// over the size limit).
     /// </summary>
     InvalidNote,
+
     /// <summary>
     /// The work item was modified by another caller between load and save
     /// (optimistic concurrency conflict). Retry the request after re-reading
     /// the latest state.
     /// </summary>
     ConcurrencyConflict,
+
     /// <summary>
     /// The caller did not present an end-user identity (the BFF must
     /// forward a <c>user:id</c> claim). Mutating operations refuse to write
@@ -39,6 +44,7 @@ public enum WorkItemActionFailureCode
     /// this claim we 401 the request rather than persist a placeholder.
     /// </summary>
     MissingActorIdentity,
+
     /// <summary>
     /// The engine could not allocate a unique <c>applicationReference</c>
     /// within its bounded retry budget (RA-219). This is a transient
@@ -46,6 +52,7 @@ public enum WorkItemActionFailureCode
     /// it to a 503 and the caller can safely retry the submission.
     /// </summary>
     ApplicationReferenceExhausted,
+
     /// <summary>
     /// A mandatory upstream notification a mutation is gated on could not be
     /// delivered within its retry budget, so the mutation was abandoned before
@@ -56,7 +63,19 @@ public enum WorkItemActionFailureCode
     /// well-formed and the failure is a server-side dependency being
     /// unreachable.
     /// </summary>
-    UpstreamNotificationFailed
+    UpstreamNotificationFailed,
+
+    /// <summary>
+    /// RA-448 phase 2: the backend call to resolve a real accreditation
+    /// number failed or timed out, so re-accreditation approval was
+    /// abandoned before anything was persisted. Kept distinct from
+    /// <see cref="UpstreamNotificationFailed"/> (a different dependency, the
+    /// operator-journey status push on /decision) so logs/alerts/error
+    /// codes keyed on this enum can tell the two outages apart. No state
+    /// changed — the caller may retry. Maps to a generic 500, not a 4xx, for
+    /// the same reason as <see cref="UpstreamNotificationFailed"/>.
+    /// </summary>
+    AccreditationNumberUnavailable,
 }
 
 /// <summary>
@@ -70,7 +89,8 @@ public sealed record WorkItemActionResult
         WorkItem? workItem,
         WorkItemActionFailureCode? failureCode,
         string? message,
-        bool isIdempotentReplay)
+        bool isIdempotentReplay
+    )
     {
         WorkItem = workItem;
         FailureCode = failureCode;

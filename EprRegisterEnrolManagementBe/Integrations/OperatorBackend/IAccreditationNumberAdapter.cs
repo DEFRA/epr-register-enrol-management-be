@@ -38,6 +38,11 @@ public interface IAccreditationNumberAdapter
     /// <param name="orgId">The organisation's real numeric Org ID.</param>
     /// <param name="year">Four-digit accreditation year.</param>
     /// <param name="regenerate">See summary above.</param>
+    /// <param name="correlationId">One id per logical call, forwarded as the
+    /// <c>X-Correlation-Id</c> header, so this service's logs and the
+    /// backend's logs for the same request can be joined on one value —
+    /// same cross-repo contract <see cref="IOperatorBackendPushAdapter"/>'s
+    /// pushes already use.</param>
     Task<AccreditationNumberResult> GenerateOrUpdateAccreditationNumberAsync(
         string organisationId,
         string applicationId,
@@ -45,6 +50,7 @@ public interface IAccreditationNumberAdapter
         int orgId,
         int year,
         bool regenerate,
+        Guid correlationId,
         CancellationToken cancellationToken = default
     );
 }

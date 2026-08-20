@@ -116,6 +116,7 @@ public class ReAccreditationApprovalServiceTests
                 Arg.Any<int>(),
                 Arg.Any<int>(),
                 Arg.Any<bool>(),
+                Arg.Any<Guid>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(Task.FromResult(AccreditationNumberResult.Success(accreditationId)));
@@ -687,6 +688,7 @@ public class ReAccreditationApprovalServiceTests
                 Arg.Any<int>(),
                 Arg.Any<int>(),
                 Arg.Any<bool>(),
+                Arg.Any<Guid>(),
                 Arg.Any<CancellationToken>()
             );
     }
@@ -753,6 +755,7 @@ public class ReAccreditationApprovalServiceTests
                 500099,
                 2028,
                 regenerate: true,
+                Arg.Any<Guid>(),
                 Arg.Any<CancellationToken>()
             );
     }
@@ -782,6 +785,7 @@ public class ReAccreditationApprovalServiceTests
             .GenerateOrUpdateAccreditationNumberAsync(
                 default!,
                 default!,
+                default,
                 default,
                 default,
                 default,
@@ -819,6 +823,7 @@ public class ReAccreditationApprovalServiceTests
                 default,
                 default,
                 default,
+                default,
                 ct
             );
     }
@@ -849,6 +854,7 @@ public class ReAccreditationApprovalServiceTests
             .GenerateOrUpdateAccreditationNumberAsync(
                 default!,
                 default!,
+                default,
                 default,
                 default,
                 default,
@@ -934,6 +940,7 @@ public class ReAccreditationApprovalServiceTests
                 default,
                 default,
                 default,
+                default,
                 ct
             );
         await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
@@ -976,6 +983,7 @@ public class ReAccreditationApprovalServiceTests
                 default,
                 default,
                 default,
+                default,
                 ct
             );
     }
@@ -1012,19 +1020,20 @@ public class ReAccreditationApprovalServiceTests
                 default,
                 default,
                 default,
+                default,
                 ct
             );
     }
 
     /// <summary>
-    /// RA-448 phase 2's new requirement: a present accreditation id that
-    /// does NOT match the expected backend-issued format (e.g. the retired
-    /// local generator's shape) is treated as unset on a not-yet-approved
-    /// item, so a real number is (re)issued via the backend rather than the
-    /// legacy value blocking approval or being carried forward unchanged.
+    /// RA-448 phase 2's new requirement: a present accreditation id matching
+    /// the retired local generator's exact known shape (fixed-width, 16
+    /// characters) is treated as unset on a not-yet-approved item, so a real
+    /// number is (re)issued via the backend rather than the legacy value
+    /// blocking approval or being carried forward unchanged.
     /// </summary>
     [Fact]
-    public async Task ApproveAsync_treats_a_non_standard_format_existing_id_as_unset_and_issues_a_real_one()
+    public async Task ApproveAsync_treats_a_known_legacy_format_existing_id_as_unset_and_issues_a_real_one()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build("A25ER5000270099WO");
@@ -1036,7 +1045,8 @@ public class ReAccreditationApprovalServiceTests
                 ["operatorOrganisationId"] = "500027",
                 ["operatorRegistrationId"] = "APP-500027",
                 ["nation"] = "England",
-                ["accreditationId"] = "ACC-2025-A-DEADBEEF",
+                // Retired AccreditationIdGenerator's exact 16-char fixed width.
+                ["accreditationId"] = "A25ER00000000000",
             }
         );
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
@@ -1055,6 +1065,7 @@ public class ReAccreditationApprovalServiceTests
                 500027,
                 Arg.Any<int>(),
                 regenerate: true,
+                Arg.Any<Guid>(),
                 Arg.Any<CancellationToken>()
             );
     }
@@ -1062,12 +1073,12 @@ public class ReAccreditationApprovalServiceTests
     /// <summary>
     /// RA-448 phase 2: the adapter never throws — a failed backend call is
     /// reported as a non-success AccreditationNumberResult. Approval must
-    /// abandon cleanly (UpstreamNotificationFailed, mapped to a 500 by the
-    /// endpoint) rather than proceed with no number or fall back to any
+    /// abandon cleanly (AccreditationNumberUnavailable, mapped to a 500 by
+    /// the endpoint) rather than proceed with no number or fall back to any
     /// local generation.
     /// </summary>
     [Fact]
-    public async Task ApproveAsync_returns_UpstreamNotificationFailed_when_the_adapter_reports_failure()
+    public async Task ApproveAsync_returns_AccreditationNumberUnavailable_when_the_adapter_reports_failure()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
@@ -1078,6 +1089,7 @@ public class ReAccreditationApprovalServiceTests
                 Arg.Any<int>(),
                 Arg.Any<int>(),
                 Arg.Any<bool>(),
+                Arg.Any<Guid>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(Task.FromResult(AccreditationNumberResult.Failure("backend returned 503")));
@@ -1086,7 +1098,114 @@ public class ReAccreditationApprovalServiceTests
 
         var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
-        Assert.Equal(WorkItemActionFailureCode.UpstreamNotificationFailed, result.FailureCode);
+        Assert.Equal(WorkItemActionFailureCode.AccreditationNumberUnavailable, result.FailureCode);
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+    }
+
+    // ─────────────────────────── review follow-ups ─────────────────────
+
+    /// <summary>
+    /// RA-448 phase 2 review: the concurrency-exhaustion path (every attempt
+    /// loses the race) is the higher-risk case for the "call the adapter at
+    /// most once" invariant — confirms it holds even when persistence never
+    /// succeeds, not just on the happy-path retry covered above.
+    /// </summary>
+    [Fact]
+    public async Task Calls_the_number_adapter_at_most_once_even_when_every_concurrency_retry_fails()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        sut.Persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns(_ => BuildWorkItem());
+        sut.Persistence.When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
+            .Do(call =>
+            {
+                var item = call.Arg<WorkItem>();
+                throw new WorkItemConcurrencyException(item.Id, expectedVersion: 0);
+            });
+
+        var result = await sut.Service.ApproveAsync(Guid.NewGuid(), DecisionMaker(), ct);
+
+        Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
+        await sut
+            .NumberAdapter.Received(1)
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Nation>(),
+                Arg.Any<int>(),
+                Arg.Any<int>(),
+                Arg.Any<bool>(),
+                Arg.Any<Guid>(),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task ApproveAsync_returns_InvalidTransition_and_does_not_call_the_adapter_when_org_id_is_blank()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["operatorOrganisationId"] = "",
+                ["operatorRegistrationId"] = "APP-500027",
+                ["nation"] = "England",
+            }
+        );
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        await sut
+            .NumberAdapter.DidNotReceiveWithAnyArgs()
+            .GenerateOrUpdateAccreditationNumberAsync(
+                default!,
+                default!,
+                default,
+                default,
+                default,
+                default,
+                default,
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task ApproveAsync_returns_InvalidTransition_and_does_not_call_the_adapter_when_registration_id_is_blank()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["operatorOrganisationId"] = "500027",
+                ["operatorRegistrationId"] = "",
+                ["nation"] = "England",
+            }
+        );
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        await sut
+            .NumberAdapter.DidNotReceiveWithAnyArgs()
+            .GenerateOrUpdateAccreditationNumberAsync(
+                default!,
+                default!,
+                default,
+                default,
+                default,
+                default,
+                default,
+                ct
+            );
     }
 }

@@ -89,6 +89,7 @@ public class ReAccreditationLifecycleTests
                 Arg.Any<int>(),
                 Arg.Any<int>(),
                 Arg.Any<bool>(),
+                Arg.Any<Guid>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(AccreditationNumberResult.Success("A27ER5000270036WO"));

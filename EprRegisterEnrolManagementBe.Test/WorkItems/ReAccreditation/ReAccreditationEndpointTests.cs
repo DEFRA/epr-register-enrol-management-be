@@ -3228,6 +3228,51 @@ public class ReAccreditationEndpointTests
         Assert.Equal("approved", persisted!.StateId);
     }
 
+    /// <summary>
+    /// RA-448 phase 2 review follow-up: exercises the new
+    /// WorkItemActionFailureCode.AccreditationNumberUnavailable → 500 mapping
+    /// end-to-end, via a real HTTP round trip against a substituted
+    /// IAccreditationNumberAdapter that reports failure. Every other approve
+    /// test uses ReAccreditationFactory's default success-returning fake, so
+    /// this arm of the endpoint's status-code switch was otherwise untested.
+    /// </summary>
+    [Fact]
+    public async Task Approve_returns_internal_server_error_when_the_accreditation_number_adapter_fails()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var failingNumberAdapter = Substitute.For<IAccreditationNumberAdapter>();
+        failingNumberAdapter
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Nation>(),
+                Arg.Any<int>(),
+                Arg.Any<int>(),
+                Arg.Any<bool>(),
+                Arg.Any<Guid>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(AccreditationNumberResult.Failure("backend unreachable"));
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            numberAdapter: failingNumberAdapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/approve",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("awaiting-decision", persisted!.StateId);
+    }
+
     // --------------------------- RA-410: single-call decision ---------------------------
 
     /// <summary>
@@ -3685,6 +3730,7 @@ public class ReAccreditationEndpointTests
                     Arg.Any<int>(),
                     Arg.Any<int>(),
                     Arg.Any<bool>(),
+                    Arg.Any<Guid>(),
                     Arg.Any<CancellationToken>()
                 )
                 .Returns(AccreditationNumberResult.Success("A25ER5000270036WO"));

@@ -159,7 +159,20 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "SW1A 1AA",
             submittedDaysAgo: 1,
             stateId: "submitted",
-            payload: SimpleSeedPayload("Acme Recycling Ltd", "EPR-100023", "reg-001", "plastic", 2025, 0, "acme.recycling@example.com", "02345678", "1 Acme Way, London", "SW1A 1AA", 54600),
+            payload: SimpleSeedPayload(
+                "Acme Recycling Ltd",
+                "EPR-100023",
+                "reg-001",
+                "500001",
+                "plastic",
+                2025,
+                0,
+                "acme.recycling@example.com",
+                "02345678",
+                "1 Acme Way, London",
+                "SW1A 1AA",
+                54600
+            ),
             submittedBy: "stub-portal-client",
             now: now
         );
@@ -171,7 +184,20 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "EH1 3BN",
             submittedDaysAgo: 3,
             stateId: "submitted",
-            payload: SimpleSeedPayload("Northern Plastics Co-op", "EPR-100087", "reg-002", "plastic", 2025, 1, "northern.plastics@example.com", "03456789", "1 Northern Plastics Court, Edinburgh", "EH1 3BN", 218400),
+            payload: SimpleSeedPayload(
+                "Northern Plastics Co-op",
+                "EPR-100087",
+                "reg-002",
+                "500002",
+                "plastic",
+                2025,
+                1,
+                "northern.plastics@example.com",
+                "03456789",
+                "1 Northern Plastics Court, Edinburgh",
+                "EH1 3BN",
+                218400
+            ),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-standard-1",
             assignedToName: "Stub Standard User",
@@ -184,7 +210,21 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "CF10 1AA",
             submittedDaysAgo: 9,
             stateId: "assessment-in-progress",
-            payload: SimpleSeedPayload("Riverside Glass Recovery", "EPR-099812", "reg-003", "glass", 2024, 2, "riverside.glass@example.com", "04567890", "1 Riverside Way, Cardiff", "CF10 1AA", 327600, glassRecyclingProcess: "glass_re_melt"),
+            payload: SimpleSeedPayload(
+                "Riverside Glass Recovery",
+                "EPR-099812",
+                "reg-003",
+                "500003",
+                "glass",
+                2024,
+                2,
+                "riverside.glass@example.com",
+                "04567890",
+                "1 Riverside Way, Cardiff",
+                "CF10 1AA",
+                327600,
+                glassRecyclingProcess: "glass_re_melt"
+            ),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
@@ -199,7 +239,20 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "BT1 1AA",
             submittedDaysAgo: 15,
             stateId: "awaiting-decision",
-            payload: SimpleSeedPayload("Coastal Materials Group", "EPR-098774", "reg-004", "plastic", 2024, 0, "coastal.materials@example.com", "05678901", "1 Coastal Materials Quay, Belfast", "BT1 1AA", 396500),
+            payload: SimpleSeedPayload(
+                "Coastal Materials Group",
+                "EPR-098774",
+                "reg-004",
+                "500004",
+                "plastic",
+                2024,
+                0,
+                "coastal.materials@example.com",
+                "05678901",
+                "1 Coastal Materials Quay, Belfast",
+                "BT1 1AA",
+                396500
+            ),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
@@ -213,7 +266,20 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "BS1 4DJ",
             submittedDaysAgo: 32,
             stateId: "approved",
-            payload: SimpleSeedPayload("Heritage Paper Mills", "EPR-097215", "reg-005", "paper", 2024, 0, "heritage.paper@example.com", "06789012", "1 Heritage Paper Mill Road, Bristol", "BS1 4DJ", 360400),
+            payload: SimpleSeedPayload(
+                "Heritage Paper Mills",
+                "EPR-097215",
+                "reg-005",
+                "500005",
+                "paper",
+                2024,
+                0,
+                "heritage.paper@example.com",
+                "06789012",
+                "1 Heritage Paper Mill Road, Bristol",
+                "BS1 4DJ",
+                360400
+            ),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
@@ -226,7 +292,20 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "G1 1AA",
             submittedDaysAgo: 5,
             stateId: "submitted",
-            payload: SimpleSeedPayload("Clyde Composites Ltd", "EPR-100134", "reg-006", "plastic", 2025, 0, "clyde.composites@example.com", "07890123", "1 Clyde Composites Way, Glasgow", "G1 1AA", 54600),
+            payload: SimpleSeedPayload(
+                "Clyde Composites Ltd",
+                "EPR-100134",
+                "reg-006",
+                "500006",
+                "plastic",
+                2025,
+                0,
+                "clyde.composites@example.com",
+                "07890123",
+                "1 Clyde Composites Way, Glasgow",
+                "G1 1AA",
+                54600
+            ),
             submittedBy: "stub-portal-client",
             now: now
         );
@@ -237,7 +316,21 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "SA1 1AA",
             submittedDaysAgo: 11,
             stateId: "assessment-in-progress",
-            payload: SimpleSeedPayload("Swansea Textiles Recovery", "EPR-099441", "reg-007", "glass", 2024, 1, "swansea.textiles@example.com", "08901234", "1 Swansea Textiles Court, Swansea", "SA1 1AA", 218400, glassRecyclingProcess: "glass_other"),
+            payload: SimpleSeedPayload(
+                "Swansea Textiles Recovery",
+                "EPR-099441",
+                "reg-007",
+                "500007",
+                "glass",
+                2024,
+                1,
+                "swansea.textiles@example.com",
+                "08901234",
+                "1 Swansea Textiles Court, Swansea",
+                "SA1 1AA",
+                218400,
+                glassRecyclingProcess: "glass_other"
+            ),
             submittedBy: "stub-portal-client",
             assignedToId: "stub-assign-1",
             assignedToName: "Stub Assign User",
@@ -250,7 +343,20 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             postcode: "BT7 1AA",
             submittedDaysAgo: 2,
             stateId: "submitted",
-            payload: SimpleSeedPayload("Belfast Fibres Co", "EPR-100198", "reg-008", "paper", 2025, 0, "belfast.fibres@example.com", "10111213", "1 Belfast Fibres Way, Belfast", "BT7 1AA", 396500),
+            payload: SimpleSeedPayload(
+                "Belfast Fibres Co",
+                "EPR-100198",
+                "reg-008",
+                "500008",
+                "paper",
+                2025,
+                0,
+                "belfast.fibres@example.com",
+                "10111213",
+                "1 Belfast Fibres Way, Belfast",
+                "BT7 1AA",
+                396500
+            ),
             submittedBy: "stub-portal-client",
             now: now
         );
@@ -270,7 +376,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = "Full Payload Verification Ltd",
                 ["registrationNumber"] = "EPR-100999",
                 ["operatorApplicationId"] = "app-full-payload-001",
-                ["operatorOrganisationId"] = "org-full-payload-001",
+                // RA-448 phase 2: must be numeric (IAccreditationNumberAdapter
+                // parses it as int) for this fixture to be approvable end-to-end.
+                ["operatorOrganisationId"] = "500009",
                 ["operatorRegistrationId"] = "reg-full-payload-001",
                 // RA-412: this item carries overseasSites/BES evidence below, so
                 // it must declare the real discriminator management-fe's
@@ -474,7 +582,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = OrsInterimAuthorityOrganisationName,
                 ["registrationNumber"] = "EPR-100292",
                 ["operatorApplicationId"] = "app-ors-interim-authority-001",
-                ["operatorOrganisationId"] = "org-ors-interim-authority-001",
+                // RA-448 phase 2: must be numeric for this fixture to be
+                // approvable end-to-end.
+                ["operatorOrganisationId"] = "500010",
                 ["operatorRegistrationId"] = "reg-ors-interim-authority-001",
                 // RA-412: see the same field on the full-payload-verification
                 // item above — this item's overseasSites/ORS sites need it too.
@@ -743,6 +853,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = GlobalGlassExportsOrganisationName,
                 ["registrationNumber"] = "EPR-100506",
                 ["operatorRegistrationId"] = "reg-050006",
+                // RA-448 phase 2: required, and must be numeric, for this
+                // fixture to be approvable end-to-end.
+                ["operatorOrganisationId"] = "500011",
                 ["wasteProcessingType"] = "exporter",
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
@@ -783,7 +896,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = AdditionalInformationExporterOrganisationName,
                 ["registrationNumber"] = "EPR-100434",
                 ["operatorApplicationId"] = "app-additional-info-exporter-001",
-                ["operatorOrganisationId"] = "org-additional-info-exporter-001",
+                // RA-448 phase 2: must be numeric for this fixture to be
+                // approvable end-to-end.
+                ["operatorOrganisationId"] = "500012",
                 ["operatorRegistrationId"] = "reg-additional-info-exporter-001",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
@@ -820,7 +935,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = AdditionalInformationReprocessorOrganisationName,
                 ["registrationNumber"] = "EPR-100435",
                 ["operatorApplicationId"] = "app-additional-info-reprocessor-001",
-                ["operatorOrganisationId"] = "org-additional-info-reprocessor-001",
+                // RA-448 phase 2: must be numeric for this fixture to be
+                // approvable end-to-end.
+                ["operatorOrganisationId"] = "500013",
                 ["operatorRegistrationId"] = "reg-additional-info-reprocessor-001",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
@@ -1005,6 +1122,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         string organisationName,
         string registrationNumber,
         string operatorRegistrationId,
+        string operatorOrganisationId,
         string material,
         int previousAccreditationYear,
         int complianceIssuesReported,
@@ -1013,13 +1131,18 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         string siteAddress,
         string siteAddressPostcode,
         int chargeAmountPence,
-        string? glassRecyclingProcess = null)
+        string? glassRecyclingProcess = null
+    )
     {
         var payload = new BsonDocument
         {
             ["organisationName"] = organisationName,
             ["registrationNumber"] = registrationNumber,
             ["operatorRegistrationId"] = operatorRegistrationId,
+            // RA-448 phase 2: real submissions always carry a numeric Org ID
+            // (IAccreditationNumberAdapter parses it as int); seed fixtures
+            // need a realistic value too so they can be approved end-to-end.
+            ["operatorOrganisationId"] = operatorOrganisationId,
             ["material"] = material,
         };
         if (glassRecyclingProcess is not null)

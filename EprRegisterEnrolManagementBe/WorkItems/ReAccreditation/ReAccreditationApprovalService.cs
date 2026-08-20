@@ -72,6 +72,13 @@ internal sealed class ReAccreditationApprovalService(
         RegexOptions.Compiled
     );
 
+    // RA-448 phase 2: fixed width of the retired local AccreditationIdGenerator's
+    // format (A{Year:2}{Agency:1}{OperatorType:1}{OrgId:6}{PostcodeSuffix:3}{Material:2}
+    // = 1+2+1+1+6+3+2 = 16). Used as the "is this the one known, explainable
+    // legacy shape" signal below — anything else non-matching stays treated
+    // as genuinely unexplained/corrupt, same as before this phase.
+    private const int LegacyAccreditationIdLength = 16;
+
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly IWorkItemPostActionHook[] _postActionHooks = postActionHooks.ToArray();
     private readonly AccreditationConfig _accreditationConfig = accreditationOptions.Value;
@@ -98,6 +105,12 @@ internal sealed class ReAccreditationApprovalService(
         // moment ago on attempt 1, corrupting the count for no reason. See
         // Phase 2 doc AC10/AC11.
         AccreditationNumberResult? numberResult = null;
+        // RA-448 phase 2: one id for the whole logical approval attempt (not
+        // per retry), forwarded to the backend as X-Correlation-Id so this
+        // service's logs and the backend's logs for the same request can be
+        // joined on one value.
+        var correlationId = Guid.NewGuid();
+        var accreditationYear = _accreditationConfig.CurrentYear;
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -133,16 +146,19 @@ internal sealed class ReAccreditationApprovalService(
             // retroactively fix already-approved records (Phase 2 doc AC12),
             // so this branch is unchanged from before.
             //
-            // A present id on a NOT-yet-approved item is more nuanced. If it
-            // is in the expected backend-issued format, its presence here is
-            // still unexplained/corrupt (a real number is only ever stamped
-            // by this same approval flow, on an item that then transitions
-            // to 'approved') — surfaced as InvalidTransition, as before. If
-            // it does NOT match the expected format, it can only be a
-            // leftover from the retired local AccreditationIdGenerator (or
-            // similar bad data); RA-448 phase 2 treats that as if no id were
-            // present at all and falls through to (re)issue a real one below,
-            // rather than blocking approval on data this change exists to fix.
+            // A present id on a NOT-yet-approved item is more nuanced. Only a
+            // value matching the RETIRED local AccreditationIdGenerator's
+            // known, specific shape (fixed-width, exactly
+            // LegacyAccreditationIdLength characters) is treated as unset and
+            // falls through to (re)issue a real one below — that is the one
+            // explainable "known legacy data" case RA-448 phase 2 exists to
+            // migrate. Anything else non-matching — the real backend format
+            // (still unexplained/corrupt pre-approval; a genuine number is
+            // only ever stamped by this same flow, on an item that then
+            // transitions to 'approved'), or any other unrecognised shape —
+            // is still treated as corrupt, exactly as before this change:
+            // silently reissuing a number over genuinely unexplained data
+            // would mask whatever produced it.
             var existingAccreditationId = TryReadString(workItem.Payload, "accreditationId");
             if (!string.IsNullOrWhiteSpace(existingAccreditationId))
             {
@@ -151,7 +167,10 @@ internal sealed class ReAccreditationApprovalService(
                     return WorkItemActionResult.Success(workItem);
                 }
 
-                if (s_expectedAccreditationNumberFormat.IsMatch(existingAccreditationId))
+                var isKnownLegacyFormat =
+                    existingAccreditationId.Length == LegacyAccreditationIdLength
+                    && !s_expectedAccreditationNumberFormat.IsMatch(existingAccreditationId);
+                if (!isKnownLegacyFormat)
                 {
                     logger.LogWarning(
                         "Work item {WorkItemId} carries accreditation id {AccreditationId} but is in state "
@@ -213,14 +232,19 @@ internal sealed class ReAccreditationApprovalService(
 
             var now = _timeProvider.GetUtcNow();
             var nowUtc = now.UtcDateTime;
-            var accreditationYear = _accreditationConfig.CurrentYear;
+            // Scoped to THIS iteration only (unlike numberResult): a retry
+            // iteration re-fetches a fresh workItem, so a payload deserialised
+            // on an earlier iteration must never be reused for the merge
+            // below — only the value set in the SAME iteration it is passed
+            // into TryApplyApprovalToPayload is safe to reuse.
+            ReAccreditationPayload? numberPayload = null;
 
             if (numberResult is null)
             {
-                ReAccreditationPayload numberPayload;
+                ReAccreditationPayload freshPayload;
                 try
                 {
-                    numberPayload = BsonSerializer.Deserialize<ReAccreditationPayload>(
+                    freshPayload = BsonSerializer.Deserialize<ReAccreditationPayload>(
                         workItem.Payload ?? new BsonDocument()
                     );
                 }
@@ -246,10 +270,15 @@ internal sealed class ReAccreditationApprovalService(
                 }
 
                 if (
-                    numberPayload.Nation is not { } nation
-                    || string.IsNullOrWhiteSpace(numberPayload.OperatorOrganisationId)
-                    || string.IsNullOrWhiteSpace(numberPayload.OperatorRegistrationId)
-                    || !int.TryParse(numberPayload.OperatorOrganisationId, out var orgId)
+                    freshPayload.Nation is not { } nation
+                    || string.IsNullOrWhiteSpace(freshPayload.OperatorOrganisationId)
+                    || string.IsNullOrWhiteSpace(freshPayload.OperatorRegistrationId)
+                    || !int.TryParse(
+                        freshPayload.OperatorOrganisationId,
+                        NumberStyles.Integer,
+                        CultureInfo.InvariantCulture,
+                        out var orgId
+                    )
                 )
                 {
                     logger.LogError(
@@ -273,28 +302,36 @@ internal sealed class ReAccreditationApprovalService(
                 // application's first accreditation or an annual reapply.
                 numberResult =
                     await accreditationNumberAdapter.GenerateOrUpdateAccreditationNumberAsync(
-                        numberPayload.OperatorOrganisationId,
-                        numberPayload.OperatorRegistrationId,
+                        freshPayload.OperatorOrganisationId,
+                        freshPayload.OperatorRegistrationId,
                         nation,
                         orgId,
                         accreditationYear,
                         regenerate: true,
+                        correlationId,
                         cancellationToken
                     );
 
                 if (!numberResult.IsSuccess)
                 {
                     logger.LogError(
-                        "Failed to resolve an accreditation number for work item {WorkItemId}: {Error}",
+                        "Failed to resolve an accreditation number for work item {WorkItemId} "
+                            + "(correlation {CorrelationId}): {Error}",
                         workItem.Id,
+                        correlationId,
                         numberResult.ErrorMessage
                     );
                     return WorkItemActionResult.Failure(
-                        WorkItemActionFailureCode.UpstreamNotificationFailed,
+                        WorkItemActionFailureCode.AccreditationNumberUnavailable,
                         $"Work item '{workItemId}' could not be approved: an accreditation number could "
                             + "not be obtained. Try again, or contact support if the problem persists."
                     );
                 }
+
+                // Reused by TryApplyApprovalToPayload below so the same,
+                // not-yet-mutated payload is not deserialised a second time
+                // on the common path (numberResult resolved on attempt 1).
+                numberPayload = freshPayload;
             }
 
             var accreditationId = numberResult.AccreditationNumber!;
@@ -312,7 +349,8 @@ internal sealed class ReAccreditationApprovalService(
                     accreditationId,
                     accreditationStartDate,
                     accreditationYear,
-                    now
+                    now,
+                    numberPayload
                 )
             )
             {
@@ -411,30 +449,42 @@ internal sealed class ReAccreditationApprovalService(
         string accreditationId,
         DateOnly accreditationStartDate,
         int accreditationYear,
-        DateTimeOffset stoppedAt
+        DateTimeOffset stoppedAt,
+        ReAccreditationPayload? preDeserializedPayload
     )
     {
-        // Deserialise → with-mutate → reserialise so the mongo-driver's
-        // serializer (camelCase convention, nested record) is the single
-        // source of truth for the on-disk shape.
         ReAccreditationPayload payload;
-        try
+        if (preDeserializedPayload is not null)
         {
-            payload = BsonSerializer.Deserialize<ReAccreditationPayload>(
-                workItem.Payload ?? new BsonDocument()
-            );
+            // Caller already deserialised the same, not-yet-mutated
+            // workItem.Payload this iteration (to resolve the number-request
+            // fields) — reuse it rather than parsing the identical document
+            // a second time.
+            payload = preDeserializedPayload;
         }
-        catch (Exception ex)
-            when (ex is BsonSerializationException or FormatException or InvalidCastException)
+        else
         {
-            logger.LogError(
-                ex,
-                "Re-accreditation approval for work item {WorkItemId} aborted: "
-                    + "existing payload could not be deserialised. Approving would destroy "
-                    + "existing payload data (organisation name, registration number, nation, etc.).",
-                workItem.Id
-            );
-            return false;
+            // Deserialise → with-mutate → reserialise so the mongo-driver's
+            // serializer (camelCase convention, nested record) is the single
+            // source of truth for the on-disk shape.
+            try
+            {
+                payload = BsonSerializer.Deserialize<ReAccreditationPayload>(
+                    workItem.Payload ?? new BsonDocument()
+                );
+            }
+            catch (Exception ex)
+                when (ex is BsonSerializationException or FormatException or InvalidCastException)
+            {
+                logger.LogError(
+                    ex,
+                    "Re-accreditation approval for work item {WorkItemId} aborted: "
+                        + "existing payload could not be deserialised. Approving would destroy "
+                        + "existing payload data (organisation name, registration number, nation, etc.).",
+                    workItem.Id
+                );
+                return false;
+            }
         }
 
         var updated = payload with

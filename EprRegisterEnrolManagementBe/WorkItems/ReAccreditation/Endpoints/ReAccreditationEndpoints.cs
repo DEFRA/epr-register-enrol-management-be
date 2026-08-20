@@ -545,7 +545,7 @@ internal static class ReAccreditationEndpoints
             // server-side dependency problem, not a malformed request, so
             // this maps to a generic 500 like LogDecision's own upstream
             // push failure does, not a 4xx.
-            WorkItemActionFailureCode.UpstreamNotificationFailed =>
+            WorkItemActionFailureCode.AccreditationNumberUnavailable =>
                 StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
         };

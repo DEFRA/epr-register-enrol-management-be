@@ -32,7 +32,7 @@ public class HttpAccreditationNumberAdapterTests
     private static (
         HttpAccreditationNumberAdapter Adapter,
         FakeHttpMessageHandler Handler
-    ) BuildSut(string? sharedSecret = null, string? url = BaseUrl)
+    ) BuildSut(string? sharedSecret = null, string? url = BaseUrl, bool enabled = true)
     {
         var handler = new FakeHttpMessageHandler();
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
@@ -41,6 +41,7 @@ public class HttpAccreditationNumberAdapterTests
         var config = Options.Create(
             new OperatorBackendApiConfig
             {
+                Enabled = enabled,
                 Url = url ?? string.Empty,
                 ClientId = "epr-register-enrol-management-be",
                 SharedSecret = sharedSecret,
@@ -79,7 +80,8 @@ public class HttpAccreditationNumberAdapterTests
         Nation nation = Nation.England,
         int orgId = 500027,
         int year = 2025,
-        bool regenerate = true
+        bool regenerate = true,
+        Guid correlationId = default
     ) =>
         adapter.GenerateOrUpdateAccreditationNumberAsync(
             organisationId,
@@ -88,6 +90,7 @@ public class HttpAccreditationNumberAdapterTests
             orgId,
             year,
             regenerate,
+            correlationId,
             ct
         );
 
@@ -104,6 +107,40 @@ public class HttpAccreditationNumberAdapterTests
 
         Assert.False(result.IsSuccess);
         Assert.Null(handler.LastRequest);
+    }
+
+    /// <summary>
+    /// RA-448 phase 2 review follow-up: Enabled=false must stay a valid,
+    /// behaviour-neutral state (MBE-F5) even when Url happens to be
+    /// pre-populated ahead of a rollout — this adapter must not fire a real
+    /// signed HTTP call in that state, unlike a check on Url alone would.
+    /// </summary>
+    [Fact]
+    public async Task Fails_fast_and_does_not_call_out_when_disabled_even_with_a_configured_url()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut(enabled: false);
+
+        var result = await Call(adapter, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task Sends_the_correlation_id_header()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK, SuccessBody("A25ER5000270036WO"));
+        var correlationId = Guid.NewGuid();
+
+        await Call(adapter, ct, correlationId: correlationId);
+
+        Assert.Equal(
+            correlationId.ToString(),
+            handler.LastRequest!.Headers.GetValues("X-Correlation-Id").Single()
+        );
     }
 
     [Fact]
@@ -232,6 +269,22 @@ public class HttpAccreditationNumberAdapterTests
         Assert.NotNull(result.ErrorMessage);
     }
 
+    /// <summary>
+    /// RA-448 phase 2 review follow-up: genuine caller-token cancellation
+    /// (request aborted, upstream timeout) must propagate as a cancellation,
+    /// not be converted into an AccreditationNumberResult.Failure the caller
+    /// would otherwise treat as a definite, retriable business outcome.
+    /// </summary>
+    [Fact]
+    public async Task Propagates_cancellation_rather_than_returning_a_failure_result()
+    {
+        var (adapter, _) = BuildSut();
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Call(adapter, cts.Token));
+    }
+
     [Fact]
     public async Task Never_throws_when_sending_fails()
     {
@@ -302,9 +355,16 @@ public class HttpAccreditationNumberAdapterTests
     }
 
     // ─────── real (non-test-substituted) BuildRetryPipeline branch coverage ───────
+    //
+    // Unlike HttpOperatorBackendPushAdapter's pipeline, this adapter's
+    // per-attempt timeout/retry budget is fixed internal constants, not
+    // sourced from OperatorBackendApiConfig.RequestTimeoutSeconds (see the
+    // class doc comment for why) — so there is no "timeout disabled" branch
+    // to exercise here; these tests just cover the real (non-injected)
+    // pipeline's happy path and retry behaviour.
 
     [Fact]
-    public async Task Succeeds_via_the_real_pipeline_when_the_per_attempt_timeout_is_disabled()
+    public async Task Succeeds_via_the_real_pipeline()
     {
         var ct = TestContext.Current.CancellationToken;
         var handler = new FakeHttpMessageHandler();
@@ -313,9 +373,9 @@ public class HttpAccreditationNumberAdapterTests
         var config = Options.Create(
             new OperatorBackendApiConfig
             {
+                Enabled = true,
                 Url = BaseUrl,
                 ClientId = "epr-register-enrol-management-be",
-                RequestTimeoutSeconds = 0,
             }
         );
         // No retryPipeline argument: forces the constructor to build the
@@ -343,6 +403,7 @@ public class HttpAccreditationNumberAdapterTests
         var config = Options.Create(
             new OperatorBackendApiConfig
             {
+                Enabled = true,
                 Url = BaseUrl,
                 ClientId = "epr-register-enrol-management-be",
             }
