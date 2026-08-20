@@ -153,213 +153,42 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // reference. Seeding it everywhere would leave that fallback — the path
         // almost every real work item takes — completely unexercised.
 
-        // Newly submitted, no one has picked it up yet.
-        yield return Build(
-            seedKey: "acme-recycling",
-            postcode: "SW1A 1AA",
-            submittedDaysAgo: 1,
-            stateId: "submitted",
-            payload: SimpleSeedPayload(
-                "Acme Recycling Ltd",
-                "EPR-100023",
-                "reg-001",
-                "500001",
-                "plastic",
-                2025,
-                0,
-                "acme.recycling@example.com",
-                "02345678",
-                "1 Acme Way, London",
-                "SW1A 1AA",
-                54600
-            ),
-            submittedBy: "stub-portal-client",
-            now: now
-        );
-
-        // Submitted and self-claimed by a standard user; first state still
-        // has work to do.
-        yield return Build(
-            seedKey: "northern-plastics",
-            postcode: "EH1 3BN",
-            submittedDaysAgo: 3,
-            stateId: "submitted",
-            payload: SimpleSeedPayload(
-                "Northern Plastics Co-op",
-                "EPR-100087",
-                "reg-002",
-                "500002",
-                "plastic",
-                2025,
-                1,
-                "northern.plastics@example.com",
-                "03456789",
-                "1 Northern Plastics Court, Edinburgh",
-                "EH1 3BN",
-                218400
-            ),
-            submittedBy: "stub-portal-client",
-            assignedToId: "stub-standard-1",
-            assignedToName: "Stub Standard User",
-            now: now
-        );
-
-        // Mid-assessment: assigned and under active review.
-        yield return Build(
-            seedKey: "riverside-glass",
-            postcode: "CF10 1AA",
-            submittedDaysAgo: 9,
-            stateId: "assessment-in-progress",
-            payload: SimpleSeedPayload(
-                "Riverside Glass Recovery",
-                "EPR-099812",
-                "reg-003",
-                "500003",
-                "glass",
-                2024,
-                2,
-                "riverside.glass@example.com",
-                "04567890",
-                "1 Riverside Way, Cardiff",
-                "CF10 1AA",
-                327600,
-                glassRecyclingProcess: "glass_re_melt"
-            ),
-            submittedBy: "stub-portal-client",
-            assignedToId: "stub-assign-1",
-            assignedToName: "Stub Assign User",
-            now: now
-        );
-
-        // Awaiting decision: parked in the intermediate state a pre-RA-410
-        // two-step decision left items in, so the single-call /decision
-        // endpoint has a fixture proving it recovers them.
-        yield return Build(
-            seedKey: "coastal-materials",
-            postcode: "BT1 1AA",
-            submittedDaysAgo: 15,
-            stateId: "awaiting-decision",
-            payload: SimpleSeedPayload(
-                "Coastal Materials Group",
-                "EPR-098774",
-                "reg-004",
-                "500004",
-                "plastic",
-                2024,
-                0,
-                "coastal.materials@example.com",
-                "05678901",
-                "1 Coastal Materials Quay, Belfast",
-                "BT1 1AA",
-                396500
-            ),
-            submittedBy: "stub-portal-client",
-            assignedToId: "stub-assign-1",
-            assignedToName: "Stub Assign User",
-            now: now
-        );
-
-        // Already approved — terminal state, useful for exercising the
-        // "no further actions" rendering path.
-        yield return Build(
-            seedKey: "heritage-paper",
-            postcode: "BS1 4DJ",
-            submittedDaysAgo: 32,
-            stateId: "approved",
-            payload: SimpleSeedPayload(
-                "Heritage Paper Mills",
-                "EPR-097215",
-                "reg-005",
-                "500005",
-                "paper",
-                2024,
-                0,
-                "heritage.paper@example.com",
-                "06789012",
-                "1 Heritage Paper Mill Road, Bristol",
-                "BS1 4DJ",
-                360400
-            ),
-            submittedBy: "stub-portal-client",
-            assignedToId: "stub-assign-1",
-            assignedToName: "Stub Assign User",
-            now: now
-        );
-
-        // Additional Scotland item — submitted, unassigned.
-        yield return Build(
-            seedKey: "clyde-composites",
-            postcode: "G1 1AA",
-            submittedDaysAgo: 5,
-            stateId: "submitted",
-            payload: SimpleSeedPayload(
-                "Clyde Composites Ltd",
-                "EPR-100134",
-                "reg-006",
-                "500006",
-                "plastic",
-                2025,
-                0,
-                "clyde.composites@example.com",
-                "07890123",
-                "1 Clyde Composites Way, Glasgow",
-                "G1 1AA",
-                54600
-            ),
-            submittedBy: "stub-portal-client",
-            now: now
-        );
-
-        // Additional Wales item — assessment in progress.
-        yield return Build(
-            seedKey: "swansea-textiles",
-            postcode: "SA1 1AA",
-            submittedDaysAgo: 11,
-            stateId: "assessment-in-progress",
-            payload: SimpleSeedPayload(
-                "Swansea Textiles Recovery",
-                "EPR-099441",
-                "reg-007",
-                "500007",
-                "glass",
-                2024,
-                1,
-                "swansea.textiles@example.com",
-                "08901234",
-                "1 Swansea Textiles Court, Swansea",
-                "SA1 1AA",
-                218400,
-                glassRecyclingProcess: "glass_other"
-            ),
-            submittedBy: "stub-portal-client",
-            assignedToId: "stub-assign-1",
-            assignedToName: "Stub Assign User",
-            now: now
-        );
-
-        // Additional Northern Ireland item — submitted, unassigned.
-        yield return Build(
-            seedKey: "belfast-fibres",
-            postcode: "BT7 1AA",
-            submittedDaysAgo: 2,
-            stateId: "submitted",
-            payload: SimpleSeedPayload(
-                "Belfast Fibres Co",
-                "EPR-100198",
-                "reg-008",
-                "500008",
-                "paper",
-                2025,
-                0,
-                "belfast.fibres@example.com",
-                "10111213",
-                "1 Belfast Fibres Way, Belfast",
-                "BT7 1AA",
-                396500
-            ),
-            submittedBy: "stub-portal-client",
-            now: now
-        );
+        // The eight simple, single-field-varying items below are data-driven
+        // (s_simpleFixtures + one Build/SimpleSeedPayload call) rather than
+        // eight near-identical yield-return blocks: once RA-448 phase 2 added
+        // an operatorOrganisationId argument to each, the repeated multi-line
+        // call shape re-tripped SonarCloud's duplicate-code gate on new code
+        // the same way the payload literals themselves did before
+        // SimpleSeedPayload existed (see its doc comment) — same fix, one
+        // level up.
+        foreach (var spec in s_simpleFixtures)
+        {
+            yield return Build(
+                seedKey: spec.SeedKey,
+                postcode: spec.Postcode,
+                submittedDaysAgo: spec.SubmittedDaysAgo,
+                stateId: spec.StateId,
+                payload: SimpleSeedPayload(
+                    spec.OrganisationName,
+                    spec.RegistrationNumber,
+                    spec.OperatorRegistrationId,
+                    spec.OperatorOrganisationId,
+                    spec.Material,
+                    spec.PreviousAccreditationYear,
+                    spec.ComplianceIssuesReported,
+                    spec.OperatorEmail,
+                    spec.CompaniesHouseNumber,
+                    spec.SiteAddress,
+                    spec.SiteAddressPostcode,
+                    spec.ChargeAmountPence,
+                    spec.GlassRecyclingProcess
+                ),
+                submittedBy: "stub-portal-client",
+                assignedToId: spec.AssignedToId,
+                assignedToName: spec.AssignedToName,
+                now: now
+            );
+        }
 
         // RA-254: carries every field a real operator submission can send —
         // including submittedBy, prns, businessPlan and samplingPlan, which
@@ -1134,12 +963,207 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     }
 
     /// <summary>
-    /// Builds the payload for the eight simple, single-field-varying seed
-    /// items (Acme Recycling through Belfast Fibres). Factored into one
-    /// call per item, rather than eight near-identical
-    /// <c>BsonDocument</c> initializers, because the repeated multi-line
-    /// shape tripped SonarCloud's duplicate-code gate on new code once
-    /// RA-447/CM4 added companiesHouseNumber/siteAddress to all eight.
+    /// One of the eight simple, single-field-varying seed items (Acme
+    /// Recycling through Belfast Fibres), fed to
+    /// <see cref="SimpleSeedPayload"/> and the private <c>Build</c> helper
+    /// by the <see cref="s_simpleFixtures"/> loop.
+    /// </summary>
+    private sealed record SimpleFixtureSpec(
+        string SeedKey,
+        string Postcode,
+        int SubmittedDaysAgo,
+        string StateId,
+        string OrganisationName,
+        string RegistrationNumber,
+        string OperatorRegistrationId,
+        string OperatorOrganisationId,
+        string Material,
+        int PreviousAccreditationYear,
+        int ComplianceIssuesReported,
+        string OperatorEmail,
+        string CompaniesHouseNumber,
+        string SiteAddress,
+        string SiteAddressPostcode,
+        int ChargeAmountPence,
+        string? GlassRecyclingProcess = null,
+        string? AssignedToId = null,
+        string? AssignedToName = null
+    );
+
+    private static readonly SimpleFixtureSpec[] s_simpleFixtures =
+    [
+        // Newly submitted, no one has picked it up yet.
+        new(
+            "acme-recycling",
+            "SW1A 1AA",
+            1,
+            "submitted",
+            "Acme Recycling Ltd",
+            "EPR-100023",
+            "reg-001",
+            "500001",
+            "plastic",
+            2025,
+            0,
+            "acme.recycling@example.com",
+            "02345678",
+            "1 Acme Way, London",
+            "SW1A 1AA",
+            54600
+        ),
+        // Submitted and self-claimed by a standard user; first state still
+        // has work to do.
+        new(
+            "northern-plastics",
+            "EH1 3BN",
+            3,
+            "submitted",
+            "Northern Plastics Co-op",
+            "EPR-100087",
+            "reg-002",
+            "500002",
+            "plastic",
+            2025,
+            1,
+            "northern.plastics@example.com",
+            "03456789",
+            "1 Northern Plastics Court, Edinburgh",
+            "EH1 3BN",
+            218400,
+            AssignedToId: "stub-standard-1",
+            AssignedToName: "Stub Standard User"
+        ),
+        // Mid-assessment: assigned and under active review.
+        new(
+            "riverside-glass",
+            "CF10 1AA",
+            9,
+            "assessment-in-progress",
+            "Riverside Glass Recovery",
+            "EPR-099812",
+            "reg-003",
+            "500003",
+            "glass",
+            2024,
+            2,
+            "riverside.glass@example.com",
+            "04567890",
+            "1 Riverside Way, Cardiff",
+            "CF10 1AA",
+            327600,
+            GlassRecyclingProcess: "glass_re_melt",
+            AssignedToId: "stub-assign-1",
+            AssignedToName: "Stub Assign User"
+        ),
+        // Awaiting decision: parked in the intermediate state a pre-RA-410
+        // two-step decision left items in, so the single-call /decision
+        // endpoint has a fixture proving it recovers them.
+        new(
+            "coastal-materials",
+            "BT1 1AA",
+            15,
+            "awaiting-decision",
+            "Coastal Materials Group",
+            "EPR-098774",
+            "reg-004",
+            "500004",
+            "plastic",
+            2024,
+            0,
+            "coastal.materials@example.com",
+            "05678901",
+            "1 Coastal Materials Quay, Belfast",
+            "BT1 1AA",
+            396500,
+            AssignedToId: "stub-assign-1",
+            AssignedToName: "Stub Assign User"
+        ),
+        // Already approved — terminal state, useful for exercising the
+        // "no further actions" rendering path.
+        new(
+            "heritage-paper",
+            "BS1 4DJ",
+            32,
+            "approved",
+            "Heritage Paper Mills",
+            "EPR-097215",
+            "reg-005",
+            "500005",
+            "paper",
+            2024,
+            0,
+            "heritage.paper@example.com",
+            "06789012",
+            "1 Heritage Paper Mill Road, Bristol",
+            "BS1 4DJ",
+            360400,
+            AssignedToId: "stub-assign-1",
+            AssignedToName: "Stub Assign User"
+        ),
+        // Additional Scotland item — submitted, unassigned.
+        new(
+            "clyde-composites",
+            "G1 1AA",
+            5,
+            "submitted",
+            "Clyde Composites Ltd",
+            "EPR-100134",
+            "reg-006",
+            "500006",
+            "plastic",
+            2025,
+            0,
+            "clyde.composites@example.com",
+            "07890123",
+            "1 Clyde Composites Way, Glasgow",
+            "G1 1AA",
+            54600
+        ),
+        // Additional Wales item — assessment in progress.
+        new(
+            "swansea-textiles",
+            "SA1 1AA",
+            11,
+            "assessment-in-progress",
+            "Swansea Textiles Recovery",
+            "EPR-099441",
+            "reg-007",
+            "500007",
+            "glass",
+            2024,
+            1,
+            "swansea.textiles@example.com",
+            "08901234",
+            "1 Swansea Textiles Court, Swansea",
+            "SA1 1AA",
+            218400,
+            GlassRecyclingProcess: "glass_other",
+            AssignedToId: "stub-assign-1",
+            AssignedToName: "Stub Assign User"
+        ),
+        // Additional Northern Ireland item — submitted, unassigned.
+        new(
+            "belfast-fibres",
+            "BT7 1AA",
+            2,
+            "submitted",
+            "Belfast Fibres Co",
+            "EPR-100198",
+            "reg-008",
+            "500008",
+            "paper",
+            2025,
+            0,
+            "belfast.fibres@example.com",
+            "10111213",
+            "1 Belfast Fibres Way, Belfast",
+            "BT7 1AA",
+            396500
+        ),
+    ];
+
+    /// <summary>
+    /// Builds the payload for one of <see cref="s_simpleFixtures"/>.
     /// <paramref name="glassRecyclingProcess"/> is null except for the two
     /// glass items (RA-307).
     /// </summary>
