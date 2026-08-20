@@ -279,7 +279,7 @@ internal sealed class ReAccreditationApprovalService(
                 if (
                     freshPayload.Nation is not { } nation
                     || string.IsNullOrWhiteSpace(freshPayload.OperatorOrganisationId)
-                    || string.IsNullOrWhiteSpace(freshPayload.OperatorRegistrationId)
+                    || string.IsNullOrWhiteSpace(freshPayload.OperatorApplicationId)
                     || !int.TryParse(
                         freshPayload.OperatorOrganisationId,
                         NumberStyles.Integer,
@@ -290,7 +290,7 @@ internal sealed class ReAccreditationApprovalService(
                 {
                     logger.LogError(
                         "Work item {WorkItemId} is missing data required to request an accreditation number "
-                            + "(nation, a numeric operatorOrganisationId, or operatorRegistrationId).",
+                            + "(nation, a numeric operatorOrganisationId, or operatorApplicationId).",
                         workItem.Id
                     );
                     return WorkItemActionResult.Failure(
@@ -299,23 +299,35 @@ internal sealed class ReAccreditationApprovalService(
                     );
                 }
 
-                // RA-448 phase 2: OperatorRegistrationId is used as the backend's
-                // {applicationId} route segment — a working assumption, not a
-                // verified fact (Phase 2 doc AC11). Always pass Regenerate=true:
-                // the backend itself decides generate-vs-reapply based on
-                // whether IT already has a stored number for this application
-                // (AccreditationApplicationModel.AccreditationReference), so
-                // this single call is correct whether this is the
-                // application's first accreditation or an annual reapply.
+                // RA-448 phase 2 review: OperatorApplicationId is the backend's
+                // {applicationId} route segment — confirmed (not assumed) against
+                // HttpCaseWorkingApiAdapter.BuildPayload in epr-register-enrol-backend,
+                // which sends operatorApplicationId = application.ApplicationId (the
+                // AccreditationApplicationModel's own Mongo id) on every real
+                // submission. OperatorRegistrationId, used here before the fix, is a
+                // different value — the seed-time ReEx registration id — and every
+                // other route on that backend's accreditation-applications group keys
+                // on the document id, not the registration id.
+                //
+                // Regenerate=false, not true: a work item is approved at most once
+                // (the idempotent-return branch above blocks re-approval outright), so
+                // the only time this call runs twice for the SAME application is a
+                // retry after a transient failure — attempt 1 may have already
+                // committed a number the caller never saw acknowledged. Regenerate=true
+                // would ask the backend to bump/reissue on that retry, silently
+                // changing an externally-quoted number; Regenerate=false returns the
+                // already-issued one unchanged when the backend already has one, and
+                // still generates on a genuine first call (see
+                // IAccreditationNumberAdapter's contract) when it doesn't.
                 numberResult =
                     await accreditationNumberAdapter.GenerateOrUpdateAccreditationNumberAsync(
                         new AccreditationNumberRequest(
                             freshPayload.OperatorOrganisationId,
-                            freshPayload.OperatorRegistrationId,
+                            freshPayload.OperatorApplicationId,
                             nation,
                             orgId,
                             accreditationYear,
-                            Regenerate: true,
+                            Regenerate: false,
                             CorrelationId: correlationId
                         ),
                         cancellationToken

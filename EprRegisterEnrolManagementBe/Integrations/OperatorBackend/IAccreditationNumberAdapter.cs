@@ -40,10 +40,14 @@ public interface IAccreditationNumberAdapter
 /// </summary>
 /// <param name="OrganisationId">Backend organisation id — sourced from the
 /// work item payload's operator organisation id.</param>
-/// <param name="ApplicationId">Backend AccreditationApplicationModel id.
-/// Callers should treat this as a verified-during-implementation
-/// assumption, not a guaranteed-correct value, until confirmed against real
-/// data — see the Phase 2 doc's AC11.</param>
+/// <param name="ApplicationId">Backend <c>AccreditationApplicationModel.Id</c>
+/// — confirmed (RA-448 phase 2 review, resolving AC11) against
+/// <c>HttpCaseWorkingApiAdapter.BuildPayload</c> in epr-register-enrol-backend,
+/// which sends <c>operatorApplicationId = application.ApplicationId</c> (that
+/// model's own Mongo id, stringified) on every real submission. Callers
+/// should source this from the work item payload's <c>operatorApplicationId</c>,
+/// not <c>operatorRegistrationId</c> (a different value — the seed-time ReEx
+/// registration id).</param>
 /// <param name="Nation">Regulator nation; becomes the number's agency
 /// letter.</param>
 /// <param name="OrgId">The organisation's real numeric Org ID.</param>

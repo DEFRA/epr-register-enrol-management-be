@@ -108,7 +108,7 @@ public class ReAccreditationLifecycleTests
             Payload = new BsonDocument
             {
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
                 ["nation"] = "England",
             },
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),

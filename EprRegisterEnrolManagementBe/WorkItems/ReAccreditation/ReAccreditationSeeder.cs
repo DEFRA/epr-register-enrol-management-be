@@ -171,6 +171,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 payload: SimpleSeedPayload(
                     spec.OrganisationName,
                     spec.RegistrationNumber,
+                    spec.OperatorApplicationId,
                     spec.OperatorRegistrationId,
                     spec.OperatorOrganisationId,
                     spec.Material,
@@ -685,6 +686,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             {
                 ["organisationName"] = GlobalGlassExportsOrganisationName,
                 ["registrationNumber"] = "EPR-100506",
+                ["operatorApplicationId"] = "app-global-glass-exports-001",
                 ["wasteProcessingType"] = "exporter",
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
@@ -975,6 +977,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         string StateId,
         string OrganisationName,
         string RegistrationNumber,
+        string OperatorApplicationId,
         string OperatorRegistrationId,
         string OperatorOrganisationId,
         string Material,
@@ -1000,6 +1003,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "submitted",
             "Acme Recycling Ltd",
             "EPR-100023",
+            "app-acme-recycling-001",
             "reg-001",
             "500001",
             "plastic",
@@ -1020,6 +1024,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "submitted",
             "Northern Plastics Co-op",
             "EPR-100087",
+            "app-northern-plastics-001",
             "reg-002",
             "500002",
             "plastic",
@@ -1041,6 +1046,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "assessment-in-progress",
             "Riverside Glass Recovery",
             "EPR-099812",
+            "app-riverside-glass-001",
             "reg-003",
             "500003",
             "glass",
@@ -1065,6 +1071,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "awaiting-decision",
             "Coastal Materials Group",
             "EPR-098774",
+            "app-coastal-materials-001",
             "reg-004",
             "500004",
             "plastic",
@@ -1087,6 +1094,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "approved",
             "Heritage Paper Mills",
             "EPR-097215",
+            "app-heritage-paper-001",
             "reg-005",
             "500005",
             "paper",
@@ -1108,6 +1116,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "submitted",
             "Clyde Composites Ltd",
             "EPR-100134",
+            "app-clyde-composites-001",
             "reg-006",
             "500006",
             "plastic",
@@ -1127,6 +1136,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "assessment-in-progress",
             "Swansea Textiles Recovery",
             "EPR-099441",
+            "app-swansea-textiles-001",
             "reg-007",
             "500007",
             "glass",
@@ -1149,6 +1159,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "submitted",
             "Belfast Fibres Co",
             "EPR-100198",
+            "app-belfast-fibres-001",
             "reg-008",
             "500008",
             "paper",
@@ -1170,6 +1181,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     private static BsonDocument SimpleSeedPayload(
         string organisationName,
         string registrationNumber,
+        string operatorApplicationId,
         string operatorRegistrationId,
         string operatorOrganisationId,
         string material,
@@ -1187,6 +1199,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         {
             ["organisationName"] = organisationName,
             ["registrationNumber"] = registrationNumber,
+            // RA-448 phase 2 review: the backend's own AccreditationApplicationModel
+            // id (confirmed against HttpCaseWorkingApiAdapter.BuildPayload) — the
+            // adapter's {applicationId} route segment. Seed fixtures need a
+            // realistic value too so they can be approved end-to-end.
+            ["operatorApplicationId"] = operatorApplicationId,
             ["operatorRegistrationId"] = operatorRegistrationId,
             // RA-448 phase 2: real submissions always carry a numeric Org ID
             // (IAccreditationNumberAdapter parses it as int); seed fixtures

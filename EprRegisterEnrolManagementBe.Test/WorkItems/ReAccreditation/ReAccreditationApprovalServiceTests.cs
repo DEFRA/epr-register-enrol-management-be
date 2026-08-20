@@ -25,8 +25,12 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// generator — it comes from <see cref="IAccreditationNumberAdapter"/>, a
 /// real call to the backend. <see cref="BuildWorkItem"/>'s default payload
 /// therefore carries the three fields the service needs to make that call
-/// (operatorOrganisationId, operatorRegistrationId, nation) alongside the
+/// (operatorOrganisationId, operatorApplicationId, nation) alongside the
 /// pre-existing organisationName/registrationNumber fields.
+/// operatorApplicationId (not operatorRegistrationId — a review-confirmed
+/// fix; see ReAccreditationApprovalService's comment at the adapter call
+/// site) is the backend's own AccreditationApplicationModel id, forwarded
+/// as the {applicationId} route segment.
 /// </summary>
 public class ReAccreditationApprovalServiceTests
 {
@@ -80,9 +84,14 @@ public class ReAccreditationApprovalServiceTests
                 {
                     ["organisationName"] = "Acme Ltd",
                     ["registrationNumber"] = "EX-001",
-                    // RA-448 phase 2: required to call IAccreditationNumberAdapter.
+                    // RA-448 phase 2 review: operatorApplicationId (the backend's
+                    // AccreditationApplicationModel.Id, confirmed against
+                    // HttpCaseWorkingApiAdapter.BuildPayload), not
+                    // operatorRegistrationId, is required to call
+                    // IAccreditationNumberAdapter.
                     ["operatorOrganisationId"] = "500027",
-                    ["operatorRegistrationId"] = "APP-500027",
+                    ["operatorApplicationId"] = "APP-500027",
+                    ["operatorRegistrationId"] = "reg-500027",
                     ["nation"] = "England",
                 },
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
@@ -273,7 +282,8 @@ public class ReAccreditationApprovalServiceTests
                 ["organisationName"] = "Acme Ltd",
                 ["registrationNumber"] = "EX-001",
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["operatorRegistrationId"] = "reg-500027",
                 ["nation"] = "England",
                 // Unmodelled keys that the model would otherwise discard.
                 ["applicationReference"] = "RA-000000123",
@@ -336,7 +346,8 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["operatorRegistrationId"] = "reg-500027",
                 ["nation"] = "England",
                 ["overseasSites"] = new BsonDocument
                 {
@@ -424,7 +435,8 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["operatorRegistrationId"] = "reg-500027",
                 ["nation"] = "England",
                 ["applicationReference"] = "RA-000000999",
                 // Stale modelled values that must be overwritten by approval.
@@ -724,7 +736,7 @@ public class ReAccreditationApprovalServiceTests
     // ─────────────────────────── RA-133 / RA-448 phase 2 ────────────────
 
     [Fact]
-    public async Task ApproveAsync_resolves_the_number_from_organisation_registration_nation_and_year()
+    public async Task ApproveAsync_resolves_the_number_from_organisation_application_nation_and_year()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build(currentYear: 2028);
@@ -733,7 +745,7 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "500099",
-                ["operatorRegistrationId"] = "APP-500099",
+                ["operatorApplicationId"] = "APP-500099",
                 ["nation"] = "Scotland",
             }
         );
@@ -750,7 +762,10 @@ public class ReAccreditationApprovalServiceTests
                     && r.Nation == Nation.Scotland
                     && r.OrgId == 500099
                     && r.Year == 2028
-                    && r.Regenerate
+                    // RA-448 phase 2 review: false, not true — a retried approval
+                    // must idempotently return the already-issued number rather
+                    // than asking the backend to bump it.
+                    && !r.Regenerate
                 ),
                 Arg.Any<CancellationToken>()
             );
@@ -766,7 +781,8 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["operatorRegistrationId"] = "reg-500027",
                 // nation deliberately absent
             }
         );
@@ -791,7 +807,7 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "not-a-number",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
                 ["nation"] = "England",
             }
         );
@@ -950,7 +966,8 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["operatorRegistrationId"] = "reg-500027",
                 ["nation"] = "England",
                 ["accreditationId"] = "A25ER5000270036WO",
             }
@@ -985,7 +1002,8 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["operatorRegistrationId"] = "reg-500027",
                 ["nation"] = "England",
                 // Retired AccreditationIdGenerator's exact 16-char fixed width.
                 ["accreditationId"] = "A25ER00000000000",
@@ -1006,7 +1024,7 @@ public class ReAccreditationApprovalServiceTests
                     && r.ApplicationId == "APP-500027"
                     && r.Nation == Nation.England
                     && r.OrgId == 500027
-                    && r.Regenerate
+                    && !r.Regenerate
                 ),
                 Arg.Any<CancellationToken>()
             );
@@ -1081,7 +1099,7 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
                 ["nation"] = "England",
             }
         );
@@ -1097,7 +1115,7 @@ public class ReAccreditationApprovalServiceTests
     }
 
     [Fact]
-    public async Task ApproveAsync_returns_InvalidTransition_and_does_not_call_the_adapter_when_registration_id_is_blank()
+    public async Task ApproveAsync_returns_InvalidTransition_and_does_not_call_the_adapter_when_application_id_is_blank()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
@@ -1106,7 +1124,7 @@ public class ReAccreditationApprovalServiceTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "",
+                ["operatorApplicationId"] = "",
                 ["nation"] = "England",
             }
         );

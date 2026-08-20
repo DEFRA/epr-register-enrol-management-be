@@ -2897,7 +2897,7 @@ public class ReAccreditationEndpointTests
             Payload = new BsonDocument
             {
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
                 ["nation"] = "England",
             },
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
@@ -2921,7 +2921,7 @@ public class ReAccreditationEndpointTests
                 // RA-448 phase 2: required for the approve step's call to
                 // IAccreditationNumberAdapter.
                 ["operatorOrganisationId"] = "500027",
-                ["operatorRegistrationId"] = "APP-500027",
+                ["operatorApplicationId"] = "APP-500027",
                 ["nation"] = "England",
             },
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
