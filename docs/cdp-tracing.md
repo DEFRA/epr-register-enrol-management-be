@@ -8,7 +8,7 @@ with it, and forward it on outbound HTTP calls.
 
 | Concern | Status | Reference |
 | --- | --- | --- |
-| Header name aligns FE ↔ BE | ✅ Both use `x-cdp-request-id` | FE: [`src/config/config.js`](../../epr-register-case-management-frontend-poc/src/config/config.js) `tracing.header` default; BE: [`appsettings.json`](../EprRegisterEnrolManagementBe/appsettings.json) `TraceHeader` |
+| Header name aligns FE ↔ BE | ✅ Both use `x-cdp-request-id` | FE: [`src/config/config.js`](../../epr-register-enrol-management-fe/src/config/config.js) `tracing.header` default; BE: [`appsettings.json`](../EprRegisterEnrolManagementBe/appsettings.json) `TraceHeader` |
 | Inbound header is propagated on outbound HttpClients | ✅ Wired via `AddHeaderPropagation` | [`Program.cs`](../EprRegisterEnrolManagementBe/Program.cs) `ConfigureHeaderPropagation` |
 | Logs enriched with trace id | ✅ Serilog `Enrich.WithCorrelationId(traceIdHeader)` | [`Utils/Logging/CdpLogging.cs`](../EprRegisterEnrolManagementBe/Utils/Logging/CdpLogging.cs) |
 | Outbound `HttpClient`s use `AddHttpClientWithTracing` | ⚠️ No real downstream clients yet — example call is commented out in `Program.cs::ConfigureHttpClients`. When the first real client is added it MUST use `AddHttpClientWithTracing` (or `AddHttpClientWithProxy` which composes tracing) |
