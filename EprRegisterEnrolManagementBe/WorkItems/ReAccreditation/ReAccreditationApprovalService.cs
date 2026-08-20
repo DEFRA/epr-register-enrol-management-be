@@ -66,10 +66,17 @@ internal sealed class ReAccreditationApprovalService(
 
     // RA-448 phase 2: mirrors the backend's own AC1 format regex
     // (accreditation-number-generation.md), anchored to the 'A' prefix since
-    // this module only ever deals with accreditation numbers.
+    // this module only ever deals with accreditation numbers. Explicit
+    // matchTimeout: every quantifier here is bounded ({2}/{6}/{4}) with no
+    // nested/overlapping repetition, so catastrophic backtracking isn't
+    // actually reachable — but a fixed timeout costs nothing and is what
+    // static analysis (and defence-in-depth) expects of any Regex applied
+    // to a value that ultimately originates from a persisted document
+    // rather than a compile-time constant.
     private static readonly Regex s_expectedAccreditationNumberFormat = new(
         @"^A\d{2}(ER|EX|NR|NX|SR|SX|WR|WX)\d{6}\d{4}(AL|FB|GO|GR|PA|PL|ST|WO)$",
-        RegexOptions.Compiled
+        RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250)
     );
 
     // RA-448 phase 2: fixed width of the retired local AccreditationIdGenerator's
@@ -302,13 +309,15 @@ internal sealed class ReAccreditationApprovalService(
                 // application's first accreditation or an annual reapply.
                 numberResult =
                     await accreditationNumberAdapter.GenerateOrUpdateAccreditationNumberAsync(
-                        freshPayload.OperatorOrganisationId,
-                        freshPayload.OperatorRegistrationId,
-                        nation,
-                        orgId,
-                        accreditationYear,
-                        regenerate: true,
-                        correlationId,
+                        new AccreditationNumberRequest(
+                            freshPayload.OperatorOrganisationId,
+                            freshPayload.OperatorRegistrationId,
+                            nation,
+                            orgId,
+                            accreditationYear,
+                            Regenerate: true,
+                            CorrelationId: correlationId
+                        ),
                         cancellationToken
                     );
 

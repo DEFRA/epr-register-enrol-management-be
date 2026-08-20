@@ -22,38 +22,47 @@ public interface IAccreditationNumberAdapter
     /// Calls <c>POST {organisationId}/{applicationId}/accreditation-number</c>
     /// on the backend. The backend itself decides generate-vs-reapply based
     /// on whether it already has a stored accreditation number for this
-    /// application — <paramref name="regenerate"/> only controls what
-    /// happens when one already exists (reapply/YY+1 when true, unchanged
-    /// idempotent return when false); a first-ever generate always happens
-    /// regardless of this flag when the backend has no number yet.
+    /// application — <see cref="AccreditationNumberRequest.Regenerate"/> only
+    /// controls what happens when one already exists (reapply/YY+1 when
+    /// true, unchanged idempotent return when false); a first-ever generate
+    /// always happens regardless of this flag when the backend has no
+    /// number yet.
     /// </summary>
-    /// <param name="organisationId">Backend organisation id — sourced from
-    /// the work item payload's operator organisation id.</param>
-    /// <param name="applicationId">Backend AccreditationApplicationModel id.
-    /// Callers should treat this as a verified-during-implementation
-    /// assumption, not a guaranteed-correct value, until confirmed against
-    /// real data — see the Phase 2 doc's AC11.</param>
-    /// <param name="nation">Regulator nation; becomes the number's agency
-    /// letter.</param>
-    /// <param name="orgId">The organisation's real numeric Org ID.</param>
-    /// <param name="year">Four-digit accreditation year.</param>
-    /// <param name="regenerate">See summary above.</param>
-    /// <param name="correlationId">One id per logical call, forwarded as the
-    /// <c>X-Correlation-Id</c> header, so this service's logs and the
-    /// backend's logs for the same request can be joined on one value —
-    /// same cross-repo contract <see cref="IOperatorBackendPushAdapter"/>'s
-    /// pushes already use.</param>
     Task<AccreditationNumberResult> GenerateOrUpdateAccreditationNumberAsync(
-        string organisationId,
-        string applicationId,
-        Nation nation,
-        int orgId,
-        int year,
-        bool regenerate,
-        Guid correlationId,
+        AccreditationNumberRequest request,
         CancellationToken cancellationToken = default
     );
 }
+
+/// <summary>
+/// Everything <see cref="IAccreditationNumberAdapter.GenerateOrUpdateAccreditationNumberAsync"/>
+/// needs, bundled into one value rather than a long parameter list.
+/// </summary>
+/// <param name="OrganisationId">Backend organisation id — sourced from the
+/// work item payload's operator organisation id.</param>
+/// <param name="ApplicationId">Backend AccreditationApplicationModel id.
+/// Callers should treat this as a verified-during-implementation
+/// assumption, not a guaranteed-correct value, until confirmed against real
+/// data — see the Phase 2 doc's AC11.</param>
+/// <param name="Nation">Regulator nation; becomes the number's agency
+/// letter.</param>
+/// <param name="OrgId">The organisation's real numeric Org ID.</param>
+/// <param name="Year">Four-digit accreditation year.</param>
+/// <param name="Regenerate">See the interface method's doc comment.</param>
+/// <param name="CorrelationId">One id per logical call, forwarded as the
+/// <c>X-Correlation-Id</c> header, so this service's logs and the backend's
+/// logs for the same request can be joined on one value — same cross-repo
+/// contract <see cref="IOperatorBackendPushAdapter"/>'s pushes already
+/// use.</param>
+public sealed record AccreditationNumberRequest(
+    string OrganisationId,
+    string ApplicationId,
+    Nation Nation,
+    int OrgId,
+    int Year,
+    bool Regenerate,
+    Guid CorrelationId
+);
 
 /// <summary>
 /// Outcome of a <see cref="IAccreditationNumberAdapter"/> call. Never thrown

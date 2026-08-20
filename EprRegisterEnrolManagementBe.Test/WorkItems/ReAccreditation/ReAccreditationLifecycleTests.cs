@@ -83,13 +83,7 @@ public class ReAccreditationLifecycleTests
         var numberAdapter = Substitute.For<IAccreditationNumberAdapter>();
         numberAdapter
             .GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Nation>(),
-                Arg.Any<int>(),
-                Arg.Any<int>(),
-                Arg.Any<bool>(),
-                Arg.Any<Guid>(),
+                Arg.Any<AccreditationNumberRequest>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(AccreditationNumberResult.Success("A27ER5000270036WO"));

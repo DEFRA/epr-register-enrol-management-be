@@ -110,13 +110,7 @@ public class ReAccreditationApprovalServiceTests
         var numberAdapter = Substitute.For<IAccreditationNumberAdapter>();
         numberAdapter
             .GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Nation>(),
-                Arg.Any<int>(),
-                Arg.Any<int>(),
-                Arg.Any<bool>(),
-                Arg.Any<Guid>(),
+                Arg.Any<AccreditationNumberRequest>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(Task.FromResult(AccreditationNumberResult.Success(accreditationId)));
@@ -242,7 +236,8 @@ public class ReAccreditationApprovalServiceTests
         // sla-clock-stopped / accreditation-issued rows are not state-less.
         Assert.Equal(
             ["approved", "approved", "approved"],
-            workItem.AuditLog.Select(e => e.StateId).ToArray());
+            workItem.AuditLog.Select(e => e.StateId).ToArray()
+        );
 
         await sut.Persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
         await sut
@@ -688,13 +683,7 @@ public class ReAccreditationApprovalServiceTests
         await sut
             .NumberAdapter.Received(1)
             .GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Nation>(),
-                Arg.Any<int>(),
-                Arg.Any<int>(),
-                Arg.Any<bool>(),
-                Arg.Any<Guid>(),
+                Arg.Any<AccreditationNumberRequest>(),
                 Arg.Any<CancellationToken>()
             );
     }
@@ -755,13 +744,14 @@ public class ReAccreditationApprovalServiceTests
         await sut
             .NumberAdapter.Received(1)
             .GenerateOrUpdateAccreditationNumberAsync(
-                "500099",
-                "APP-500099",
-                Nation.Scotland,
-                500099,
-                2028,
-                regenerate: true,
-                Arg.Any<Guid>(),
+                Arg.Is<AccreditationNumberRequest>(r =>
+                    r.OrganisationId == "500099"
+                    && r.ApplicationId == "APP-500099"
+                    && r.Nation == Nation.Scotland
+                    && r.OrgId == 500099
+                    && r.Year == 2028
+                    && r.Regenerate
+                ),
                 Arg.Any<CancellationToken>()
             );
     }
@@ -788,16 +778,7 @@ public class ReAccreditationApprovalServiceTests
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(
-                default!,
-                default!,
-                default,
-                default,
-                default,
-                default,
-                default,
-                ct
-            );
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
 
     [Fact]
@@ -822,16 +803,7 @@ public class ReAccreditationApprovalServiceTests
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(
-                default!,
-                default!,
-                default,
-                default,
-                default,
-                default,
-                default,
-                ct
-            );
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
 
     /// <summary>
@@ -857,16 +829,7 @@ public class ReAccreditationApprovalServiceTests
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(
-                default!,
-                default!,
-                default,
-                default,
-                default,
-                default,
-                default,
-                ct
-            );
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
 
     [Fact]
@@ -939,16 +902,7 @@ public class ReAccreditationApprovalServiceTests
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(
-                default!,
-                default!,
-                default,
-                default,
-                default,
-                default,
-                default,
-                ct
-            );
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
         await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
         await sut.Hooks[0]
             .DidNotReceiveWithAnyArgs()
@@ -982,16 +936,7 @@ public class ReAccreditationApprovalServiceTests
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(
-                default!,
-                default!,
-                default,
-                default,
-                default,
-                default,
-                default,
-                ct
-            );
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
 
     [Fact]
@@ -1019,16 +964,7 @@ public class ReAccreditationApprovalServiceTests
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(
-                default!,
-                default!,
-                default,
-                default,
-                default,
-                default,
-                default,
-                ct
-            );
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
 
     /// <summary>
@@ -1065,13 +1001,13 @@ public class ReAccreditationApprovalServiceTests
         await sut
             .NumberAdapter.Received(1)
             .GenerateOrUpdateAccreditationNumberAsync(
-                "500027",
-                "APP-500027",
-                Nation.England,
-                500027,
-                Arg.Any<int>(),
-                regenerate: true,
-                Arg.Any<Guid>(),
+                Arg.Is<AccreditationNumberRequest>(r =>
+                    r.OrganisationId == "500027"
+                    && r.ApplicationId == "APP-500027"
+                    && r.Nation == Nation.England
+                    && r.OrgId == 500027
+                    && r.Regenerate
+                ),
                 Arg.Any<CancellationToken>()
             );
     }
@@ -1089,13 +1025,7 @@ public class ReAccreditationApprovalServiceTests
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
         sut.NumberAdapter.GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Nation>(),
-                Arg.Any<int>(),
-                Arg.Any<int>(),
-                Arg.Any<bool>(),
-                Arg.Any<Guid>(),
+                Arg.Any<AccreditationNumberRequest>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(Task.FromResult(AccreditationNumberResult.Failure("backend returned 503")));
@@ -1136,13 +1066,7 @@ public class ReAccreditationApprovalServiceTests
         await sut
             .NumberAdapter.Received(1)
             .GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Nation>(),
-                Arg.Any<int>(),
-                Arg.Any<int>(),
-                Arg.Any<bool>(),
-                Arg.Any<Guid>(),
+                Arg.Any<AccreditationNumberRequest>(),
                 Arg.Any<CancellationToken>()
             );
     }
@@ -1169,16 +1093,7 @@ public class ReAccreditationApprovalServiceTests
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(
-                default!,
-                default!,
-                default,
-                default,
-                default,
-                default,
-                default,
-                ct
-            );
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
 
     [Fact]
@@ -1203,15 +1118,6 @@ public class ReAccreditationApprovalServiceTests
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(
-                default!,
-                default!,
-                default,
-                default,
-                default,
-                default,
-                default,
-                ct
-            );
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
 }

@@ -3243,13 +3243,7 @@ public class ReAccreditationEndpointTests
         var failingNumberAdapter = Substitute.For<IAccreditationNumberAdapter>();
         failingNumberAdapter
             .GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Nation>(),
-                Arg.Any<int>(),
-                Arg.Any<int>(),
-                Arg.Any<bool>(),
-                Arg.Any<Guid>(),
+                Arg.Any<AccreditationNumberRequest>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(AccreditationNumberResult.Failure("backend unreachable"));
@@ -3724,13 +3718,7 @@ public class ReAccreditationEndpointTests
             var adapter = Substitute.For<IAccreditationNumberAdapter>();
             adapter
                 .GenerateOrUpdateAccreditationNumberAsync(
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<Nation>(),
-                    Arg.Any<int>(),
-                    Arg.Any<int>(),
-                    Arg.Any<bool>(),
-                    Arg.Any<Guid>(),
+                    Arg.Any<AccreditationNumberRequest>(),
                     Arg.Any<CancellationToken>()
                 )
                 .Returns(AccreditationNumberResult.Success("A25ER5000270036WO"));

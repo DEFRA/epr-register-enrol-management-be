@@ -1,9 +1,4 @@
 using System.Net.Http.Json;
-using System.Security.Cryptography;
-using System.Text.Json;
-using System.Text.Json.Serialization;
-using EprRegisterEnrolManagementBe.Auth;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
@@ -16,8 +11,10 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 ///
 /// Reuses <see cref="OperatorBackendApiConfig"/> (same base URL, client id
 /// and shared secret as <see cref="HttpOperatorBackendPushAdapter"/> — this
-/// is the same backend service, just a different route) and the same
-/// unproxied "DefaultClient" / v3 HMAC signing scheme.
+/// is the same backend service, just a different route), the same
+/// unproxied "DefaultClient", and the shared <see cref="OperatorBackendJson"/>
+/// / <see cref="OperatorBackendSigning"/> helpers for the wire contract and
+/// v3 HMAC signing both adapters use.
 ///
 /// Posts to the backend's confirmed phase 1 contract:
 /// <c>POST api/v1/accreditation-applications/{organisationId}/{applicationId}/accreditation-number</c>
@@ -64,24 +61,12 @@ internal sealed class HttpAccreditationNumberAdapter(
     private const int PerAttemptTimeoutSeconds = 5;
     private static readonly TimeSpan s_maxBackoff = TimeSpan.FromSeconds(2);
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-    };
-
     private readonly OperatorBackendApiConfig _config = config.Value;
     private readonly ResiliencePipeline<HttpResponseMessage> _retryPipeline =
         retryPipeline ?? BuildRetryPipeline(logger);
 
     public async Task<AccreditationNumberResult> GenerateOrUpdateAccreditationNumberAsync(
-        string organisationId,
-        string applicationId,
-        Nation nation,
-        int orgId,
-        int year,
-        bool regenerate,
-        Guid correlationId,
+        AccreditationNumberRequest request,
         CancellationToken cancellationToken = default
     )
     {
@@ -97,8 +82,8 @@ internal sealed class HttpAccreditationNumberAdapter(
 
         var relativePath = string.Format(
             RelativePathTemplate,
-            Uri.EscapeDataString(organisationId),
-            Uri.EscapeDataString(applicationId)
+            Uri.EscapeDataString(request.OrganisationId),
+            Uri.EscapeDataString(request.ApplicationId)
         );
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
@@ -106,20 +91,20 @@ internal sealed class HttpAccreditationNumberAdapter(
             "Requesting accreditation number for organisation {OrganisationId} application "
                 + "{ApplicationId} from {Endpoint} (nation {Nation}, year {Year}, regenerate {Regenerate}, "
                 + "correlation {CorrelationId})",
-            organisationId,
-            applicationId,
+            request.OrganisationId,
+            request.ApplicationId,
             endpoint,
-            nation,
-            year,
-            regenerate,
-            correlationId
+            request.Nation,
+            request.Year,
+            request.Regenerate,
+            request.CorrelationId
         );
 
-        var body = new GenerateOrUpdateRegulatoryNumberRequest(
-            nation.ToString(),
-            orgId,
-            year,
-            regenerate
+        var body = new BackendRequestBody(
+            request.Nation.ToString(),
+            request.OrgId,
+            request.Year,
+            request.Regenerate
         );
 
         try
@@ -130,9 +115,9 @@ internal sealed class HttpAccreditationNumberAdapter(
                     // Rebuilt on every attempt (retry included): request content
                     // can only be sent once, and a fresh timestamp/nonce per
                     // attempt is correct anyway (signature window).
-                    using var request = BuildRequest(endpoint, correlationId, body);
+                    using var httpRequest = BuildRequest(endpoint, request.CorrelationId, body);
                     var client = httpClientFactory.CreateClient("DefaultClient");
-                    return await client.SendAsync(request, ct);
+                    return await client.SendAsync(httpRequest, ct);
                 },
                 cancellationToken
             );
@@ -145,9 +130,9 @@ internal sealed class HttpAccreditationNumberAdapter(
                         + "application {ApplicationId} (correlation {CorrelationId}): {Body}",
                     (int)response.StatusCode,
                     endpoint,
-                    organisationId,
-                    applicationId,
-                    correlationId,
+                    request.OrganisationId,
+                    request.ApplicationId,
+                    request.CorrelationId,
                     responseBody
                 );
                 return AccreditationNumberResult.Failure(
@@ -157,7 +142,7 @@ internal sealed class HttpAccreditationNumberAdapter(
 
             var payload =
                 await response.Content.ReadFromJsonAsync<AccreditationApplicationResponse>(
-                    JsonOptions,
+                    OperatorBackendJson.Options,
                     cancellationToken
                 );
             if (string.IsNullOrWhiteSpace(payload?.AccreditationReference))
@@ -167,9 +152,9 @@ internal sealed class HttpAccreditationNumberAdapter(
                         + "{OrganisationId} application {ApplicationId} (correlation {CorrelationId}) but the "
                         + "response carried no accreditationReference.",
                     endpoint,
-                    organisationId,
-                    applicationId,
-                    correlationId
+                    request.OrganisationId,
+                    request.ApplicationId,
+                    request.CorrelationId
                 );
                 return AccreditationNumberResult.Failure(
                     "Backend response did not include an accreditation reference."
@@ -179,9 +164,9 @@ internal sealed class HttpAccreditationNumberAdapter(
             logger.LogInformation(
                 "Accreditation number resolved for organisation {OrganisationId} application "
                     + "{ApplicationId} (correlation {CorrelationId}).",
-                organisationId,
-                applicationId,
-                correlationId
+                request.OrganisationId,
+                request.ApplicationId,
+                request.CorrelationId
             );
             return AccreditationNumberResult.Success(payload.AccreditationReference);
         }
@@ -200,10 +185,10 @@ internal sealed class HttpAccreditationNumberAdapter(
                 ex,
                 "Failed to resolve accreditation number for organisation {OrganisationId} application "
                     + "{ApplicationId} from {Endpoint} (correlation {CorrelationId})",
-                organisationId,
-                applicationId,
+                request.OrganisationId,
+                request.ApplicationId,
                 endpoint,
-                correlationId
+                request.CorrelationId
             );
             return AccreditationNumberResult.Failure(ex.Message);
         }
@@ -213,29 +198,11 @@ internal sealed class HttpAccreditationNumberAdapter(
     {
         var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
         {
-            Content = JsonContent.Create(body, options: JsonOptions),
+            Content = JsonContent.Create(body, options: OperatorBackendJson.Options),
         };
 
-        request.Headers.Add("x-cdp-client-id", _config.ClientId);
         request.Headers.Add("X-Correlation-Id", correlationId.ToString());
-
-        if (!string.IsNullOrEmpty(_config.SharedSecret))
-        {
-            var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
-            var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
-            var signature = ClientIdAuthenticationHandler.ComputeSignature(
-                _config.SharedSecret,
-                _config.ClientId,
-                userId: null,
-                userName: null,
-                timestamp,
-                nonce
-            );
-
-            request.Headers.Add("x-cdp-auth-signature", signature);
-            request.Headers.Add("x-cdp-auth-timestamp", timestamp);
-            request.Headers.Add("x-cdp-auth-nonce", nonce);
-        }
+        OperatorBackendSigning.AddHeaders(request, _config);
 
         return request;
     }
@@ -297,7 +264,7 @@ internal sealed class HttpAccreditationNumberAdapter(
         return builder.Build();
     }
 
-    private sealed record GenerateOrUpdateRegulatoryNumberRequest(
+    private sealed record BackendRequestBody(
         string? Nation,
         int? OrgId,
         int? Year,

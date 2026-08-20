@@ -84,13 +84,15 @@ public class HttpAccreditationNumberAdapterTests
         Guid correlationId = default
     ) =>
         adapter.GenerateOrUpdateAccreditationNumberAsync(
-            organisationId,
-            applicationId,
-            nation,
-            orgId,
-            year,
-            regenerate,
-            correlationId,
+            new AccreditationNumberRequest(
+                organisationId,
+                applicationId,
+                nation,
+                orgId,
+                year,
+                regenerate,
+                correlationId
+            ),
             ct
         );
 
