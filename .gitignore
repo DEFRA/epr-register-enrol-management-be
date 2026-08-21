@@ -285,3 +285,4 @@ coverage.json
 .dolt/
 *.db
 .beads-credential-key
+.claude/
