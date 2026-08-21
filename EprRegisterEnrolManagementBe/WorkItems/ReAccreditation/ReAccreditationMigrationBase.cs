@@ -63,10 +63,11 @@ internal abstract class ReAccreditationMigrationBase : IWorkItemMigration
                     await persistence.ReplaceAsync(full, cancellationToken);
                     migrated++;
                 }
-                catch (WorkItemConcurrencyException)
+                catch (WorkItemConcurrencyException ex)
                 {
                     // Another instance migrated this item concurrently; it is already up to date.
                     Logger.LogDebug(
+                        ex,
                         "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
                         full.Id);
                     skipped++;

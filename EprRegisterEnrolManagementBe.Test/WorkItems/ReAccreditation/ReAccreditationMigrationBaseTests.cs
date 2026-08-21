@@ -43,7 +43,7 @@ public class ReAccreditationMigrationBaseTests
 
         await migration.ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -90,7 +90,7 @@ public class ReAccreditationMigrationBaseTests
 
         await migration.ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -137,6 +137,6 @@ public class ReAccreditationMigrationBaseTests
 
         await migration.ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 }
