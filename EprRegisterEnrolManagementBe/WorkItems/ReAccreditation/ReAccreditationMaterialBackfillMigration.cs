@@ -21,81 +21,41 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationMaterialBackfillMigration(
     ILogger<ReAccreditationMaterialBackfillMigration> logger,
-    TimeProvider? timeProvider = null) : IWorkItemMigration
+    TimeProvider? timeProvider = null)
+    : ReAccreditationMigrationBase(logger)
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
-    public string Name => "ReAccreditation: backfill payload.material from legacy materialsHandled array";
+    public override string Name => "ReAccreditation: backfill payload.material from legacy materialsHandled array";
 
-    public async Task ApplyAsync(IWorkItemPersistence persistence, CancellationToken cancellationToken)
+    protected override bool TryMigrate(WorkItem full)
     {
-        var backfilled = 0;
-        var skipped = 0;
-        var page = 1;
-        const int pageSize = WorkItemQuery.MaxPageSize;
-
-        while (true)
+        if (!NeedsBackfill(full.Payload, out var material))
         {
-            var result = await persistence.QueryAsync(
-                new WorkItemQuery(
-                    TypeIds: [ReAccreditationType.Id],
-                    Page: page,
-                    PageSize: pageSize,
-                    IncludeArchived: true),
-                cancellationToken);
-
-            foreach (var candidate in result.Items)
-            {
-                // QueryAsync excludes Notes/AuditLog — fetch the full document
-                // before mutating so a subsequent ReplaceAsync doesn't wipe them.
-                var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
-                if (full is null || !NeedsBackfill(full.Payload, out var material))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                full.Payload["material"] = material;
-                full.AuditLog.Add(new WorkItemAuditEntry
-                {
-                    Action = "material-backfilled",
-                    ActionDisplayName = "Material backfilled",
-                    CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
-                    CreatedBy = "migration",
-                    CreatedByName = "Migration",
-                    Details = new Dictionary<string, string?>
-                    {
-                        ["material"] = material
-                    }
-                });
-
-                try
-                {
-                    await persistence.ReplaceAsync(full, cancellationToken);
-                    backfilled++;
-                }
-                catch (WorkItemConcurrencyException)
-                {
-                    logger.LogDebug(
-                        "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                        full.Id);
-                    skipped++;
-                }
-            }
-
-            var processed = (long)(page - 1) * pageSize + result.Items.Count;
-            if (processed >= result.TotalCount)
-            {
-                break;
-            }
-
-            page++;
+            return false;
         }
 
-        logger.LogInformation(
-            "Migration '{Name}' complete: {Backfilled} materials backfilled, {Skipped} already current or lacked legacy data.",
-            Name, backfilled, skipped);
+        full.Payload["material"] = material;
+        full.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "material-backfilled",
+            ActionDisplayName = "Material backfilled",
+            CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
+            CreatedBy = "migration",
+            CreatedByName = "Migration",
+            Details = new Dictionary<string, string?>
+            {
+                ["material"] = material
+            }
+        });
+
+        return true;
     }
+
+    protected override void LogCompletion(int migrated, int skipped) =>
+        Logger.LogInformation(
+            "Migration '{Name}' complete: {Backfilled} materials backfilled, {Skipped} already current or lacked legacy data.",
+            Name, migrated, skipped);
 
     private static bool NeedsBackfill(BsonDocument payload, out string material)
     {

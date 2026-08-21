@@ -21,78 +21,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <c>duly-make</c> are skipped.
 /// </summary>
 internal sealed class ReAccreditationDulyMadeSnapshotMigration(
-    ILogger<ReAccreditationDulyMadeSnapshotMigration> logger,
-    TimeProvider? timeProvider = null) : IWorkItemMigration
+    ILogger<ReAccreditationDulyMadeSnapshotMigration> logger)
+    : ReAccreditationSnapshotMigrationBase(logger)
 {
-    private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
-
-    public string Name => "ReAccreditation: remove duly-make transition from snapshot (v4 → v5)";
-
-    public async Task ApplyAsync(IWorkItemPersistence persistence, CancellationToken cancellationToken)
-    {
-        var migrated = 0;
-        var autoTransitioned = 0;
-        var skipped = 0;
-        var page = 1;
-        const int pageSize = WorkItemQuery.MaxPageSize;
-
-        while (true)
-        {
-            var result = await persistence.QueryAsync(
-                new WorkItemQuery(
-                    TypeIds: [ReAccreditationType.Id],
-                    Page: page,
-                    PageSize: pageSize,
-                    IncludeArchived: true),
-                cancellationToken);
-
-            foreach (var candidate in result.Items)
-            {
-                if (!NeedsMigration(candidate))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                // QueryAsync omits AuditLog/Notes — fetch the full document before saving
-                // so we do not accidentally wipe audit history on ReplaceAsync.
-                var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
-                if (full is null || !NeedsMigration(full))
-                {
-                    skipped++;
-                    continue;
-                }
-
-                PatchSnapshot(full);
-
-                try
-                {
-                    await persistence.ReplaceAsync(full, cancellationToken);
-                    migrated++;
-                }
-                catch (WorkItemConcurrencyException)
-                {
-                    // Another instance migrated this item concurrently; it is already up to date.
-                    logger.LogDebug(
-                        "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                        full.Id);
-                    skipped++;
-                }
-            }
-
-            var processed = (long)(page - 1) * pageSize + result.Items.Count;
-            if (processed >= result.TotalCount)
-            {
-                break;
-            }
-
-            page++;
-        }
-
-        logger.LogInformation(
-            "Migration '{Name}' complete: {Migrated} updated ({AutoTransitioned} auto-transitioned to duly-made), {Skipped} already current.",
-            Name, migrated, autoTransitioned, skipped);
-    }
+    public override string Name => "ReAccreditation: remove duly-make transition from snapshot (v4 → v5)";
 
     /// <summary>
     /// RA-316: the presence of <c>duly-make</c> is no longer sufficient on its
@@ -106,7 +38,7 @@ internal sealed class ReAccreditationDulyMadeSnapshotMigration(
     /// Versions are compared numerically rather than by string equality so a
     /// v1/v2/v3 item (should any survive) is still caught.
     /// </summary>
-    private static bool NeedsMigration(WorkItem workItem) =>
+    protected override bool NeedsMigration(WorkItem workItem) =>
         workItem.TemplateSnapshot is not null &&
         workItem.TemplateSnapshot.Transitions.Any(t => t.ActionId == "duly-make") &&
         IsPreV5(workItem.TemplateSnapshot.TemplateVersion);
@@ -128,7 +60,7 @@ internal sealed class ReAccreditationDulyMadeSnapshotMigration(
         return !int.TryParse(digits, out var version) || version < 5;
     }
 
-    private static void PatchSnapshot(WorkItem workItem)
+    protected override void PatchSnapshot(WorkItem workItem)
     {
         var snapshot = workItem.TemplateSnapshot!;
         workItem.TemplateSnapshot = new WorkItemTemplateSnapshot
