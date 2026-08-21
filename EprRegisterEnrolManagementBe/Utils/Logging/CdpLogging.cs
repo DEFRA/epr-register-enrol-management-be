@@ -18,7 +18,11 @@ public static class CdpLogging
     /// <c>null</c>, so the ECS HTTP enricher silently emits no
     /// request-context fields (epr-3yv).
     /// </summary>
-    public static void Configuration(HostBuilderContext ctx, IServiceProvider services, LoggerConfiguration config)
+    public static void Configuration(
+        HostBuilderContext ctx,
+        IServiceProvider services,
+        LoggerConfiguration config
+    )
     {
         var httpAccessor = services.GetRequiredService<IHttpContextAccessor>();
         var traceIdHeader = ctx.Configuration.GetValue<string>("TraceHeader");
@@ -31,6 +35,7 @@ public static class CdpLogging
         var mainLogger = new LoggerConfiguration()
             .ReadFrom.Configuration(ctx.Configuration)
             .Enrich.WithEcsHttpContext(httpAccessor)
+            .Enrich.With<PiiRedactionEnricher>()
             .Enrich.FromLogContext()
             .CreateLogger();
 
