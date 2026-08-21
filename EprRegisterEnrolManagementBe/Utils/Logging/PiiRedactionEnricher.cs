@@ -20,7 +20,8 @@ public sealed class PiiRedactionEnricher : ILogEventEnricher
     // property whose own key happens to be named "Email".
     private static readonly Regex EmailPattern = new(
         @"[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+",
-        RegexOptions.Compiled
+        RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250)
     );
 
     public void Enrich(LogEvent logEvent, ILogEventPropertyFactory propertyFactory)
@@ -79,13 +80,29 @@ public sealed class PiiRedactionEnricher : ILogEventEnricher
     {
         foreach (var (name, value) in logEvent.Properties.ToList())
         {
-            if (value is ScalarValue { Value: string text } && EmailPattern.IsMatch(text))
+            if (value is not ScalarValue { Value: string text })
+            {
+                continue;
+            }
+
+            string? redactedText;
+            try
+            {
+                redactedText = EmailPattern.IsMatch(text)
+                    ? EmailPattern.Replace(text, RedactedValue)
+                    : null;
+            }
+            catch (RegexMatchTimeoutException)
+            {
+                // Fail safe: a value too long to scan in time is treated as
+                // unsafe to log verbatim, rather than let it through unredacted.
+                redactedText = RedactedValue;
+            }
+
+            if (redactedText is not null)
             {
                 logEvent.AddOrUpdateProperty(
-                    new LogEventProperty(
-                        name,
-                        new ScalarValue(EmailPattern.Replace(text, RedactedValue))
-                    )
+                    new LogEventProperty(name, new ScalarValue(redactedText))
                 );
             }
         }
