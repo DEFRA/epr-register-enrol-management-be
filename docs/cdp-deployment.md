@@ -32,6 +32,8 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 | `OperatorBackendApi__ClientId` | Service config    | Defaults to `epr-register-enrol-management-be`. Only override if `epr-register-enrol-backend`'s `CaseManagementAuth:ExpectedClientId` expects a different value — prefer leaving both at their defaults. |
 | `Auth__ManagementFeClientId` | Service config  | The `clientId` (`x-cdp-client-id` value) that `management-fe` is expected to assert. Defaults to `frontend` — override only if `management-fe`'s own `BACKEND_API_CLIENT_ID` is set to something else. Must be distinct from `Auth__BackendClientId` (see RA-345 below). |
 | `Auth__BackendClientId` | Service config      | The `clientId` that `epr-register-enrol-backend` is expected to assert. Defaults to `epr-register-enrol-backend` — override only if that service's own `CaseWorking__ClientId` is set to something else. Must be distinct from `Auth__ManagementFeClientId`; the service throws at first request if the two collide. |
+| `ENVIRONMENT`              | CDP platform          | Platform environment name (`local`, `dev`, `test`, `perf-test`, `ext-test`, `prod`). Read by `NotifySendingPolicy` — see [Notify sending by environment](#notify-sending-by-environment) below. |
+| `NOTIFY_SENDEMAILS`        | Service config        | Optional. Overrides the environment-derived decision about whether email is really dispatched (`true`/`false`). A flat top-level key, matching `NOTIFY_API_KEY`'s convention. Leave unset in normal operation. |
 
 ## Required secrets (cdp-portal)
 
@@ -41,7 +43,7 @@ Create via the CDP self-service portal under the service's "secrets" tab:
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `AUTH_SHARED_SECRET__MANAGEMENT_FE` | HMAC secret used to verify signed trust headers from `management-fe` (see [BFF signing contract](#bff-signing-contract) below). Must match the secret `management-fe` signs with (`AUTH_SHARED_SECRET` in that service). **Required in all non-Development environments.** The service will reject every authenticated request with `401` until at least one caller's secret is set (see RA-345 below). Generate with `openssl rand -base64 32`. |
 | `AUTH_SHARED_SECRET__BACKEND` | HMAC secret used to verify signed trust headers from `epr-register-enrol-backend` (see [BFF signing contract](#bff-signing-contract) below). Must match the secret `epr-register-enrol-backend` signs with (`CASE_MANAGEMENT_API_SHARED_SECRET` in that service — a flat name, not the nested `CaseWorking__*` form the rest of that service's `CaseWorking` config uses, per CDP's secrets naming convention). **Required in all non-Development environments.** Distinct from `AUTH_SHARED_SECRET__MANAGEMENT_FE` — this is the entire point of RA-345 (per-caller secrets): rotating or revoking one caller's secret must never require touching the other's. Generate with `openssl rand -base64 32`. |
-| `NOTIFY_API_KEY`     | GOV.UK Notify API key. Only takes effect when the `Notify__Enabled` master switch is `true` (RA-422; default `false`, set per environment in cdp-app-config). With the flag off — the default in every environment — the notification hook is never registered, so no email is sent and no `notification-*` audit entries are written regardless of this key. With the flag on but this key absent, the service boots with a no-op Notify client (notifications logged, not sent). |
+| `NOTIFY_API_KEY`     | GOV.UK Notify API key. Only takes effect when the `Notify__Enabled` master switch is `true` (RA-422; default `false`, set per environment in cdp-app-config). With the flag off — the default in every environment — the notification hook is never registered, so no email is sent and no `notification-*` audit entries are written regardless of this key. With the flag on but this key absent, the service boots with a no-op Notify client (notifications logged, not sent). Even with the flag on and this key set, dev and localhost suppress sending regardless — see [Notify sending by environment](#notify-sending-by-environment). |
 | `OPERATOR_BACKEND_SHARED_SECRET` | HMAC shared secret this service signs its outbound RA-311/MBE-1 query-push requests with — a flat name, not the nested `OperatorBackendApi__*` form the rest of that config section uses, per CDP's secrets naming convention. Must match `AUTH_SHARED_SECRET__MANAGEMENT_BE` on `epr-register-enrol-backend` exactly — a mismatch on either side 401s every push. The two secrets deliberately don't share a name: this service names its own outbound secrets by target/purpose (matching `epr-register-enrol-backend`'s own `CASE_MANAGEMENT_API_SHARED_SECRET` pattern for its outbound calls into this service), while `epr-register-enrol-backend` names its inbound secrets by caller (matching this service's own `AUTH_SHARED_SECRET__MANAGEMENT_FE`/`AUTH_SHARED_SECRET__BACKEND` pattern below) — same convention applied from each service's own side, not a shared literal name. **Required when `OperatorBackendApi__Enabled=true`** — startup fails otherwise. Generate with `openssl rand -base64 32`. Distinct from the two `AUTH_SHARED_SECRET__*` secrets above (this service's *inbound* secrets) and from whatever `epr-register-enrol-backend` uses for its own calls into this service (`CASE_MANAGEMENT_API_SHARED_SECRET`) — four separate secrets in total, not one, do not conflate them when rotating. |
 
 > **RA-345 (per-caller secrets):** prior to RA-345 there was a single
@@ -52,6 +54,49 @@ Create via the CDP self-service portal under the service's "secrets" tab:
 > above, each verified only against the specific `clientId` it is registered
 > for. See `docs/adr/0005-rbac-in-frontend-drop-roles-from-payload.md`'s
 > "Follow-up: per-caller shared secrets" section for the rationale.
+
+## Notify sending by environment
+
+The non-production GOV.UK Notify service is driven by a **team** API key. A
+team key may only send to addresses registered on the Notify team, plus a hard
+limit of five guest addresses — and those guest slots are exhausted. A send to
+any other address fails, and the case worker sees that failure in the
+case-management UI as a failed action.
+
+`NotifySendingPolicy` therefore decides, at startup, whether sends are really
+dispatched:
+
+| `ENVIRONMENT`                            | Dispatches email? |
+| ---------------------------------------- | ----------------- |
+| `local`, `dev`                            | No                |
+| unset, with `ASPNETCORE_ENVIRONMENT=Development` (Compose, `dotnet run`) | No |
+| `test`, `perf-test`, `ext-test`, `prod`   | Yes               |
+| unset or unrecognised, non-Development host | Yes (fail-open) |
+
+When sending is suppressed, `NoOpNotifyClient` is registered **even though
+`NOTIFY_API_KEY` is set**. It returns success, so the work item's audit log
+still records a `notification-sent` entry and the UI behaves exactly as it does
+in a sending environment. The only difference is that no HTTP traffic reaches
+Notify. Suppressed sends are logged with
+`notify.suppression_reason=sending_disabled_for_environment` (as opposed to
+`no_api_key` when no key is configured at all), and the startup line
+`Notify integration: … sendingEnabled=… environment=…` records the decision.
+
+`ENVIRONMENT` is read straight from the process environment
+(`NotifySendingPolicy.ReadCdpEnvironment`), not through `IConfiguration`:
+`ENVIRONMENT` is also `WebHostDefaults.EnvironmentKey`, so when the ASP.NET
+host environment is set explicitly, host configuration shadows the key and
+`configuration["ENVIRONMENT"]` returns the host environment name
+(`Development`) rather than the platform value (`dev`). It cannot therefore be
+set from `appsettings.json`.
+
+The fail-open default is deliberate: an unset or renamed `ENVIRONMENT` in a
+deployed environment must not silently swallow real notifications. To force the
+decision either way, set `NOTIFY_SENDEMAILS` (`true` to smoke-test the real
+integration in dev against a Notify-registered address, `false` to silence a
+sending environment). Environment variables for deployed environments live in
+[DEFRA/cdp-app-config](https://github.com/DEFRA/cdp-app-config), not in this
+repo.
 
 ## BFF signing contract
 

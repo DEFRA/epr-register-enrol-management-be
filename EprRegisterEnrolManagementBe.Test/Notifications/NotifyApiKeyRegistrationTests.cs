@@ -103,11 +103,18 @@ public class NotifyApiKeyRegistrationTests
 
     // Always set NOTIFY_API_KEY and Notify:Enabled explicitly so an ambient
     // value in the test runner's environment cannot influence the outcome.
+    //
+    // NOTIFY_SENDEMAILS=true pins NotifySendingPolicy open. Without it the
+    // enabled+API-key case would assert the dev/localhost environment gate
+    // (the test host defaults to the Development environment) instead of the
+    // flag×API-key matrix it is about — NotifyEnvironmentGatingTests covers
+    // the gate itself.
     private EphemeralMongoTestFactory NewFactory(string? apiKey, bool enabled) =>
         new(_fixture, "notify-key", settings: new Dictionary<string, string?>
         {
             ["NOTIFY_API_KEY"] = apiKey ?? string.Empty,
             ["Notify:Enabled"] = enabled ? "true" : "false",
+            [NotifySendingPolicy.SendEmailsKey] = "true",
         });
 }
 
@@ -169,9 +176,13 @@ public class NotifyApiKeyEnvVarRegistrationTests
 
     // Notifications enabled so the key dimension alone drives the decision;
     // the RA-422 flag gate is covered by NotifyApiKeyRegistrationTests.
+    // NOTIFY_SENDEMAILS=true pins NotifySendingPolicy open so the environment
+    // gate (test host defaults to Development) does not shadow the API-key
+    // branch under test — NotifyEnvironmentGatingTests covers the gate itself.
     private EphemeralMongoTestFactory EnabledFactory(string prefix) =>
         new(_fixture, prefix, settings: new Dictionary<string, string?>
         {
             ["Notify:Enabled"] = "true",
+            [NotifySendingPolicy.SendEmailsKey] = "true",
         });
 }

@@ -70,6 +70,20 @@ entries are written. To send real notifications you need **both**
 but no key the service still starts and uses the no-op client (calls logged, no
 HTTP traffic to Notify).
 
+Even with the flag on and a key set, notification calls are logged but **never**
+sent to GOV.UK Notify when running locally: the no-op client is registered on a
+Development host and whenever `ENVIRONMENT` is `local` or `dev`. It returns
+success, so the work item's audit log still records a `notification-sent` entry
+and the UI behaves as it does in a sending environment. The non-production
+Notify team key can only reach team-registered addresses plus five guests, and
+those slots are used up — see
+[docs/cdp-deployment.md](./docs/cdp-deployment.md#notify-sending-by-environment).
+
+To smoke-test the real integration locally, set `NOTIFY_API_KEY` to a key from
+the [Notify dashboard](https://www.notifications.service.gov.uk/), enable
+`Notify__Enabled=true` **and** `NOTIFY_SENDEMAILS=true`, and make sure the
+recipient address is registered on the Notify team.
+
 If you do not have MongoDB installed locally, start just the database from
 the Compose stack:
 
