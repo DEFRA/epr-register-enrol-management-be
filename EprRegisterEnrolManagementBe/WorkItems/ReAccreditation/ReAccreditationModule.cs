@@ -141,6 +141,15 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // number it returns. When the integration is unconfigured, the
         // adapter's own Url check returns a Failure result instead.
         services.AddSingleton<IAccreditationNumberAdapter, HttpAccreditationNumberAdapter>();
+        // RA-469 AC16: same unconditional-registration reasoning as
+        // IAccreditationNumberAdapter above — a regulator's recycling-
+        // operations edit has no safe no-op to fall back to, so the
+        // adapter enforces its own Enabled/Url checks rather than being
+        // swapped for a no-op implementation when unconfigured.
+        services.AddSingleton<
+            IOverseasSiteRecyclingOperationsAdapter,
+            HttpOverseasSiteRecyclingOperationsAdapter
+        >();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
         // RA-316: bespoke duly-making workflow. Owns the submitted → duly-made
         // transition and the side effect the generic engine cannot perform —
