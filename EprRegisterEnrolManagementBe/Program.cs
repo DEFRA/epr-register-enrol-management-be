@@ -148,7 +148,7 @@ static void ConfigureServices(WebApplicationBuilder builder)
     ConfigureHttpClients(services);
     ConfigureMongo(services, configuration);
     ConfigureCors(services, configuration);
-    ConfigureNotifications(services, configuration);
+    ConfigureNotifications(services, configuration, builder.Environment);
     ConfigureReEx(services, configuration);
     ConfigureOperatorBackendPush(services, configuration);
 
@@ -511,12 +511,20 @@ static void ConfigureOperatorBackendPush(IServiceCollection services, IConfigura
 /// <summary>
 /// GOV.UK Notify wiring (RA-123). When <c>NOTIFY_API_KEY</c> is absent or
 /// empty the no-op client is registered so the service still boots in
-/// environments without Notify credentials. When set, the real
-/// GovukNotify SDK client is registered behind the project-owned
-/// <see cref="INotifyClient"/> abstraction with Polly retries.
+/// environments without Notify credentials. The no-op client is also
+/// registered — API key or not — in environments that
+/// <see cref="NotifySendingPolicy"/> says must not dispatch real email
+/// (dev and localhost, because the non-production Notify team key has run
+/// out of guest-address slots). Otherwise the real GovukNotify SDK client
+/// is registered behind the project-owned <see cref="INotifyClient"/>
+/// abstraction with Polly retries.
 /// </summary>
 [ExcludeFromCodeCoverage]
-static void ConfigureNotifications(IServiceCollection services, IConfiguration configuration)
+static void ConfigureNotifications(
+    IServiceCollection services,
+    IConfiguration configuration,
+    IHostEnvironment hostEnvironment
+)
 {
     services.AddOptions<NotifyConfig>().Bind(configuration.GetSection("Notify"));
 
@@ -531,6 +539,23 @@ static void ConfigureNotifications(IServiceCollection services, IConfiguration c
     if (!NotifyFeature.NotificationsEnabled(configuration) || string.IsNullOrWhiteSpace(apiKey))
     {
         services.AddSingleton<INotifyClient, NoOpNotifyClient>();
+        return;
+    }
+
+    var shouldSend = NotifySendingPolicy.ShouldSendEmails(
+        configuration.GetValue<bool?>(NotifySendingPolicy.SendEmailsKey),
+        NotifySendingPolicy.ReadCdpEnvironment(),
+        hostEnvironment.IsDevelopment()
+    );
+
+    if (!shouldSend)
+    {
+        // A key IS configured, but this environment deliberately does not
+        // send. Callers still get success + a notification-sent audit entry.
+        services.AddSingleton<INotifyClient>(sp => new NoOpNotifyClient(
+            sp.GetRequiredService<IStructuredLogger<NoOpNotifyClient>>(),
+            NotifySendingPolicy.SuppressedByEnvironmentReason
+        ));
         return;
     }
 
@@ -650,13 +675,21 @@ static void LogNotifyClientRegistration(WebApplication app)
     var apiKeyConfigured = !string.IsNullOrWhiteSpace(
         app.Configuration.GetValue<string>("NOTIFY_API_KEY")
     );
+    var cdpEnvironment = NotifySendingPolicy.ReadCdpEnvironment();
+    var sendingEnabled = NotifySendingPolicy.ShouldSendEmails(
+        app.Configuration.GetValue<bool?>(NotifySendingPolicy.SendEmailsKey),
+        cdpEnvironment,
+        app.Environment.IsDevelopment());
     app.Logger.LogInformation(
         "Notify integration: enabled={NotificationsEnabled} client={NotifyClientType} "
-            + "apiKeyConfigured={ApiKeyConfigured} baseUri={NotifyBaseUri} "
+            + "apiKeyConfigured={ApiKeyConfigured} sendingEnabled={NotifySendingEnabled} "
+            + "environment={CdpEnvironment} baseUri={NotifyBaseUri} "
             + "timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
         NotifyFeature.NotificationsEnabled(app.Configuration),
         notifyClient.GetType().FullName,
         apiKeyConfigured,
+        sendingEnabled,
+        string.IsNullOrWhiteSpace(cdpEnvironment) ? "<unset>" : cdpEnvironment,
         string.IsNullOrWhiteSpace(notifyOptions.BaseUri) ? "<sdk-default>" : notifyOptions.BaseUri,
         notifyOptions.RequestTimeoutSeconds,
         notifyOptions.Templates.Count
