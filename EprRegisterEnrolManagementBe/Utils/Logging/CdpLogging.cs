@@ -35,8 +35,8 @@ public static class CdpLogging
         var mainLogger = new LoggerConfiguration()
             .ReadFrom.Configuration(ctx.Configuration)
             .Enrich.WithEcsHttpContext(httpAccessor)
-            .Enrich.With<PiiRedactionEnricher>()
             .Enrich.FromLogContext()
+            .Enrich.With<PiiRedactionEnricher>()
             .CreateLogger();
 
         if (traceIdHeader != null)

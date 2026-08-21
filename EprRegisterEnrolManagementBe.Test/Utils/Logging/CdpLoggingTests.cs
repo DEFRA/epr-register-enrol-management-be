@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
@@ -23,14 +24,12 @@ public class CdpLoggingTests
     [Fact]
     public void Configuration_resolves_HttpContextAccessor_from_di()
     {
-        var liveAccessor = new HttpContextAccessor
-        {
-            HttpContext = new DefaultHttpContext()
-        };
+        var liveAccessor = new HttpContextAccessor { HttpContext = new DefaultHttpContext() };
         var provider = new TrackingServiceProvider(
             new ServiceCollection()
                 .AddSingleton<IHttpContextAccessor>(liveAccessor)
-                .BuildServiceProvider());
+                .BuildServiceProvider()
+        );
 
         var ctx = NewHostBuilderContext();
 
@@ -50,15 +49,72 @@ public class CdpLoggingTests
         var emptyProvider = new ServiceCollection().BuildServiceProvider();
         var ctx = NewHostBuilderContext();
 
-        Assert.Throws<InvalidOperationException>(
-            () => CdpLogging.Configuration(ctx, emptyProvider, new LoggerConfiguration()));
+        Assert.Throws<InvalidOperationException>(() =>
+            CdpLogging.Configuration(ctx, emptyProvider, new LoggerConfiguration())
+        );
     }
 
-    private static HostBuilderContext NewHostBuilderContext() => new(new Dictionary<object, object>())
+    /// <summary>
+    /// Pins that <see cref="PiiRedactionEnricher"/> is actually wired into
+    /// the real <c>mainLogger</c> sub-pipeline this method builds internally
+    /// (not just correct in isolation, as <c>PiiRedactionEnricherTests</c>
+    /// already covers) - proves an email claim never reaches this method's
+    /// real composed output, not just that the standalone enricher redacts
+    /// it when called directly.
+    /// </summary>
+    [Fact]
+    public void Configuration_RedactsEmailClaim_InComposedPipeline()
     {
-        HostingEnvironment = new TestHostEnvironment(),
-        Configuration = new ConfigurationBuilder().Build()
-    };
+        var identity = new ClaimsIdentity(
+            [new Claim(ClaimTypes.Email, "person@example.com")],
+            "TestAuth"
+        );
+        var httpContext = new DefaultHttpContext { User = new ClaimsPrincipal(identity) };
+        var provider = new ServiceCollection()
+            .AddSingleton<IHttpContextAccessor>(
+                new HttpContextAccessor { HttpContext = httpContext }
+            )
+            .BuildServiceProvider();
+
+        var originalOut = Console.Out;
+        var capturedOutput = new StringWriter();
+        Console.SetOut(capturedOutput);
+        try
+        {
+            var ctx = NewHostBuilderContext(withConsoleSink: true);
+            var config = new LoggerConfiguration();
+
+            CdpLogging.Configuration(ctx, provider, config);
+            using var logger = config.CreateLogger();
+            logger.Information("Notify send starting");
+        }
+        finally
+        {
+            Console.SetOut(originalOut);
+        }
+
+        var output = capturedOutput.ToString();
+        Assert.Contains(PiiRedactionEnricher.RedactedValue, output);
+        Assert.DoesNotContain("person@example.com", output);
+    }
+
+    private static HostBuilderContext NewHostBuilderContext(bool withConsoleSink = false) =>
+        new(new Dictionary<object, object>())
+        {
+            HostingEnvironment = new TestHostEnvironment(),
+            Configuration = withConsoleSink
+                ? new ConfigurationBuilder()
+                    .AddInMemoryCollection(
+                        new Dictionary<string, string?>
+                        {
+                            ["Serilog:WriteTo:0:Name"] = "Console",
+                            ["Serilog:WriteTo:0:Args:formatter"] =
+                                "Elastic.CommonSchema.Serilog.EcsTextFormatter, Elastic.CommonSchema.Serilog",
+                        }
+                    )
+                    .Build()
+                : new ConfigurationBuilder().Build(),
+        };
 
     /// <summary>
     /// Wraps a real <see cref="IServiceProvider"/> and records the set
