@@ -1,3 +1,4 @@
+using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
@@ -33,6 +34,23 @@ internal sealed record ReAccreditationPayload
     public string? ApplicationReference { get; init; }
 
     public string? Material { get; init; }
+
+    /// <summary>
+    /// RA-307: the glass recycling process, present only when
+    /// <see cref="Material"/> is glass. Stamped onto the payload by the
+    /// operator backend's HttpCaseWorkingApiAdapter as a plain string wire
+    /// value (e.g. "glass_re_melt"); absent for every non-glass material and
+    /// for glass applications that predate RA-307.
+    ///
+    /// BsonRepresentation(String) pins ToBsonDocument() to write the enum's
+    /// member name rather than the driver's default ordinal int — the member
+    /// names are the wire values themselves (see GlassRecyclingProcess.cs),
+    /// so this keeps every write consistent with what ingestion already
+    /// stores. Matches the convention on WorkItem/WorkItemAuditEntry/WorkItemNote.
+    /// </summary>
+    [BsonRepresentation(BsonType.String)]
+    public GlassRecyclingProcess? GlassRecyclingProcess { get; init; }
+
     public int? PreviousAccreditationYear { get; init; }
     public int? ComplianceIssuesReported { get; init; }
 
@@ -49,6 +67,20 @@ internal sealed record ReAccreditationPayload
     /// with <see cref="OperatorOrganisationId"/> for prior-year lookups.
     /// </summary>
     public string? OperatorRegistrationId { get; init; }
+
+    /// <summary>
+    /// RA-448 phase 2: the operator backend's own <c>AccreditationApplicationModel.Id</c>
+    /// — confirmed (not assumed) against <c>HttpCaseWorkingApiAdapter.BuildPayload</c>
+    /// in epr-register-enrol-backend, which sends
+    /// <c>operatorApplicationId = application.ApplicationId</c> (that model's
+    /// Mongo <c>Id</c>, stringified) on every real submission. This, not
+    /// <see cref="OperatorRegistrationId"/> (the seed-time ReEx registration id —
+    /// a different value), is the correct <c>{applicationId}</c> route segment
+    /// for the accreditation-number endpoint: every subsequent route on that
+    /// backend's <c>accreditation-applications</c> group keys on the same
+    /// document id, not on the registration id.
+    /// </summary>
+    public string? OperatorApplicationId { get; init; }
 
     /// <summary>
     /// Operator email address used as the GOV.UK Notify recipient for

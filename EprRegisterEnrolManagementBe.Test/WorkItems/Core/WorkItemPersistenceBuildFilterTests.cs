@@ -421,4 +421,97 @@ public class WorkItemPersistenceBuildFilterTests
 
         Assert.Equal(new BsonDocument(), doc);
     }
+
+    // ───────────────────────── WasteProcessingType (RA-412) ─────────────────────────
+
+    [Fact]
+    public void ExporterRendersAsAnchoredCaseInsensitiveRegex()
+    {
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }));
+
+        var regex = doc["payload.wasteProcessingType"].AsBsonRegularExpression;
+        Assert.Equal("^exporter$", regex.Pattern);
+        Assert.Equal("i", regex.Options);
+    }
+
+    [Fact]
+    public void ExporterValueIsCaseInsensitive()
+    {
+        // Casing of the QUERY VALUE must not change which bucket it lands in
+        // ("Exporter" still means exporter) — the rendered pattern is always
+        // the fixed literal "^exporter$"; only the match against stored data
+        // is case-insensitive ("i" option).
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "Exporter" }));
+
+        Assert.Equal("^exporter$", doc["payload.wasteProcessingType"].AsBsonRegularExpression.Pattern);
+    }
+
+    [Fact]
+    public void ReprocessorRendersAsNotExporter()
+    {
+        // Self-review fix: "reprocessor" must NOT be a literal-string match —
+        // that would exclude every item with no wasteProcessingType at all,
+        // disagreeing with the "absent means Reprocessor" fallback every
+        // other reader of this field applies. $not on the exporter regex
+        // matches everything that isn't a literal "exporter", including an
+        // absent or non-string field (confirmed against a real Mongo instance
+        // in WorkItemPersistenceMongoIntegrationTests).
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "reprocessor" }));
+
+        var not = doc["payload.wasteProcessingType"]["$not"];
+        Assert.Equal("^exporter$", not.AsBsonRegularExpression.Pattern);
+        Assert.Equal("i", not.AsBsonRegularExpression.Options);
+    }
+
+    [Fact]
+    public void UnknownValueIsTreatedAsReprocessor()
+    {
+        // No backend enum for this field: anything that isn't literally
+        // "exporter" falls into the same "not exporter" bucket as
+        // "reprocessor" itself — there is no third bucket to drop the value
+        // into, and that mirrors the app-wide "anything but exporter" rule.
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "bogus" }));
+
+        Assert.Equal(
+            "^exporter$",
+            doc["payload.wasteProcessingType"]["$not"].AsBsonRegularExpression.Pattern);
+    }
+
+    [Fact]
+    public void BothBucketsSelectedAppliesNoRestriction()
+    {
+        // Exporter and "not exporter" partition every possible item, so
+        // selecting both is equivalent to selecting neither.
+        var doc = Render(new WorkItemQuery(
+            WasteProcessingTypes: new[] { "exporter", "reprocessor" }));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void EmptyWasteProcessingTypesIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: Array.Empty<string>()));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void NullWasteProcessingTypesIsIgnored()
+    {
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: null));
+
+        Assert.Equal(new BsonDocument(), doc);
+    }
+
+    [Fact]
+    public void WasteProcessingTypesAndTypeIdsCombineCorrectly()
+    {
+        var doc = Render(new WorkItemQuery(
+            TypeIds: new[] { "re-accreditation" },
+            WasteProcessingTypes: new[] { "exporter" }));
+
+        Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
+        Assert.Equal("^exporter$", doc["payload.wasteProcessingType"].AsBsonRegularExpression.Pattern);
+    }
 }

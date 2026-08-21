@@ -1,3 +1,5 @@
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 
@@ -16,7 +18,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
 
     public IWorkItemType Type => s_type;
 
-    public void RegisterServices(IServiceCollection services)
+    public void RegisterServices(IServiceCollection services, IConfiguration configuration)
     {
         services.AddSingleton<INationResolver, NationResolver>();
         services.AddSingleton<IRegulatorMailboxResolver, RegulatorMailboxResolver>();
@@ -29,7 +31,16 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // establishes. The clock is started once, by
         // ReAccreditationDulyMakingService, and payment-received no longer
         // touches it.
-        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
+        // RA-422: outbound CM email + every notification-* audit entry flow
+        // through this one hook, so gating its registration on the central
+        // Notify:Enabled flag is the single chokepoint for both concerns. When
+        // notifications are disabled the hook is never registered, so no email
+        // is sent AND no notification-sent/skipped/failed audit entries are
+        // written. See NotifyFeature / ConfigureNotifications in Program.cs.
+        if (NotifyFeature.NotificationsEnabled(configuration))
+        {
+            services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
+        }
         // RA-311/MBE-1: pushes the query note + sections to the operator
         // backend whenever a query is raised.
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
@@ -52,6 +63,15 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             ReAccreditationDulyMadeSlaClockBackfillMigration
         >();
         services.AddSingleton<IWorkItemMigration, ReAccreditationMaterialBackfillMigration>();
+        // RA-412 (self-review): backfills wasteProcessingType/
+        // companyRegisterAddressPostcode on the two overseas-sites seed
+        // fixtures for any environment that seeded before those fields were
+        // added — CreateIfAbsentAsync never updates an already-seeded id.
+        // No ordering dependency on any other migration.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationExporterFixtureBackfillMigration
+        >();
         // RA-311/MBE-1: adds the resume-during-* transitions to every
         // existing work item's frozen template snapshot (v6 → v7).
         services.AddSingleton<IWorkItemMigration, ReAccreditationResumeSnapshotMigration>();
@@ -87,6 +107,13 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // advertising the old two-step decision path. Runs after the v10 → v11
         // migration above so an older item reaches v11 first.
         services.AddSingleton<IWorkItemMigration, ReAccreditationDecisionSnapshotMigration>();
+        // RA-351: adds the queried sla-extend self-loop to every existing
+        // work item's frozen template snapshot (v12 → v13). No ordering
+        // dependency on the migrations above — it only appends a single
+        // self-contained transition, keyed off an sla-extend transition
+        // whose from-state is 'queried' (a v12 snapshot already carries the
+        // assessment-in-progress sla-extend self-loop).
+        services.AddSingleton<IWorkItemMigration, ReAccreditationSlaExtendQuerySnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply
@@ -94,30 +121,26 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // (a bad correction hides a genuinely new site from the regulator,
         // which is worse than the defect it fixes). Safe to register
         // unconditionally: with no configuration it returns immediately.
-        services.AddSingleton<
-            IWorkItemMigration,
-            ReAccreditationIsNewSiteCorrectionMigration
-        >();
-        // RA-132: accreditation-id generator + module-scoped approval
-        // service that owns the bespoke approval workflow (id issuance,
-        // SLA clock stop, queued publishing). RA-133: the generator
-        // now consults a Mongo-backed lookup for uniqueness.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationIsNewSiteCorrectionMigration>();
+        // RA-132: module-scoped approval service that owns the bespoke
+        // approval workflow (id issuance, SLA clock stop, queued publishing).
         // RA-410: module-scoped service that owns the single-call decision
         // hop. Registered after the approval service it delegates approvals to.
         services.AddSingleton<
             IReAccreditationLogDecisionService,
             ReAccreditationLogDecisionService
         >();
-        services.AddSingleton<IAccreditationIdLookup, AccreditationIdLookup>();
-        services.AddSingleton<IAccreditationIdGenerator, AccreditationIdGenerator>();
-        // epr-accreditation-id-format AC02: backfills payload.accreditationId
-        // on already-approved items to the new fixed-width format. Like
-        // ReAccreditationIsNewSiteCorrectionMigration, safe to register
-        // unconditionally: with no configuration it returns immediately.
-        services.AddSingleton<
-            IWorkItemMigration,
-            ReAccreditationAccreditationIdFormatMigration
-        >();
+        // RA-448 phase 2: the locally-fabricated accreditation id generator
+        // (AccreditationIdGenerator/AccreditationIdLookup) and its
+        // ULID-format backfill migration are gone. ReAccreditationApprovalService
+        // now resolves a real, backend-issued accreditation number via this
+        // adapter instead — registered unconditionally (not gated behind
+        // OperatorBackendApi:Enabled like IOperatorBackendPushAdapter's
+        // no-op/real switch): unlike that fire-and-forget push, there is no
+        // safe no-op for this call, since approval genuinely depends on the
+        // number it returns. When the integration is unconfigured, the
+        // adapter's own Url check returns a Failure result instead.
+        services.AddSingleton<IAccreditationNumberAdapter, HttpAccreditationNumberAdapter>();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
         // RA-316: bespoke duly-making workflow. Owns the submitted → duly-made
         // transition and the side effect the generic engine cannot perform —

@@ -166,7 +166,8 @@ static void ConfigureServices(WebApplicationBuilder builder)
         // are deliberately disjoint so a downed dependency cannot recycle
         // the pod and a wedged process cannot keep serving traffic.
         .AddCheck<LivenessHealthCheck>("threadpool", tags: ["live"])
-        .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"]);
+        .AddCheck<MongoHealthCheck>("mongodb", tags: ["ready"])
+        .AddCheck<RequiredConfigHealthCheck>("required-config", tags: ["ready"]);
 
     ConfigureWorkItems(builder);
 
@@ -189,10 +190,10 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     services.AddWorkItemFramework();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
     // RA-131: SLA extend / override is a cross-cutting framework concern
-    // (universal rules: max-extension cap, audit shape, operator notify on
-    // extend via post-action hooks) so it lives next to the framework, not
-    // in a module.
-    services.AddOptions<SlaConfig>().Bind(builder.Configuration.GetSection("WorkItems:Sla"));
+    // (universal rules: audit shape, operator notify on extend via
+    // post-action hooks) so it lives next to the framework, not in a
+    // module. RA-447/CM6: the old max-extension-days cap (SlaConfig) has
+    // been removed entirely.
     // RA-133: accreditation issuance config (current year drives the
     // generated AccreditationId year segment and AccreditationStartDate).
     services
@@ -209,7 +210,7 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
                     configuration.GetValue<string>("OPERATOR_SERVICE_BASE_URL") ?? string.Empty
         );
     services.AddSingleton<ISlaService, SlaService>();
-    services.AddWorkItemModule<ReAccreditationModule>();
+    services.AddWorkItemModule<ReAccreditationModule>(builder.Configuration);
     services.AddHostedService<SlaBreachBackgroundService>();
     services.AddHostedService<ArchiveBackgroundService>();
 
@@ -529,7 +530,13 @@ static void ConfigureNotifications(
 
     var apiKey = configuration.GetValue<string>("NOTIFY_API_KEY");
 
-    if (string.IsNullOrWhiteSpace(apiKey))
+    // RA-422: outbound CM email is centrally disabled via Notify:Enabled
+    // (default false). Register the no-op client when notifications are
+    // disabled OR no API key is configured — belt-and-braces, so no real email
+    // can leave even if something resolves INotifyClient directly. The
+    // notification post-action hook (which also writes the notification-* audit
+    // entries) is gated on the same flag in ReAccreditationModule.
+    if (!NotifyFeature.NotificationsEnabled(configuration) || string.IsNullOrWhiteSpace(apiKey))
     {
         services.AddSingleton<INotifyClient, NoOpNotifyClient>();
         return;
@@ -674,9 +681,11 @@ static void LogNotifyClientRegistration(WebApplication app)
         cdpEnvironment,
         app.Environment.IsDevelopment());
     app.Logger.LogInformation(
-        "Notify integration: client={NotifyClientType} apiKeyConfigured={ApiKeyConfigured} "
-            + "sendingEnabled={NotifySendingEnabled} environment={CdpEnvironment} "
-            + "baseUri={NotifyBaseUri} timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
+        "Notify integration: enabled={NotificationsEnabled} client={NotifyClientType} "
+            + "apiKeyConfigured={ApiKeyConfigured} sendingEnabled={NotifySendingEnabled} "
+            + "environment={CdpEnvironment} baseUri={NotifyBaseUri} "
+            + "timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
+        NotifyFeature.NotificationsEnabled(app.Configuration),
         notifyClient.GetType().FullName,
         apiKeyConfigured,
         sendingEnabled,

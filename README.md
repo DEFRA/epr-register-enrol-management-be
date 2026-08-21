@@ -1,12 +1,12 @@
-# EPR Register Case Management Backend (PoC)
+# EPR Register Enrol Management Backend
 
-A proof-of-concept .NET 10 backend API for the EPR Register case management
-service. Built from
+A .NET 10 backend API for the EPR Register case management service. Built
+from
 [cdp-dotnet-backend-template](https://github.com/DEFRA/cdp-dotnet-backend-template).
 
 The backend exposes a JSON HTTP API and persists data in MongoDB. It is
 designed to run alongside the
-[`epr-register-case-management-frontend-poc`](../epr-register-case-management-frontend-poc/)
+[`epr-register-enrol-management-fe`](../epr-register-enrol-management-fe/)
 service.
 
 - [Requirements](#requirements)
@@ -61,9 +61,18 @@ The MongoDB connection is configured in
 and can be overridden via the `Mongo__DatabaseUri` and `Mongo__DatabaseName`
 environment variables.
 
-Notification calls are logged but **never** sent to GOV.UK Notify when running
-locally, with or without a `NOTIFY_API_KEY`: the no-op client is registered on
-a Development host and whenever `ENVIRONMENT` is `local` or `dev`. It returns
+Outbound GOV.UK Notify email is disabled by default (RA-422): the master switch
+`Notify__Enabled` defaults to `false`, so the notification hook is not registered
+and a no-op client is used — nothing is sent and no `notification-*` audit
+entries are written. To send real notifications you need **both**
+`Notify__Enabled=true` **and** a `NOTIFY_API_KEY` from the
+[Notify dashboard](https://www.notifications.service.gov.uk/); with the flag on
+but no key the service still starts and uses the no-op client (calls logged, no
+HTTP traffic to Notify).
+
+Even with the flag on and a key set, notification calls are logged but **never**
+sent to GOV.UK Notify when running locally: the no-op client is registered on a
+Development host and whenever `ENVIRONMENT` is `local` or `dev`. It returns
 success, so the work item's audit log still records a `notification-sent` entry
 and the UI behaves as it does in a sending environment. The non-production
 Notify team key can only reach team-registered addresses plus five guests, and
@@ -71,9 +80,9 @@ those slots are used up — see
 [docs/cdp-deployment.md](./docs/cdp-deployment.md#notify-sending-by-environment).
 
 To smoke-test the real integration locally, set `NOTIFY_API_KEY` to a key from
-the [Notify dashboard](https://www.notifications.service.gov.uk/) **and**
-`NOTIFY_SENDEMAILS=true`, and make sure the recipient address is registered on
-the Notify team.
+the [Notify dashboard](https://www.notifications.service.gov.uk/), enable
+`Notify__Enabled=true` **and** `NOTIFY_SENDEMAILS=true`, and make sure the
+recipient address is registered on the Notify team.
 
 If you do not have MongoDB installed locally, start just the database from
 the Compose stack:
@@ -192,13 +201,13 @@ Bypass in an emergency with `git commit --no-verify`.
 ## Frontend integration
 
 The companion frontend
-([`epr-register-case-management-frontend-poc`](../epr-register-case-management-frontend-poc/))
+([`epr-register-enrol-management-fe`](../epr-register-enrol-management-fe/))
 calls this API server-to-server. With both services running locally the
 frontend at `http://localhost:3000/backend-status` reports the backend's
 `/health` response, providing an end-to-end smoke test.
 
 To run both services together via Docker Compose, see the
-[frontend README](../epr-register-case-management-frontend-poc/README.md#running-the-full-stack).
+[frontend README](../epr-register-enrol-management-fe/README.md#running-the-full-stack).
 
 ## Deployment
 

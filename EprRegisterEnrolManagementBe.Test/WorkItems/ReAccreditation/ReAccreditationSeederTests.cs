@@ -102,6 +102,57 @@ public class ReAccreditationSeederTests
     }
 
     [Fact]
+    public void Build_historical_audit_entries_carry_the_state_as_of_the_event()
+    {
+        // epr-rr9s. The seed's `stateId` is the item's TERMINAL state. The
+        // submitted / routed-to-nation / assigned events all fire before any
+        // transition, so their per-entry snapshot must be the initial state.
+        // Stamping the terminal state here would reproduce, in seed data, the
+        // very bug epr-rr9s fixes -- and would do it invisibly, because the
+        // journey spec only asserts that a State row EXISTS, not its value.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var progressed = items.Where(i => i.StateId != "submitted").ToList();
+
+        Assert.NotEmpty(progressed);
+        Assert.All(
+            progressed,
+            item =>
+            {
+                foreach (var action in new[] { "work-item-submitted", "routed-to-nation" })
+                {
+                    var entry = Assert.Single(item.AuditLog, e => e.Action == action);
+                    Assert.Equal("submitted", entry.StateId);
+                    Assert.NotEqual(item.StateId, entry.StateId);
+                }
+
+                var assigned = item.AuditLog.SingleOrDefault(e => e.Action == "assigned");
+                if (assigned is not null)
+                {
+                    Assert.Equal("submitted", assigned.StateId);
+                }
+            }
+        );
+    }
+
+    [Fact]
+    public void Build_submitted_entry_details_state_is_the_initial_state()
+    {
+        // The birth entry's own Details["stateId"] renders as its "Initial
+        // state" row, so it too must be the state at submission rather than
+        // the seed's terminal state.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(
+            items,
+            item =>
+            {
+                var entry = Assert.Single(item.AuditLog, e => e.Action == "work-item-submitted");
+                Assert.Equal("submitted", entry.Details["stateId"]);
+            }
+        );
+    }
+
+    [Fact]
     public void Build_assigned_items_have_assigned_audit_entry()
     {
         // Mirrors WorkItemService.AssignAsync — assigned items need an
@@ -665,6 +716,219 @@ public class ReAccreditationSeederTests
         // Every other seed relies on the applicationReference fallback, which
         // the framework stamps on all of them.
         Assert.All(items, i => Assert.True(i.Payload.Contains("applicationReference")));
+    }
+
+    // ── RA-447/CM4: companiesHouseNumber / siteAddress never null in dev ────
+
+    /// <summary>
+    /// RA-447 (CM4) regression guard. The seeder used to leave
+    /// companiesHouseNumber unset entirely, so every non-production
+    /// environment rendered the Additional information tab's Companies House
+    /// number row as absent — the opposite of the field being genuinely
+    /// optional, since the operator backend always supplies it on a real
+    /// submission.
+    /// </summary>
+    [Fact]
+    public void Every_seeded_item_carries_a_companies_house_number()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.NotEmpty(items);
+        Assert.All(items, item =>
+        {
+            Assert.True(
+                item.Payload.Contains("companiesHouseNumber"),
+                $"Item {item.Id} missing 'companiesHouseNumber' in payload.");
+            Assert.False(
+                string.IsNullOrWhiteSpace(item.Payload["companiesHouseNumber"].AsString),
+                $"Item {item.Id} has blank companiesHouseNumber.");
+        });
+    }
+
+    /// <summary>
+    /// RA-447 (CM4) regression guard, the site-address half of the fix. Only 3
+    /// of the original seed items carried a full siteAddress; the rest
+    /// rendered a dash on any tab that reads it. Exporter-type items are
+    /// excluded on purpose — re-ex has no site for an exporter, so those
+    /// fixtures (<see cref="AdditionalInformationExporterSeedKey"/> and the
+    /// RA-412 fixture) deliberately omit siteAddress to exercise the
+    /// registered-address fallback.
+    /// </summary>
+    [Fact]
+    public void Every_non_exporter_seeded_item_carries_a_site_address()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var nonExporters = items.Where(i =>
+            !i.Payload.Contains("wasteProcessingType") ||
+            i.Payload["wasteProcessingType"].AsString != "exporter").ToList();
+
+        Assert.NotEmpty(nonExporters);
+        Assert.All(nonExporters, item =>
+        {
+            Assert.True(
+                item.Payload.Contains("siteAddress"),
+                $"Item {item.Id} missing 'siteAddress' in payload.");
+            Assert.False(
+                string.IsNullOrWhiteSpace(item.Payload["siteAddress"].AsString),
+                $"Item {item.Id} has blank siteAddress.");
+        });
+    }
+
+    // ── RA-412: genuine Exporter organisation fixture ─────────────────────────
+
+    /// <summary>
+    /// The RA-412 fixture, located the way mgmt-tests locates it — by the
+    /// organisation name the work-items list is searchable on.
+    /// </summary>
+    private static WorkItem BuildGlobalGlassExportsFixture()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        return items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.GlobalGlassExportsOrganisationName);
+    }
+
+    [Fact]
+    public void Build_ra412_fixture_organisation_name_is_unique_across_the_seed_set()
+    {
+        // mgmt-tests reaches this item by searching the work-items list on the
+        // organisation name and asserting exactly one row. A duplicate here
+        // would make that search ambiguous and the spec flaky.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var matches = items.Count(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.GlobalGlassExportsOrganisationName);
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
+    public void Build_ra412_fixture_has_its_own_seed_key_so_it_lands_in_already_seeded_databases()
+    {
+        // Seeding is CreateIfAbsentAsync keyed by a deterministic id: it
+        // inserts, it never updates. A new key is inserted on the next boot
+        // regardless of what an already-seeded database has.
+        var expectedId = WorkItemSeed.DeterministicId(
+            ReAccreditationType.Id, ReAccreditationSeeder.GlobalGlassExportsSeedKey);
+
+        Assert.Equal(expectedId, BuildGlobalGlassExportsFixture().Id);
+    }
+
+    [Fact]
+    public void Build_ra412_fixture_carries_wasteProcessingType_exporter()
+    {
+        // The whole point of this fixture: a genuine exporter application the
+        // card label and the Applicant-type filter can both resolve, proving
+        // the positive case rather than just the "don't mislabel a Reprocessor
+        // that happens to carry overseas data" case the other two RA-412
+        // payload["wasteProcessingType"] edits cover.
+        var fixture = BuildGlobalGlassExportsFixture();
+
+        Assert.Equal("exporter", fixture.Payload["wasteProcessingType"].AsString);
+    }
+
+    // ── RA-434: "Additional information" tab seed fields ────────────────────
+
+    [Fact]
+    public void Build_full_payload_fixture_carries_the_new_additional_information_fields()
+    {
+        // RA-434: the full-payload fixture is meant to carry every field a
+        // real operator submission can send, so the three fields new to the
+        // "Additional information" tab belong here too.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var fullPayload = items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString == "Full Payload Verification Ltd");
+
+        Assert.Equal("12345678", fullPayload.Payload["companiesHouseNumber"].AsString);
+        Assert.Equal(
+            "100 Registered Office Road, London, EC1A 1AB",
+            fullPayload.Payload["companyRegisteredAddress"].AsString);
+
+        var permitNumbers = fullPayload.Payload["permitNumbers"].AsBsonArray;
+        Assert.Equal(["WML999000", "PPC888777"], permitNumbers.Select(p => p.AsString));
+
+        // companyRegisteredAddress and siteAddress are deliberately different
+        // values — a template that accidentally aliases the two fields would
+        // otherwise pass unnoticed.
+        Assert.NotEqual(
+            fullPayload.Payload["companyRegisteredAddress"].AsString,
+            fullPayload.Payload["siteAddress"].AsString);
+    }
+
+    /// <summary>
+    /// The RA-434 exporter fixture, located by organisation name like the
+    /// RA-292 fixture above.
+    /// </summary>
+    private static WorkItem BuildExporterFixture()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        return items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.AdditionalInformationExporterOrganisationName);
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_organisation_name_is_unique_across_the_seed_set()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var matches = items.Count(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.AdditionalInformationExporterOrganisationName);
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_has_its_own_seed_key_so_it_lands_in_already_seeded_databases()
+    {
+        // Seeding is insert-only by deterministic id, so a new fixture needs
+        // its own seedKey to reach an environment that has already seeded —
+        // see docs/work-items.md.
+        var expectedId = WorkItemSeed.DeterministicId(
+            ReAccreditationType.Id, ReAccreditationSeeder.AdditionalInformationExporterSeedKey);
+
+        Assert.Equal(expectedId, BuildExporterFixture().Id);
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_is_flagged_as_an_exporter()
+    {
+        var exporter = BuildExporterFixture();
+
+        Assert.Equal("exporter", exporter.Payload["wasteProcessingType"].AsString);
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_has_no_site_address()
+    {
+        // The point of this fixture: re-ex has no site for an exporter, so
+        // the CM frontend's Site address row must fall back to
+        // companyRegisteredAddress. That fallback has no coverage without a
+        // seed item that is genuinely missing siteAddress.
+        var exporter = BuildExporterFixture();
+
+        Assert.False(exporter.Payload.Contains("siteAddress"));
+        Assert.False(exporter.Payload.Contains("siteAddressPostcode"));
+    }
+
+    [Fact]
+    public void Build_exporter_fixture_carries_the_new_additional_information_fields()
+    {
+        var exporter = BuildExporterFixture();
+
+        Assert.False(string.IsNullOrWhiteSpace(exporter.Payload["companiesHouseNumber"].AsString));
+        Assert.False(string.IsNullOrWhiteSpace(exporter.Payload["companyRegisteredAddress"].AsString));
+
+        var permitNumbers = exporter.Payload["permitNumbers"].AsBsonArray;
+        Assert.True(permitNumbers.Count > 1, "Needs more than one permit number to exercise the comma-joined rendering.");
+        Assert.All(permitNumbers, p => Assert.False(string.IsNullOrWhiteSpace(p.AsString)));
     }
 }
 

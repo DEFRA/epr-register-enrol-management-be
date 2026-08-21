@@ -54,7 +54,7 @@ public class HttpReExAccreditationClientTests
 
     [Theory]
     [InlineData("up_to_500", "UpTo500")]
-    [InlineData("up_to_1000", "UpTo1000")]
+    [InlineData("up_to_5000", "UpTo5000")]
     [InlineData("up_to_10000", "UpTo10000")]
     [InlineData("over_10000", "Over10000")]
     [InlineData("UP_TO_500", "UpTo500")]
@@ -66,6 +66,36 @@ public class HttpReExAccreditationClientTests
 
         Assert.NotNull(result);
         Assert.Equal(expected, result!.TonnageBand);
+    }
+
+    [Fact]
+    public async Task Returns_a_result_with_empty_defaults_when_prnIssuance_is_absent()
+    {
+        // Covers the `prn?.` null-conditional chain's null-prn arm (tonnage
+        // band, authorisers, business plan) — every other test supplies a
+        // populated prnIssuance object.
+        const string json = """
+            {
+              "registrations": [
+                { "id": "reg-1", "accreditationId": "acc-1" }
+              ],
+              "accreditations": [
+                {
+                  "id": "acc-1",
+                  "validFrom": "2025-04-01",
+                  "prnIssuance": null
+                }
+              ]
+            }
+            """;
+        var client = CreateClient(json);
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.NotNull(result);
+        Assert.Null(result!.TonnageBand);
+        Assert.Empty(result.Authorisers);
+        Assert.NotNull(result.BusinessPlan);
     }
 
     [Fact]
@@ -100,5 +130,216 @@ public class HttpReExAccreditationClientTests
             };
             return Task.FromResult(response);
         }
+    }
+
+    private sealed class StatusCodeHttpMessageHandler(HttpStatusCode statusCode) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(statusCode));
+    }
+
+    private sealed class ThrowingHttpMessageHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            throw exception;
+    }
+
+    [Theory]
+    [InlineData(null, "reg-1")]
+    [InlineData("", "reg-1")]
+    [InlineData("   ", "reg-1")]
+    [InlineData("org-1", null)]
+    [InlineData("org-1", "")]
+    [InlineData("org-1", "   ")]
+    public async Task GetPriorYearAsync_returns_null_for_missing_identifiers(string? organisationId, string? registrationId)
+    {
+        var client = CreateClient(OrganisationJson("up_to_500"));
+
+        var result = await client.GetPriorYearAsync(organisationId, registrationId, 2025);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_returns_null_when_year_is_null()
+    {
+        var client = CreateClient(OrganisationJson("up_to_500"));
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", null);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_returns_null_and_logs_a_warning_on_a_non_success_status_code()
+    {
+        var handler = new StatusCodeHttpMessageHandler(HttpStatusCode.NotFound);
+        var httpClient = new HttpClient(handler);
+        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
+        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
+        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.Null(result);
+        logger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Any<string>(),
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                (string)p["reex.organisation_id"]! == "org-1" &&
+                (int)p["reex.status_code"]! == (int)HttpStatusCode.NotFound),
+            null);
+    }
+
+    [Theory]
+    [InlineData(typeof(HttpRequestException))]
+    [InlineData(typeof(TaskCanceledException))]
+    public async Task GetPriorYearAsync_returns_null_and_logs_an_error_when_the_request_throws(Type exceptionType)
+    {
+        var exception = (Exception)Activator.CreateInstance(exceptionType, "boom")!;
+        var handler = new ThrowingHttpMessageHandler(exception);
+        var httpClient = new HttpClient(handler);
+        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
+        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
+        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.Null(result);
+        logger.Received(1).Log(
+            LogLevel.Error,
+            Arg.Any<string>(),
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p => (string)p["reex.organisation_id"]! == "org-1"),
+            exception);
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_returns_null_when_the_response_body_deserialises_to_null()
+    {
+        var client = CreateClient("null");
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_returns_null_when_no_registration_matches()
+    {
+        var client = CreateClient(OrganisationJson("up_to_500").Replace("reg-1", "reg-other"));
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_returns_null_when_no_accreditation_matches_the_registration()
+    {
+        const string json = """
+            {
+              "registrations": [
+                { "id": "reg-1", "accreditationId": "acc-missing" }
+              ],
+              "accreditations": [
+                { "id": "acc-1", "validFrom": "2025-04-01", "prnIssuance": null }
+              ]
+            }
+            """;
+        var client = CreateClient(json);
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_returns_null_when_validFrom_does_not_parse()
+    {
+        const string json = """
+            {
+              "registrations": [
+                { "id": "reg-1", "accreditationId": "acc-1" }
+              ],
+              "accreditations": [
+                { "id": "acc-1", "validFrom": "not-a-date", "prnIssuance": null }
+              ]
+            }
+            """;
+        var client = CreateClient(json);
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_returns_null_when_validFrom_year_does_not_match_the_requested_year()
+    {
+        var client = CreateClient(OrganisationJson("up_to_500"));
+
+        // OrganisationJson's validFrom is 2025-04-01.
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2024);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_maps_a_known_business_plan_usage_description_and_ignores_unrecognised_or_incomplete_entries()
+    {
+        const string json = """
+            {
+              "registrations": [
+                { "id": "reg-1", "accreditationId": "acc-1" }
+              ],
+              "accreditations": [
+                {
+                  "id": "acc-1",
+                  "validFrom": "2025-04-01",
+                  "prnIssuance": {
+                    "tonnageBand": "up_to_500",
+                    "signatories": [
+                      { "fullName": null, "email": null }
+                    ],
+                    "incomeBusinessPlan": [
+                      { "usageDescription": "Support for business collections", "percentIncomeSpent": 15 },
+                      { "usageDescription": "Some unrecognised category", "percentIncomeSpent": 5 },
+                      { "usageDescription": null, "percentIncomeSpent": 5 },
+                      { "usageDescription": "Support for business collections", "percentIncomeSpent": null }
+                    ]
+                  }
+                }
+              ]
+            }
+            """;
+        var client = CreateClient(json, out var logger);
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+
+        Assert.NotNull(result);
+        Assert.Equal(15, result!.BusinessPlan.BusinessCollectionsPercent);
+        Assert.Equal(string.Empty, result.Authorisers[0].FullName);
+        Assert.Equal(string.Empty, result.Authorisers[0].Email);
+
+        logger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Any<string>(),
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                (string)p["reex.usage_description"]! == "Some unrecognised category"),
+            null);
+    }
+
+    [Fact]
+    public void Constructor_does_not_set_a_base_address_when_the_configured_base_url_is_blank()
+    {
+        var httpClient = new HttpClient();
+        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "" });
+        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
+
+        _ = new HttpReExAccreditationClient(httpClient, config, logger);
+
+        Assert.Null(httpClient.BaseAddress);
     }
 }

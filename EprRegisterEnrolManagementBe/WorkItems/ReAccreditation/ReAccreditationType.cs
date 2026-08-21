@@ -124,7 +124,15 @@ internal sealed class ReAccreditationType : IWorkItemType
     // hops server-side. Items snapshotted before v12 keep the v11 action set
     // until ReAccreditationDecisionSnapshotMigration patches their frozen
     // snapshot.
-    public string TemplateVersion => "v12";
+    // v13 (RA-351): added a second sla-extend self-loop, on 'queried'
+    // (queried -> queried), so the regulator can Extend/Override the SLA of
+    // a queried application whose clock is at risk — previously the only
+    // sla-extend transition was the assessment-in-progress self-loop, so
+    // queried offered no SLA option. Items snapshotted before v13 have no
+    // sla-extend transition from 'queried' until
+    // ReAccreditationSlaExtendQuerySnapshotMigration patches their frozen
+    // snapshot.
+    public string TemplateVersion => "v13";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -173,6 +181,22 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Extend SLA",
             s_assessmentInProgress.Id,
             s_assessmentInProgress.Id
+        ),
+        // RA-351: SLA extension is also a self-loop on 'queried'. A queried
+        // application is paused pending clarification but its SLA clock may
+        // still be at risk, so the regulator must be able to Extend/Override
+        // the SLA here just as during assessment. Same action id
+        // ('sla-extend'), same DisplayName — the engine keys transitions per
+        // from-state, so two 'sla-extend' entries coexist and Project() emits
+        // whichever matches the item's state. The FE derives both the Extend
+        // and Override SLA links from this single projected action. Only
+        // 'queried' is added: the story is scoped to that state and, unlike
+        // withdraw, there is no paired 'updated' requirement.
+        new WorkItemTransition(
+            "sla-extend",
+            "Extend SLA",
+            s_queried.Id,
+            s_queried.Id
         ),
         // RA-410: 'awaiting-decision' survives as an internal hop, but no
         // caseworker clicks through it any more. Recording a decision is a

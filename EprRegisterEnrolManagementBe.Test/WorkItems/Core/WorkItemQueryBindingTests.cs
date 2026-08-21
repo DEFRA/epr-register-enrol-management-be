@@ -51,6 +51,34 @@ public class WorkItemQueryBindingTests
     }
 
     [Fact]
+    public void SubmittedByIsNullWhenTheQueryValueIsWhitespace()
+    {
+        // Covers ReadString's `IsNullOrWhiteSpace` true arm — every other
+        // test supplies a real value.
+        var query = WorkItemQueryBinding.FromQueryString(Q(("submittedBy", "   ")));
+
+        Assert.Null(query.SubmittedBy);
+    }
+
+    [Fact]
+    public void PageFallsBackToTheDefaultWhenTheQueryValueIsNotAnInteger()
+    {
+        // Covers ReadInt's `int.TryParse` false arm.
+        var query = WorkItemQueryBinding.FromQueryString(Q(("page", "not-a-number")));
+
+        Assert.Equal(1, query.Page);
+    }
+
+    [Fact]
+    public void UnassignedIsFalseWhenTheQueryValueIsWhitespace()
+    {
+        // Covers ReadBool's `IsNullOrWhiteSpace` true arm.
+        var query = WorkItemQueryBinding.FromQueryString(Q(("unassigned", "   ")));
+
+        Assert.False(query.UnassignedOnly);
+    }
+
+    [Fact]
     public void EmptyQueryProducesNullSubmittedBy()
     {
         var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
@@ -233,6 +261,39 @@ public class WorkItemQueryBindingTests
 
         Assert.Null(query.Materials);
         Assert.Null(query.Organisation);
+    }
+
+    // ───────────────────────── WasteProcessingType (RA-412) ─────────────────────────
+
+    [Fact]
+    public void SingleWasteProcessingTypeIsBound()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("wasteProcessingType", "exporter")));
+
+        Assert.NotNull(query.WasteProcessingTypes);
+        Assert.Equal(new[] { "exporter" }, query.WasteProcessingTypes!);
+    }
+
+    [Fact]
+    public void RepeatedWasteProcessingTypeParamsAreAllBound()
+    {
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["wasteProcessingType"] = new Microsoft.Extensions.Primitives.StringValues(
+                new[] { "exporter", "reprocessor" })
+        };
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.Equal(new[] { "exporter", "reprocessor" }, query.WasteProcessingTypes!);
+    }
+
+    [Fact]
+    public void MissingWasteProcessingTypeDefaultsToNull()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection());
+
+        Assert.Null(query.WasteProcessingTypes);
     }
 
     [Theory]

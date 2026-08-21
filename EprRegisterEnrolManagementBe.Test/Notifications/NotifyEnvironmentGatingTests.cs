@@ -95,6 +95,11 @@ public class NotifyEnvironmentGatingTests : IClassFixture<MongoIntegrationFixtur
             var settings = new Dictionary<string, string?>
             {
                 ["NOTIFY_API_KEY"] = NotifyTestConstants.FakeApiKey,
+                // RA-422 master switch: on, so the environment gate this class
+                // exists to assert is actually reached rather than short-
+                // circuited by the flag. NotifyApiKeyRegistrationTests covers
+                // the flag gate itself.
+                ["Notify:Enabled"] = "true",
             };
             if (sendEmails is not null)
             {

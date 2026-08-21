@@ -165,18 +165,35 @@ internal sealed class ReAccreditationStatusPushHook(
         Task.CompletedTask;
 
     /// <summary>
-    /// Every action id whose declared transition lands on <c>queried</c> or
-    /// <c>withdrawn</c> — i.e. exactly the query-during-* and
-    /// withdraw/withdraw-during-* families, without restating their literal
-    /// ids here. Computed once from a fresh <see cref="ReAccreditationType"/>
-    /// instance, the same source of truth the engine itself validates
-    /// transitions against.
+    /// Every action id whose declared transition <em>moves</em> a work item
+    /// onto <c>queried</c> or <c>withdrawn</c> — i.e. exactly the
+    /// query-during-* and withdraw/withdraw-during-* families, without
+    /// restating their literal ids here. Computed once from a fresh
+    /// <see cref="ReAccreditationType"/> instance, the same source of truth
+    /// the engine itself validates transitions against.
+    ///
+    /// RA-351: self-loops are deliberately not excluded. The new
+    /// <c>sla-extend</c> transition on <c>queried</c> (queried → queried)
+    /// lands on <c>queried</c> but does not <em>move</em> the item there — it
+    /// is an in-place SLA extension, the same kind of status change the
+    /// assessment-in-progress <c>sla-extend</c> self-loop pushes. Without the
+    /// self-loop guard, sharing the <c>sla-extend</c> action id across both
+    /// self-loops would wrongly exclude the whole action from status pushes.
     /// </summary>
     private static HashSet<string> BuildExcludedActionIds()
     {
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var transition in s_type.Transitions)
         {
+            if (string.Equals(
+                    transition.FromStateId,
+                    transition.ToStateId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                // Self-loop: an in-place action, not a move onto queried/withdrawn.
+                continue;
+            }
+
             if (string.Equals(transition.ToStateId, "queried", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(transition.ToStateId, "withdrawn", StringComparison.OrdinalIgnoreCase))
             {

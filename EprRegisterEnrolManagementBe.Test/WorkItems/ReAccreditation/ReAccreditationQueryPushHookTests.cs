@@ -126,6 +126,23 @@ public class ReAccreditationQueryPushHookTests
     }
 
     [Fact]
+    public async Task OnActionAppliedAsync_logs_a_warning_when_the_sent_audit_entry_fails_to_persist()
+    {
+        // The push itself succeeded; only the follow-up audit-append failed
+        // (e.g. a concurrent mutation). Must not throw.
+        var ct = TestContext.Current.CancellationToken;
+        var (hook, _, auditAppender) = BuildSut();
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        var workItem = BuildWorkItem();
+
+        await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
+    }
+
+    [Fact]
     public async Task OnActionAppliedAsync_records_a_skipped_audit_entry_when_the_push_is_disabled()
     {
         var ct = TestContext.Current.CancellationToken;

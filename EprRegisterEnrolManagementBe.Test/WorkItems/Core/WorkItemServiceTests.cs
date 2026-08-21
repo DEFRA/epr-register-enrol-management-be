@@ -244,6 +244,81 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
     }
 
+    // RA-351: an action id can be declared on more than one state (e.g.
+    // `sla-extend` self-loops on both `assessment-in-progress` and `queried`).
+    // ApplyActionAsync must resolve to the transition whose FromStateId matches
+    // the work item's CURRENT state, not the first one declared — otherwise the
+    // generic action endpoint rejects the action from every state after the
+    // first, even though Project() advertises it.
+    [Fact]
+    public async Task ApplyAction_resolves_a_multi_state_action_to_the_current_state()
+    {
+        var stateA = new WorkItemState("state-a", "State A");
+        var stateB = new WorkItemState("state-b", "State B");
+        var type = new TestWorkItemType(
+            TypeId,
+            "Test type",
+            initialState: stateA,
+            states: [stateA, stateB],
+            transitions:
+            [
+                // Same action id declared twice; the current-state match is the
+                // SECOND declaration, so a first-declaration-wins resolution
+                // would wrongly reject it.
+                new WorkItemTransition("ping", "Ping", "state-a", "state-a"),
+                new WorkItemTransition("ping", "Ping", "state-b", "state-b"),
+            ]
+        );
+        var workItem = await SeedAsync(stateId: "state-b");
+
+        var result = await BuildService(type)
+            .ApplyActionAsync(
+                workItem.Id,
+                "ping",
+                User(),
+                TestContext.Current.CancellationToken
+            );
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("state-b", fetched.StateId);
+    }
+
+    // RA-351: the fallback must not swallow a genuinely invalid request — an
+    // action declared only on other states is still rejected with
+    // InvalidTransition (not UnknownAction) when applied from a state it does
+    // not cover.
+    [Fact]
+    public async Task ApplyAction_fails_InvalidTransition_when_multi_state_action_not_valid_here()
+    {
+        var stateA = new WorkItemState("state-a", "State A");
+        var stateB = new WorkItemState("state-b", "State B");
+        var stateC = new WorkItemState("state-c", "State C");
+        var type = new TestWorkItemType(
+            TypeId,
+            "Test type",
+            initialState: stateA,
+            states: [stateA, stateB, stateC],
+            transitions:
+            [
+                new WorkItemTransition("ping", "Ping", "state-a", "state-a"),
+                new WorkItemTransition("ping", "Ping", "state-b", "state-b"),
+            ]
+        );
+        var workItem = await SeedAsync(stateId: "state-c");
+
+        var result = await BuildService(type)
+            .ApplyActionAsync(
+                workItem.Id,
+                "ping",
+                User(),
+                TestContext.Current.CancellationToken
+            );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+    }
+
     [Fact]
     public async Task ApplyAction_returns_ConcurrencyConflict_when_persistence_throws()
     {
@@ -454,6 +529,86 @@ public class WorkItemServiceTests : IAsyncDisposable
         await Task.CompletedTask;
     }
 
+    [Fact]
+    public async Task ProjectAsync_returns_null_when_work_item_missing()
+    {
+        var type = BuildType();
+
+        var projection = await BuildService(type)
+            .ProjectAsync(Guid.NewGuid(), TestContext.Current.CancellationToken);
+
+        Assert.Null(projection);
+    }
+
+    [Fact]
+    public async Task ProjectAsync_returns_projection_for_an_existing_work_item()
+    {
+        var type = BuildType(
+            transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
+        );
+        var workItem = await SeedAsync();
+
+        var projection = await BuildService(type)
+            .ProjectAsync(workItem.Id, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(projection);
+        Assert.Equal(workItem.Id, projection!.WorkItem.Id);
+        Assert.Contains("approve", projection.AvailableActions.Select(a => a.ActionId));
+    }
+
+    [Fact]
+    public async Task ApplyAction_fails_when_type_is_unregistered_and_has_no_template_snapshot()
+    {
+        // Distinct from ApplyAction_fails_when_action_unknown (a registered
+        // type rejecting an unknown action id): this covers LoadAsync's own
+        // template-resolution guard, reached when the work item's type has
+        // been de-registered (or was never registered) AND it predates
+        // template snapshots, so WorkItemEngineRules.ResolveTemplate has
+        // nothing to fall back on.
+        var registeredType = BuildType();
+        var orphanTypeId = "no-longer-registered-type";
+        var workItem = new WorkItem
+        {
+            Id = Guid.NewGuid(),
+            TypeId = orphanTypeId,
+            StateId = "submitted",
+            SubmittedAt = InitialNow,
+            LastModifiedAt = InitialNow,
+            SubmittedBy = "test-client",
+            TemplateSnapshot = null,
+        };
+        await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
+
+        var result = await BuildService(registeredType)
+            .ApplyActionAsync(
+                workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
+        Assert.Contains(orphanTypeId, result.Message);
+    }
+
+    [Fact]
+    public async Task AssignAsync_returns_missing_actor_identity_when_user_id_claim_is_whitespace()
+    {
+        // Covers ResolveActorUserId's `string.IsNullOrWhiteSpace(id)` branch
+        // for a claim that is *present* but blank, distinct from the
+        // claim-absent case already covered above.
+        var type = BuildType();
+        var workItem = await SeedAsync();
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("client_id", "test-client"),
+            new Claim("user:id", "   "),
+        ], "test"));
+
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", user, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+    }
+
     // ---------------------- Assignment ----------------------
 
     [Fact]
@@ -662,6 +817,42 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal(InitialNow, fetched.AssignedAt);
         Assert.Equal("old-actor", fetched.AssignedBy);
         Assert.Equal(0, fetched.Version);
+    }
+
+    [Fact]
+    public async Task AssignAsync_returns_missing_actor_identity_when_no_user_id_claim()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync();
+
+        var result = await BuildService(type).AssignAsync(
+            workItem.Id, "alice-1", "Alice", UserWithoutActorId(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Null(fetched.AssignedToId);
+    }
+
+    [Fact]
+    public async Task UnassignAsync_returns_missing_actor_identity_when_no_user_id_claim()
+    {
+        var type = BuildType();
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+            w.AssignedAt = InitialNow;
+            w.AssignedBy = "old-actor";
+        });
+
+        var result = await BuildService(type).UnassignAsync(
+            workItem.Id, UserWithoutActorId(), TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+        var fetched = await GetAsync(workItem.Id);
+        Assert.Equal("alice-1", fetched.AssignedToId);
     }
 
     // ---- RA-358: assignment is refused on a closed (terminal) case ----
@@ -924,6 +1115,18 @@ public class WorkItemServiceTests : IAsyncDisposable
         var actor = UserWithRoles("actor-1", "assign");
         var result = await BuildService(type).AssignAsync(
             Guid.NewGuid(), "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+    }
+
+    [Fact]
+    public async Task Unassign_returns_not_found_when_work_item_missing()
+    {
+        var type = BuildType();
+        var actor = UserWithRoles("actor-1", "assign");
+        var result = await BuildService(type).UnassignAsync(
+            Guid.NewGuid(), actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
@@ -1204,6 +1407,9 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal("rejected", entry.Details["toStateId"]);
         Assert.Equal("alice-1", entry.CreatedBy);
         Assert.Equal(TickedNow, entry.CreatedAt);
+        // epr-rr9s: the entry snapshots the state AS OF the event — the
+        // resulting post-transition state, not the item's live state.
+        Assert.Equal("rejected", entry.StateId);
     }
 
     [Fact]
@@ -1421,6 +1627,16 @@ public class WorkItemServiceTests : IAsyncDisposable
         // chronological (insertion) order on disk.
         Assert.True(fetched.AuditLog[0].CreatedAt < fetched.AuditLog[1].CreatedAt);
         Assert.True(fetched.AuditLog[1].CreatedAt < fetched.AuditLog[2].CreatedAt);
+        // epr-rr9s: each entry snapshots the state AS OF its own event. The
+        // note + assign happened while the item was still 'submitted'; only
+        // the action-applied entry carries the post-transition 'approved'.
+        // This is the regression the bug was about: earlier entries must NOT
+        // inherit the live current state.
+        Assert.Equal("approved", fetched.StateId);
+        Assert.Equal(
+            ["submitted", "submitted", "approved"],
+            fetched.AuditLog.Select(e => e.StateId).ToArray()
+        );
     }
 
     private sealed class MutableTimeProvider(DateTime initial) : TimeProvider
@@ -1493,6 +1709,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.Equal(TypeId, entry.Details["typeId"]);
         Assert.Equal("submitted", entry.Details["stateId"]);
         Assert.Equal("v1", entry.Details["templateVersion"]);
+        // epr-rr9s: the birth entry snapshots the initial state.
+        Assert.Equal("submitted", entry.StateId);
     }
 
     [Fact]
@@ -1612,6 +1830,33 @@ public class WorkItemServiceTests : IAsyncDisposable
         var fetched = await GetAsync(result.WorkItem!.Id);
         Assert.True(fetched.Payload.Contains("applicationReference"));
         Assert.Matches(@"^AP\d{2}EA$", fetched.Payload["applicationReference"].AsString);
+    }
+
+    [Fact]
+    public async Task Submit_stamps_paymentReference_to_match_the_generated_applicationReference()
+    {
+        // RA-447/CM3: paymentReference used to stay null forever (the operator
+        // backend cannot know applicationReference before management-be
+        // generates it). Now that the reference is generated here, it is
+        // stamped as the payment reference too.
+        var type = BuildType();
+
+        var result = await BuildService(type)
+            .SubmitAsync(
+                type,
+                new BsonDocument(),
+                "test-client",
+                AuditUser(),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        Assert.True(fetched.Payload.Contains("paymentReference"));
+        Assert.Equal(
+            fetched.Payload["applicationReference"].AsString,
+            fetched.Payload["paymentReference"].AsString
+        );
     }
 
     [Fact]

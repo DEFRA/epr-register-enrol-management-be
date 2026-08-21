@@ -465,4 +465,87 @@ public sealed class ApplicationReferenceGeneratorTests
         );
         Assert.Contains("01188", reference, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void Generate_falls_open_to_England_when_postcode_has_no_letter_prefix()
+    {
+        // ExtractAreaCode returns null when the postcode starts with a
+        // digit (or is otherwise unparseable), which must fail open to
+        // the default England agency rather than throwing.
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: "1AA");
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("EA", reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void Generate_returns_null_postcode_when_siteAddress_is_present_but_not_a_document()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = new BsonDocument
+        {
+            ["accreditationYear"] = 2026,
+            ["operatorOrganisationId"] = "50002",
+            ["siteAddress"] = "not a nested document",
+            ["material"] = "Glass",
+        };
+
+        var reference = generator.Generate(payload);
+
+        // No postcode suffix contributed, and agency falls open to England.
+        Assert.Equal("EA", reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void Generate_returns_null_postcode_when_siteAddress_document_has_no_postcode_key()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = new BsonDocument
+        {
+            ["accreditationYear"] = 2026,
+            ["operatorOrganisationId"] = "50002",
+            ["siteAddress"] = new BsonDocument { ["line1"] = "1 Example Street" },
+            ["material"] = "Glass",
+        };
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("EA", reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void Generate_disambiguator_wraps_to_zero_on_the_tenth_attempt()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026);
+
+        var reference = generator.Generate(payload, attempt: 10);
+
+        Assert.EndsWith("0", reference);
+    }
+
+    [Fact]
+    public void Generate_postcode_suffix_uses_whole_compact_postcode_when_three_characters_or_fewer()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: "W1A");
+
+        var reference = generator.Generate(payload);
+
+        // agency(2) + organisationId(5) then the 3-char postcode suffix.
+        Assert.Equal("W1A", reference.Substring(4 + 2 + 5, 3));
+    }
+
+    [Fact]
+    public void Generate_material_prefix_uses_whole_material_when_two_characters_or_fewer()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, material: "Pl");
+
+        var reference = generator.Generate(payload);
+
+        Assert.EndsWith("PL", reference, StringComparison.OrdinalIgnoreCase);
+    }
 }

@@ -107,7 +107,14 @@ public sealed record WorkItemEngineProjection(
     // discharges (see IWorkItemOriginStateResolver). Almost always
     // WorkItem.StateId. Defaults to null so callers constructing a projection
     // directly are unaffected; Project always populates it.
-    string? OriginStateId = null
+    string? OriginStateId = null,
+    // RA-359: whether the item's current state is terminal (withdrawn /
+    // approved / rejected) under its resolved template. Drives the read-side
+    // SLA projection: a terminal item's SLA is reported as Cancelled rather
+    // than a running OnTrack/AtRisk/Breached. Defaults to false so callers
+    // constructing a projection directly are unaffected; Project always
+    // populates it from TerminalStates.Find.
+    bool IsTerminal = false
 );
 
 public sealed class WorkItemService : IWorkItemService
@@ -234,6 +241,16 @@ public sealed class WorkItemService : IWorkItemService
         {
             var applicationReference = _referenceGenerator.Generate(payload, attempt);
             payload["applicationReference"] = applicationReference;
+
+            // RA-447/CM3: the operator backend cannot know applicationReference
+            // before management-be generates it, so paymentReference is always
+            // null on initial submit (RA-316, deliberate). Now that the
+            // reference exists, stamp it as the payment reference too — the
+            // application reference *is* the payment reference for this
+            // service, so this is a real persisted value (not a display-time
+            // fallback) that never changes after creation. No backfill: only
+            // work items created from this point on carry it.
+            payload["paymentReference"] = applicationReference;
 
             workItem = new WorkItem
             {
@@ -446,16 +463,34 @@ public sealed class WorkItemService : IWorkItemService
             return failure;
         }
 
-        var transition = template!.Transitions.FirstOrDefault(t =>
-            string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
-        );
-        if (transition is null)
+        var actionTransitions = template!
+            .Transitions.Where(t =>
+                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
+            )
+            .ToList();
+        if (actionTransitions.Count == 0)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UnknownAction,
                 $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'."
             );
         }
+
+        // An action id can be declared as a self-loop on more than one state
+        // (e.g. `sla-extend` on both `assessment-in-progress` and `queried`),
+        // so resolve to the transition whose FromStateId matches the work
+        // item's current state — matching on action id alone would always pick
+        // the first declaration and wrongly reject the action from every other
+        // state it is valid in. Fall back to the first declaration only so the
+        // InvalidTransition message below still names a valid from-state.
+        var transition =
+            actionTransitions.FirstOrDefault(t =>
+                string.Equals(
+                    t.FromStateId,
+                    workItem!.StateId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            ) ?? actionTransitions[0];
 
         if (TerminalStates.Find(template, workItem!.StateId) is { } currentTerminalState)
         {
@@ -894,7 +929,8 @@ public sealed class WorkItemService : IWorkItemService
             workItem,
             template.TemplateVersion,
             available,
-            ResolveOriginStateId(workItem, template)
+            ResolveOriginStateId(workItem, template),
+            isTerminal
         );
     }
 
@@ -1132,6 +1168,12 @@ public sealed class WorkItemService : IWorkItemService
                 CreatedAt = createdAt,
                 CreatedBy = ResolveActorUserId(user)!,
                 CreatedByName = user?.FindFirstValue("user:name"),
+                // epr-rr9s: snapshot the state as of this event. Every
+                // AppendAudit caller invokes this AFTER any state mutation
+                // (submit sets the initial state, action-applied assigns
+                // transition.ToStateId first), so workItem.StateId is the
+                // resulting post-mutation state for this entry.
+                StateId = workItem.StateId,
             }
         );
     }

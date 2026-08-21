@@ -26,7 +26,10 @@ public interface IWorkItemPersistence
     /// produce exactly one insert and one <c>false</c> regardless of
     /// timing (epr-33c).
     /// </summary>
-    Task<bool> CreateIfAbsentAsync(WorkItem workItem, CancellationToken cancellationToken = default);
+    Task<bool> CreateIfAbsentAsync(
+        WorkItem workItem,
+        CancellationToken cancellationToken = default
+    );
 
     Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 
@@ -44,7 +47,10 @@ public interface IWorkItemPersistence
     /// list path's bandwidth bounded by the document envelope rather
     /// than by accumulated assessor activity.
     /// </summary>
-    Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default);
+    Task<WorkItemPage> QueryAsync(
+        WorkItemQuery query,
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// Persist updates made by the engine (state transitions, assignment, notes).
@@ -86,7 +92,8 @@ public interface IWorkItemPersistence
         Guid workItemId,
         string fieldName,
         BsonValue value,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 
     /// <summary>
     /// RA-311/MBE-3: find an existing work item of <paramref name="typeId"/>
@@ -102,7 +109,8 @@ public interface IWorkItemPersistence
     Task<WorkItem?> FindByOperatorApplicationIdAsync(
         string typeId,
         string operatorApplicationId,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default
+    );
 }
 
 public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersistence
@@ -113,7 +121,8 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     public WorkItemPersistence(
         IMongoDbClientFactory connectionFactory,
         ILoggerFactory loggerFactory,
-        IWorkItemRegistry registry)
+        IWorkItemRegistry registry
+    )
         : base(connectionFactory, "workItems", loggerFactory)
     {
         _statusRank = WorkItemSort.StatusRank(registry);
@@ -130,24 +139,30 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     [ExcludeFromCodeCoverage]
     internal WorkItemPersistence(
         IMongoDbClientFactory connectionFactory,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory
+    )
         : this(
             connectionFactory,
             loggerFactory,
-            new WorkItemRegistry([new ReAccreditation.ReAccreditationType()]))
-    {
-    }
+            new WorkItemRegistry([new ReAccreditation.ReAccreditationType()])
+        ) { }
+
     [ExcludeFromCodeCoverage]
     public async Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default)
     {
         await Collection.InsertOneAsync(workItem, cancellationToken: cancellationToken);
         Logger.LogInformation(
             "Submitted work item {WorkItemId} of type {WorkItemTypeId} by {SubmittedBy}",
-            workItem.Id, workItem.TypeId, workItem.SubmittedBy ?? "unknown");
+            workItem.Id,
+            workItem.TypeId,
+            workItem.SubmittedBy ?? "unknown"
+        );
     }
 
     public async Task<bool> CreateIfAbsentAsync(
-        WorkItem workItem, CancellationToken cancellationToken = default)
+        WorkItem workItem,
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(workItem);
 
@@ -156,7 +171,8 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             await Collection.InsertOneAsync(workItem, cancellationToken: cancellationToken);
             return true;
         }
-        catch (MongoWriteException ex) when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        catch (MongoWriteException ex)
+            when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
         {
             // _id already in the collection — another instance won the
             // race or the seeder has already run on this database.
@@ -166,32 +182,43 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     }
 
     [ExcludeFromCodeCoverage]
-    public async Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<WorkItem?> GetByIdAsync(
+        Guid id,
+        CancellationToken cancellationToken = default
+    )
     {
-        return await Collection
-            .Find(w => w.Id == id)
-            .FirstOrDefaultAsync(cancellationToken);
+        return await Collection.Find(w => w.Id == id).FirstOrDefaultAsync(cancellationToken);
     }
 
     [ExcludeFromCodeCoverage]
     public async Task<WorkItem?> FindByOperatorApplicationIdAsync(
-        string typeId, string operatorApplicationId, CancellationToken cancellationToken = default)
+        string typeId,
+        string operatorApplicationId,
+        CancellationToken cancellationToken = default
+    )
     {
         var filter = Builders<WorkItem>.Filter.And(
             Builders<WorkItem>.Filter.Eq(w => w.TypeId, typeId),
-            Builders<WorkItem>.Filter.Eq("payload.operatorApplicationId", operatorApplicationId));
+            Builders<WorkItem>.Filter.Eq("payload.operatorApplicationId", operatorApplicationId)
+        );
 
         return await Collection.Find(filter).FirstOrDefaultAsync(cancellationToken);
     }
 
     [ExcludeFromCodeCoverage]
-    public async Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default)
+    public async Task<WorkItemPage> QueryAsync(
+        WorkItemQuery query,
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(query);
 
         var filter = BuildFilter(query);
 
-        var totalCount = await Collection.CountDocumentsAsync(filter, cancellationToken: cancellationToken);
+        var totalCount = await Collection.CountDocumentsAsync(
+            filter,
+            cancellationToken: cancellationToken
+        );
 
         var page = query.NormalisedPage;
         var pageSize = query.NormalisedPageSize;
@@ -206,8 +233,8 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             // newest submitted first, with the per-item Notes / AuditLog
             // collections projected away (epr-4pf): the list endpoint never
             // renders them and they dominate document size on chatty items.
-            var projection = Builders<WorkItem>.Projection
-                .Exclude(w => w.Notes)
+            var projection = Builders<WorkItem>
+                .Projection.Exclude(w => w.Notes)
                 .Exclude(w => w.AuditLog);
 
             items = await Collection
@@ -230,10 +257,14 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             // still deserialises to WorkItem (which does not ignore extra BSON
             // elements).
             var (addFields, sort) = sortStages.Value;
-            var serializer = MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry
-                .GetSerializer<WorkItem>();
+            var serializer =
+                MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry.GetSerializer<WorkItem>();
             var matchDoc = filter.Render(
-                new RenderArgs<WorkItem>(serializer, MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry));
+                new RenderArgs<WorkItem>(
+                    serializer,
+                    MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry
+                )
+            );
 
             var stages = new List<BsonDocument>
             {
@@ -282,9 +313,12 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             var escaped = System.Text.RegularExpressions.Regex.Escape(search);
             var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
 
-            clauses.Add(builder.Or(
-                builder.Regex("_id", pattern),
-                builder.Regex(nameof(WorkItem.SubmittedBy), pattern)));
+            clauses.Add(
+                builder.Or(
+                    builder.Regex("_id", pattern),
+                    builder.Regex(nameof(WorkItem.SubmittedBy), pattern)
+                )
+            );
         }
 
         var orgId = query.NormalisedOrgId;
@@ -308,7 +342,9 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         {
             // Wrap in quotes for phrase matching: prevents OR word-matching where common
             // words like "Org" in the query accidentally match unrelated items.
-            clauses.Add(builder.Text($"\"{orgName}\"", new TextSearchOptions { CaseSensitive = false }));
+            clauses.Add(
+                builder.Text($"\"{orgName}\"", new TextSearchOptions { CaseSensitive = false })
+            );
         }
 
         // RA-324: the Applications page merges the old separate orgName / orgId
@@ -324,9 +360,12 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         {
             var escaped = System.Text.RegularExpressions.Regex.Escape(organisation);
             var contains = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
-            clauses.Add(builder.Or(
-                builder.Regex("payload.organisationName", contains),
-                builder.Regex("payload.operatorOrganisationId", contains)));
+            clauses.Add(
+                builder.Or(
+                    builder.Regex("payload.organisationName", contains),
+                    builder.Regex("payload.operatorOrganisationId", contains)
+                )
+            );
         }
 
         // RA-324: material filter (multi-select). payload.material stores a
@@ -337,14 +376,51 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         if (query.Materials is { Count: > 0 } materials)
         {
             var materialClauses = materials
-                .Select(m => builder.Regex(
-                    "payload.material",
-                    new MongoDB.Bson.BsonRegularExpression(
-                        $"^{System.Text.RegularExpressions.Regex.Escape(m)}$", "i")))
+                .Select(m => CaseInsensitiveExactMatch(builder, "payload.material", m))
                 .ToList();
-            clauses.Add(materialClauses.Count == 1
-                ? materialClauses[0]
-                : builder.Or(materialClauses));
+            clauses.Add(
+                materialClauses.Count == 1 ? materialClauses[0] : builder.Or(materialClauses)
+            );
+        }
+
+        // RA-412 (self-review): applicant-type filter. payload.wasteProcessingType
+        // has no backend enum, but it is NOT an open value set either — every
+        // producer writes exactly "exporter" or "reprocessor"
+        // (AccreditationIdGenerator.ResolveOperatorType / ApplicationReferenceGenerator
+        // both branch on nothing else), and critically every other reader of
+        // this field treats an ABSENT value as "reprocessor" — the documented
+        // pre-RA-314 fallback that preserves on-screen behaviour for old data.
+        // A naive per-value regex match on the literal stored string (the
+        // original version of this clause) does not: Mongo's $regex never
+        // matches a missing field, so filtering by Reprocessor would silently
+        // exclude every pre-RA-314 item and 9 of the 11 seeded fixtures —
+        // disagreeing with what the card label and every ID generator already
+        // decide for those same items.
+        //
+        // So "exporter" is a positive, case-insensitive match on the literal
+        // value; "reprocessor" is everything else — $not the exporter match,
+        // which Mongo defines to include a missing/differently-typed field,
+        // not just a literal "reprocessor" string. Selecting both collapses to
+        // no restriction, which is correct: between the two buckets every item
+        // matches exactly one.
+        if (query.WasteProcessingTypes is { Count: > 0 } wasteProcessingTypes)
+        {
+            var wantsExporter = wasteProcessingTypes.Any(t =>
+                t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
+            );
+            var wantsReprocessor = wasteProcessingTypes.Any(t =>
+                !t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
+            );
+
+            if (wantsExporter != wantsReprocessor)
+            {
+                var exporterFilter = CaseInsensitiveExactMatch(
+                    builder,
+                    "payload.wasteProcessingType",
+                    "exporter"
+                );
+                clauses.Add(wantsExporter ? exporterFilter : builder.Not(exporterFilter));
+            }
         }
 
         var assigneeId = query.NormalisedAssigneeId;
@@ -352,9 +428,12 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         {
             // "Show me my work and anything still up for grabs" — assigned to
             // the user OR unassigned.
-            clauses.Add(builder.Or(
-                builder.Eq(w => w.AssignedToId, assigneeId),
-                builder.Eq(w => w.AssignedToId, null)));
+            clauses.Add(
+                builder.Or(
+                    builder.Eq(w => w.AssignedToId, assigneeId),
+                    builder.Eq(w => w.AssignedToId, null)
+                )
+            );
         }
         else if (assigneeId is not null)
         {
@@ -404,6 +483,26 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
     }
 
+    /// <summary>
+    /// Case-insensitive exact-token match on a single BSON field: an anchored
+    /// regex so casing differences never hide a match without matching
+    /// substrings of a longer value. Shared by the <c>Materials</c> and
+    /// <c>WasteProcessingTypes</c> filter clauses above, which both need this
+    /// exact idiom.
+    /// </summary>
+    private static FilterDefinition<WorkItem> CaseInsensitiveExactMatch(
+        FilterDefinitionBuilder<WorkItem> builder,
+        string field,
+        string value
+    ) =>
+        builder.Regex(
+            field,
+            new MongoDB.Bson.BsonRegularExpression(
+                $"^{System.Text.RegularExpressions.Regex.Escape(value)}$",
+                "i"
+            )
+        );
+
     [ExcludeFromCodeCoverage]
     public async Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default)
     {
@@ -413,7 +512,8 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         var result = await Collection.ReplaceOneAsync(
             w => w.Id == workItem.Id && w.Version == expectedVersion,
             workItem,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken
+        );
 
         if (result.MatchedCount != 1)
         {
@@ -425,14 +525,19 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
 
         Logger.LogInformation(
             "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState} (version {Version})",
-            workItem.Id, workItem.TypeId, workItem.StateId, workItem.Version);
+            workItem.Id,
+            workItem.TypeId,
+            workItem.StateId,
+            workItem.Version
+        );
     }
 
     public async Task<bool> SetPayloadFieldAsync(
         Guid workItemId,
         string fieldName,
         BsonValue value,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(fieldName);
         // A C# null would be written as an explicit BSON null; callers must
@@ -443,51 +548,58 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         // operator would target a nested document or rewrite a different part
         // of the envelope entirely. This method's contract is one field
         // directly under `payload`.
-        if (fieldName.Contains('.', StringComparison.Ordinal)
-            || fieldName.StartsWith('$'))
+        if (fieldName.Contains('.', StringComparison.Ordinal) || fieldName.StartsWith('$'))
         {
             throw new ArgumentException(
-                "Payload field name must be a single field directly under 'payload' " +
-                "(no dotted paths, no update operators).",
-                nameof(fieldName));
+                "Payload field name must be a single field directly under 'payload' "
+                    + "(no dotted paths, no update operators).",
+                nameof(fieldName)
+            );
         }
 
         var result = await Collection.UpdateOneAsync(
             Builders<WorkItem>.Filter.Eq(w => w.Id, workItemId),
             Builders<WorkItem>.Update.Set($"payload.{fieldName}", value),
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken
+        );
 
         return result.MatchedCount > 0;
     }
 
     [ExcludeFromCodeCoverage]
     protected override List<CreateIndexModel<WorkItem>> DefineIndexes(
-        IndexKeysDefinitionBuilder<WorkItem> builder)
+        IndexKeysDefinitionBuilder<WorkItem> builder
+    )
     {
         var typeAndSubmitted = new CreateIndexModel<WorkItem>(
             builder.Combine(
                 builder.Ascending(w => w.TypeId),
-                builder.Descending(w => w.SubmittedAt)));
+                builder.Descending(w => w.SubmittedAt)
+            )
+        );
         var stateAndSubmitted = new CreateIndexModel<WorkItem>(
             builder.Combine(
                 builder.Ascending(w => w.StateId),
-                builder.Descending(w => w.SubmittedAt)));
+                builder.Descending(w => w.SubmittedAt)
+            )
+        );
         var submittedDescending = new CreateIndexModel<WorkItem>(
-            builder.Descending(w => w.SubmittedAt));
+            builder.Descending(w => w.SubmittedAt)
+        );
         var assigneeAndSubmitted = new CreateIndexModel<WorkItem>(
             builder.Combine(
                 builder.Ascending(w => w.AssignedToId),
-                builder.Descending(w => w.SubmittedAt)));
+                builder.Descending(w => w.SubmittedAt)
+            )
+        );
         // RA-125: nation-based routing filter; most useful when also
         // filtering by state so both fields appear in the compound key.
         var nationAndState = new CreateIndexModel<WorkItem>(
-            builder.Combine(
-                builder.Ascending("payload.nation"),
-                builder.Ascending(w => w.StateId)));
+            builder.Combine(builder.Ascending("payload.nation"), builder.Ascending(w => w.StateId))
+        );
         // Search by org name: text index supports word-level case-insensitive $text queries.
         // Only one text index is allowed per collection; scope it to organisationName.
-        var orgNameText = new CreateIndexModel<WorkItem>(
-            builder.Text("payload.organisationName"));
+        var orgNameText = new CreateIndexModel<WorkItem>(builder.Text("payload.organisationName"));
         // Search by org ID / applicationReference: ascending index lets anchored prefix
         // regex queries avoid a full collection scan.
         //
@@ -500,7 +612,8 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         // are constrained, and every new submission sets it.
         var applicationReference = new CreateIndexModel<WorkItem>(
             builder.Ascending("payload.applicationReference"),
-            new CreateIndexOptions { Unique = true, Sparse = true });
+            new CreateIndexOptions { Unique = true, Sparse = true }
+        );
         // RA-311/MBE-3: the operator backend forwards the operator's own
         // "submit application" call and may retry it after a client-side
         // timeout even though the original request already succeeded here
@@ -515,16 +628,20 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         // signal to hand back the original work item instead of erroring.
         var operatorApplicationId = new CreateIndexModel<WorkItem>(
             builder.Ascending("payload.operatorApplicationId"),
-            new CreateIndexOptions { Unique = true, Sparse = true });
-        // epr-r9oy: read by AccreditationIdLookup.ExistsAsync, but DEFINED HERE
-        // rather than there, because index definitions only take effect when the
-        // owning MongoService is constructed. AccreditationIdLookup is a lazy
-        // singleton that nothing resolves during startup — the only migration
-        // that pulls it in resolves it after a feature-flag check that is off by
-        // default (25a1399) — so its indexes are not created until the first
-        // approval. WorkItemPersistence is resolved by
-        // WorkItemMigrationHostedService on every boot, so a definition here
-        // reaches every environment on deploy.
+            new CreateIndexOptions { Unique = true, Sparse = true }
+        );
+        // epr-r9oy: defined here (not on a dedicated MongoService for
+        // payload.accreditationId) because index definitions only take effect
+        // when the owning MongoService is constructed, and WorkItemPersistence
+        // is resolved by WorkItemMigrationHostedService on every boot — so a
+        // definition here reaches every environment on deploy, unlike a lazily
+        // constructed singleton nothing resolves during startup would.
+        // RA-448 phase 2: originally also read by AccreditationIdLookup.ExistsAsync
+        // (the retired local generator's own uniqueness pre-check); that reader
+        // is gone now that accreditation numbers come from the backend, which
+        // guarantees uniqueness itself via its own atomic counters, but this
+        // index stays as a defence-in-depth backstop against two concurrent
+        // approvals stamping the same id onto this collection.
         //
         // PARTIAL, not sparse. Sparse excludes only documents where the field is
         // ABSENT; a document carrying an EXPLICIT null is indexed like any other,
@@ -538,18 +655,30 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         //
         // "Is a string" excludes explicit nulls and absent fields alike while
         // keeping uniqueness over real ids, so the backstop against two
-        // concurrent approvals stamping the same id survives. Note that
-        // AccreditationIdLookup.ExistsFilter must carry the same $type predicate
-        // for the planner to use this index at all.
+        // concurrent approvals stamping the same id survives.
         var accreditationId = new CreateIndexModel<WorkItem>(
             builder.Ascending("payload.accreditationId"),
             new CreateIndexOptions<WorkItem>
             {
                 Unique = true,
                 PartialFilterExpression = Builders<WorkItem>.Filter.Type(
-                    "payload.accreditationId", BsonType.String),
-            });
-        return [typeAndSubmitted, stateAndSubmitted, submittedDescending, assigneeAndSubmitted, nationAndState, orgNameText, applicationReference, operatorApplicationId, accreditationId];
+                    "payload.accreditationId",
+                    BsonType.String
+                ),
+            }
+        );
+        return
+        [
+            typeAndSubmitted,
+            stateAndSubmitted,
+            submittedDescending,
+            assigneeAndSubmitted,
+            nationAndState,
+            orgNameText,
+            applicationReference,
+            operatorApplicationId,
+            accreditationId,
+        ];
     }
 }
 
@@ -576,8 +705,11 @@ public static class WorkItemPayloadConverter
 
     public static BsonDocument ToBson(JsonElement? payload)
     {
-        if (!payload.HasValue || payload.Value.ValueKind == JsonValueKind.Undefined ||
-            payload.Value.ValueKind == JsonValueKind.Null)
+        if (
+            !payload.HasValue
+            || payload.Value.ValueKind == JsonValueKind.Undefined
+            || payload.Value.ValueKind == JsonValueKind.Null
+        )
         {
             return new BsonDocument();
         }
@@ -585,7 +717,8 @@ public static class WorkItemPayloadConverter
         if (payload.Value.ValueKind != JsonValueKind.Object)
         {
             throw new InvalidWorkItemPayloadException(
-                $"Work item payload must be a JSON object, got {payload.Value.ValueKind}.");
+                $"Work item payload must be a JSON object, got {payload.Value.ValueKind}."
+            );
         }
 
         var json = payload.Value.GetRawText();

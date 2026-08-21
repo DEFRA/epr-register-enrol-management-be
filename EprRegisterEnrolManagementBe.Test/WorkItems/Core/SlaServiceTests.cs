@@ -1,9 +1,7 @@
 using System.Security.Claims;
 using System.Xml;
-using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 
@@ -23,20 +21,12 @@ public class SlaServiceTests
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private SlaService BuildService(int maxExtensionDays = 31) =>
+    private SlaService BuildService() =>
         new(
             _persistence,
             NullLogger<SlaService>.Instance,
-            BuildOptions(maxExtensionDays),
             _time,
             [_hook]);
-
-    private static IOptionsMonitor<SlaConfig> BuildOptions(int maxDays = 31)
-    {
-        var monitor = Substitute.For<IOptionsMonitor<SlaConfig>>();
-        monitor.CurrentValue.Returns(new SlaConfig { MaxExtensionDays = maxDays });
-        return monitor;
-    }
 
     private static ClaimsPrincipal TeamLeader(string userId = "tl-1") =>
         new(new ClaimsIdentity(
@@ -90,6 +80,32 @@ public class SlaServiceTests
     private sealed class FakeTimeProvider(DateTime utcNow) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
+    }
+
+    // ── Constructor defaults ─────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Constructor_defaults_time_provider_and_hooks_when_omitted()
+    {
+        // Covers the `timeProvider ?? TimeProvider.System` and
+        // `postActionHooks?.ToArray() ?? Array.Empty<...>()` branches, which
+        // BuildService() above never exercises because it always supplies
+        // both explicitly.
+        var service = new SlaService(_persistence, NullLogger<SlaService>.Instance);
+
+        var workItem = WorkItemWithClock();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await service.ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(7), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        // LastModifiedAt should be close to real wall-clock time, proving
+        // TimeProvider.System (not a fixed fake) was used.
+        Assert.True(
+            Math.Abs((DateTime.UtcNow - result.WorkItem!.LastModifiedAt).TotalMinutes) < 5);
     }
 
     // ── ExtendAsync — success path ────────────────────────────────────────────
@@ -152,11 +168,15 @@ public class SlaServiceTests
 
         var entry = Assert.Single(result.WorkItem!.AuditLog);
         Assert.Equal("sla-extended", entry.Action);
-        Assert.Equal("SLA extended", entry.ActionDisplayName);
+        Assert.Equal("Determination deadline extended", entry.ActionDisplayName);
         Assert.Equal("tl-alice", entry.CreatedBy);
         Assert.Equal(UtcNow, entry.CreatedAt);
         Assert.Equal("Needs more time", entry.Details["reason"]);
         Assert.Equal("tl-alice", entry.Details["actorUserId"]);
+        // epr-rr9s: the entry snapshots the state as of this event. Extending
+        // the deadline does not move the item, so it is the state it was in.
+        Assert.Equal(result.WorkItem!.StateId, entry.StateId);
+        Assert.NotNull(entry.StateId);
         // Before snapshot
         Assert.Equal(
             XmlConvert.ToString(TimeSpan.FromDays(84)),
@@ -245,25 +265,16 @@ public class SlaServiceTests
     }
 
     [Fact]
-    public async Task ExtendAsync_returns_invalid_request_when_duration_exceeds_max()
+    public async Task ExtendAsync_allows_any_duration_with_no_upper_cap()
     {
-        var result = await BuildService(maxExtensionDays: 7).ExtendAsync(
-            Guid.NewGuid(), TimeSpan.FromDays(8), "reason",
-            TeamLeader(), TestContext.Current.CancellationToken);
-
-        Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
-        Assert.Contains("7", result.Message);
-    }
-
-    [Fact]
-    public async Task ExtendAsync_accepts_duration_exactly_at_max()
-    {
+        // RA-447/CM6: MaxExtensionDays has been removed entirely — a
+        // caseworker may extend by any positive duration.
         var workItem = WorkItemWithClock();
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
             .Returns(workItem);
 
-        var result = await BuildService(maxExtensionDays: 7).ExtendAsync(
-            workItem.Id, TimeSpan.FromDays(7), "reason",
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(365), "reason",
             TeamLeader(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
@@ -380,6 +391,37 @@ public class SlaServiceTests
     }
 
     [Fact]
+    public async Task OverrideAsync_preserves_an_already_utc_started_at_without_converting()
+    {
+        var workItem = WorkItemWithClock();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+        var utcTime = DateTime.SpecifyKind(UtcNow.AddDays(-5), DateTimeKind.Utc);
+
+        var result = await BuildService().OverrideAsync(
+            workItem.Id, TimeSpan.FromDays(84), utcTime, "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(utcTime, result.WorkItem!.SlaClock!.StartedAt);
+        Assert.Equal(DateTimeKind.Utc, result.WorkItem.SlaClock.StartedAt.Kind);
+    }
+
+    [Fact]
+    public async Task OverrideAsync_accepts_a_started_at_of_exactly_now()
+    {
+        var workItem = WorkItemWithClock();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().OverrideAsync(
+            workItem.Id, TimeSpan.FromDays(84), UtcNow, "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
     public async Task OverrideAsync_writes_sla_overridden_audit_entry()
     {
         var workItem = WorkItemWithClock(
@@ -429,7 +471,7 @@ public class SlaServiceTests
             .Returns(workItem);
 
         // BA confirmed (RA-131): no cap on override — regulators agree offline.
-        var result = await BuildService(maxExtensionDays: 7).OverrideAsync(
+        var result = await BuildService().OverrideAsync(
             workItem.Id, TimeSpan.FromDays(365), null, "Long regulatory extension",
             TeamLeader(), TestContext.Current.CancellationToken);
 

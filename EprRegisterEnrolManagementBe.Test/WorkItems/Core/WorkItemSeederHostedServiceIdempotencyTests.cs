@@ -48,6 +48,74 @@ public sealed class WorkItemSeederHostedServiceIdempotencyTests
     }
 
     [Fact]
+    public async Task StartAsync_does_nothing_when_seed_on_startup_is_not_enabled()
+    {
+        // Covers the `!configuration.GetValue(...)` true arm — the default,
+        // opt-in-off configuration — which every other test in this file
+        // bypasses by explicitly enabling seeding.
+        var config = new ConfigurationBuilder().Build();
+        var service = new WorkItemSeederHostedService(
+            _services, config, NullLogger<WorkItemSeederHostedService>.Instance);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery { Page = 1, PageSize = 100 },
+            TestContext.Current.CancellationToken);
+        Assert.Equal(0, page.TotalCount);
+    }
+
+    [Fact]
+    public async Task StartAsync_does_nothing_when_no_seeders_are_registered()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["WorkItems:SeedOnStartup"] = "true"
+            })
+            .Build();
+        var registry = new WorkItemRegistry(new IWorkItemType[] { new ReAccreditationType() });
+        var services = new ServiceCollection()
+            .AddSingleton<IWorkItemPersistence>(_persistence)
+            .AddSingleton<IWorkItemRegistry>(registry)
+            // Deliberately no IWorkItemSeeder registered.
+            .BuildServiceProvider();
+        var service = new WorkItemSeederHostedService(
+            services, config, NullLogger<WorkItemSeederHostedService>.Instance);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery { Page = 1, PageSize = 100 },
+            TestContext.Current.CancellationToken);
+        Assert.Equal(0, page.TotalCount);
+    }
+
+    [Fact]
+    public async Task StartAsync_does_not_throw_when_persistence_is_unavailable()
+    {
+        // Covers the `persistence is null || registry is null` guard — the
+        // service must degrade gracefully (e.g. host starting before Mongo
+        // is reachable) rather than fail startup.
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["WorkItems:SeedOnStartup"] = "true"
+            })
+            .Build();
+        var services = new ServiceCollection()
+            .AddSingleton<INationResolver, NationResolver>()
+            .AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>()
+            // Deliberately no IWorkItemPersistence or IWorkItemRegistry registered.
+            .BuildServiceProvider();
+        var service = new WorkItemSeederHostedService(
+            services, config, NullLogger<WorkItemSeederHostedService>.Instance);
+
+        // Should not throw.
+        await service.StartAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Running_the_seeder_twice_does_not_duplicate_items()
     {
         var first = BuildHostedService();

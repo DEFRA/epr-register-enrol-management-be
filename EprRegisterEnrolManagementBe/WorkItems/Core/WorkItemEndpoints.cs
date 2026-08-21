@@ -403,8 +403,25 @@ public static class WorkItemEndpoints
         // resolves the transition from) so this rejects using the exact
         // rules the item was submitted under.
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        var transition = workItem?.TemplateSnapshot?.Transitions.FirstOrDefault(t =>
-            string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase));
+        // RA-351: an action id can be declared on more than one state (e.g.
+        // `sla-extend` self-loops on both `assessment-in-progress` and
+        // `queried`). Resolve the CallerInvocable check against the transition
+        // for the item's CURRENT state — matching on action id alone would
+        // test the first-declared transition, which can differ in
+        // CallerInvocable from the one that actually applies here.
+        var actionTransitions = workItem
+            ?.TemplateSnapshot?.Transitions.Where(t =>
+                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
+            )
+            .ToList();
+        var transition =
+            actionTransitions?.FirstOrDefault(t =>
+                string.Equals(
+                    t.FromStateId,
+                    workItem!.StateId,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            ) ?? actionTransitions?.FirstOrDefault();
         if (transition is { CallerInvocable: false })
         {
             return ToHttpResult(
@@ -578,7 +595,7 @@ public static class WorkItemEndpoints
     {
         var w = projection.WorkItem;
         var now = timeProvider?.GetUtcNow().UtcDateTime;
-        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now);
+        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now, projection.IsTerminal);
         return new WorkItemResponse(
             w.Id,
             w.TypeId,
@@ -623,7 +640,9 @@ public static class WorkItemEndpoints
                     x.Entry.Details,
                     x.Entry.CreatedAt,
                     x.Entry.CreatedBy,
-                    x.Entry.CreatedByName
+                    x.Entry.CreatedByName,
+                    // epr-rr9s: per-event state snapshot (null for pre-change entries).
+                    x.Entry.StateId
                 ))
                 .ToList(),
             slaRemaining,
@@ -640,10 +659,30 @@ public static class WorkItemEndpoints
 
     internal static (TimeSpan? Remaining, WorkItemSlaState? State) ComputeSla(
         WorkItemSlaClock? clock,
-        DateTime? now
+        DateTime? now,
+        bool isTerminal = false
     )
     {
-        if (clock is null || now is null)
+        // No clock means no SLA at all — nothing to cancel, run or breach.
+        // This is checked before terminality on purpose: a terminal item that
+        // never started an SLA reports no state, exactly as a non-terminal one
+        // does. Only items with an actual clock are eligible for Cancelled.
+        if (clock is null)
+        {
+            return (null, null);
+        }
+        // RA-359: a terminal work item (withdrawn / approved / rejected) has no
+        // live SLA. Its clock is cancelled regardless of elapsed time, so we
+        // stop the countdown (Remaining => null) and report Cancelled instead
+        // of an OnTrack/AtRisk/Breached derived purely from the clock. The
+        // historical deadline is untouched and still surfaced via
+        // ComputeSlaDueDate. Terminality is time-independent, so this holds even
+        // when no "now" was supplied.
+        if (isTerminal)
+        {
+            return (null, WorkItemSlaState.Cancelled);
+        }
+        if (now is null)
         {
             return (null, null);
         }
@@ -679,7 +718,7 @@ public static class WorkItemEndpoints
     {
         var w = projection.WorkItem;
         var now = timeProvider?.GetUtcNow().UtcDateTime;
-        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now);
+        var (slaRemaining, slaState) = ComputeSla(w.SlaClock, now, projection.IsTerminal);
         return new WorkItemListItemResponse(
             w.Id,
             w.TypeId,
