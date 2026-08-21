@@ -22,8 +22,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <see cref="IWorkItemPersistence"/> wholesale), which let any
 /// regression in BSON conventions, indexes or projections pass CI.
 /// </summary>
-public sealed class WorkItemPersistenceMongoIntegrationTests
-    : IAsyncDisposable, IDisposable
+public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable, IDisposable
 {
     /// <summary>
     /// Deterministic timestamp seed used for every <see cref="WorkItem"/>
@@ -32,8 +31,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     /// and obscures which value the contract under test actually
     /// cares about.
     /// </summary>
-    private static readonly DateTimeOffset s_seedNow =
-        new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset s_seedNow = new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
 
     private readonly MongoIntegrationFixture _fixture;
     private readonly string _databaseName;
@@ -82,12 +80,15 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             SubmittedAt = now,
             LastModifiedAt = now,
             SubmittedBy = "client-1",
-            Payload = new BsonDocument { ["key"] = "value" }
+            Payload = new BsonDocument { ["key"] = "value" },
         };
 
         await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
 
-        var fetched = await _persistence.GetByIdAsync(workItem.Id, TestContext.Current.CancellationToken);
+        var fetched = await _persistence.GetByIdAsync(
+            workItem.Id,
+            TestContext.Current.CancellationToken
+        );
         Assert.NotNull(fetched);
         Assert.Equal("re-accreditation", fetched!.TypeId);
         Assert.Equal("submitted", fetched.StateId);
@@ -95,7 +96,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Equal("value", fetched.Payload["key"].AsString);
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(), TestContext.Current.CancellationToken);
+            new WorkItemQuery(),
+            TestContext.Current.CancellationToken
+        );
         Assert.Equal(1, page.TotalCount);
         Assert.Single(page.Items);
         Assert.Equal(workItem.Id, page.Items[0].Id);
@@ -108,8 +111,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // assert what the driver actually wrote (not what we asked for)
         // so a future change to the index set is caught here.
         var collection = _clientFactory.GetCollection<WorkItem>("workItems");
-        var indexes = await (await collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
-            .ToListAsync(TestContext.Current.CancellationToken);
+        var indexes = await (
+            await collection.Indexes.ListAsync(TestContext.Current.CancellationToken)
+        ).ToListAsync(TestContext.Current.CancellationToken);
 
         // Mongo always writes a default _id_ index in addition to ours.
         var keyDocs = indexes
@@ -119,13 +123,31 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             .ToList();
 
         Assert.Equal(9, keyDocs.Count);
-        Assert.Contains(keyDocs, k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1"));
-        Assert.Contains(keyDocs, k => k.Contains("\"stateId\" : 1") && k.Contains("\"submittedAt\" : -1"));
-        Assert.Contains(keyDocs, k => k.Contains("\"assignedToId\" : 1") && k.Contains("\"submittedAt\" : -1"));
-        Assert.Contains(keyDocs, k =>
-            k.Contains("\"submittedAt\" : -1") && !k.Contains("typeId") && !k.Contains("stateId") && !k.Contains("assignedToId"));
+        Assert.Contains(
+            keyDocs,
+            k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1")
+        );
+        Assert.Contains(
+            keyDocs,
+            k => k.Contains("\"stateId\" : 1") && k.Contains("\"submittedAt\" : -1")
+        );
+        Assert.Contains(
+            keyDocs,
+            k => k.Contains("\"assignedToId\" : 1") && k.Contains("\"submittedAt\" : -1")
+        );
+        Assert.Contains(
+            keyDocs,
+            k =>
+                k.Contains("\"submittedAt\" : -1")
+                && !k.Contains("typeId")
+                && !k.Contains("stateId")
+                && !k.Contains("assignedToId")
+        );
         // RA-125: nation + stateId compound index for fast nation-filtered worklist queries.
-        Assert.Contains(keyDocs, k => k.Contains("\"payload.nation\" : 1") && k.Contains("\"stateId\" : 1"));
+        Assert.Contains(
+            keyDocs,
+            k => k.Contains("\"payload.nation\" : 1") && k.Contains("\"stateId\" : 1")
+        );
         // Text index for org name search — the key doc always contains "_fts":"text".
         Assert.Contains(keyDocs, k => k.Contains("\"_fts\" : \"text\""));
         // Ascending index for applicationReference prefix search.
@@ -133,14 +155,16 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // RA-311/MBE-3: ascending index backing the operatorApplicationId
         // idempotent-submit lookup.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorApplicationId\" : 1"));
-        // epr-r9oy: ascending index backing AccreditationIdLookup.ExistsAsync.
+        // epr-r9oy: ascending uniqueness index on the accreditation number
+        // stamped at approval (RA-448 phase 2: now backend-issued).
         Assert.Contains(keyDocs, k => k.Contains("\"payload.accreditationId\" : 1"));
 
         // RA-219: that index must be UNIQUE (enforce one ref per work item /
         // give the engine a collision signal) and SPARSE (legacy docs without
         // the field are not indexed, so they cannot trip the constraint).
         var appRefIndex = indexes.Single(i =>
-            i["key"].AsBsonDocument.Contains("payload.applicationReference"));
+            i["key"].AsBsonDocument.Contains("payload.applicationReference")
+        );
         Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
         Assert.True(appRefIndex.GetValue("sparse", false).ToBoolean());
 
@@ -148,7 +172,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // — one work item per operator application id, but legacy/manual
         // items without the field are never constrained.
         var operatorApplicationIdIndex = indexes.Single(i =>
-            i["key"].AsBsonDocument.Contains("payload.operatorApplicationId"));
+            i["key"].AsBsonDocument.Contains("payload.operatorApplicationId")
+        );
         Assert.True(operatorApplicationIdIndex.GetValue("unique", false).ToBoolean());
         Assert.True(operatorApplicationIdIndex.GetValue("sparse", false).ToBoolean());
 
@@ -159,7 +184,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // is the half that stops a well-meaning "make it consistent with the
         // two above" from reintroducing the outage.
         var accreditationIdIndex = indexes.Single(i =>
-            i["key"].AsBsonDocument.Contains("payload.accreditationId"));
+            i["key"].AsBsonDocument.Contains("payload.accreditationId")
+        );
         Assert.True(accreditationIdIndex.GetValue("unique", false).ToBoolean());
         Assert.False(accreditationIdIndex.GetValue("sparse", false).ToBoolean());
         Assert.True(accreditationIdIndex.Contains("partialFilterExpression"));
@@ -185,21 +211,26 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             collection.Indexes.CreateOne(
                 new CreateIndexModel<WorkItem>(
                     Builders<WorkItem>.IndexKeys.Ascending("payload.applicationReference"),
-                    new CreateIndexOptions { Unique = false, Sparse = false }),
-                cancellationToken: TestContext.Current.CancellationToken);
+                    new CreateIndexOptions { Unique = false, Sparse = false }
+                ),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
 
             // Constructing the persistence runs EnsureIndexes in its base ctor.
             // Before the fix this threw MongoCommandException (code 85); now it
             // must complete cleanly.
             var ex = Record.Exception(() =>
-                new WorkItemPersistence(factory, NullLoggerFactory.Instance));
+                new WorkItemPersistence(factory, NullLoggerFactory.Instance)
+            );
             Assert.Null(ex);
 
             // And the index must have been migrated to unique + sparse.
-            var indexes = await (await collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
-                .ToListAsync(TestContext.Current.CancellationToken);
+            var indexes = await (
+                await collection.Indexes.ListAsync(TestContext.Current.CancellationToken)
+            ).ToListAsync(TestContext.Current.CancellationToken);
             var appRefIndex = indexes.Single(i =>
-                i["key"].AsBsonDocument.Contains("payload.applicationReference"));
+                i["key"].AsBsonDocument.Contains("payload.applicationReference")
+            );
             Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
             Assert.True(appRefIndex.GetValue("sparse", false).ToBoolean());
         }
@@ -221,14 +252,17 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         {
             _ = new WorkItemPersistence(factory, NullLoggerFactory.Instance);
             var ex = Record.Exception(() =>
-                new WorkItemPersistence(factory, NullLoggerFactory.Instance));
+                new WorkItemPersistence(factory, NullLoggerFactory.Instance)
+            );
             Assert.Null(ex);
 
             var collection = factory.GetCollection<WorkItem>("workItems");
-            var indexes = await (await collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
-                .ToListAsync(TestContext.Current.CancellationToken);
+            var indexes = await (
+                await collection.Indexes.ListAsync(TestContext.Current.CancellationToken)
+            ).ToListAsync(TestContext.Current.CancellationToken);
             var appRefIndex = indexes.Single(i =>
-                i["key"].AsBsonDocument.Contains("payload.applicationReference"));
+                i["key"].AsBsonDocument.Contains("payload.applicationReference")
+            );
             Assert.True(appRefIndex.GetValue("unique", false).ToBoolean());
             Assert.True(appRefIndex.GetValue("sparse", false).ToBoolean());
         }
@@ -245,21 +279,25 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // payload.applicationReference is rejected with a DuplicateKey write
         // error (the very signal the engine retries on).
         var now = _time.GetUtcNow().UtcDateTime;
-        WorkItem Build() => new()
-        {
-            TypeId = "re-accreditation",
-            StateId = "submitted",
-            SubmittedAt = now,
-            LastModifiedAt = now,
-            Payload = new MongoDB.Bson.BsonDocument { ["applicationReference"] = "RA-123456789" }
-        };
+        WorkItem Build() =>
+            new()
+            {
+                TypeId = "re-accreditation",
+                StateId = "submitted",
+                SubmittedAt = now,
+                LastModifiedAt = now,
+                Payload = new MongoDB.Bson.BsonDocument
+                {
+                    ["applicationReference"] = "RA-123456789",
+                },
+            };
 
         await _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken);
 
         var ex = await Assert.ThrowsAsync<MongoDB.Driver.MongoWriteException>(() =>
-            _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken));
-        Assert.Equal(
-            MongoDB.Driver.ServerErrorCategory.DuplicateKey, ex.WriteError?.Category);
+            _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken)
+        );
+        Assert.Equal(MongoDB.Driver.ServerErrorCategory.DuplicateKey, ex.WriteError?.Category);
     }
 
     [Fact]
@@ -269,13 +307,14 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // option means they are simply not indexed, so two of them do not
         // collide on the unique constraint.
         var now = _time.GetUtcNow().UtcDateTime;
-        WorkItem Build() => new()
-        {
-            TypeId = "re-accreditation",
-            StateId = "submitted",
-            SubmittedAt = now,
-            LastModifiedAt = now
-        };
+        WorkItem Build() =>
+            new()
+            {
+                TypeId = "re-accreditation",
+                StateId = "submitted",
+                SubmittedAt = now,
+                LastModifiedAt = now,
+            };
 
         await _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken);
         await _persistence.CreateAsync(Build(), TestContext.Current.CancellationToken);
@@ -292,19 +331,43 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             StateId = "submitted",
             SubmittedAt = now,
             LastModifiedAt = now,
-            Notes = { new WorkItemNote { Text = "secret note body", CreatedAt = now, CreatedBy = "user-1", CreatedByName = "Alice" } },
-            AuditLog = { new WorkItemAuditEntry { Action = "submitted", ActionDisplayName = "Submitted", CreatedAt = now, CreatedBy = "user-1", CreatedByName = "Alice" } }
+            Notes =
+            {
+                new WorkItemNote
+                {
+                    Text = "secret note body",
+                    CreatedAt = now,
+                    CreatedBy = "user-1",
+                    CreatedByName = "Alice",
+                },
+            },
+            AuditLog =
+            {
+                new WorkItemAuditEntry
+                {
+                    Action = "submitted",
+                    ActionDisplayName = "Submitted",
+                    CreatedAt = now,
+                    CreatedBy = "user-1",
+                    CreatedByName = "Alice",
+                },
+            },
         };
         await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
 
         // Sanity: GetByIdAsync still returns the full document.
-        var full = await _persistence.GetByIdAsync(workItem.Id, TestContext.Current.CancellationToken);
+        var full = await _persistence.GetByIdAsync(
+            workItem.Id,
+            TestContext.Current.CancellationToken
+        );
         Assert.Single(full!.Notes);
         Assert.Single(full.AuditLog);
 
         // QueryAsync is the projected path; both collections must be empty.
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(), TestContext.Current.CancellationToken);
+            new WorkItemQuery(),
+            TestContext.Current.CancellationToken
+        );
         var item = Assert.Single(page.Items);
         Assert.Empty(item.Notes);
         Assert.Empty(item.AuditLog);
@@ -319,7 +382,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         string? wasteProcessingType = null,
         string stateId = "submitted",
         int submittedMinutesAgo = 0,
-        WorkItemSlaClock? slaClock = null)
+        WorkItemSlaClock? slaClock = null
+    )
     {
         var now = _time.GetUtcNow().UtcDateTime;
         var payload = new BsonDocument { ["organisationName"] = organisationName };
@@ -342,7 +406,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             SubmittedAt = now.AddMinutes(-submittedMinutesAgo),
             LastModifiedAt = now,
             Payload = payload,
-            SlaClock = slaClock
+            SlaClock = slaClock,
         };
         await _persistence.CreateAsync(item, TestContext.Current.CancellationToken);
     }
@@ -384,7 +448,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         await SeedAsync("Cherry");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(Sort: "organisation", SortDescending: true), ct);
+            new WorkItemQuery(Sort: "organisation", SortDescending: true),
+            ct
+        );
 
         Assert.Equal(new[] { "Cherry", "banana", "Apple" }, OrgOrder(page));
     }
@@ -404,8 +470,16 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "status"), ct);
 
         Assert.Equal(
-            new[] { "submitted", "duly-made", "assessment-in-progress", "awaiting-decision", "queried" },
-            page.Items.Select(i => i.StateId).ToArray());
+            new[]
+            {
+                "submitted",
+                "duly-made",
+                "assessment-in-progress",
+                "awaiting-decision",
+                "queried",
+            },
+            page.Items.Select(i => i.StateId).ToArray()
+        );
     }
 
     [Fact]
@@ -420,7 +494,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         await SeedAsync("s-new", stateId: "submitted", submittedMinutesAgo: 0);
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(Sort: "status", SortDescending: true), ct);
+            new WorkItemQuery(Sort: "status", SortDescending: true),
+            ct
+        );
 
         // Descending workflow rank: queried(4), assessment-in-progress(2), then
         // the two submitted(0) items broken newest-first by the tiebreak.
@@ -441,11 +517,17 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         }
 
         var page1 = await _persistence.QueryAsync(
-            new WorkItemQuery(Sort: "organisation", Page: 1, PageSize: 2), ct);
+            new WorkItemQuery(Sort: "organisation", Page: 1, PageSize: 2),
+            ct
+        );
         var page2 = await _persistence.QueryAsync(
-            new WorkItemQuery(Sort: "organisation", Page: 2, PageSize: 2), ct);
+            new WorkItemQuery(Sort: "organisation", Page: 2, PageSize: 2),
+            ct
+        );
         var page3 = await _persistence.QueryAsync(
-            new WorkItemQuery(Sort: "organisation", Page: 3, PageSize: 2), ct);
+            new WorkItemQuery(Sort: "organisation", Page: 3, PageSize: 2),
+            ct
+        );
 
         Assert.Equal(new[] { "a", "b" }, OrgOrder(page1));
         Assert.Equal(new[] { "c", "d" }, OrgOrder(page2));
@@ -463,13 +545,34 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         var now = _time.GetUtcNow().UtcDateTime;
         // Same start, longer target => later deadline: proves the sort reflects
         // targetDuration (SLA extensions), not just startedAt.
-        await SeedAsync("B", stateId: "assessment-in-progress",
-            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(30) });
-        await SeedAsync("A", stateId: "assessment-in-progress",
-            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(10) });
+        await SeedAsync(
+            "B",
+            stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock
+            {
+                StartedAt = now,
+                TargetDuration = TimeSpan.FromDays(30),
+            }
+        );
+        await SeedAsync(
+            "A",
+            stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock
+            {
+                StartedAt = now,
+                TargetDuration = TimeSpan.FromDays(10),
+            }
+        );
         await SeedAsync("NoClock", stateId: "submitted", slaClock: null);
-        await SeedAsync("C", stateId: "assessment-in-progress",
-            slaClock: new WorkItemSlaClock { StartedAt = now.AddDays(-5), TargetDuration = TimeSpan.FromDays(84) });
+        await SeedAsync(
+            "C",
+            stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock
+            {
+                StartedAt = now.AddDays(-5),
+                TargetDuration = TimeSpan.FromDays(84),
+            }
+        );
 
         var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "due-date"), ct);
 
@@ -482,14 +585,30 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     {
         var ct = TestContext.Current.CancellationToken;
         var now = _time.GetUtcNow().UtcDateTime;
-        await SeedAsync("B", stateId: "assessment-in-progress",
-            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(30) });
-        await SeedAsync("A", stateId: "assessment-in-progress",
-            slaClock: new WorkItemSlaClock { StartedAt = now, TargetDuration = TimeSpan.FromDays(10) });
+        await SeedAsync(
+            "B",
+            stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock
+            {
+                StartedAt = now,
+                TargetDuration = TimeSpan.FromDays(30),
+            }
+        );
+        await SeedAsync(
+            "A",
+            stateId: "assessment-in-progress",
+            slaClock: new WorkItemSlaClock
+            {
+                StartedAt = now,
+                TargetDuration = TimeSpan.FromDays(10),
+            }
+        );
         await SeedAsync("NoClock", stateId: "submitted", slaClock: null);
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(Sort: "due-date", SortDescending: true), ct);
+            new WorkItemQuery(Sort: "due-date", SortDescending: true),
+            ct
+        );
 
         // Latest deadline first, but the clock-less item still sorts last.
         Assert.Equal(new[] { "B", "A", "NoClock" }, OrgOrder(page));
@@ -507,8 +626,27 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             SubmittedAt = now,
             LastModifiedAt = now,
             Payload = new BsonDocument { ["organisationName"] = "Acme" },
-            Notes = { new WorkItemNote { Text = "secret", CreatedAt = now, CreatedBy = "u", CreatedByName = "U" } },
-            AuditLog = { new WorkItemAuditEntry { Action = "submitted", ActionDisplayName = "Submitted", CreatedAt = now, CreatedBy = "u", CreatedByName = "U" } }
+            Notes =
+            {
+                new WorkItemNote
+                {
+                    Text = "secret",
+                    CreatedAt = now,
+                    CreatedBy = "u",
+                    CreatedByName = "U",
+                },
+            },
+            AuditLog =
+            {
+                new WorkItemAuditEntry
+                {
+                    Action = "submitted",
+                    ActionDisplayName = "Submitted",
+                    CreatedAt = now,
+                    CreatedBy = "u",
+                    CreatedByName = "U",
+                },
+            },
         };
         await _persistence.CreateAsync(item, ct);
 
@@ -530,7 +668,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         await SeedAsync("g", material: "glass");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(Materials: new[] { "PLASTIC" }), ct);
+            new WorkItemQuery(Materials: new[] { "PLASTIC" }),
+            ct
+        );
 
         var got = Assert.Single(page.Items);
         Assert.Equal("plastic", got.Payload["material"].AsString);
@@ -545,7 +685,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         await SeedAsync("w", material: "wood");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(Materials: new[] { "plastic", "glass" }, Sort: "organisation"), ct);
+            new WorkItemQuery(Materials: new[] { "plastic", "glass" }, Sort: "organisation"),
+            ct
+        );
 
         Assert.Equal(new[] { "g", "p" }, OrgOrder(page));
     }
@@ -565,7 +707,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         await SeedAsync("No Field Co");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }), ct);
+            new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }),
+            ct
+        );
 
         Assert.Equal("Exporter Co", Assert.Single(page.Items).Payload["organisationName"].AsString);
     }
@@ -579,7 +723,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         await SeedAsync("No Field Co");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(WasteProcessingTypes: new[] { "reprocessor" }, Sort: "organisation"), ct);
+            new WorkItemQuery(WasteProcessingTypes: new[] { "reprocessor" }, Sort: "organisation"),
+            ct
+        );
 
         // Both the explicit "reprocessor" item AND the item with no field at
         // all match — the pre-RA-314 fallback every other reader applies.
@@ -593,7 +739,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         await SeedAsync("Exporter Co", wasteProcessingType: "Exporter");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }), ct);
+            new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }),
+            ct
+        );
 
         Assert.Single(page.Items);
     }
@@ -606,10 +754,16 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         await SeedAsync("Beta Metals", operatorOrganisationId: "ORG-222-002");
 
         var byName = await _persistence.QueryAsync(new WorkItemQuery(Organisation: "acme"), ct);
-        Assert.Equal("Acme Recycling", Assert.Single(byName.Items).Payload["organisationName"].AsString);
+        Assert.Equal(
+            "Acme Recycling",
+            Assert.Single(byName.Items).Payload["organisationName"].AsString
+        );
 
         var byOrgId = await _persistence.QueryAsync(new WorkItemQuery(Organisation: "ORG-222"), ct);
-        Assert.Equal("Beta Metals", Assert.Single(byOrgId.Items).Payload["organisationName"].AsString);
+        Assert.Equal(
+            "Beta Metals",
+            Assert.Single(byOrgId.Items).Payload["organisationName"].AsString
+        );
     }
 
     [Fact]
@@ -621,7 +775,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             TypeId = "re-accreditation",
             StateId = "submitted",
             SubmittedAt = now,
-            LastModifiedAt = now
+            LastModifiedAt = now,
         };
         await _persistence.CreateAsync(workItem, TestContext.Current.CancellationToken);
 
@@ -630,15 +784,22 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         // matches what the document had at read time but no longer
         // matches what is on disk, so the filter should not match and
         // ReplaceAsync should throw.
-        var stale = await _persistence.GetByIdAsync(workItem.Id, TestContext.Current.CancellationToken);
-        var fresh = await _persistence.GetByIdAsync(workItem.Id, TestContext.Current.CancellationToken);
+        var stale = await _persistence.GetByIdAsync(
+            workItem.Id,
+            TestContext.Current.CancellationToken
+        );
+        var fresh = await _persistence.GetByIdAsync(
+            workItem.Id,
+            TestContext.Current.CancellationToken
+        );
 
         fresh!.StateId = "in-progress";
         await _persistence.ReplaceAsync(fresh, TestContext.Current.CancellationToken);
 
         stale!.StateId = "approved";
         var ex = await Assert.ThrowsAsync<WorkItemConcurrencyException>(() =>
-            _persistence.ReplaceAsync(stale, TestContext.Current.CancellationToken));
+            _persistence.ReplaceAsync(stale, TestContext.Current.CancellationToken)
+        );
         Assert.Equal(workItem.Id, ex.WorkItemId);
 
         // The in-memory version on the failed attempt must roll back so
@@ -646,7 +807,10 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Equal(0, stale.Version);
 
         // The on-disk document is the winner's value, not the loser's.
-        var final = await _persistence.GetByIdAsync(workItem.Id, TestContext.Current.CancellationToken);
+        var final = await _persistence.GetByIdAsync(
+            workItem.Id,
+            TestContext.Current.CancellationToken
+        );
         Assert.Equal("in-progress", final!.StateId);
     }
 
@@ -667,7 +831,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             StateId = "submitted",
             SubmittedAt = now,
             LastModifiedAt = now,
-            SubmittedBy = "first-writer"
+            SubmittedBy = "first-writer",
         };
         var second = new WorkItem
         {
@@ -676,11 +840,17 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             StateId = "approved",
             SubmittedAt = now,
             LastModifiedAt = now,
-            SubmittedBy = "second-writer"
+            SubmittedBy = "second-writer",
         };
 
-        var insertedFirst = await _persistence.CreateIfAbsentAsync(first, TestContext.Current.CancellationToken);
-        var insertedSecond = await _persistence.CreateIfAbsentAsync(second, TestContext.Current.CancellationToken);
+        var insertedFirst = await _persistence.CreateIfAbsentAsync(
+            first,
+            TestContext.Current.CancellationToken
+        );
+        var insertedSecond = await _persistence.CreateIfAbsentAsync(
+            second,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.True(insertedFirst);
         Assert.False(insertedSecond);
@@ -693,9 +863,12 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.Equal("first-writer", fetched.SubmittedBy);
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(), TestContext.Current.CancellationToken);
+            new WorkItemQuery(),
+            TestContext.Current.CancellationToken
+        );
         Assert.Equal(1, page.TotalCount);
     }
+
     // ---------------------- RA-291 SetPayloadFieldAsync ----------------------
 
     [Fact]
@@ -711,16 +884,22 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
             LastModifiedAt = now,
             SubmittedBy = "client-1",
         };
-        workItem.ReplacePayload(new BsonDocument
-        {
-            ["organisationName"] = "Acme Recycling Ltd",
-            ["applicationReference"] = "RA-000000123",
-        });
+        workItem.ReplacePayload(
+            new BsonDocument
+            {
+                ["organisationName"] = "Acme Recycling Ltd",
+                ["applicationReference"] = "RA-000000123",
+            }
+        );
         await _persistence.CreateAsync(workItem, ct);
         var versionBefore = workItem.Version;
 
         var matched = await _persistence.SetPayloadFieldAsync(
-            workItem.Id, "currentQuery", new BsonDocument { ["reason"] = "why" }, ct);
+            workItem.Id,
+            "currentQuery",
+            new BsonDocument { ["reason"] = "why" },
+            ct
+        );
 
         Assert.True(matched);
         var fetched = await _persistence.GetByIdAsync(workItem.Id, ct);
@@ -738,7 +917,11 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     public async Task SetPayloadFieldAsync_returns_false_when_no_work_item_matches()
     {
         var matched = await _persistence.SetPayloadFieldAsync(
-            Guid.NewGuid(), "currentQuery", BsonNull.Value, TestContext.Current.CancellationToken);
+            Guid.NewGuid(),
+            "currentQuery",
+            BsonNull.Value,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.False(matched);
     }
@@ -750,11 +933,17 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     // caller rewrite a different part of the envelope entirely.
     [InlineData("$set")]
     public async Task SetPayloadFieldAsync_rejects_field_names_that_escape_the_payload(
-        string fieldName)
+        string fieldName
+    )
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>
             _persistence.SetPayloadFieldAsync(
-                Guid.NewGuid(), fieldName, BsonNull.Value, TestContext.Current.CancellationToken));
+                Guid.NewGuid(),
+                fieldName,
+                BsonNull.Value,
+                TestContext.Current.CancellationToken
+            )
+        );
     }
 
     [Theory]
@@ -764,7 +953,12 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>
             _persistence.SetPayloadFieldAsync(
-                Guid.NewGuid(), fieldName, BsonNull.Value, TestContext.Current.CancellationToken));
+                Guid.NewGuid(),
+                fieldName,
+                BsonNull.Value,
+                TestContext.Current.CancellationToken
+            )
+        );
     }
 
     // A C# null is rejected outright so it can't be written as an explicit
@@ -774,8 +968,14 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
     {
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
             _persistence.SetPayloadFieldAsync(
-                Guid.NewGuid(), "currentQuery", null!, TestContext.Current.CancellationToken));
+                Guid.NewGuid(),
+                "currentQuery",
+                null!,
+                TestContext.Current.CancellationToken
+            )
+        );
     }
+
     // ------------------- RA-342 legacy snapshot tolerance -------------------
 
     /// <summary>
@@ -828,14 +1028,14 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                         ["displayName"] = "Submitted",
                         ["isTerminal"] = false,
                         // State stray element (WorkItemState).
-                        ["colour"] = "amber"
+                        ["colour"] = "amber",
                     },
                     new BsonDocument
                     {
                         ["_id"] = "approved",
                         ["displayName"] = "Approved",
-                        ["isTerminal"] = true
-                    }
+                        ["isTerminal"] = true,
+                    },
                 },
                 ["transitions"] = new BsonArray
                 {
@@ -848,8 +1048,12 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                         ["requiresAllTasksComplete"] = true,
                         // The exact element from the reported stack trace: an
                         // array of role names on a transition (WorkItemTransition).
-                        ["requiredRoles"] = new BsonArray { "regulator-admin", "regulator-approver" }
-                    }
+                        ["requiredRoles"] = new BsonArray
+                        {
+                            "regulator-admin",
+                            "regulator-approver",
+                        },
+                    },
                 },
                 // RA-410: tasksByState itself is now a retired, whole-sale-ignored
                 // element on the snapshot root — the task framework (and the type
@@ -865,16 +1069,17 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
                         {
                             ["_id"] = "task-one",
                             ["displayName"] = "Task One",
-                            ["mandatory"] = true
-                        }
-                    }
-                }
-            }
+                            ["mandatory"] = true,
+                        },
+                    },
+                },
+            },
         };
 
         // Insert the raw document so the stray elements are stored verbatim,
         // exactly as a legacy work item holds them.
-        await _clientFactory.GetCollection<BsonDocument>("workItems")
+        await _clientFactory
+            .GetCollection<BsonDocument>("workItems")
             .InsertOneAsync(legacyDoc, cancellationToken: ct);
 
         // Projected worklist path (WorkItemPersistence.QueryAsync) — the code
@@ -894,7 +1099,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests
         Assert.NotNull(fetched);
         Assert.Equal(id, fetched!.Id);
         Assert.NotNull(fetched.TemplateSnapshot);
-        Assert.Equal("Submitted", Assert.Single(
-            fetched.TemplateSnapshot!.States, s => s.Id == "submitted").DisplayName);
+        Assert.Equal(
+            "Submitted",
+            Assert.Single(fetched.TemplateSnapshot!.States, s => s.Id == "submitted").DisplayName
+        );
     }
 }

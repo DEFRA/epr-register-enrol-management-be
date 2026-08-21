@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using EprRegisterEnrolManagementBe.Auth;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -18,8 +20,6 @@ using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using NSubstitute;
-using EprRegisterEnrolManagementBe.Auth;
-using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
@@ -469,7 +469,10 @@ public class ReAccreditationEndpointTests
         // AC04: every declared ORS detail field arrives intact.
         var newSite = sites[0];
         Assert.Equal("ORS-2026-0292", newSite.GetProperty("orsId").GetString());
-        Assert.Equal("Rotterdam New Reprocessing Site", newSite.GetProperty("siteName").GetString());
+        Assert.Equal(
+            "Rotterdam New Reprocessing Site",
+            newSite.GetProperty("siteName").GetString()
+        );
         Assert.Equal("1 Havenstraat", newSite.GetProperty("addressLine1").GetString());
         Assert.Equal("Europoort Industrial Park", newSite.GetProperty("addressLine2").GetString());
         Assert.Equal("Rotterdam", newSite.GetProperty("townOrCity").GetString());
@@ -482,9 +485,14 @@ public class ReAccreditationEndpointTests
         Assert.Equal("B3011", newSite.GetProperty("code1").GetString());
         Assert.Equal("GH013", newSite.GetProperty("code2").GetString());
         Assert.Equal("Y48", newSite.GetProperty("code3").GetString());
-        Assert.Equal("bes-evidence.pdf",
-            newSite.GetProperty("besEvidence").GetProperty("files")[0]
-                .GetProperty("filename").GetString());
+        Assert.Equal(
+            "bes-evidence.pdf",
+            newSite
+                .GetProperty("besEvidence")
+                .GetProperty("files")[0]
+                .GetProperty("filename")
+                .GetString()
+        );
 
         // Primitive types survive exactly as the producer sent them. The
         // frontend badge logic compares booleans by identity, so a boolean
@@ -547,10 +555,7 @@ public class ReAccreditationEndpointTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            BuildAwaitingDecision(id, TenantClientId),
-            cancellationToken
-        );
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/decision-rationale",
@@ -580,10 +585,7 @@ public class ReAccreditationEndpointTests
         await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
         using var client = factory.CreateClient();
 
-        await factory.SeedAsync(
-            BuildAwaitingDecision(id, TenantClientId),
-            cancellationToken
-        );
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/decision-rationale",
@@ -716,10 +718,7 @@ public class ReAccreditationEndpointTests
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            BuildAwaitingDecision(id, "other-tenant"),
-            cancellationToken
-        );
+        await factory.SeedAsync(BuildAwaitingDecision(id, "other-tenant"), cancellationToken);
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/decision-rationale",
@@ -946,10 +945,7 @@ public class ReAccreditationEndpointTests
                 TypeId = ReAccreditationType.Id,
                 StateId = "submitted",
                 SubmittedBy = TenantClientId,
-                Payload = new BsonDocument
-                {
-                    ["previousAccreditationYear"] = "not-a-number",
-                },
+                Payload = new BsonDocument { ["previousAccreditationYear"] = "not-a-number" },
             },
             cancellationToken
         );
@@ -1086,10 +1082,7 @@ public class ReAccreditationEndpointTests
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
-        Assert.Equal(
-            "'rationale' is required and must not be whitespace.",
-            problem!.Detail
-        );
+        Assert.Equal("'rationale' is required and must not be whitespace.", problem!.Detail);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Null(persisted);
     }
@@ -2702,9 +2695,7 @@ public class ReAccreditationEndpointTests
                 Arg.Any<CancellationToken>()
             )
             .Returns(
-                Task.FromResult(
-                    OperatorBackendPushResult.Failure("operator journey unreachable")
-                )
+                Task.FromResult(OperatorBackendPushResult.Failure("operator journey unreachable"))
             );
 
         await using var factory = new ReAccreditationFactory(
@@ -2901,6 +2892,14 @@ public class ReAccreditationEndpointTests
             TypeId = ReAccreditationType.Id,
             StateId = "awaiting-decision",
             SubmittedBy = submittedBy,
+            // RA-448 phase 2: required for the approve step's call to
+            // IAccreditationNumberAdapter.
+            Payload = new BsonDocument
+            {
+                ["operatorOrganisationId"] = "500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["nation"] = "England",
+            },
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
             TemplateVersion = type.TemplateVersion,
         };
@@ -2919,6 +2918,11 @@ public class ReAccreditationEndpointTests
             {
                 ["organisationName"] = "Acme Ltd",
                 ["registrationNumber"] = "EX-001",
+                // RA-448 phase 2: required for the approve step's call to
+                // IAccreditationNumberAdapter.
+                ["operatorOrganisationId"] = "500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["nation"] = "England",
             },
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
             TemplateVersion = type.TemplateVersion,
@@ -2969,10 +2973,7 @@ public class ReAccreditationEndpointTests
         var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
         Assert.Equal(expectedErrorCode, problem.GetProperty("errorCode").GetString());
         Assert.Equal("paymentDate", problem.GetProperty("field").GetString());
-        Assert.Equal(
-            "Could not complete duly making",
-            problem.GetProperty("title").GetString()
-        );
+        Assert.Equal("Could not complete duly making", problem.GetProperty("title").GetString());
 
         // A rejected date changes nothing.
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
@@ -3225,6 +3226,45 @@ public class ReAccreditationEndpointTests
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.NotNull(persisted);
         Assert.Equal("approved", persisted!.StateId);
+    }
+
+    /// <summary>
+    /// RA-448 phase 2 review follow-up: exercises the new
+    /// WorkItemActionFailureCode.AccreditationNumberUnavailable → 500 mapping
+    /// end-to-end, via a real HTTP round trip against a substituted
+    /// IAccreditationNumberAdapter that reports failure. Every other approve
+    /// test uses ReAccreditationFactory's default success-returning fake, so
+    /// this arm of the endpoint's status-code switch was otherwise untested.
+    /// </summary>
+    [Fact]
+    public async Task Approve_returns_internal_server_error_when_the_accreditation_number_adapter_fails()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var failingNumberAdapter = Substitute.For<IAccreditationNumberAdapter>();
+        failingNumberAdapter
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Any<AccreditationNumberRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(AccreditationNumberResult.Failure("backend unreachable"));
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            numberAdapter: failingNumberAdapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/re-accreditation/{id}/approve",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("awaiting-decision", persisted!.StateId);
     }
 
     // --------------------------- RA-410: single-call decision ---------------------------
@@ -3482,10 +3522,7 @@ public class ReAccreditationEndpointTests
             cancellationToken
         );
         Assert.NotNull(pending);
-        Assert.DoesNotContain(
-            pending!.AvailableActions,
-            a => a.ActionId == "submit-for-decision"
-        );
+        Assert.DoesNotContain(pending!.AvailableActions, a => a.ActionId == "submit-for-decision");
     }
 
     /// <summary>
@@ -3606,8 +3643,15 @@ public class ReAccreditationEndpointTests
         ) => inner.GetByIdAsync(id, cancellationToken);
 
         public Task<WorkItem?> FindByOperatorApplicationIdAsync(
-            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default
-        ) => inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
+            string typeId,
+            string operatorApplicationId,
+            CancellationToken cancellationToken = default
+        ) =>
+            inner.FindByOperatorApplicationIdAsync(
+                typeId,
+                operatorApplicationId,
+                cancellationToken
+            );
 
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,
@@ -3636,6 +3680,7 @@ public class ReAccreditationEndpointTests
         private readonly string _userName;
         private readonly Guid? _raceWorkItemId;
         private readonly IOperatorBackendPushAdapter? _pushAdapter;
+        private readonly IAccreditationNumberAdapter _numberAdapter;
 
         public IReAccreditationDecisionService DecisionService { get; } =
             Substitute.For<IReAccreditationDecisionService>();
@@ -3649,7 +3694,8 @@ public class ReAccreditationEndpointTests
             string? userId = DefaultUserId,
             string userName = DefaultUserName,
             Guid? raceWorkItemId = null,
-            IOperatorBackendPushAdapter? pushAdapter = null
+            IOperatorBackendPushAdapter? pushAdapter = null,
+            IAccreditationNumberAdapter? numberAdapter = null
         )
         {
             _fixture = fixture;
@@ -3658,6 +3704,25 @@ public class ReAccreditationEndpointTests
             _userName = userName;
             _raceWorkItemId = raceWorkItemId;
             _pushAdapter = pushAdapter;
+            // RA-448 phase 2: the real HttpAccreditationNumberAdapter (registered
+            // unconditionally by ReAccreditationModule) needs a live backend, which
+            // this integration suite has none of. Default to a fake returning a
+            // fixed, well-formed number so every existing approve/decision test
+            // keeps exercising the rest of the pipeline unchanged; pass an explicit
+            // numberAdapter to assert against a specific call or failure instead.
+            _numberAdapter = numberAdapter ?? BuildDefaultNumberAdapter();
+        }
+
+        private static IAccreditationNumberAdapter BuildDefaultNumberAdapter()
+        {
+            var adapter = Substitute.For<IAccreditationNumberAdapter>();
+            adapter
+                .GenerateOrUpdateAccreditationNumberAsync(
+                    Arg.Any<AccreditationNumberRequest>(),
+                    Arg.Any<CancellationToken>()
+                )
+                .Returns(AccreditationNumberResult.Success("A25ER5000270036WO"));
+            return adapter;
         }
 
         public IWorkItemPersistence Persistence =>
@@ -3674,17 +3739,20 @@ public class ReAccreditationEndpointTests
         /// indexes on the shared <c>workItems</c> collection, so integration
         /// tests run against the SAME index set production has.
         ///
-        /// <see cref="IAccreditationIdLookup"/> is a lazily-constructed
-        /// singleton, and indexes are created in the <c>MongoService</c>
-        /// constructor — so unless something resolves it, its unique + sparse
-        /// index on <c>payload.accreditationId</c> never exists in the test
-        /// database. That is exactly why the duplicate-key bug in the
-        /// current-query stamp reached the real stack with 968 tests green.
+        /// Resolving <see cref="IWorkItemPersistence"/> is what actually does
+        /// this: its <c>DefineIndexes</c> owns every production index on this
+        /// collection, including the unique + sparse index on
+        /// <c>payload.accreditationId</c> (see its own doc comment for why —
+        /// that index used to also be read by the now-retired
+        /// <c>AccreditationIdLookup</c>, whose own <c>DefineIndexes</c> was
+        /// deliberately empty for exactly this reason). That is exactly why
+        /// the duplicate-key bug in the current-query stamp reached the real
+        /// stack with 968 tests green: nothing had forced this construction
+        /// yet at the time.
         /// </summary>
         private void EnsureProductionIndexes()
         {
             _ = Persistence;
-            _ = Services.GetRequiredService<IAccreditationIdLookup>();
         }
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -3736,6 +3804,12 @@ public class ReAccreditationEndpointTests
                     services.RemoveAll<IOperatorBackendPushAdapter>();
                     services.AddSingleton(_pushAdapter);
                 }
+
+                // RA-448 phase 2: always substitute — the real
+                // HttpAccreditationNumberAdapter needs a live backend this
+                // integration suite doesn't have.
+                services.RemoveAll<IAccreditationNumberAdapter>();
+                services.AddSingleton(_numberAdapter);
             });
         }
 

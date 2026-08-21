@@ -69,6 +69,20 @@ internal sealed record ReAccreditationPayload
     public string? OperatorRegistrationId { get; init; }
 
     /// <summary>
+    /// RA-448 phase 2: the operator backend's own <c>AccreditationApplicationModel.Id</c>
+    /// — confirmed (not assumed) against <c>HttpCaseWorkingApiAdapter.BuildPayload</c>
+    /// in epr-register-enrol-backend, which sends
+    /// <c>operatorApplicationId = application.ApplicationId</c> (that model's
+    /// Mongo <c>Id</c>, stringified) on every real submission. This, not
+    /// <see cref="OperatorRegistrationId"/> (the seed-time ReEx registration id —
+    /// a different value), is the correct <c>{applicationId}</c> route segment
+    /// for the accreditation-number endpoint: every subsequent route on that
+    /// backend's <c>accreditation-applications</c> group keys on the same
+    /// document id, not on the registration id.
+    /// </summary>
+    public string? OperatorApplicationId { get; init; }
+
+    /// <summary>
     /// Operator email address used as the GOV.UK Notify recipient for
     /// the lifecycle email templates wired up by
     /// <c>ReAccreditationNotificationHook</c> (RA-123). Optional —
