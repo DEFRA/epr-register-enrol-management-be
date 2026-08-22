@@ -3771,6 +3771,91 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
+    public async Task RecyclingOperations_success_still_returns_ok_when_no_site_in_the_stored_snapshot_matches()
+    {
+        // The edit already succeeded on the operator backend (the system of
+        // record) by the time RefreshStoredRecyclingOperationsAsync runs - if
+        // this repo's own stored overseasSites.sites doesn't contain a
+        // matching siteId (a legitimately possible drift: this snapshot is
+        // only refreshed on a successful edit, so it can lag the operator
+        // backend), the refresh must silently no-op rather than turn an
+        // already-successful write into an error response.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var candidate = BuildRecyclingOperationsCandidate(id, TenantClientId, "England");
+        candidate.Payload["overseasSites"] = new BsonDocument
+        {
+            ["sites"] = new BsonArray
+            {
+                new BsonDocument
+                {
+                    ["siteId"] = 999,
+                    ["siteName"] = "A Different Site",
+                    ["operationCodes"] = new BsonArray { "R5" },
+                },
+            },
+        };
+        await factory.SeedAsync(candidate, cancellationToken);
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        var untouchedSite = stored!
+            .Payload["overseasSites"]
+            .AsBsonDocument["sites"]
+            .AsBsonArray.Select(s => s.AsBsonDocument)
+            .Single(s => s["siteId"].AsInt32 == 999);
+        Assert.Equal(
+            new[] { "R5" },
+            untouchedSite["operationCodes"].AsBsonArray.Select(v => v.AsString).ToArray()
+        );
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_success_still_returns_ok_when_the_snapshot_refresh_write_fails()
+    {
+        // Same reasoning as the "no matching site" case above: the edit
+        // already succeeded on the operator backend, so a failure refreshing
+        // this repo's own local snapshot must be logged and swallowed, never
+        // surfaced as an error on a write that genuinely went through.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England",
+            throwOnSetPayloadFieldWorkItemId: id
+        );
+        using var client = factory.CreateClient();
+
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidateWithOverseasSites(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task RecyclingOperations_returns_forbidden_for_support_readonly_role()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -3796,7 +3881,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         await factory
             .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
-            .UpdateRecyclingOperationsAsync(default!, default);
+            .UpdateRecyclingOperationsAsync(default!, cancellationToken);
     }
 
     [Fact]
@@ -3825,7 +3910,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         await factory
             .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
-            .UpdateRecyclingOperationsAsync(default!, default);
+            .UpdateRecyclingOperationsAsync(default!, cancellationToken);
     }
 
     [Theory]
@@ -3882,7 +3967,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         await factory
             .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
-            .UpdateRecyclingOperationsAsync(default!, default);
+            .UpdateRecyclingOperationsAsync(default!, cancellationToken);
     }
 
     /// <summary>
@@ -3934,7 +4019,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
         await factory
             .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
-            .UpdateRecyclingOperationsAsync(default!, default);
+            .UpdateRecyclingOperationsAsync(default!, cancellationToken);
     }
 
     [Fact]
@@ -3964,7 +4049,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
         await factory
             .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
-            .UpdateRecyclingOperationsAsync(default!, default);
+            .UpdateRecyclingOperationsAsync(default!, cancellationToken);
     }
 
     [Fact]
@@ -4166,7 +4251,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         await factory
             .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
-            .UpdateRecyclingOperationsAsync(default!, default);
+            .UpdateRecyclingOperationsAsync(default!, cancellationToken);
     }
 
     private static WorkItem BuildRecyclingOperationsCandidate(
@@ -4290,6 +4375,63 @@ public class ReAccreditationEndpointTests
         }
     }
 
+    /// <summary>
+    /// Throws from SetPayloadFieldAsync for one work item id only — exercises
+    /// RefreshStoredRecyclingOperationsAsync's best-effort catch block (the
+    /// edit already succeeded on the operator backend by the time this runs,
+    /// so a local-snapshot-refresh failure must be swallowed and logged, not
+    /// surfaced as an error response).
+    /// </summary>
+    private sealed class ThrowingSetPayloadFieldPersistence(
+        IWorkItemPersistence inner,
+        Guid throwId
+    ) : IWorkItemPersistence
+    {
+        public Task<bool> SetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default
+        ) =>
+            workItemId == throwId
+                ? throw new InvalidOperationException("Simulated snapshot-refresh failure.")
+                : inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
+        public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+            inner.CreateAsync(workItem, cancellationToken);
+
+        public Task<bool> CreateIfAbsentAsync(
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => inner.CreateIfAbsentAsync(workItem, cancellationToken);
+
+        public Task<WorkItem?> GetByIdAsync(
+            Guid id,
+            CancellationToken cancellationToken = default
+        ) => inner.GetByIdAsync(id, cancellationToken);
+
+        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+            string typeId,
+            string operatorApplicationId,
+            CancellationToken cancellationToken = default
+        ) =>
+            inner.FindByOperatorApplicationIdAsync(
+                typeId,
+                operatorApplicationId,
+                cancellationToken
+            );
+
+        public Task<WorkItemPage> QueryAsync(
+            WorkItemQuery query,
+            CancellationToken cancellationToken = default
+        ) => inner.QueryAsync(query, cancellationToken);
+
+        public Task ReplaceAsync(
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => inner.ReplaceAsync(workItem, cancellationToken);
+    }
+
     private sealed class ReAccreditationFactory : WebApplicationFactory<Program>
     {
         private readonly MongoIntegrationFixture _fixture;
@@ -4300,6 +4442,7 @@ public class ReAccreditationEndpointTests
         private readonly string? _role;
         private readonly string? _nation;
         private readonly Guid? _raceWorkItemId;
+        private readonly Guid? _throwOnSetPayloadFieldWorkItemId;
         private readonly IOperatorBackendPushAdapter? _pushAdapter;
         private readonly IAccreditationNumberAdapter _numberAdapter;
         private readonly IOverseasSiteRecyclingOperationsAdapter _recyclingOperationsAdapter;
@@ -4318,6 +4461,7 @@ public class ReAccreditationEndpointTests
             string? role = null,
             string? nation = null,
             Guid? raceWorkItemId = null,
+            Guid? throwOnSetPayloadFieldWorkItemId = null,
             IOperatorBackendPushAdapter? pushAdapter = null,
             IAccreditationNumberAdapter? numberAdapter = null,
             IOverseasSiteRecyclingOperationsAdapter? recyclingOperationsAdapter = null
@@ -4330,6 +4474,7 @@ public class ReAccreditationEndpointTests
             _role = role;
             _nation = nation;
             _raceWorkItemId = raceWorkItemId;
+            _throwOnSetPayloadFieldWorkItemId = throwOnSetPayloadFieldWorkItemId;
             _pushAdapter = pushAdapter;
             // RA-448 phase 2: the real HttpAccreditationNumberAdapter (registered
             // unconditionally by ReAccreditationModule) needs a live backend, which
@@ -4440,6 +4585,10 @@ public class ReAccreditationEndpointTests
                                 }
                             }
                         );
+                    }
+                    if (_throwOnSetPayloadFieldWorkItemId is { } throwId)
+                    {
+                        return new ThrowingSetPayloadFieldPersistence(real, throwId);
                     }
                     return real;
                 });

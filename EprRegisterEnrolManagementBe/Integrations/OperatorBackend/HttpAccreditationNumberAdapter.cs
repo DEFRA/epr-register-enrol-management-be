@@ -217,52 +217,14 @@ internal sealed class HttpAccreditationNumberAdapter(
     /// MaxRetryAttempts * s_maxBackoff ≈ 3*5s + 2*2s = 19s — the case
     /// management frontend's timeout for this call must exceed that.
     /// </summary>
-    private static ResiliencePipeline<HttpResponseMessage> BuildRetryPipeline(ILogger logger)
-    {
-        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>()
-            .AddRetry(
-                new RetryStrategyOptions<HttpResponseMessage>
-                {
-                    MaxRetryAttempts = MaxRetryAttempts,
-                    BackoffType = DelayBackoffType.Exponential,
-                    UseJitter = true,
-                    Delay = TimeSpan.FromMilliseconds(500),
-                    MaxDelay = s_maxBackoff,
-                    ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
-                        .Handle<HttpRequestException>()
-                        .Handle<TimeoutRejectedException>()
-                        .HandleResult(response => (int)response.StatusCode >= 500),
-                    OnRetry = args =>
-                    {
-                        logger.LogWarning(
-                            "Accreditation number request attempt {Attempt} failed{StatusInfo}; retrying in {DelayMs}ms.",
-                            args.AttemptNumber + 1,
-                            args.Outcome.Result is { } result
-                                ? $" (HTTP {(int)result.StatusCode})"
-                                : string.Empty,
-                            (long)args.RetryDelay.TotalMilliseconds
-                        );
-                        return ValueTask.CompletedTask;
-                    },
-                }
-            )
-            .AddTimeout(
-                new TimeoutStrategyOptions
-                {
-                    Timeout = TimeSpan.FromSeconds(PerAttemptTimeoutSeconds),
-                    OnTimeout = args =>
-                    {
-                        logger.LogWarning(
-                            "Accreditation number request attempt timed out after {TimeoutSeconds}s.",
-                            args.Timeout.TotalSeconds
-                        );
-                        return ValueTask.CompletedTask;
-                    },
-                }
-            );
-
-        return builder.Build();
-    }
+    private static ResiliencePipeline<HttpResponseMessage> BuildRetryPipeline(ILogger logger) =>
+        OperatorBackendRetryPipeline.Build(
+            logger,
+            "Accreditation number request",
+            MaxRetryAttempts,
+            PerAttemptTimeoutSeconds,
+            s_maxBackoff
+        );
 
     private sealed record BackendRequestBody(
         string? Nation,
