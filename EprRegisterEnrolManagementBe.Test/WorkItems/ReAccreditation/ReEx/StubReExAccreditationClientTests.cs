@@ -35,7 +35,12 @@ public class StubReExAccreditationClientTests
         // field is populated and that every percentage still sums to 100.
         var client = new StubReExAccreditationClient();
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.NotNull(result);
         var plan = result!.BusinessPlan;
