@@ -26,10 +26,14 @@ namespace EprRegisterEnrolManagementBe.Auth;
 /// its own secret rather than one value shared by all callers); the
 /// timestamp bounds the replay window; the nonce ensures a captured signed
 /// request cannot be replayed even within that window. See ADR-0003 for
-/// the timestamp/nonce contract and ADR-0005 for the v3 payload (role
-/// membership dropped — authorization is entirely the BFF's concern now)
-/// and its "Follow-up: per-caller shared secrets" section for the
-/// rationale behind this per-clientId lookup.
+/// the timestamp/nonce contract and ADR-0005 for the original v3 payload
+/// (role membership dropped — authorization was entirely the BFF's
+/// concern) and its "Follow-up: per-caller shared secrets" section for
+/// the rationale behind this per-clientId lookup. RA-469 reinstates a
+/// role field (and adds nation) in the signed payload: this endpoint's
+/// AC17 authorization is deliberately enforced backend-side too, so the
+/// two claims it gates on must carry the same signed-integrity guarantee
+/// as userId/userName rather than arriving as bare, tamperable headers.
 ///
 /// When no client secrets are configured the handler fails CLOSED in any
 /// non-Development environment (the integrity contract is broken). In
@@ -116,11 +120,10 @@ public class ClientIdAuthenticationHandler(
                 userName = v;
         }
         // RA-469: role/nation trust headers follow the exact same
-        // optional-header pattern as userId/userName above. Neither is
-        // folded into the v3 HMAC canonical payload — see
-        // ComputeSignature's doc comment — so this stays a narrower-than-
-        // signed trust tier, only reachable once the primary client-id
-        // signature has already passed.
+        // optional-header pattern as userId/userName above, and (like
+        // userId/userName) are folded into the v3 HMAC canonical payload —
+        // see ComputeSignature's doc comment — so a tampered role/nation
+        // invalidates the signature the same way a tampered userId would.
         if (Request.Headers.TryGetValue(Options.RoleHeaderName, out var roleValues))
         {
             var v = roleValues.ToString();
@@ -284,7 +287,9 @@ public class ClientIdAuthenticationHandler(
                 userId,
                 userName,
                 timestampHeader,
-                nonce
+                nonce,
+                role,
+                nation
             );
 
             if (!FixedTimeEquals(providedSignature, expectedSignature))
@@ -430,11 +435,25 @@ public class ClientIdAuthenticationHandler(
     }
 
     /// <summary>
-    /// Canonical signing payload (v3). Order and field separators are part
-    /// of the contract with the BFF: any change here is a breaking change
-    /// and requires a coordinated deploy. The timestamp and nonce are
-    /// non-optional — see ADR-0003. Role membership is not part of the
-    /// payload — see ADR-0005.
+    /// Canonical signing payload (v3, RA-469-extended). Order and field
+    /// separators are part of the contract with the BFF: any change here is
+    /// a breaking change and requires a coordinated deploy. The timestamp
+    /// and nonce are non-optional — see ADR-0003. Role/nation were dropped
+    /// from the payload at v3 (see ADR-0005) but RA-469 puts them back for
+    /// callers that supply them: <see cref="ReAccreditationEndpoints"/>'s
+    /// recycling-operations endpoint enforces AC17 authorization backend-
+    /// side using the resulting user:role/user:nation claims, so those two
+    /// values need the same signed-integrity guarantee as userId/userName —
+    /// otherwise a party able to alter headers on an already-signed request
+    /// (e.g. a misbehaving intermediary) could bypass that authorization
+    /// while the signature still validates.
+    ///
+    /// <paramref name="role"/>/<paramref name="nation"/> are declared last
+    /// and optional so every pre-existing call site that never dealt with
+    /// them keeps compiling unchanged; they are still placed immediately
+    /// after userName in the actual payload string, not appended at the
+    /// end — the wire/canonical order groups all four identity fields
+    /// together ahead of timestamp/nonce.
     /// </summary>
     internal static string ComputeSignature(
         string sharedSecret,
@@ -442,7 +461,9 @@ public class ClientIdAuthenticationHandler(
         string? userId,
         string? userName,
         string timestamp,
-        string nonce
+        string nonce,
+        string? role = null,
+        string? nation = null
     )
     {
         var payload = string.Join(
@@ -451,6 +472,8 @@ public class ClientIdAuthenticationHandler(
             clientId,
             userId ?? string.Empty,
             userName ?? string.Empty,
+            role ?? string.Empty,
+            nation ?? string.Empty,
             timestamp,
             nonce
         );

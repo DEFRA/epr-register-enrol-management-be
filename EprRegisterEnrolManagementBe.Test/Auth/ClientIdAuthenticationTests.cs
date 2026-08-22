@@ -869,6 +869,121 @@ public class ClientIdAuthenticationTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
+
+    [Fact]
+    public async Task Signature_valid_with_role_and_nation_signed_is_200()
+    {
+        // RA-469 PR review (masante): role/nation are now part of the v3
+        // canonical payload, so a caller that signs over them must still
+        // authenticate successfully — this is the "correctly signed" half
+        // of the fix, paired with the tamper-detection test below.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-role-signed";
+        var signature = ClientIdAuthenticationHandler.ComputeSignature(
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce,
+            role: "standard",
+            nation: "Wales"
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+        client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
+        client.DefaultRequestHeaders.Add("x-cdp-user-nation", "Wales");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_valid_but_role_tampered_after_signing_is_401()
+    {
+        // RA-469 PR review (masante): the vulnerability this closes — a
+        // signature computed for one role must NOT validate once the
+        // x-cdp-user-role header is altered afterwards (e.g. by a
+        // misbehaving intermediary), even though clientId/userId/userName/
+        // timestamp/nonce are all untouched. Before the fix, role wasn't in
+        // the signed payload at all, so this exact request would have
+        // passed and UpdateRecyclingOperations' AC17 gate would have
+        // trusted the tampered role.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-role-tampered";
+        var signature = ClientIdAuthenticationHandler.ComputeSignature(
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce,
+            role: "support-readonly"
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+        // Tampered post-signing: signed for "support-readonly", sent as "standard".
+        client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_valid_but_nation_tampered_after_signing_is_401()
+    {
+        // Same attack as the role test above, on the nation field.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-nation-tampered";
+        var signature = ClientIdAuthenticationHandler.ComputeSignature(
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce,
+            role: "standard",
+            nation: "England"
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+        client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
+        // Tampered post-signing: signed for "England", sent as "Wales".
+        client.DefaultRequestHeaders.Add("x-cdp-user-nation", "Wales");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
 }
 
 /// <summary>
