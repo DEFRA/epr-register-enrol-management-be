@@ -40,10 +40,35 @@ internal static class OperatorBackendSigning
     /// <c>x-cdp-auth-signature</c>/<c>-timestamp</c>/<c>-nonce</c> computed
     /// via <see cref="ClientIdAuthenticationHandler.ComputeSignature"/>, the
     /// same v3 HMAC this service's own inbound handler verifies.
+    ///
+    /// <paramref name="userId"/>/<paramref name="userName"/> are optional
+    /// (default null, so every existing call site — currently
+    /// <see cref="HttpAccreditationNumberAdapter"/>, which intentionally
+    /// signs with a null identity because that call has no per-user
+    /// attribution need — is completely unaffected). RA-469: when supplied,
+    /// they are added as <c>x-cdp-user-id</c>/<c>x-cdp-user-name</c> headers
+    /// AND fed into the signature, so a caller that needs the backend to
+    /// record a real acting user (e.g. an audit actor for a regulator's
+    /// edit) gets that identity both on the wire and inside the HMAC that
+    /// proves it wasn't forged.
     /// </summary>
-    public static void AddHeaders(HttpRequestMessage request, OperatorBackendApiConfig config)
+    public static void AddHeaders(
+        HttpRequestMessage request,
+        OperatorBackendApiConfig config,
+        string? userId = null,
+        string? userName = null
+    )
     {
         request.Headers.Add("x-cdp-client-id", config.ClientId);
+
+        if (userId is not null)
+        {
+            request.Headers.Add("x-cdp-user-id", userId);
+        }
+        if (userName is not null)
+        {
+            request.Headers.Add("x-cdp-user-name", userName);
+        }
 
         if (string.IsNullOrEmpty(config.SharedSecret))
         {
@@ -54,11 +79,7 @@ internal static class OperatorBackendSigning
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             config.SharedSecret,
-            config.ClientId,
-            userId: null,
-            userName: null,
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(config.ClientId, userId, userName, timestamp, nonce)
         );
 
         request.Headers.Add("x-cdp-auth-signature", signature);

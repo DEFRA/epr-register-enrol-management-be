@@ -26,10 +26,14 @@ namespace EprRegisterEnrolManagementBe.Auth;
 /// its own secret rather than one value shared by all callers); the
 /// timestamp bounds the replay window; the nonce ensures a captured signed
 /// request cannot be replayed even within that window. See ADR-0003 for
-/// the timestamp/nonce contract and ADR-0005 for the v3 payload (role
-/// membership dropped — authorization is entirely the BFF's concern now)
-/// and its "Follow-up: per-caller shared secrets" section for the
-/// rationale behind this per-clientId lookup.
+/// the timestamp/nonce contract and ADR-0005 for the original v3 payload
+/// (role membership dropped — authorization was entirely the BFF's
+/// concern) and its "Follow-up: per-caller shared secrets" section for
+/// the rationale behind this per-clientId lookup. RA-469 reinstates a
+/// role field (and adds nation) in the signed payload: this endpoint's
+/// AC17 authorization is deliberately enforced backend-side too, so the
+/// two claims it gates on must carry the same signed-integrity guarantee
+/// as userId/userName rather than arriving as bare, tamperable headers.
 ///
 /// When no client secrets are configured the handler fails CLOSED in any
 /// non-Development environment (the integrity contract is broken). In
@@ -42,8 +46,8 @@ public class ClientIdAuthenticationHandler(
     UrlEncoder encoder,
     IHostEnvironment hostEnvironment,
     TimeProvider timeProvider,
-    IMemoryCache replayCache)
-    : AuthenticationHandler<ClientIdAuthenticationOptions>(options, logger, encoder)
+    IMemoryCache replayCache
+) : AuthenticationHandler<ClientIdAuthenticationOptions>(options, logger, encoder)
 {
     // Tracks whether the Development header-trust downgrade warning has
     // already been emitted in this process. Atomic CAS keeps it to a single
@@ -77,32 +81,76 @@ public class ClientIdAuthenticationHandler(
         // would be worse than a 401.
         if (clientId.Length > Options.MaxClientIdLength)
         {
-            return Task.FromResult(AuthenticateResult.Fail(
-                $"{headerName} exceeds {Options.MaxClientIdLength} chars"));
+            return Task.FromResult(
+                AuthenticateResult.Fail($"{headerName} exceeds {Options.MaxClientIdLength} chars")
+            );
         }
 
         string? userId = null;
         string? userName = null;
+        string? role = null;
+        string? nation = null;
 
         if (Request.Headers.TryGetValue(Options.UserIdHeaderName, out var userIdValues))
         {
             var v = userIdValues.ToString();
             if (v.Length > Options.MaxUserIdLength)
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"{Options.UserIdHeaderName} exceeds {Options.MaxUserIdLength} chars"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail(
+                        $"{Options.UserIdHeaderName} exceeds {Options.MaxUserIdLength} chars"
+                    )
+                );
             }
-            if (!string.IsNullOrWhiteSpace(v)) userId = v;
+            if (!string.IsNullOrWhiteSpace(v))
+                userId = v;
         }
         if (Request.Headers.TryGetValue(Options.UserNameHeaderName, out var userNameValues))
         {
             var v = userNameValues.ToString();
             if (v.Length > Options.MaxUserNameLength)
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"{Options.UserNameHeaderName} exceeds {Options.MaxUserNameLength} chars"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail(
+                        $"{Options.UserNameHeaderName} exceeds {Options.MaxUserNameLength} chars"
+                    )
+                );
             }
-            if (!string.IsNullOrWhiteSpace(v)) userName = v;
+            if (!string.IsNullOrWhiteSpace(v))
+                userName = v;
+        }
+        // RA-469: role/nation trust headers follow the exact same
+        // optional-header pattern as userId/userName above, and (like
+        // userId/userName) are folded into the v3 HMAC canonical payload —
+        // see ComputeSignature's doc comment — so a tampered role/nation
+        // invalidates the signature the same way a tampered userId would.
+        if (Request.Headers.TryGetValue(Options.RoleHeaderName, out var roleValues))
+        {
+            var v = roleValues.ToString();
+            if (v.Length > Options.MaxUserRoleLength)
+            {
+                return Task.FromResult(
+                    AuthenticateResult.Fail(
+                        $"{Options.RoleHeaderName} exceeds {Options.MaxUserRoleLength} chars"
+                    )
+                );
+            }
+            if (!string.IsNullOrWhiteSpace(v))
+                role = v;
+        }
+        if (Request.Headers.TryGetValue(Options.NationHeaderName, out var nationValues))
+        {
+            var v = nationValues.ToString();
+            if (v.Length > Options.MaxUserNationLength)
+            {
+                return Task.FromResult(
+                    AuthenticateResult.Fail(
+                        $"{Options.NationHeaderName} exceeds {Options.MaxUserNationLength} chars"
+                    )
+                );
+            }
+            if (!string.IsNullOrWhiteSpace(v))
+                nation = v;
         }
 
         // Integrity check: when per-caller secrets are configured the BFF
@@ -115,38 +163,48 @@ public class ClientIdAuthenticationHandler(
             // --- Timestamp: present, parseable, within +/- MaxClockSkew. ---
             if (!Request.Headers.TryGetValue(Options.TimestampHeaderName, out var timestampValues))
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Missing {Options.TimestampHeaderName} header"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header")
+                );
             }
 
             var timestampHeader = timestampValues.ToString();
             if (string.IsNullOrWhiteSpace(timestampHeader))
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Missing {Options.TimestampHeaderName} header"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header")
+                );
             }
 
             if (timestampHeader.Length > Options.MaxTimestampLength)
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"{Options.TimestampHeaderName} exceeds {Options.MaxTimestampLength} chars"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail(
+                        $"{Options.TimestampHeaderName} exceeds {Options.MaxTimestampLength} chars"
+                    )
+                );
             }
 
-            if (!DateTimeOffset.TryParse(
+            if (
+                !DateTimeOffset.TryParse(
                     timestampHeader,
                     CultureInfo.InvariantCulture,
                     DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                    out var timestamp))
+                    out var timestamp
+                )
+            )
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Malformed {Options.TimestampHeaderName} header"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Malformed {Options.TimestampHeaderName} header")
+                );
             }
 
             var now = timeProvider.GetUtcNow();
             if ((now - timestamp).Duration() > Options.MaxClockSkew)
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Stale {Options.TimestampHeaderName} header"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Stale {Options.TimestampHeaderName} header")
+                );
             }
 
             // --- Nonce: present. Replay check happens after signature
@@ -154,28 +212,34 @@ public class ClientIdAuthenticationHandler(
             // legitimate callers by burning their nonces with bad sigs.
             if (!Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonceValues))
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Missing {Options.NonceHeaderName} header"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header")
+                );
             }
 
             var nonce = nonceValues.ToString();
             if (string.IsNullOrWhiteSpace(nonce))
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Missing {Options.NonceHeaderName} header"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header")
+                );
             }
 
             if (nonce.Length > Options.MaxNonceLength)
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"{Options.NonceHeaderName} exceeds {Options.MaxNonceLength} chars"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail(
+                        $"{Options.NonceHeaderName} exceeds {Options.MaxNonceLength} chars"
+                    )
+                );
             }
 
             // --- Signature: matches expected HMAC over v3 canonical string. ---
             if (!Request.Headers.TryGetValue(Options.SignatureHeaderName, out var signatureValues))
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Missing {Options.SignatureHeaderName} header"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Missing {Options.SignatureHeaderName} header")
+                );
             }
 
             var providedSignature = signatureValues.ToString();
@@ -184,8 +248,11 @@ public class ClientIdAuthenticationHandler(
             // a small DoS amplifier.
             if (providedSignature.Length > Options.MaxSignatureLength)
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"{Options.SignatureHeaderName} exceeds {Options.MaxSignatureLength} chars"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail(
+                        $"{Options.SignatureHeaderName} exceeds {Options.MaxSignatureLength} chars"
+                    )
+                );
             }
 
             // --- Client secret lookup: the secret used to verify the
@@ -207,35 +274,53 @@ public class ClientIdAuthenticationHandler(
             {
                 Logger.LogWarning(
                     "ClientIdAuthentication: no secret registered for asserted client id {ClientId}",
-                    clientId);
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Invalid {Options.SignatureHeaderName} header"));
+                    clientId
+                );
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header")
+                );
             }
 
             var expectedSignature = ComputeSignature(
-                secret, clientId, userId, userName,
-                timestampHeader, nonce);
+                secret,
+                new ClientIdSignaturePayload(
+                    clientId,
+                    userId,
+                    userName,
+                    timestampHeader,
+                    nonce,
+                    role,
+                    nation
+                )
+            );
 
             if (!FixedTimeEquals(providedSignature, expectedSignature))
             {
                 Logger.LogWarning(
                     "ClientIdAuthentication: signature mismatch for asserted client id {ClientId}",
-                    clientId);
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Invalid {Options.SignatureHeaderName} header"));
+                    clientId
+                );
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header")
+                );
             }
 
             // --- Replay check: the nonce is single-use within its TTL. ---
             var cacheKey = ReplayCacheKeyPrefix + nonce;
             if (replayCache.TryGetValue(cacheKey, out _))
             {
-                return Task.FromResult(AuthenticateResult.Fail(
-                    $"Replayed {Options.NonceHeaderName} header"));
+                return Task.FromResult(
+                    AuthenticateResult.Fail($"Replayed {Options.NonceHeaderName} header")
+                );
             }
-            replayCache.Set(cacheKey, true, new MemoryCacheEntryOptions
-            {
-                AbsoluteExpirationRelativeToNow = Options.ReplayCacheTtl
-            });
+            replayCache.Set(
+                cacheKey,
+                true,
+                new MemoryCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = Options.ReplayCacheTtl,
+                }
+            );
         }
         else if (!hostEnvironment.IsDevelopment())
         {
@@ -245,9 +330,11 @@ public class ClientIdAuthenticationHandler(
             // headers in this state would let any caller forge identity.
             Logger.LogCritical(
                 "ClientIdAuthentication misconfigured: no ClientSecrets are set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
-                hostEnvironment.EnvironmentName);
-            return Task.FromResult(AuthenticateResult.Fail(
-                "Authentication misconfigured: no client secrets set"));
+                hostEnvironment.EnvironmentName
+            );
+            return Task.FromResult(
+                AuthenticateResult.Fail("Authentication misconfigured: no client secrets set")
+            );
         }
         else if (Interlocked.CompareExchange(ref s_devDowngradeWarned, 1, 0) == 0)
         {
@@ -256,13 +343,14 @@ public class ClientIdAuthenticationHandler(
             // so the downgrade is visible without spamming the log.
             Logger.LogWarning(
                 "ClientIdAuthentication: no ClientSecrets configured — operating in header-trust mode. This is allowed only because the host environment is '{Environment}'. Set AUTH_SHARED_SECRET__MANAGEMENT_FE / AUTH_SHARED_SECRET__BACKEND in any non-Development deployment.",
-                hostEnvironment.EnvironmentName);
+                hostEnvironment.EnvironmentName
+            );
         }
 
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, clientId),
-            new("client_id", clientId)
+            new("client_id", clientId),
         };
 
         // The BFF (frontend) forwards the acting user's identity in optional
@@ -270,8 +358,14 @@ public class ClientIdAuthenticationHandler(
         // signature above is what establishes trust in the primary client id
         // header — but they let backend endpoints produce more useful audit
         // log lines without a separate user lookup.
-        if (userId is not null) claims.Add(new Claim("user:id", userId));
-        if (userName is not null) claims.Add(new Claim("user:name", userName));
+        if (userId is not null)
+            claims.Add(new Claim("user:id", userId));
+        if (userName is not null)
+            claims.Add(new Claim("user:name", userName));
+        if (role is not null)
+            claims.Add(new Claim("user:role", role));
+        if (nation is not null)
+            claims.Add(new Claim("user:nation", nation));
 
         var identity = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
@@ -299,25 +393,32 @@ public class ClientIdAuthenticationHandler(
         // The signature value is intentionally omitted — it is an HMAC
         // digest, not a secret, but there is no diagnostic value in logging it.
         Logger.LogWarning(
-            "ClientId auth challenge on {Method} {Path}: {FailureReason}. " +
-            "Headers — {ClientIdHeader}: {ClientId}, " +
-            "{TimestampHeader}: {Timestamp}, " +
-            "{NonceHeader}: {Nonce}, " +
-            "{SignatureHeader} present: {SignaturePresent}, " +
-            "Content-Type: {ContentType}, Content-Length: {ContentLength}",
+            "ClientId auth challenge on {Method} {Path}: {FailureReason}. "
+                + "Headers — {ClientIdHeader}: {ClientId}, "
+                + "{TimestampHeader}: {Timestamp}, "
+                + "{NonceHeader}: {Nonce}, "
+                + "{SignatureHeader} present: {SignaturePresent}, "
+                + "Content-Type: {ContentType}, Content-Length: {ContentLength}",
             Request.Method,
             Request.Path,
             failureMessage ?? "(no failure message)",
             Options.HeaderName,
-            Request.Headers.TryGetValue(Options.HeaderName, out var clientId) ? clientId.ToString() : "(absent)",
+            Request.Headers.TryGetValue(Options.HeaderName, out var clientId)
+                ? clientId.ToString()
+                : "(absent)",
             Options.TimestampHeaderName,
-            Request.Headers.TryGetValue(Options.TimestampHeaderName, out var ts) ? ts.ToString() : "(absent)",
+            Request.Headers.TryGetValue(Options.TimestampHeaderName, out var ts)
+                ? ts.ToString()
+                : "(absent)",
             Options.NonceHeaderName,
-            Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonce) ? nonce.ToString() : "(absent)",
+            Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonce)
+                ? nonce.ToString()
+                : "(absent)",
             Options.SignatureHeaderName,
             Request.Headers.ContainsKey(Options.SignatureHeaderName),
             Request.ContentType ?? "(absent)",
-            Request.ContentLength?.ToString() ?? "(absent)");
+            Request.ContentLength?.ToString() ?? "(absent)"
+        );
 
         Response.StatusCode = 401;
         var challenge = string.IsNullOrEmpty(failureMessage)
@@ -336,29 +437,34 @@ public class ClientIdAuthenticationHandler(
     }
 
     /// <summary>
-    /// Canonical signing payload (v3). Order and field separators are part
-    /// of the contract with the BFF: any change here is a breaking change
-    /// and requires a coordinated deploy. The timestamp and nonce are
-    /// non-optional — see ADR-0003. Role membership is not part of the
-    /// payload — see ADR-0005.
+    /// Canonical signing payload (v3, RA-469-extended). Order and field
+    /// separators are part of the contract with the BFF: any change here is
+    /// a breaking change and requires a coordinated deploy. The timestamp
+    /// and nonce are non-optional — see ADR-0003. Role/nation were dropped
+    /// from the payload at v3 (see ADR-0005) but RA-469 puts them back for
+    /// callers that supply them: <see cref="ReAccreditationEndpoints"/>'s
+    /// recycling-operations endpoint enforces AC17 authorization backend-
+    /// side using the resulting user:role/user:nation claims, so those two
+    /// values need the same signed-integrity guarantee as userId/userName —
+    /// otherwise a party able to alter headers on an already-signed request
+    /// (e.g. a misbehaving intermediary) could bypass that authorization
+    /// while the signature still validates.
     /// </summary>
-    internal static string ComputeSignature(
-        string sharedSecret,
-        string clientId,
-        string? userId,
-        string? userName,
-        string timestamp,
-        string nonce)
+    internal static string ComputeSignature(string sharedSecret, ClientIdSignaturePayload payload)
     {
-        var payload = string.Join('\n',
+        var canonicalPayload = string.Join(
+            '\n',
             "v3",
-            clientId,
-            userId ?? string.Empty,
-            userName ?? string.Empty,
-            timestamp,
-            nonce);
+            payload.ClientId,
+            payload.UserId ?? string.Empty,
+            payload.UserName ?? string.Empty,
+            payload.Role ?? string.Empty,
+            payload.Nation ?? string.Empty,
+            payload.Timestamp,
+            payload.Nonce
+        );
         var keyBytes = Encoding.UTF8.GetBytes(sharedSecret);
-        var payloadBytes = Encoding.UTF8.GetBytes(payload);
+        var payloadBytes = Encoding.UTF8.GetBytes(canonicalPayload);
         var mac = HMACSHA256.HashData(keyBytes, payloadBytes);
         return Convert.ToBase64String(mac);
     }
@@ -380,3 +486,25 @@ public class ClientIdAuthenticationHandler(
         return CryptographicOperations.FixedTimeEquals(aHash, bHash);
     }
 }
+
+/// <summary>
+/// The v3 canonical payload's identity/timing fields, bundled into one
+/// argument so <see cref="ClientIdAuthenticationHandler.ComputeSignature"/>
+/// stays under SonarCloud's parameter-count cap (S107) now that RA-469's
+/// role/nation join userId/userName. Constructor-parameter order here is
+/// irrelevant to the wire format — <see cref="ClientIdAuthenticationHandler.ComputeSignature"/>
+/// reads named properties, not positional order; the WIRE order is fixed
+/// inside that method's own payload string. Role/nation default to null so
+/// every caller that has no use for them (e.g. <see cref="OperatorBackendSigning.AddHeaders"/>)
+/// can omit them. Declared top-level (not nested) so every caller in this
+/// namespace can reference it unqualified.
+/// </summary>
+internal sealed record ClientIdSignaturePayload(
+    string ClientId,
+    string? UserId,
+    string? UserName,
+    string Timestamp,
+    string Nonce,
+    string? Role = null,
+    string? Nation = null
+);
