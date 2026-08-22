@@ -283,13 +283,15 @@ public class ClientIdAuthenticationHandler(
 
             var expectedSignature = ComputeSignature(
                 secret,
-                clientId,
-                userId,
-                userName,
-                timestampHeader,
-                nonce,
-                role,
-                nation
+                new ClientIdSignaturePayload(
+                    clientId,
+                    userId,
+                    userName,
+                    timestampHeader,
+                    nonce,
+                    role,
+                    nation
+                )
             );
 
             if (!FixedTimeEquals(providedSignature, expectedSignature))
@@ -447,38 +449,22 @@ public class ClientIdAuthenticationHandler(
     /// otherwise a party able to alter headers on an already-signed request
     /// (e.g. a misbehaving intermediary) could bypass that authorization
     /// while the signature still validates.
-    ///
-    /// <paramref name="role"/>/<paramref name="nation"/> are declared last
-    /// and optional so every pre-existing call site that never dealt with
-    /// them keeps compiling unchanged; they are still placed immediately
-    /// after userName in the actual payload string, not appended at the
-    /// end — the wire/canonical order groups all four identity fields
-    /// together ahead of timestamp/nonce.
     /// </summary>
-    internal static string ComputeSignature(
-        string sharedSecret,
-        string clientId,
-        string? userId,
-        string? userName,
-        string timestamp,
-        string nonce,
-        string? role = null,
-        string? nation = null
-    )
+    internal static string ComputeSignature(string sharedSecret, ClientIdSignaturePayload payload)
     {
-        var payload = string.Join(
+        var canonicalPayload = string.Join(
             '\n',
             "v3",
-            clientId,
-            userId ?? string.Empty,
-            userName ?? string.Empty,
-            role ?? string.Empty,
-            nation ?? string.Empty,
-            timestamp,
-            nonce
+            payload.ClientId,
+            payload.UserId ?? string.Empty,
+            payload.UserName ?? string.Empty,
+            payload.Role ?? string.Empty,
+            payload.Nation ?? string.Empty,
+            payload.Timestamp,
+            payload.Nonce
         );
         var keyBytes = Encoding.UTF8.GetBytes(sharedSecret);
-        var payloadBytes = Encoding.UTF8.GetBytes(payload);
+        var payloadBytes = Encoding.UTF8.GetBytes(canonicalPayload);
         var mac = HMACSHA256.HashData(keyBytes, payloadBytes);
         return Convert.ToBase64String(mac);
     }
@@ -500,3 +486,25 @@ public class ClientIdAuthenticationHandler(
         return CryptographicOperations.FixedTimeEquals(aHash, bHash);
     }
 }
+
+/// <summary>
+/// The v3 canonical payload's identity/timing fields, bundled into one
+/// argument so <see cref="ClientIdAuthenticationHandler.ComputeSignature"/>
+/// stays under SonarCloud's parameter-count cap (S107) now that RA-469's
+/// role/nation join userId/userName. Constructor-parameter order here is
+/// irrelevant to the wire format — <see cref="ClientIdAuthenticationHandler.ComputeSignature"/>
+/// reads named properties, not positional order; the WIRE order is fixed
+/// inside that method's own payload string. Role/nation default to null so
+/// every caller that has no use for them (e.g. <see cref="OperatorBackendSigning.AddHeaders"/>)
+/// can omit them. Declared top-level (not nested) so every caller in this
+/// namespace can reference it unqualified.
+/// </summary>
+internal sealed record ClientIdSignaturePayload(
+    string ClientId,
+    string? UserId,
+    string? UserName,
+    string Timestamp,
+    string Nonce,
+    string? Role = null,
+    string? Nation = null
+);

@@ -51,7 +51,8 @@ internal sealed class HttpOperatorBackendPushAdapter(
     IOptions<OperatorBackendApiConfig> config,
     ILogger<HttpOperatorBackendPushAdapter> logger,
     ResiliencePipeline<HttpResponseMessage>? retryPipeline = null,
-    ResiliencePipeline<HttpResponseMessage>? decisionRetryPipeline = null) : IOperatorBackendPushAdapter
+    ResiliencePipeline<HttpResponseMessage>? decisionRetryPipeline = null
+) : IOperatorBackendPushAdapter
 {
     private const string QueryRelativePathTemplate =
         "/api/v1/accreditation-applications/case-management/{0}/query";
@@ -79,24 +80,30 @@ internal sealed class HttpOperatorBackendPushAdapter(
     // timeout, and a capped backoff) — kept separate from the best-effort one
     // above so the non-decision pushes' behaviour is untouched.
     private readonly ResiliencePipeline<HttpResponseMessage> _decisionRetryPipeline =
-        decisionRetryPipeline ?? BuildDecisionRetryPipeline(
+        decisionRetryPipeline
+        ?? BuildDecisionRetryPipeline(
             logger,
             config.Value.DecisionPushRequestTimeoutSeconds,
-            config.Value.DecisionPushMaxRetryAttempts);
+            config.Value.DecisionPushMaxRetryAttempts
+        );
 
     public async Task<OperatorBackendPushResult> PushQueryRaisedAsync(
         Guid workItemId,
         Guid correlationId,
         string queryNote,
         IReadOnlyList<string> sectionKeys,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         if (string.IsNullOrWhiteSpace(_config.Url))
         {
             return OperatorBackendPushResult.Failure("OperatorBackendApi:Url is not configured.");
         }
 
-        var relativePath = string.Format(QueryRelativePathTemplate, Uri.EscapeDataString(workItemId.ToString()));
+        var relativePath = string.Format(
+            QueryRelativePathTemplate,
+            Uri.EscapeDataString(workItemId.ToString())
+        );
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
         // RA-311/MBE-1: request payload metadata + correlation id, logged
@@ -109,11 +116,23 @@ internal sealed class HttpOperatorBackendPushAdapter(
         // to the same field (RA-311 security note).
         logger.LogInformation(
             "Pushing query-raised for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); sections {SectionKeys}, note length {QueryNoteLength}",
-            workItemId, endpoint, correlationId, sectionKeys, queryNote.Length);
+            workItemId,
+            endpoint,
+            correlationId,
+            sectionKeys,
+            queryNote.Length
+        );
 
         var body = new QueryRaisedPushRequest(queryNote, sectionKeys);
         return await ExecutePushAsync(
-            workItemId, endpoint, correlationId, body, "query-raised", _retryPipeline, cancellationToken);
+            workItemId,
+            endpoint,
+            correlationId,
+            body,
+            "query-raised",
+            _retryPipeline,
+            cancellationToken
+        );
     }
 
     public Task<OperatorBackendPushResult> PushStatusChangedAsync(
@@ -125,10 +144,21 @@ internal sealed class HttpOperatorBackendPushAdapter(
         string actionId,
         string actionDisplayName,
         DateTime occurredAt,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         PushStatusInternalAsync(
-            workItemId, correlationId, fromStateId, toStateId, toStateDisplayName, actionId,
-            actionDisplayName, occurredAt, _retryPipeline, "status-changed", cancellationToken);
+            workItemId,
+            correlationId,
+            fromStateId,
+            toStateId,
+            toStateDisplayName,
+            actionId,
+            actionDisplayName,
+            occurredAt,
+            _retryPipeline,
+            "status-changed",
+            cancellationToken
+        );
 
     public Task<OperatorBackendPushResult> PushDecisionStatusChangedAsync(
         Guid workItemId,
@@ -139,10 +169,21 @@ internal sealed class HttpOperatorBackendPushAdapter(
         string actionId,
         string actionDisplayName,
         DateTime occurredAt,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default
+    ) =>
         PushStatusInternalAsync(
-            workItemId, correlationId, fromStateId, toStateId, toStateDisplayName, actionId,
-            actionDisplayName, occurredAt, _decisionRetryPipeline, "decision-status-changed", cancellationToken);
+            workItemId,
+            correlationId,
+            fromStateId,
+            toStateId,
+            toStateDisplayName,
+            actionId,
+            actionDisplayName,
+            occurredAt,
+            _decisionRetryPipeline,
+            "decision-status-changed",
+            cancellationToken
+        );
 
     /// <summary>
     /// Shared body for both status pushes. Identical on the wire — same
@@ -161,23 +202,48 @@ internal sealed class HttpOperatorBackendPushAdapter(
         DateTime occurredAt,
         ResiliencePipeline<HttpResponseMessage> pipeline,
         string operationName,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (string.IsNullOrWhiteSpace(_config.Url))
         {
             return OperatorBackendPushResult.Failure("OperatorBackendApi:Url is not configured.");
         }
 
-        var relativePath = string.Format(StatusRelativePathTemplate, Uri.EscapeDataString(workItemId.ToString()));
+        var relativePath = string.Format(
+            StatusRelativePathTemplate,
+            Uri.EscapeDataString(workItemId.ToString())
+        );
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
         logger.LogInformation(
             "Pushing {Operation} for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); {FromStateId} -> {ToStateId} via {ActionId}",
-            operationName, workItemId, endpoint, correlationId, fromStateId, toStateId, actionId);
+            operationName,
+            workItemId,
+            endpoint,
+            correlationId,
+            fromStateId,
+            toStateId,
+            actionId
+        );
 
         var body = new StatusChangedPushRequest(
-            fromStateId, toStateId, toStateDisplayName, actionId, actionDisplayName, occurredAt);
-        return await ExecutePushAsync(workItemId, endpoint, correlationId, body, operationName, pipeline, cancellationToken);
+            fromStateId,
+            toStateId,
+            toStateDisplayName,
+            actionId,
+            actionDisplayName,
+            occurredAt
+        );
+        return await ExecutePushAsync(
+            workItemId,
+            endpoint,
+            correlationId,
+            body,
+            operationName,
+            pipeline,
+            cancellationToken
+        );
     }
 
     /// <summary>
@@ -188,9 +254,14 @@ internal sealed class HttpOperatorBackendPushAdapter(
     /// already-persisted transition it reports on.
     /// </summary>
     private async Task<OperatorBackendPushResult> ExecutePushAsync<TBody>(
-        Guid workItemId, string endpoint, Guid correlationId, TBody body, string operationName,
+        Guid workItemId,
+        string endpoint,
+        Guid correlationId,
+        TBody body,
+        string operationName,
         ResiliencePipeline<HttpResponseMessage> pipeline,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         try
         {
@@ -205,28 +276,44 @@ internal sealed class HttpOperatorBackendPushAdapter(
                     var client = httpClientFactory.CreateClient("DefaultClient");
                     return await client.SendAsync(request, ct);
                 },
-                cancellationToken);
+                cancellationToken
+            );
 
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 logger.LogError(
                     "Operator backend returned {Status} from {Endpoint} for work item {WorkItemId} (correlation {CorrelationId}): {Body}",
-                    (int)response.StatusCode, endpoint, workItemId, correlationId, responseBody);
+                    (int)response.StatusCode,
+                    endpoint,
+                    workItemId,
+                    correlationId,
+                    responseBody
+                );
                 return OperatorBackendPushResult.Failure(
-                    $"Operator backend returned {(int)response.StatusCode} from {endpoint}.");
+                    $"Operator backend returned {(int)response.StatusCode} from {endpoint}."
+                );
             }
 
             logger.LogInformation(
                 "Operator backend {Operation} push succeeded for work item {WorkItemId} (correlation {CorrelationId}); status {Status}.",
-                operationName, workItemId, correlationId, (int)response.StatusCode);
+                operationName,
+                workItemId,
+                correlationId,
+                (int)response.StatusCode
+            );
             return OperatorBackendPushResult.Success();
         }
         catch (Exception ex)
         {
             logger.LogError(
-                ex, "Failed to push {Operation} for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId})",
-                operationName, workItemId, endpoint, correlationId);
+                ex,
+                "Failed to push {Operation} for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId})",
+                operationName,
+                workItemId,
+                endpoint,
+                correlationId
+            );
             return OperatorBackendPushResult.Failure(ex.Message);
         }
     }
@@ -251,10 +338,12 @@ internal sealed class HttpOperatorBackendPushAdapter(
     /// <c>GovukNotifyClient</c>'s pipeline for the same reason).
     /// </summary>
     private static ResiliencePipeline<HttpResponseMessage> BuildRetryPipeline(
-        ILogger logger, int requestTimeoutSeconds)
+        ILogger logger,
+        int requestTimeoutSeconds
+    )
     {
-        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>()
-            .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>().AddRetry(
+            new RetryStrategyOptions<HttpResponseMessage>
             {
                 MaxRetryAttempts = 2,
                 BackoffType = DelayBackoffType.Exponential,
@@ -270,25 +359,32 @@ internal sealed class HttpOperatorBackendPushAdapter(
                     logger.LogWarning(
                         "Operator backend push attempt {Attempt} failed{StatusInfo}; retrying in {DelayMs}ms.",
                         args.AttemptNumber + 1,
-                        args.Outcome.Result is { } result ? $" (HTTP {(int)result.StatusCode})" : string.Empty,
-                        (long)args.RetryDelay.TotalMilliseconds);
+                        args.Outcome.Result is { } result
+                            ? $" (HTTP {(int)result.StatusCode})"
+                            : string.Empty,
+                        (long)args.RetryDelay.TotalMilliseconds
+                    );
                     return ValueTask.CompletedTask;
                 },
-            });
+            }
+        );
 
         if (requestTimeoutSeconds > 0)
         {
-            builder.AddTimeout(new TimeoutStrategyOptions
-            {
-                Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
-                OnTimeout = args =>
+            builder.AddTimeout(
+                new TimeoutStrategyOptions
                 {
-                    logger.LogWarning(
-                        "Operator backend push attempt timed out after {TimeoutSeconds}s.",
-                        args.Timeout.TotalSeconds);
-                    return ValueTask.CompletedTask;
-                },
-            });
+                    Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
+                    OnTimeout = args =>
+                    {
+                        logger.LogWarning(
+                            "Operator backend push attempt timed out after {TimeoutSeconds}s.",
+                            args.Timeout.TotalSeconds
+                        );
+                        return ValueTask.CompletedTask;
+                    },
+                }
+            );
         }
 
         return builder.Build();
@@ -316,10 +412,13 @@ internal sealed class HttpOperatorBackendPushAdapter(
     /// re-creates the cancellation bug (epr-p86e).
     /// </summary>
     private static ResiliencePipeline<HttpResponseMessage> BuildDecisionRetryPipeline(
-        ILogger logger, int requestTimeoutSeconds, int maxRetryAttempts)
+        ILogger logger,
+        int requestTimeoutSeconds,
+        int maxRetryAttempts
+    )
     {
-        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>()
-            .AddRetry(new RetryStrategyOptions<HttpResponseMessage>
+        var builder = new ResiliencePipelineBuilder<HttpResponseMessage>().AddRetry(
+            new RetryStrategyOptions<HttpResponseMessage>
             {
                 MaxRetryAttempts = maxRetryAttempts,
                 BackoffType = DelayBackoffType.Exponential,
@@ -338,25 +437,32 @@ internal sealed class HttpOperatorBackendPushAdapter(
                     logger.LogWarning(
                         "Operator backend decision push attempt {Attempt} failed{StatusInfo}; retrying in {DelayMs}ms.",
                         args.AttemptNumber + 1,
-                        args.Outcome.Result is { } result ? $" (HTTP {(int)result.StatusCode})" : string.Empty,
-                        (long)args.RetryDelay.TotalMilliseconds);
+                        args.Outcome.Result is { } result
+                            ? $" (HTTP {(int)result.StatusCode})"
+                            : string.Empty,
+                        (long)args.RetryDelay.TotalMilliseconds
+                    );
                     return ValueTask.CompletedTask;
                 },
-            });
+            }
+        );
 
         if (requestTimeoutSeconds > 0)
         {
-            builder.AddTimeout(new TimeoutStrategyOptions
-            {
-                Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
-                OnTimeout = args =>
+            builder.AddTimeout(
+                new TimeoutStrategyOptions
                 {
-                    logger.LogWarning(
-                        "Operator backend decision push attempt timed out after {TimeoutSeconds}s.",
-                        args.Timeout.TotalSeconds);
-                    return ValueTask.CompletedTask;
-                },
-            });
+                    Timeout = TimeSpan.FromSeconds(requestTimeoutSeconds),
+                    OnTimeout = args =>
+                    {
+                        logger.LogWarning(
+                            "Operator backend decision push attempt timed out after {TimeoutSeconds}s.",
+                            args.Timeout.TotalSeconds
+                        );
+                        return ValueTask.CompletedTask;
+                    },
+                }
+            );
         }
 
         return builder.Build();
@@ -380,7 +486,15 @@ internal sealed class HttpOperatorBackendPushAdapter(
             var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
             var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
             var signature = ClientIdAuthenticationHandler.ComputeSignature(
-                _config.SharedSecret, _config.ClientId, userId: null, userName: null, timestamp, nonce);
+                _config.SharedSecret,
+                new ClientIdSignaturePayload(
+                    _config.ClientId,
+                    UserId: null,
+                    UserName: null,
+                    timestamp,
+                    nonce
+                )
+            );
 
             request.Headers.Add("x-cdp-auth-signature", signature);
             request.Headers.Add("x-cdp-auth-timestamp", timestamp);
@@ -390,7 +504,10 @@ internal sealed class HttpOperatorBackendPushAdapter(
         return request;
     }
 
-    private sealed record QueryRaisedPushRequest(string QueryNote, IReadOnlyList<string> SectionKeys);
+    private sealed record QueryRaisedPushRequest(
+        string QueryNote,
+        IReadOnlyList<string> SectionKeys
+    );
 
     private sealed record StatusChangedPushRequest(
         string FromStateId,
@@ -398,5 +515,6 @@ internal sealed class HttpOperatorBackendPushAdapter(
         string ToStateDisplayName,
         string ActionId,
         string ActionDisplayName,
-        DateTime OccurredAt);
+        DateTime OccurredAt
+    );
 }

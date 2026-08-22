@@ -90,11 +90,7 @@ public class OperatorBackendSigningTests
 
         var expectedSignature = ClientIdAuthenticationHandler.ComputeSignature(
             "shh-its-a-secret",
-            ClientId,
-            "user-42",
-            "Jane Regulator",
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(ClientId, "user-42", "Jane Regulator", timestamp, nonce)
         );
 
         Assert.Equal(expectedSignature, actualSignature);
@@ -127,11 +123,7 @@ public class OperatorBackendSigningTests
         // as the "with user" call so only the identity fields differ.
         var nullIdentitySignature = ClientIdAuthenticationHandler.ComputeSignature(
             "shh-its-a-secret",
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce)
         );
 
         Assert.NotEqual(nullIdentitySignature, withUserSignature);

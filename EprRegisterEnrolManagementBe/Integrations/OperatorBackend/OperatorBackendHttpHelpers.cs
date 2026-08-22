@@ -79,11 +79,7 @@ internal static class OperatorBackendSigning
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             config.SharedSecret,
-            config.ClientId,
-            userId,
-            userName,
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(config.ClientId, userId, userName, timestamp, nonce)
         );
 
         request.Headers.Add("x-cdp-auth-signature", signature);

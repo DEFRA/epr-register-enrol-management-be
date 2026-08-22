@@ -126,11 +126,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-valid";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce)
         );
 
         using var client = factory.CreateClient();
@@ -164,11 +160,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-cross-client";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             OtherSecret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce)
         );
 
         using var client = factory.CreateClient();
@@ -195,11 +187,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-unknown-client";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            OtherClientId,
-            null,
-            null,
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(OtherClientId, null, null, timestamp, nonce)
         );
 
         using var client = factory.CreateClient();
@@ -282,11 +270,7 @@ public class ClientIdAuthenticationTests
         var nonceA = "nonce-caller-a";
         var signatureA = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonceA
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonceA)
         );
         clientA.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(clientA, timestamp, nonceA);
@@ -296,11 +280,7 @@ public class ClientIdAuthenticationTests
         var nonceB = "nonce-caller-b";
         var signatureB = ClientIdAuthenticationHandler.ComputeSignature(
             OtherSecret,
-            OtherClientId,
-            null,
-            null,
-            timestamp,
-            nonceB
+            new ClientIdSignaturePayload(OtherClientId, null, null, timestamp, nonceB)
         );
         clientB.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, OtherClientId);
         AddTimestampAndNonce(clientB, timestamp, nonceB);
@@ -323,11 +303,7 @@ public class ClientIdAuthenticationTests
 
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            factory.FakeTime.GetUtcNow().ToString("O"),
-            "nonce-no-ts"
+            new ClientIdSignaturePayload(ClientId, null, null, factory.FakeTime.GetUtcNow().ToString("O"), "nonce-no-ts")
         );
 
         using var client = factory.CreateClient();
@@ -353,11 +329,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-stale";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            staleTimestamp,
-            nonce
+            new ClientIdSignaturePayload(ClientId, null, null, staleTimestamp, nonce)
         );
 
         using var client = factory.CreateClient();
@@ -383,11 +355,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-future";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            futureTimestamp,
-            nonce
+            new ClientIdSignaturePayload(ClientId, null, null, futureTimestamp, nonce)
         );
 
         using var client = factory.CreateClient();
@@ -411,11 +379,7 @@ public class ClientIdAuthenticationTests
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            "would-have-been-nonce"
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, "would-have-been-nonce")
         );
 
         using var client = factory.CreateClient();
@@ -443,11 +407,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-replay";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce)
         );
 
         using var client = factory.CreateClient();
@@ -512,11 +472,7 @@ public class ClientIdAuthenticationTests
             "x-cdp-auth-signature",
             ClientIdAuthenticationHandler.ComputeSignature(
                 Secret,
-                ClientId,
-                null,
-                null,
-                "not-a-valid-timestamp",
-                "nonce-malformed"
+                new ClientIdSignaturePayload(ClientId, null, null, "not-a-valid-timestamp", "nonce-malformed")
             )
         );
 
@@ -564,11 +520,7 @@ public class ClientIdAuthenticationTests
             "x-cdp-auth-signature",
             ClientIdAuthenticationHandler.ComputeSignature(
                 Secret,
-                ClientId,
-                null,
-                null,
-                timestamp,
-                "   "
+                new ClientIdSignaturePayload(ClientId, null, null, timestamp, "   ")
             )
         );
 
@@ -595,11 +547,7 @@ public class ClientIdAuthenticationTests
             "x-cdp-auth-signature",
             ClientIdAuthenticationHandler.ComputeSignature(
                 Secret,
-                ClientId,
-                null,
-                null,
-                "   ",
-                "nonce-blank-ts"
+                new ClientIdSignaturePayload(ClientId, null, null, "   ", "nonce-blank-ts")
             )
         );
 
@@ -665,11 +613,7 @@ public class ClientIdAuthenticationTests
         var goodNonce = $"nonce-{header}";
         var goodSignature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            goodTimestamp,
-            goodNonce
+            new ClientIdSignaturePayload(ClientId, null, null, goodTimestamp, goodNonce)
         );
 
         using var client = factory.CreateClient();
@@ -765,11 +709,7 @@ public class ClientIdAuthenticationTests
         var nonce = new string('n', 128);
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonce
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce)
         );
 
         using var client = factory.CreateClient();
@@ -889,13 +829,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-role-signed";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonce,
-            role: "standard",
-            nation: "Wales"
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce, Role: "standard", Nation: "Wales")
         );
 
         using var client = factory.CreateClient();
@@ -930,12 +864,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-role-tampered";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonce,
-            role: "support-readonly"
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce, Role: "support-readonly", Nation: null)
         );
 
         using var client = factory.CreateClient();
@@ -963,13 +892,7 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-nation-tampered";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            ClientId,
-            null,
-            null,
-            timestamp,
-            nonce,
-            role: "standard",
-            nation: "England"
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce, Role: "standard", Nation: "England")
         );
 
         using var client = factory.CreateClient();
@@ -1042,11 +965,7 @@ public class ClientIdAuthenticationEnvVarTests
             const string clientId = "frontend";
             var signature = ClientIdAuthenticationHandler.ComputeSignature(
                 ManagementFeSecret,
-                clientId,
-                null,
-                null,
-                timestamp,
-                nonce
+                new ClientIdSignaturePayload(clientId, null, null, timestamp, nonce)
             );
 
             using var client = factory.CreateClient();
