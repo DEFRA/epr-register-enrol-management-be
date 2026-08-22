@@ -3609,6 +3609,475 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
+    // -------------------- RA-469: Update recycling operations endpoint --------------------
+
+    private const string RecyclingOperationsSiteId = "site-42";
+
+    [Fact]
+    public async Task RecyclingOperations_returns_ok_with_updated_site_json_for_standard_role_matching_nation()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3", "R4" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("site-1", body.GetProperty("id").GetString());
+
+        await factory
+            .RecyclingOperationsAdapter.Received(1)
+            .UpdateRecyclingOperationsAsync(
+                Arg.Is<OverseasSiteRecyclingOperationsRequest>(r =>
+                    r.OrganisationId == "500027"
+                    && r.ApplicationId == "APP-500027"
+                    && r.SiteId == RecyclingOperationsSiteId
+                    && r.OperationCodes.SequenceEqual(new[] { "R3", "R4" })
+                    && r.UserId == DefaultUserId
+                    && r.UserName == DefaultUserName
+                ),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_returns_forbidden_for_support_readonly_role()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "support-readonly",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        await factory
+            .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
+            .UpdateRecyclingOperationsAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_returns_forbidden_for_standard_role_with_mismatched_nation()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "Scotland"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        await factory
+            .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
+            .UpdateRecyclingOperationsAsync(default!, default);
+    }
+
+    [Theory]
+    [InlineData(null)] // missing user:role claim entirely
+    [InlineData("")]
+    public async Task RecyclingOperations_returns_forbidden_when_role_claim_is_missing(string? role)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: role,
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_returns_forbidden_when_nation_claim_is_missing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: null
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        await factory
+            .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
+            .UpdateRecyclingOperationsAsync(default!, default);
+    }
+
+    /// <summary>
+    /// Explicit fail-closed proof for a work item whose payload has no
+    /// Nation set at all (e.g. a legacy/incomplete record) — this must
+    /// NOT be treated as "no nation restriction applies" and pass every
+    /// caller through. A missing/null resource-side Nation and a
+    /// mismatched claim are the SAME 403 outcome as
+    /// <see cref="RecyclingOperations_returns_forbidden_for_standard_role_with_mismatched_nation"/>.
+    /// </summary>
+    [Fact]
+    public async Task RecyclingOperations_returns_forbidden_when_work_item_has_no_nation_set()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var type = new ReAccreditationType();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = ReAccreditationType.Id,
+                StateId = "assessment-in-progress",
+                SubmittedBy = TenantClientId,
+                Payload = new BsonDocument
+                {
+                    ["operatorOrganisationId"] = "500027",
+                    ["operatorApplicationId"] = "APP-500027",
+                    // Deliberately no "nation" key at all.
+                },
+                TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+                TemplateVersion = type.TemplateVersion,
+            },
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        await factory
+            .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
+            .UpdateRecyclingOperationsAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            userId: null,
+            role: "standard",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        await factory
+            .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
+            .UpdateRecyclingOperationsAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_returns_not_found_for_missing_work_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_passes_through_backend_not_found_as_404()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var adapter = Substitute.For<IOverseasSiteRecyclingOperationsAdapter>();
+        adapter
+            .UpdateRecyclingOperationsAsync(
+                Arg.Any<OverseasSiteRecyclingOperationsRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(OverseasSiteRecyclingOperationsResult.NotFound());
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England",
+            recyclingOperationsAdapter: adapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_passes_through_backend_conflict_as_409()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var adapter = Substitute.For<IOverseasSiteRecyclingOperationsAdapter>();
+        adapter
+            .UpdateRecyclingOperationsAsync(
+                Arg.Any<OverseasSiteRecyclingOperationsRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(OverseasSiteRecyclingOperationsResult.Conflict("already updated"));
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England",
+            recyclingOperationsAdapter: adapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_maps_backend_validation_failure_to_400_with_errorCode_and_field()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var adapter = Substitute.For<IOverseasSiteRecyclingOperationsAdapter>();
+        adapter
+            .UpdateRecyclingOperationsAsync(
+                Arg.Any<OverseasSiteRecyclingOperationsRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                OverseasSiteRecyclingOperationsResult.ValidationFailed(
+                    "accompanying-code-required",
+                    "operationCodes",
+                    "R12/R13 require at least one of R3/R4/R5."
+                )
+            );
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England",
+            recyclingOperationsAdapter: adapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R12" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("accompanying-code-required", problem.GetProperty("errorCode").GetString());
+        Assert.Equal("operationCodes", problem.GetProperty("field").GetString());
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_maps_backend_transient_failure_to_500_with_no_errorCode()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var adapter = Substitute.For<IOverseasSiteRecyclingOperationsAdapter>();
+        adapter
+            .UpdateRecyclingOperationsAsync(
+                Arg.Any<OverseasSiteRecyclingOperationsRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(OverseasSiteRecyclingOperationsResult.TransientFailure("backend unreachable"));
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England",
+            recyclingOperationsAdapter: adapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidate(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.False(problem.TryGetProperty("errorCode", out _));
+    }
+
+    [Fact]
+    public async Task RecyclingOperations_returns_bad_request_with_wrong_work_item_type()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = "some-other-type",
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+            },
+            cancellationToken
+        );
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3" } },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await factory
+            .RecyclingOperationsAdapter.DidNotReceiveWithAnyArgs()
+            .UpdateRecyclingOperationsAsync(default!, default);
+    }
+
+    private static WorkItem BuildRecyclingOperationsCandidate(
+        Guid id,
+        string submittedBy,
+        string nation
+    )
+    {
+        var type = new ReAccreditationType();
+        return new WorkItem
+        {
+            Id = id,
+            TypeId = ReAccreditationType.Id,
+            StateId = "assessment-in-progress",
+            SubmittedBy = submittedBy,
+            Payload = new BsonDocument
+            {
+                ["operatorOrganisationId"] = "500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["nation"] = nation,
+            },
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+    }
+
     /// <summary>
     /// Wraps real persistence and runs <paramref name="onBeforeReplace"/>
     /// just before delegating to <see cref="ReplaceAsync"/> for a chosen
@@ -3678,9 +4147,12 @@ public class ReAccreditationEndpointTests
         private readonly string _clientId;
         private readonly string? _userId;
         private readonly string _userName;
+        private readonly string? _role;
+        private readonly string? _nation;
         private readonly Guid? _raceWorkItemId;
         private readonly IOperatorBackendPushAdapter? _pushAdapter;
         private readonly IAccreditationNumberAdapter _numberAdapter;
+        private readonly IOverseasSiteRecyclingOperationsAdapter _recyclingOperationsAdapter;
 
         public IReAccreditationDecisionService DecisionService { get; } =
             Substitute.For<IReAccreditationDecisionService>();
@@ -3693,15 +4165,20 @@ public class ReAccreditationEndpointTests
             string clientId = TenantClientId,
             string? userId = DefaultUserId,
             string userName = DefaultUserName,
+            string? role = null,
+            string? nation = null,
             Guid? raceWorkItemId = null,
             IOperatorBackendPushAdapter? pushAdapter = null,
-            IAccreditationNumberAdapter? numberAdapter = null
+            IAccreditationNumberAdapter? numberAdapter = null,
+            IOverseasSiteRecyclingOperationsAdapter? recyclingOperationsAdapter = null
         )
         {
             _fixture = fixture;
             _clientId = clientId;
             _userId = userId;
             _userName = userName;
+            _role = role;
+            _nation = nation;
             _raceWorkItemId = raceWorkItemId;
             _pushAdapter = pushAdapter;
             // RA-448 phase 2: the real HttpAccreditationNumberAdapter (registered
@@ -3711,6 +4188,12 @@ public class ReAccreditationEndpointTests
             // keeps exercising the rest of the pipeline unchanged; pass an explicit
             // numberAdapter to assert against a specific call or failure instead.
             _numberAdapter = numberAdapter ?? BuildDefaultNumberAdapter();
+            // RA-469: same reasoning as _numberAdapter — the real
+            // HttpOverseasSiteRecyclingOperationsAdapter (registered
+            // unconditionally by ReAccreditationModule) needs a live backend
+            // this integration suite has none of.
+            _recyclingOperationsAdapter =
+                recyclingOperationsAdapter ?? BuildDefaultRecyclingOperationsAdapter();
         }
 
         private static IAccreditationNumberAdapter BuildDefaultNumberAdapter()
@@ -3725,8 +4208,23 @@ public class ReAccreditationEndpointTests
             return adapter;
         }
 
+        private static IOverseasSiteRecyclingOperationsAdapter BuildDefaultRecyclingOperationsAdapter()
+        {
+            var adapter = Substitute.For<IOverseasSiteRecyclingOperationsAdapter>();
+            adapter
+                .UpdateRecyclingOperationsAsync(
+                    Arg.Any<OverseasSiteRecyclingOperationsRequest>(),
+                    Arg.Any<CancellationToken>()
+                )
+                .Returns(OverseasSiteRecyclingOperationsResult.Success("{\"id\":\"site-1\"}"));
+            return adapter;
+        }
+
         public IWorkItemPersistence Persistence =>
             Services.GetRequiredService<IWorkItemPersistence>();
+
+        public IOverseasSiteRecyclingOperationsAdapter RecyclingOperationsAdapter =>
+            _recyclingOperationsAdapter;
 
         public Task SeedAsync(WorkItem item, CancellationToken cancellationToken)
         {
@@ -3810,6 +4308,12 @@ public class ReAccreditationEndpointTests
                 // integration suite doesn't have.
                 services.RemoveAll<IAccreditationNumberAdapter>();
                 services.AddSingleton(_numberAdapter);
+
+                // RA-469: same reasoning — the real
+                // HttpOverseasSiteRecyclingOperationsAdapter needs a live
+                // backend this integration suite doesn't have.
+                services.RemoveAll<IOverseasSiteRecyclingOperationsAdapter>();
+                services.AddSingleton(_recyclingOperationsAdapter);
             });
         }
 
@@ -3821,6 +4325,14 @@ public class ReAccreditationEndpointTests
             {
                 client.DefaultRequestHeaders.Add("x-cdp-user-id", _userId);
                 client.DefaultRequestHeaders.Add("x-cdp-user-name", _userName);
+            }
+            if (_role is not null)
+            {
+                client.DefaultRequestHeaders.Add("x-cdp-user-role", _role);
+            }
+            if (_nation is not null)
+            {
+                client.DefaultRequestHeaders.Add("x-cdp-user-nation", _nation);
             }
         }
 

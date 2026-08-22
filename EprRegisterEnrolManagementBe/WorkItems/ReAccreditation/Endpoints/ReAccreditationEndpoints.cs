@@ -1,7 +1,9 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolManagementBe.Auth;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
@@ -82,6 +84,14 @@ internal static class ReAccreditationEndpoints
     /// title or the human-readable detail.
     /// </summary>
     public const string DulyMakeProblemTitle = "Could not complete duly making";
+
+    /// <summary>
+    /// ProblemDetails title for every recycling-operations update failure.
+    /// Constant across all of them on purpose: the frontend switches on
+    /// <c>errorCode</c> or the status code, never on the title or the
+    /// human-readable detail.
+    /// </summary>
+    public const string RecyclingOperationsProblemTitle = "Could not update recycling operations";
 
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
@@ -203,6 +213,20 @@ internal static class ReAccreditationEndpoints
             .WithName("ReAccreditationSiteAdded")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxSiteAddedBodyBytes))
+            .RequireAuthorization();
+
+        // RA-469 AC16/AC17: regulator-facing correction of one overseas
+        // site's recycling operation codes during case review. Server-side
+        // role/nation authz is enforced IN the handler (not just relying on
+        // RequireAuthorization()'s "is authenticated" check) — see the
+        // handler's own doc comment for the fail-closed checks this
+        // performs before ever calling out to the operator backend.
+        group
+            .MapPatch(
+                "/{id:guid}/overseas-sites/{siteId}/recycling-operations",
+                UpdateRecyclingOperations
+            )
+            .WithName("UpdateReAccreditationOverseasSiteRecyclingOperations")
             .RequireAuthorization();
 
         return app;
@@ -1014,6 +1038,188 @@ internal static class ReAccreditationEndpoints
             detail: result.Message,
             statusCode: status
         );
+    }
+
+    /// <summary>
+    /// RA-469 AC16/AC17: a regulator corrects one overseas reprocessing
+    /// site's recycling operation codes during case review. Forwards to
+    /// <see cref="IOverseasSiteRecyclingOperationsAdapter"/>, which calls
+    /// epr-register-enrol-backend's regulator-scoped endpoint (distinct
+    /// from the operator-only <c>PatchOverseasSites</c> route) and signs
+    /// with the real caller's identity so the backend's audit record
+    /// attributes the edit correctly.
+    ///
+    /// Server-side authz — enforced HERE, not just via
+    /// <c>RequireAuthorization()</c>'s "is authenticated" check, and never
+    /// a silent no-op on failure (AC14/AC17):
+    /// <list type="number">
+    ///   <item>No <c>user:id</c> claim → 401. Mirrors the framework's
+    ///   <c>RequireActorIdentity</c> convention (see <c>WorkItemService</c>):
+    ///   a mutation cannot be attributed to a real human without it.</item>
+    ///   <item><c>user:role</c> claim must equal <c>"standard"</c> → 403
+    ///   otherwise (in particular, <c>"support-readonly"</c> is read-only,
+    ///   per AC8/AC9).</item>
+    ///   <item><c>user:nation</c> claim must be present AND equal the work
+    ///   item's <c>ReAccreditationPayload.Nation</c> → 403 otherwise. This
+    ///   is why the work item is loaded and its payload read BEFORE this
+    ///   check can run — nation-scoping is enforced against the actual
+    ///   resource, not merely the caller's own claimed nation.</item>
+    /// </list>
+    ///
+    /// A missing/empty <see cref="UpdateRecyclingOperationsRequest.OperationCodes"/>
+    /// is forwarded rather than rejected here — AC10–AC12 are enforced
+    /// server-side on epr-register-enrol-backend (the system of record for
+    /// the codes), not duplicated in this pass-through endpoint.
+    /// </summary>
+    public static async Task<
+        Results<ContentHttpResult, NotFound, ProblemHttpResult>
+    > UpdateRecyclingOperations(
+        [FromRoute] Guid id,
+        [FromRoute] string siteId,
+        [FromBody] UpdateRecyclingOperationsRequest? request,
+        HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
+        [FromServices] IOverseasSiteRecyclingOperationsAdapter adapter,
+        CancellationToken cancellationToken
+    )
+    {
+        var user = httpContext.User;
+
+        var userId = user.FindFirstValue("user:id");
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: "Updating recycling operations requires an authenticated end user; "
+                    + "the request did not include a 'user:id' claim.",
+                statusCode: StatusCodes.Status401Unauthorized
+            );
+        }
+
+        var role = user.FindFirstValue("user:role");
+        if (!string.Equals(role, "standard", StringComparison.OrdinalIgnoreCase))
+        {
+            return TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: "Only a user with the 'standard' role may edit recycling operations.",
+                statusCode: StatusCodes.Status403Forbidden
+            );
+        }
+
+        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
+        if (workItem is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (
+            !string.Equals(
+                workItem.TypeId,
+                ReAccreditationType.Id,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            return TypedResults.Problem(
+                title: "Wrong work item type",
+                detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        ReAccreditationPayload? payload;
+        try
+        {
+            var payloadJson = WorkItemPayloadConverter.ToJson(workItem.Payload);
+            payload = payloadJson.Deserialize<ReAccreditationPayload>(s_payloadJsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            return TypedResults.Problem(
+                title: "Invalid re-accreditation payload",
+                detail: ex.Message,
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        var nationClaim = user.FindFirstValue("user:nation");
+        if (
+            string.IsNullOrWhiteSpace(nationClaim)
+            || payload?.Nation is not { } workItemNation
+            || !string.Equals(
+                nationClaim,
+                workItemNation.ToString(),
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            // Fail closed (AC14/AC17): a missing user:nation claim and a
+            // present-but-mismatched one are the SAME outcome — never a
+            // silent allow either way.
+            return TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: "You can only edit sites on applications belonging to your own nation.",
+                statusCode: StatusCodes.Status403Forbidden
+            );
+        }
+
+        if (
+            string.IsNullOrWhiteSpace(payload.OperatorOrganisationId)
+            || string.IsNullOrWhiteSpace(payload.OperatorApplicationId)
+        )
+        {
+            return TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: $"Work item '{id}' is missing data required to update recycling operations "
+                    + "(operator organisation id or application id).",
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        var result = await adapter.UpdateRecyclingOperationsAsync(
+            new OverseasSiteRecyclingOperationsRequest(
+                payload.OperatorOrganisationId,
+                payload.OperatorApplicationId,
+                siteId,
+                request?.OperationCodes ?? [],
+                userId,
+                user.FindFirstValue("user:name"),
+                CorrelationId: Guid.NewGuid()
+            ),
+            cancellationToken
+        );
+
+        return result.Outcome switch
+        {
+            OverseasSiteRecyclingOperationsOutcome.Success => TypedResults.Content(
+                result.SiteJson,
+                "application/json"
+            ),
+            OverseasSiteRecyclingOperationsOutcome.NotFound => TypedResults.NotFound(),
+            OverseasSiteRecyclingOperationsOutcome.ValidationFailed => TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: result.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["errorCode"] = result.ErrorCode,
+                    ["field"] = result.Field,
+                }
+            ),
+            OverseasSiteRecyclingOperationsOutcome.Conflict => TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: result.Message,
+                statusCode: StatusCodes.Status409Conflict
+            ),
+            // TransientFailure: a generic 500 with no errorCode — the
+            // request itself was well-formed, the failure is a server-side
+            // dependency (the operator backend) being unreachable/erroring.
+            _ => TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: result.Message,
+                statusCode: StatusCodes.Status500InternalServerError
+            ),
+        };
     }
 }
 
