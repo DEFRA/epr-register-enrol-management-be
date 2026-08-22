@@ -10,6 +10,7 @@ using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 
@@ -1080,6 +1081,7 @@ internal static class ReAccreditationEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IOverseasSiteRecyclingOperationsAdapter adapter,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
@@ -1189,6 +1191,22 @@ internal static class ReAccreditationEndpoints
             cancellationToken
         );
 
+        if (result.Outcome == OverseasSiteRecyclingOperationsOutcome.Success)
+        {
+            // AC13: refresh this repo's own stored snapshot so the redirect
+            // this call's caller performs lands on a page showing the new
+            // codes, not stale ones — see the method doc for why.
+            await RefreshStoredRecyclingOperationsAsync(
+                persistence,
+                workItem,
+                siteId,
+                request?.OperationCodes ?? [],
+                user.FindFirstValue("user:name") ?? userId,
+                loggerFactory,
+                cancellationToken
+            );
+        }
+
         return result.Outcome switch
         {
             OverseasSiteRecyclingOperationsOutcome.Success => TypedResults.Content(
@@ -1220,6 +1238,88 @@ internal static class ReAccreditationEndpoints
                 statusCode: StatusCodes.Status500InternalServerError
             ),
         };
+    }
+
+    /// <summary>
+    /// RA-469 AC13: epr-register-enrol-backend is the system of record and
+    /// has already accepted the write by the time this runs — this refreshes
+    /// THIS repo's own stored snapshot of the site
+    /// (<c>payload.overseasSites.sites[]</c>), which is what the case-review
+    /// UI actually reads on every page load, including the redirect the
+    /// caller performs right after a successful edit. Without this, a
+    /// regulator would see the pre-edit codes until whatever separate
+    /// mechanism next re-syncs this work item from the operator backend.
+    /// Also stamps <c>recyclingOperationsUpdatedBy</c>/<c>At</c> (as a plain
+    /// ISO-8601 string, not a BSON date — management-fe's
+    /// <c>formatDateTimeGds</c> parses with <c>date-fns</c>' <c>parseISO</c>,
+    /// which a <c>{"$date":...}</c>-wrapped value would not satisfy) so the
+    /// "last edited" line management-fe already reads — and degrades
+    /// gracefully without — has something to show.
+    ///
+    /// Best-effort: the edit already succeeded on the system of record, so a
+    /// failure here is logged and swallowed rather than turned into an error
+    /// response — there is no useful recovery action for "the write worked
+    /// but our local cache didn't refresh," and failing the whole request
+    /// would misreport a save that genuinely happened.
+    /// </summary>
+    private static async Task RefreshStoredRecyclingOperationsAsync(
+        IWorkItemPersistence persistence,
+        WorkItem workItem,
+        string siteId,
+        IReadOnlyList<string> operationCodes,
+        string? updatedBy,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            if (
+                !workItem.Payload.TryGetValue("overseasSites", out var overseasSitesValue)
+                || overseasSitesValue is not BsonDocument overseasSites
+                || !overseasSites.TryGetValue("sites", out var sitesValue)
+                || sitesValue is not BsonArray sites
+            )
+            {
+                return;
+            }
+
+            var site = sites
+                .OfType<BsonDocument>()
+                .FirstOrDefault(s =>
+                    s.TryGetValue("siteId", out var id) && id.IsString && id.AsString == siteId
+                );
+            if (site is null)
+            {
+                return;
+            }
+
+            site["operationCodes"] = new BsonArray(operationCodes);
+            site["recyclingOperationsUpdatedBy"] = updatedBy is null
+                ? BsonNull.Value
+                : new BsonString(updatedBy);
+            site["recyclingOperationsUpdatedAt"] = new BsonString(DateTime.UtcNow.ToString("o"));
+
+            await persistence.SetPayloadFieldAsync(
+                workItem.Id,
+                "overseasSites",
+                overseasSites,
+                cancellationToken
+            );
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            loggerFactory
+                .CreateLogger("ReAccreditationEndpoints.UpdateRecyclingOperations")
+                .LogWarning(
+                    ex,
+                    "Recycling-operations edit for work item {WorkItemId} site {SiteId} "
+                        + "succeeded on the operator backend but the local payload snapshot "
+                        + "failed to refresh; it will show stale codes until the next full sync",
+                    workItem.Id,
+                    siteId
+                );
+        }
     }
 }
 

@@ -3656,6 +3656,65 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
+    public async Task RecyclingOperations_success_refreshes_the_stored_site_snapshot_and_stamps_audit_fields()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildRecyclingOperationsCandidateWithOverseasSites(id, TenantClientId, "England"),
+            cancellationToken
+        );
+
+        var beforeCall = DateTime.UtcNow;
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
+            new { operationCodes = new[] { "R3", "R4" } },
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // AC13: the stored snapshot this repo's own case-review UI reads on
+        // every subsequent page load must reflect the new codes
+        // immediately, not just the response body the caller happened to
+        // get back.
+        var stored = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(stored);
+        var sites = stored!.Payload["overseasSites"].AsBsonDocument["sites"].AsBsonArray;
+        var site = sites
+            .Select(s => s.AsBsonDocument)
+            .Single(s => s["siteId"].AsString == RecyclingOperationsSiteId);
+
+        Assert.Equal(
+            new[] { "R3", "R4" },
+            site["operationCodes"].AsBsonArray.Select(v => v.AsString).ToArray()
+        );
+        Assert.Equal(DefaultUserName, site["recyclingOperationsUpdatedBy"].AsString);
+        var updatedAt = DateTime.Parse(
+            site["recyclingOperationsUpdatedAt"].AsString,
+            System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind
+        );
+        Assert.True(updatedAt >= beforeCall && updatedAt <= DateTime.UtcNow);
+
+        // A sibling site on the same work item must be untouched.
+        var otherSite = sites
+            .Select(s => s.AsBsonDocument)
+            .Single(s => s["siteId"].AsString == "site-other");
+        Assert.Equal(
+            new[] { "R5" },
+            otherSite["operationCodes"].AsBsonArray.Select(v => v.AsString).ToArray()
+        );
+        Assert.False(otherSite.Contains("recyclingOperationsUpdatedBy"));
+    }
+
+    [Fact]
     public async Task RecyclingOperations_returns_forbidden_for_support_readonly_role()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -4076,6 +4135,41 @@ public class ReAccreditationEndpointTests
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
             TemplateVersion = type.TemplateVersion,
         };
+    }
+
+    /// <summary>
+    /// Same base candidate as <see cref="BuildRecyclingOperationsCandidate"/>,
+    /// plus a <c>payload.overseasSites.sites</c> array carrying
+    /// <see cref="RecyclingOperationsSiteId"/> and one sibling site — the
+    /// shape <see cref="RefreshStoredRecyclingOperationsAsync"/>'s
+    /// AC13 write-back needs to find and update a site by id.
+    /// </summary>
+    private static WorkItem BuildRecyclingOperationsCandidateWithOverseasSites(
+        Guid id,
+        string submittedBy,
+        string nation
+    )
+    {
+        var candidate = BuildRecyclingOperationsCandidate(id, submittedBy, nation);
+        candidate.Payload["overseasSites"] = new BsonDocument
+        {
+            ["sites"] = new BsonArray
+            {
+                new BsonDocument
+                {
+                    ["siteId"] = RecyclingOperationsSiteId,
+                    ["siteName"] = "Test Overseas Site",
+                    ["operationCodes"] = new BsonArray { "R5" },
+                },
+                new BsonDocument
+                {
+                    ["siteId"] = "site-other",
+                    ["siteName"] = "Untouched Sibling Site",
+                    ["operationCodes"] = new BsonArray { "R5" },
+                },
+            },
+        };
+        return candidate;
     }
 
     /// <summary>
