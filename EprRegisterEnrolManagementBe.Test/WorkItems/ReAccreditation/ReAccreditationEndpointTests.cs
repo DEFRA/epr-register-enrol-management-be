@@ -3715,6 +3715,62 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
+    public async Task RecyclingOperations_success_refreshes_the_stored_snapshot_when_siteId_is_a_real_int()
+    {
+        // The operator backend's OverseasSiteModel.SiteId is a C# int, and
+        // ReAccreditationSeeder stores real/seeded overseasSites.sites[].siteId
+        // as a BSON int, not a string — unlike every other test in this file,
+        // which uses RecyclingOperationsSiteId ("site-42", a string) purely as
+        // a test-fixture convenience. This proves the site lookup still works
+        // against the actual on-the-wire shape, not just the fixture shape.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            role: "standard",
+            nation: "England"
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var candidate = BuildRecyclingOperationsCandidate(id, TenantClientId, "England");
+        candidate.Payload["overseasSites"] = new BsonDocument
+        {
+            ["sites"] = new BsonArray
+            {
+                new BsonDocument
+                {
+                    ["siteId"] = 1,
+                    ["siteName"] = "Real-Shaped Site",
+                    ["operationCodes"] = new BsonArray { "R5" },
+                },
+            },
+        };
+        await factory.SeedAsync(candidate, cancellationToken);
+
+        var response = await client.PatchAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/overseas-sites/1/recycling-operations",
+            new { operationCodes = new[] { "R3", "R4" } },
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var stored = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(stored);
+        var site = stored!
+            .Payload["overseasSites"]
+            .AsBsonDocument["sites"]
+            .AsBsonArray.Select(s => s.AsBsonDocument)
+            .Single(s => s["siteId"].AsInt32 == 1);
+
+        Assert.Equal(
+            new[] { "R3", "R4" },
+            site["operationCodes"].AsBsonArray.Select(v => v.AsString).ToArray()
+        );
+        // The lookup must also not have altered siteId's own BSON type.
+        Assert.Equal(BsonType.Int32, site["siteId"].BsonType);
+    }
+
+    [Fact]
     public async Task RecyclingOperations_returns_forbidden_for_support_readonly_role()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

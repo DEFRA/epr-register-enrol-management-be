@@ -1284,10 +1284,18 @@ internal static class ReAccreditationEndpoints
                 return;
             }
 
+            // siteId is always a string on the route, but the operator
+            // backend's OverseasSiteModel.SiteId is a C# int, which
+            // round-trips through JSON/BSON as a number, not a string — an
+            // `id.IsString`-gated comparison would never match real
+            // seeded/production data (see ReAccreditationSeeder, which
+            // stores siteId as a BSON int), only a string-typed test
+            // fixture. ToString() on both BsonString and BsonInt32 yields
+            // the plain value, so this matches either representation.
             var site = sites
                 .OfType<BsonDocument>()
                 .FirstOrDefault(s =>
-                    s.TryGetValue("siteId", out var id) && id.IsString && id.AsString == siteId
+                    s.TryGetValue("siteId", out var id) && id.ToString() == siteId
                 );
             if (site is null)
             {
