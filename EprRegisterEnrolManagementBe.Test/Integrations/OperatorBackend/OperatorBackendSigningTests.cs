@@ -1,5 +1,6 @@
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Test.Auth;
 
 namespace EprRegisterEnrolManagementBe.Test.Integrations.OperatorBackend;
 
@@ -142,5 +143,43 @@ public class OperatorBackendSigningTests
         );
 
         Assert.Equal(ClientId, request.Headers.GetValues("x-cdp-client-id").Single());
+    }
+
+    [Fact]
+    public void Signature_without_role_or_nation_is_the_legacy_six_line_form_the_operator_backend_verifies()
+    {
+        // ADR-0007: epr-register-enrol-backend's inbound
+        // CaseManagementAuthenticationHandler verifies the ORIGINAL six-line
+        // v3 string only. Our pushes to it never carry role/nation, so they
+        // must keep signing exactly that form — pinned here against an
+        // independent re-implementation of the documented wire format, not
+        // against ComputeSignature (which would stay self-consistent even
+        // if this repo's signer and verifier drifted away from the backend
+        // together — which is exactly what happened on 2026-08-22).
+        using var request = new HttpRequestMessage(HttpMethod.Patch, "https://example.test/");
+
+        OperatorBackendSigning.AddHeaders(
+            request,
+            Config(sharedSecret: "shh-its-a-secret"),
+            userId: "user-42",
+            userName: "Jane Regulator"
+        );
+
+        var timestamp = request.Headers.GetValues("x-cdp-auth-timestamp").Single();
+        var nonce = request.Headers.GetValues("x-cdp-auth-nonce").Single();
+        var actualSignature = request.Headers.GetValues("x-cdp-auth-signature").Single();
+        var payload = new ClientIdSignaturePayload(
+            ClientId,
+            "user-42",
+            "Jane Regulator",
+            timestamp,
+            nonce
+        );
+
+        Assert.Equal(WireFormatReference.LegacyV3("shh-its-a-secret", payload), actualSignature);
+        Assert.NotEqual(
+            WireFormatReference.ExtendedV3("shh-its-a-secret", payload),
+            actualSignature
+        );
     }
 }
