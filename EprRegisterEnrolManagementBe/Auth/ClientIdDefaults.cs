@@ -28,6 +28,23 @@ public static class ClientIdDefaults
     public const string DefaultUserNameHeaderName = "x-cdp-user-name";
 
     /// <summary>
+    /// Optional header carrying the caller's role as the BFF sees it (e.g.
+    /// <c>"standard"</c>/<c>"support-readonly"</c>) — becomes claim
+    /// <c>"user:role"</c>. RA-469 groundwork: not folded into the v3 HMAC
+    /// canonical payload — see <see cref="ClientIdAuthenticationHandler.ComputeSignature"/>.
+    /// </summary>
+    public const string DefaultRoleHeaderName = "x-cdp-user-role";
+
+    /// <summary>
+    /// Optional header carrying the caller's nation scope as the BFF sees
+    /// it (e.g. <c>"England"</c>/<c>"Scotland"</c>/<c>"Wales"</c>/
+    /// <c>"NorthernIreland"</c>) — becomes claim <c>"user:nation"</c>.
+    /// RA-469 groundwork: not folded into the v3 HMAC canonical payload —
+    /// see <see cref="ClientIdAuthenticationHandler.ComputeSignature"/>.
+    /// </summary>
+    public const string DefaultNationHeaderName = "x-cdp-user-nation";
+
+    /// <summary>
     /// Header carrying a base64 HMAC-SHA256 signature, computed by the BFF
     /// over the canonical concatenation of the trust headers, using a
     /// shared secret. Lets the backend verify the trust headers actually

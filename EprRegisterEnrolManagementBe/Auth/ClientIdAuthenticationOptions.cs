@@ -15,6 +15,12 @@ public class ClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// <summary>Optional header carrying the end user's display name.</summary>
     public string UserNameHeaderName { get; set; } = ClientIdDefaults.DefaultUserNameHeaderName;
 
+    /// <summary>Optional header carrying the caller's role. See <see cref="ClientIdDefaults.DefaultRoleHeaderName"/>.</summary>
+    public string RoleHeaderName { get; set; } = ClientIdDefaults.DefaultRoleHeaderName;
+
+    /// <summary>Optional header carrying the caller's nation scope. See <see cref="ClientIdDefaults.DefaultNationHeaderName"/>.</summary>
+    public string NationHeaderName { get; set; } = ClientIdDefaults.DefaultNationHeaderName;
+
     /// <summary>
     /// Name of the request header carrying the BFF-computed HMAC signature
     /// over the trust headers. Used to prove the headers originated from a
@@ -92,6 +98,18 @@ public class ClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// <c>WorkItemNote.CreatedByName</c>.
     /// </summary>
     public int MaxUserNameLength { get; set; } = 256;
+
+    /// <summary>
+    /// Maximum permitted length of the role header. Persisted into the
+    /// <c>user:role</c> claim.
+    /// </summary>
+    public int MaxUserRoleLength { get; set; } = 64;
+
+    /// <summary>
+    /// Maximum permitted length of the nation header. Persisted into the
+    /// <c>user:nation</c> claim.
+    /// </summary>
+    public int MaxUserNationLength { get; set; } = 32;
 
     /// <summary>
     /// Maximum permitted length of the HMAC signature header. Base64 of

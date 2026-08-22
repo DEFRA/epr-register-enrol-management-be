@@ -49,8 +49,8 @@ public class ClientIdAuthenticationTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory();
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
@@ -77,9 +77,11 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_when_shared_secret_configured_request_without_signature_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
@@ -95,7 +97,9 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_tampered_signature_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -111,15 +115,23 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_valid_signature_with_timestamp_and_nonce_is_200()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var nonce = "nonce-valid";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, timestamp, nonce);
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -140,16 +152,24 @@ public class ClientIdAuthenticationTests
         // not succeed, or a compromise of one caller's secret would let it
         // impersonate the other.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string>
-        {
-            [ClientId] = Secret,
-            [OtherClientId] = OtherSecret
-        });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string>
+            {
+                [ClientId] = Secret,
+                [OtherClientId] = OtherSecret,
+            }
+        );
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var nonce = "nonce-cross-client";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            OtherSecret, ClientId, null, null, timestamp, nonce);
+            OtherSecret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -167,15 +187,20 @@ public class ClientIdAuthenticationTests
         // RA-345: a clientId with no registered secret must fail closed,
         // even if signed correctly with some other caller's secret.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string>
-        {
-            [ClientId] = Secret
-        });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var nonce = "nonce-unknown-client";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, OtherClientId, null, null, timestamp, nonce);
+            Secret,
+            OtherClientId,
+            null,
+            null,
+            timestamp,
+            nonce
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, OtherClientId);
@@ -211,12 +236,14 @@ public class ClientIdAuthenticationTests
         // ClientSecrets_bind_from_real_double_underscore_environment_variables
         // for that.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(configOverrides: new Dictionary<string, string?>
-        {
-            ["AUTH_SHARED_SECRET:MANAGEMENT_FE"] = Secret,
-            ["AUTH_SHARED_SECRET:BACKEND"] = OtherSecret,
-            ["Auth:BackendClientId"] = "frontend" // collides with ManagementFe's default clientId
-        });
+        await using var factory = new BareFactory(
+            configOverrides: new Dictionary<string, string?>
+            {
+                ["AUTH_SHARED_SECRET:MANAGEMENT_FE"] = Secret,
+                ["AUTH_SHARED_SECRET:BACKEND"] = OtherSecret,
+                ["Auth:BackendClientId"] = "frontend", // collides with ManagementFe's default clientId
+            }
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "frontend");
@@ -238,13 +265,15 @@ public class ClientIdAuthenticationTests
         // with its own secret — proves the secrets are independent, not
         // one shared value both callers happen to know.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string>
-        {
-            [ClientId] = Secret,
-            [OtherClientId] = OtherSecret
-        });
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string>
+            {
+                [ClientId] = Secret,
+                [OtherClientId] = OtherSecret,
+            }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
@@ -252,7 +281,13 @@ public class ClientIdAuthenticationTests
         using var clientA = factory.CreateClient();
         var nonceA = "nonce-caller-a";
         var signatureA = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, timestamp, nonceA);
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonceA
+        );
         clientA.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
         AddTimestampAndNonce(clientA, timestamp, nonceA);
         clientA.DefaultRequestHeaders.Add("x-cdp-auth-signature", signatureA);
@@ -260,7 +295,13 @@ public class ClientIdAuthenticationTests
         using var clientB = factory.CreateClient();
         var nonceB = "nonce-caller-b";
         var signatureB = ClientIdAuthenticationHandler.ComputeSignature(
-            OtherSecret, OtherClientId, null, null, timestamp, nonceB);
+            OtherSecret,
+            OtherClientId,
+            null,
+            null,
+            timestamp,
+            nonceB
+        );
         clientB.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, OtherClientId);
         AddTimestampAndNonce(clientB, timestamp, nonceB);
         clientB.DefaultRequestHeaders.Add("x-cdp-auth-signature", signatureB);
@@ -276,11 +317,18 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_missing_timestamp_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null,
-            factory.FakeTime.GetUtcNow().ToString("O"), "nonce-no-ts");
+            Secret,
+            ClientId,
+            null,
+            null,
+            factory.FakeTime.GetUtcNow().ToString("O"),
+            "nonce-no-ts"
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -296,13 +344,21 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_stale_timestamp_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         // Six minutes ago — outside the default 5-minute skew.
         var staleTimestamp = factory.FakeTime.GetUtcNow().AddMinutes(-6).ToString("O");
         var nonce = "nonce-stale";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, staleTimestamp, nonce);
+            Secret,
+            ClientId,
+            null,
+            null,
+            staleTimestamp,
+            nonce
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -318,13 +374,21 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_future_timestamp_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         // Six minutes ahead — skew check is bidirectional.
         var futureTimestamp = factory.FakeTime.GetUtcNow().AddMinutes(6).ToString("O");
         var nonce = "nonce-future";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, futureTimestamp, nonce);
+            Secret,
+            ClientId,
+            null,
+            null,
+            futureTimestamp,
+            nonce
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -340,11 +404,19 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_missing_nonce_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, timestamp, "would-have-been-nonce");
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            "would-have-been-nonce"
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -360,15 +432,23 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_replayed_nonce_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var nonce = "nonce-replay";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, timestamp, nonce);
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -405,8 +485,8 @@ public class ClientIdAuthenticationTests
         // secret. Existing header-trust behaviour is preserved.
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory(environment: "Development");
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
@@ -421,7 +501,9 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_malformed_timestamp_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -429,7 +511,14 @@ public class ClientIdAuthenticationTests
         client.DefaultRequestHeaders.Add(
             "x-cdp-auth-signature",
             ClientIdAuthenticationHandler.ComputeSignature(
-                Secret, ClientId, null, null, "not-a-valid-timestamp", "nonce-malformed"));
+                Secret,
+                ClientId,
+                null,
+                null,
+                "not-a-valid-timestamp",
+                "nonce-malformed"
+            )
+        );
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -442,7 +531,9 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_missing_signature_header_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -460,7 +551,9 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_whitespace_only_nonce_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         using var client = factory.CreateClient();
@@ -469,7 +562,15 @@ public class ClientIdAuthenticationTests
         client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", "   ");
         client.DefaultRequestHeaders.Add(
             "x-cdp-auth-signature",
-            ClientIdAuthenticationHandler.ComputeSignature(Secret, ClientId, null, null, timestamp, "   "));
+            ClientIdAuthenticationHandler.ComputeSignature(
+                Secret,
+                ClientId,
+                null,
+                null,
+                timestamp,
+                "   "
+            )
+        );
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -482,7 +583,9 @@ public class ClientIdAuthenticationTests
     public async Task Signature_required_whitespace_only_timestamp_is_401()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -490,7 +593,15 @@ public class ClientIdAuthenticationTests
         client.DefaultRequestHeaders.Add("x-cdp-auth-nonce", "nonce-blank-ts");
         client.DefaultRequestHeaders.Add(
             "x-cdp-auth-signature",
-            ClientIdAuthenticationHandler.ComputeSignature(Secret, ClientId, null, null, "   ", "nonce-blank-ts"));
+            ClientIdAuthenticationHandler.ComputeSignature(
+                Secret,
+                ClientId,
+                null,
+                null,
+                "   ",
+                "nonce-blank-ts"
+            )
+        );
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -510,7 +621,9 @@ public class ClientIdAuthenticationTests
     [InlineData("x-cdp-user-id", 128)]
     [InlineData("x-cdp-user-name", 256)]
     public async Task Identity_header_exceeding_cap_is_401_with_descriptive_reason(
-        string header, int cap)
+        string header,
+        int cap
+    )
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory();
@@ -539,15 +652,25 @@ public class ClientIdAuthenticationTests
     [InlineData("x-cdp-auth-nonce", 128)]
     [InlineData("x-cdp-auth-signature", 256)]
     public async Task Signed_mode_header_exceeding_cap_is_401_with_descriptive_reason(
-        string header, int cap)
+        string header,
+        int cap
+    )
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         var goodTimestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var goodNonce = $"nonce-{header}";
         var goodSignature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, goodTimestamp, goodNonce);
+            Secret,
+            ClientId,
+            null,
+            null,
+            goodTimestamp,
+            goodNonce
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -555,13 +678,16 @@ public class ClientIdAuthenticationTests
         var oversize = new string('a', cap + 1);
         client.DefaultRequestHeaders.Add(
             "x-cdp-auth-timestamp",
-            header == "x-cdp-auth-timestamp" ? oversize : goodTimestamp);
+            header == "x-cdp-auth-timestamp" ? oversize : goodTimestamp
+        );
         client.DefaultRequestHeaders.Add(
             "x-cdp-auth-nonce",
-            header == "x-cdp-auth-nonce" ? oversize : goodNonce);
+            header == "x-cdp-auth-nonce" ? oversize : goodNonce
+        );
         client.DefaultRequestHeaders.Add(
             "x-cdp-auth-signature",
-            header == "x-cdp-auth-signature" ? oversize : goodSignature);
+            header == "x-cdp-auth-signature" ? oversize : goodSignature
+        );
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 
@@ -578,7 +704,9 @@ public class ClientIdAuthenticationTests
         // over the generic "Invalid signature" reason — which is a
         // proxy assertion that the cap check ran first.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -601,8 +729,8 @@ public class ClientIdAuthenticationTests
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new BareFactory();
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         using var client = factory.CreateClient();
@@ -626,15 +754,23 @@ public class ClientIdAuthenticationTests
     public async Task Nonce_at_exactly_cap_is_accepted_in_signed_mode()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(clientSecrets: new Dictionary<string, string> { [ClientId] = Secret });
-        factory.MockPersistence
-            .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
             .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var nonce = new string('n', 128);
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, ClientId, null, null, timestamp, nonce);
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce
+        );
 
         using var client = factory.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
@@ -644,6 +780,209 @@ public class ClientIdAuthenticationTests
         var response = await client.GetAsync("/work-items", cancellationToken);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("x-cdp-user-role", 64)]
+    [InlineData("x-cdp-user-nation", 32)]
+    public async Task Trust_header_exceeding_cap_is_401_with_descriptive_reason(
+        string header,
+        int cap
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory();
+        using var client = factory.CreateClient();
+
+        var oversize = new string('a', cap + 1);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        client.DefaultRequestHeaders.Add(header, oversize);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var challenge = response.Headers.WwwAuthenticate.ToString();
+        Assert.Contains($"{header} exceeds {cap} chars", challenge);
+    }
+
+    [Theory]
+    [InlineData("x-cdp-user-role", 64)]
+    [InlineData("x-cdp-user-nation", 32)]
+    public async Task Trust_header_at_exactly_cap_is_accepted(string header, int cap)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory();
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        using var client = factory.CreateClient();
+        var atCap = new string('a', cap);
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        client.DefaultRequestHeaders.Add(header, atCap);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Role_and_nation_trust_headers_present_do_not_break_auth()
+    {
+        // RA-469 AC17 groundwork: x-cdp-user-role/x-cdp-user-nation become
+        // "user:role"/"user:nation" claims on the authenticated principal.
+        // The claims actually landing correctly is proven end-to-end by the
+        // role/nation-gated recycling-operations endpoint (which 403s when
+        // either claim is absent or doesn't match) — the meaningful
+        // black-box assertion of "claim set". This test covers the
+        // auth-handler-level regression surface: presence of both new
+        // trust headers must not prevent authentication succeeding.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory();
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
+        client.DefaultRequestHeaders.Add("x-cdp-user-nation", "Wales");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Role_and_nation_trust_headers_absent_auth_unaffected()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory();
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_valid_with_role_and_nation_signed_is_200()
+    {
+        // RA-469 PR review (masante): role/nation are now part of the v3
+        // canonical payload, so a caller that signs over them must still
+        // authenticate successfully — this is the "correctly signed" half
+        // of the fix, paired with the tamper-detection test below.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-role-signed";
+        var signature = ClientIdAuthenticationHandler.ComputeSignature(
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce,
+            role: "standard",
+            nation: "Wales"
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+        client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
+        client.DefaultRequestHeaders.Add("x-cdp-user-nation", "Wales");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_valid_but_role_tampered_after_signing_is_401()
+    {
+        // RA-469 PR review (masante): the vulnerability this closes — a
+        // signature computed for one role must NOT validate once the
+        // x-cdp-user-role header is altered afterwards (e.g. by a
+        // misbehaving intermediary), even though clientId/userId/userName/
+        // timestamp/nonce are all untouched. Before the fix, role wasn't in
+        // the signed payload at all, so this exact request would have
+        // passed and UpdateRecyclingOperations' AC17 gate would have
+        // trusted the tampered role.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-role-tampered";
+        var signature = ClientIdAuthenticationHandler.ComputeSignature(
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce,
+            role: "support-readonly"
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+        // Tampered post-signing: signed for "support-readonly", sent as "standard".
+        client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Signature_valid_but_nation_tampered_after_signing_is_401()
+    {
+        // Same attack as the role test above, on the nation field.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-nation-tampered";
+        var signature = ClientIdAuthenticationHandler.ComputeSignature(
+            Secret,
+            ClientId,
+            null,
+            null,
+            timestamp,
+            nonce,
+            role: "standard",
+            nation: "England"
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+        client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
+        // Tampered post-signing: signed for "England", sent as "Wales".
+        client.DefaultRequestHeaders.Add("x-cdp-user-nation", "Wales");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 }
 
@@ -676,7 +1015,9 @@ public class ClientIdAuthenticationEnvVarTests
         try
         {
             Environment.SetEnvironmentVariable(
-                "AUTH_SHARED_SECRET__MANAGEMENT_FE", ManagementFeSecret);
+                "AUTH_SHARED_SECRET__MANAGEMENT_FE",
+                ManagementFeSecret
+            );
             Environment.SetEnvironmentVariable("AUTH_SHARED_SECRET__BACKEND", BackendSecret);
 
             // No configOverrides/clientSecrets bypass here — this factory
@@ -691,8 +1032,8 @@ public class ClientIdAuthenticationEnvVarTests
             // exists to catch. Production forces the fail-closed branch,
             // so 200 here is only possible if the secret genuinely bound.
             await using var factory = new BareFactory(environment: "Production");
-            factory.MockPersistence
-                .QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            factory
+                .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
                 .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
 
             var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
@@ -700,7 +1041,13 @@ public class ClientIdAuthenticationEnvVarTests
             // Default expected clientId for the ManagementFe slot (Program.cs).
             const string clientId = "frontend";
             var signature = ClientIdAuthenticationHandler.ComputeSignature(
-                ManagementFeSecret, clientId, null, null, timestamp, nonce);
+                ManagementFeSecret,
+                clientId,
+                null,
+                null,
+                timestamp,
+                nonce
+            );
 
             using var client = factory.CreateClient();
             client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, clientId);
@@ -709,14 +1056,15 @@ public class ClientIdAuthenticationEnvVarTests
             client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
 
             var response = await client.GetAsync(
-                "/work-items", TestContext.Current.CancellationToken);
+                "/work-items",
+                TestContext.Current.CancellationToken
+            );
 
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
         finally
         {
-            Environment.SetEnvironmentVariable(
-                "AUTH_SHARED_SECRET__MANAGEMENT_FE", previousFe);
+            Environment.SetEnvironmentVariable("AUTH_SHARED_SECRET__MANAGEMENT_FE", previousFe);
             Environment.SetEnvironmentVariable("AUTH_SHARED_SECRET__BACKEND", previousBackend);
         }
     }
@@ -725,8 +1073,8 @@ public class ClientIdAuthenticationEnvVarTests
 internal sealed class BareFactory(
     IReadOnlyDictionary<string, string>? clientSecrets = null,
     string? environment = null,
-    IReadOnlyDictionary<string, string?>? configOverrides = null)
-    : WebApplicationFactory<Program>
+    IReadOnlyDictionary<string, string?>? configOverrides = null
+) : WebApplicationFactory<Program>
 {
     public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
     public readonly FakeTimeProvider FakeTime = new(DateTimeOffset.Parse("2026-04-30T12:00:00Z"));
@@ -744,8 +1092,9 @@ internal sealed class BareFactory(
             // EnvironmentVariablesConfigurationProvider "__" -> ":"
             // rewrite itself. See
             // ClientIdAuthenticationEnvVarTests for that.
-            builder.ConfigureAppConfiguration((_, config) =>
-                config.AddInMemoryCollection(configOverrides));
+            builder.ConfigureAppConfiguration(
+                (_, config) => config.AddInMemoryCollection(configOverrides)
+            );
         }
         builder.ConfigureServices(services =>
         {
@@ -763,7 +1112,8 @@ internal sealed class BareFactory(
                 // bypass env-var binding entirely here.
                 services.PostConfigure<ClientIdAuthenticationOptions>(
                     ClientIdDefaults.AuthenticationScheme,
-                    o => o.ClientSecrets = clientSecrets);
+                    o => o.ClientSecrets = clientSecrets
+                );
             }
         });
     }

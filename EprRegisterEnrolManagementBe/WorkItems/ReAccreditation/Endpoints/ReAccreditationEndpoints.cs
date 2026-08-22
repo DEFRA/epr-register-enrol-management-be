@@ -1,13 +1,16 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolManagementBe.Auth;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 
@@ -82,6 +85,14 @@ internal static class ReAccreditationEndpoints
     /// title or the human-readable detail.
     /// </summary>
     public const string DulyMakeProblemTitle = "Could not complete duly making";
+
+    /// <summary>
+    /// ProblemDetails title for every recycling-operations update failure.
+    /// Constant across all of them on purpose: the frontend switches on
+    /// <c>errorCode</c> or the status code, never on the title or the
+    /// human-readable detail.
+    /// </summary>
+    public const string RecyclingOperationsProblemTitle = "Could not update recycling operations";
 
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
@@ -203,6 +214,20 @@ internal static class ReAccreditationEndpoints
             .WithName("ReAccreditationSiteAdded")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxSiteAddedBodyBytes))
+            .RequireAuthorization();
+
+        // RA-469 AC16/AC17: regulator-facing correction of one overseas
+        // site's recycling operation codes during case review. Server-side
+        // role/nation authz is enforced IN the handler (not just relying on
+        // RequireAuthorization()'s "is authenticated" check) — see the
+        // handler's own doc comment for the fail-closed checks this
+        // performs before ever calling out to the operator backend.
+        group
+            .MapPatch(
+                "/{id:guid}/overseas-sites/{siteId}/recycling-operations",
+                UpdateRecyclingOperations
+            )
+            .WithName("UpdateReAccreditationOverseasSiteRecyclingOperations")
             .RequireAuthorization();
 
         return app;
@@ -1014,6 +1039,295 @@ internal static class ReAccreditationEndpoints
             detail: result.Message,
             statusCode: status
         );
+    }
+
+    /// <summary>
+    /// RA-469 AC16/AC17: a regulator corrects one overseas reprocessing
+    /// site's recycling operation codes during case review. Forwards to
+    /// <see cref="IOverseasSiteRecyclingOperationsAdapter"/>, which calls
+    /// epr-register-enrol-backend's regulator-scoped endpoint (distinct
+    /// from the operator-only <c>PatchOverseasSites</c> route) and signs
+    /// with the real caller's identity so the backend's audit record
+    /// attributes the edit correctly.
+    ///
+    /// Server-side authz — enforced HERE, not just via
+    /// <c>RequireAuthorization()</c>'s "is authenticated" check, and never
+    /// a silent no-op on failure (AC14/AC17):
+    /// <list type="number">
+    ///   <item>No <c>user:id</c> claim → 401. Mirrors the framework's
+    ///   <c>RequireActorIdentity</c> convention (see <c>WorkItemService</c>):
+    ///   a mutation cannot be attributed to a real human without it.</item>
+    ///   <item><c>user:role</c> claim must equal <c>"standard"</c> → 403
+    ///   otherwise (in particular, <c>"support-readonly"</c> is read-only,
+    ///   per AC8/AC9).</item>
+    ///   <item><c>user:nation</c> claim must be present AND equal the work
+    ///   item's <c>ReAccreditationPayload.Nation</c> → 403 otherwise. This
+    ///   is why the work item is loaded and its payload read BEFORE this
+    ///   check can run — nation-scoping is enforced against the actual
+    ///   resource, not merely the caller's own claimed nation.</item>
+    /// </list>
+    ///
+    /// A missing/empty <see cref="UpdateRecyclingOperationsRequest.OperationCodes"/>
+    /// is forwarded rather than rejected here — AC10–AC12 are enforced
+    /// server-side on epr-register-enrol-backend (the system of record for
+    /// the codes), not duplicated in this pass-through endpoint.
+    /// </summary>
+    public static async Task<
+        Results<ContentHttpResult, NotFound, ProblemHttpResult>
+    > UpdateRecyclingOperations(
+        [FromRoute] Guid id,
+        [FromRoute] string siteId,
+        [FromBody] UpdateRecyclingOperationsRequest? request,
+        HttpContext httpContext,
+        [FromServices] IWorkItemPersistence persistence,
+        [FromServices] IOverseasSiteRecyclingOperationsAdapter adapter,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
+    )
+    {
+        var user = httpContext.User;
+
+        var userId = user.FindFirstValue("user:id");
+        if (string.IsNullOrWhiteSpace(userId))
+        {
+            return TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: "Updating recycling operations requires an authenticated end user; "
+                    + "the request did not include a 'user:id' claim.",
+                statusCode: StatusCodes.Status401Unauthorized
+            );
+        }
+
+        var role = user.FindFirstValue("user:role");
+        if (!string.Equals(role, "standard", StringComparison.OrdinalIgnoreCase))
+        {
+            return TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: "Only a user with the 'standard' role may edit recycling operations.",
+                statusCode: StatusCodes.Status403Forbidden
+            );
+        }
+
+        var workItem = await persistence.GetByIdAsync(id, cancellationToken);
+        if (workItem is null)
+        {
+            return TypedResults.NotFound();
+        }
+
+        if (
+            !string.Equals(
+                workItem.TypeId,
+                ReAccreditationType.Id,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            return TypedResults.Problem(
+                title: "Wrong work item type",
+                detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        ReAccreditationPayload? payload;
+        try
+        {
+            var payloadJson = WorkItemPayloadConverter.ToJson(workItem.Payload);
+            payload = payloadJson.Deserialize<ReAccreditationPayload>(s_payloadJsonOptions);
+        }
+        catch (JsonException ex)
+        {
+            return TypedResults.Problem(
+                title: "Invalid re-accreditation payload",
+                detail: ex.Message,
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        var nationClaim = user.FindFirstValue("user:nation");
+        if (
+            string.IsNullOrWhiteSpace(nationClaim)
+            || payload?.Nation is not { } workItemNation
+            || !string.Equals(
+                nationClaim,
+                workItemNation.ToString(),
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
+        {
+            // Fail closed (AC14/AC17): a missing user:nation claim and a
+            // present-but-mismatched one are the SAME outcome — never a
+            // silent allow either way.
+            return TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: "You can only edit sites on applications belonging to your own nation.",
+                statusCode: StatusCodes.Status403Forbidden
+            );
+        }
+
+        if (
+            string.IsNullOrWhiteSpace(payload.OperatorOrganisationId)
+            || string.IsNullOrWhiteSpace(payload.OperatorApplicationId)
+        )
+        {
+            return TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: $"Work item '{id}' is missing data required to update recycling operations "
+                    + "(operator organisation id or application id).",
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        var result = await adapter.UpdateRecyclingOperationsAsync(
+            new OverseasSiteRecyclingOperationsRequest(
+                payload.OperatorOrganisationId,
+                payload.OperatorApplicationId,
+                siteId,
+                request?.OperationCodes ?? [],
+                userId,
+                user.FindFirstValue("user:name"),
+                CorrelationId: Guid.NewGuid()
+            ),
+            cancellationToken
+        );
+
+        if (result.Outcome == OverseasSiteRecyclingOperationsOutcome.Success)
+        {
+            // AC13: refresh this repo's own stored snapshot so the redirect
+            // this call's caller performs lands on a page showing the new
+            // codes, not stale ones — see the method doc for why.
+            await RefreshStoredRecyclingOperationsAsync(
+                persistence,
+                workItem,
+                siteId,
+                request?.OperationCodes ?? [],
+                user.FindFirstValue("user:name") ?? userId,
+                loggerFactory,
+                cancellationToken
+            );
+        }
+
+        return result.Outcome switch
+        {
+            OverseasSiteRecyclingOperationsOutcome.Success => TypedResults.Content(
+                result.SiteJson,
+                "application/json"
+            ),
+            OverseasSiteRecyclingOperationsOutcome.NotFound => TypedResults.NotFound(),
+            OverseasSiteRecyclingOperationsOutcome.ValidationFailed => TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: result.Message,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    ["errorCode"] = result.ErrorCode,
+                    ["field"] = result.Field,
+                }
+            ),
+            OverseasSiteRecyclingOperationsOutcome.Conflict => TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: result.Message,
+                statusCode: StatusCodes.Status409Conflict
+            ),
+            // TransientFailure: a generic 500 with no errorCode — the
+            // request itself was well-formed, the failure is a server-side
+            // dependency (the operator backend) being unreachable/erroring.
+            _ => TypedResults.Problem(
+                title: RecyclingOperationsProblemTitle,
+                detail: result.Message,
+                statusCode: StatusCodes.Status500InternalServerError
+            ),
+        };
+    }
+
+    /// <summary>
+    /// RA-469 AC13: epr-register-enrol-backend is the system of record and
+    /// has already accepted the write by the time this runs — this refreshes
+    /// THIS repo's own stored snapshot of the site
+    /// (<c>payload.overseasSites.sites[]</c>), which is what the case-review
+    /// UI actually reads on every page load, including the redirect the
+    /// caller performs right after a successful edit. Without this, a
+    /// regulator would see the pre-edit codes until whatever separate
+    /// mechanism next re-syncs this work item from the operator backend.
+    /// Also stamps <c>recyclingOperationsUpdatedBy</c>/<c>At</c> (as a plain
+    /// ISO-8601 string, not a BSON date — management-fe's
+    /// <c>formatDateTimeGds</c> parses with <c>date-fns</c>' <c>parseISO</c>,
+    /// which a <c>{"$date":...}</c>-wrapped value would not satisfy) so the
+    /// "last edited" line management-fe already reads — and degrades
+    /// gracefully without — has something to show.
+    ///
+    /// Best-effort: the edit already succeeded on the system of record, so a
+    /// failure here is logged and swallowed rather than turned into an error
+    /// response — there is no useful recovery action for "the write worked
+    /// but our local cache didn't refresh," and failing the whole request
+    /// would misreport a save that genuinely happened.
+    /// </summary>
+    private static async Task RefreshStoredRecyclingOperationsAsync(
+        IWorkItemPersistence persistence,
+        WorkItem workItem,
+        string siteId,
+        IReadOnlyList<string> operationCodes,
+        string? updatedBy,
+        ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            if (
+                !workItem.Payload.TryGetValue("overseasSites", out var overseasSitesValue)
+                || overseasSitesValue is not BsonDocument overseasSites
+                || !overseasSites.TryGetValue("sites", out var sitesValue)
+                || sitesValue is not BsonArray sites
+            )
+            {
+                return;
+            }
+
+            // siteId is always a string on the route, but the operator
+            // backend's OverseasSiteModel.SiteId is a C# int, which
+            // round-trips through JSON/BSON as a number, not a string — an
+            // `id.IsString`-gated comparison would never match real
+            // seeded/production data (see ReAccreditationSeeder, which
+            // stores siteId as a BSON int), only a string-typed test
+            // fixture. ToString() on both BsonString and BsonInt32 yields
+            // the plain value, so this matches either representation.
+            var site = sites
+                .OfType<BsonDocument>()
+                .FirstOrDefault(s =>
+                    s.TryGetValue("siteId", out var id) && id.ToString() == siteId
+                );
+            if (site is null)
+            {
+                return;
+            }
+
+            site["operationCodes"] = new BsonArray(operationCodes);
+            site["recyclingOperationsUpdatedBy"] = updatedBy is null
+                ? BsonNull.Value
+                : new BsonString(updatedBy);
+            site["recyclingOperationsUpdatedAt"] = new BsonString(DateTime.UtcNow.ToString("o"));
+
+            await persistence.SetPayloadFieldAsync(
+                workItem.Id,
+                "overseasSites",
+                overseasSites,
+                cancellationToken
+            );
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            loggerFactory
+                .CreateLogger("ReAccreditationEndpoints.UpdateRecyclingOperations")
+                .LogWarning(
+                    ex,
+                    "Recycling-operations edit for work item {WorkItemId} site {SiteId} "
+                        + "succeeded on the operator backend but the local payload snapshot "
+                        + "failed to refresh; it will show stale codes until the next full sync",
+                    workItem.Id,
+                    siteId
+                );
+        }
     }
 }
 
