@@ -72,6 +72,15 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IWorkItemMigration,
             ReAccreditationExporterFixtureBackfillMigration
         >();
+        // RA-456 (self-review): backfills the seventh "other" business plan
+        // category onto the full-payload-verification seed fixture for any
+        // environment that seeded before that field was added —
+        // CreateIfAbsentAsync never updates an already-seeded id. No
+        // ordering dependency on any other migration.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationBusinessPlanOtherCategoryBackfillMigration
+        >();
         // RA-311/MBE-1: adds the resume-during-* transitions to every
         // existing work item's frozen template snapshot (v6 → v7).
         services.AddSingleton<IWorkItemMigration, ReAccreditationResumeSnapshotMigration>();

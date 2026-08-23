@@ -32,12 +32,18 @@ internal sealed class StubReExAccreditationClient : IReExAccreditationClient
             ],
             BusinessPlan = new PriorYearBusinessPlanDto
             {
-                NewInfrastructurePercent = 20,
-                PriceSupportPercent = 20,
-                BusinessCollectionsPercent = 20,
-                CommunicationsPercent = 20,
+                NewInfrastructurePercent = 15,
+                PriceSupportPercent = 15,
+                BusinessCollectionsPercent = 15,
+                CommunicationsPercent = 15,
                 NewMarketsPercent = 10,
-                NewUsesPercent = 10
+                NewUsesPercent = 10,
+                // RA-456: the 7th "Activities or investment not covered by the
+                // other categories" category — matches HttpReExAccreditationClient's
+                // s_businessPlanMap entry for the same category, and the other
+                // six percentages above were rebalanced (20/20/20/20/10/10 ->
+                // 15/15/15/15/10/10) so all seven still sum to 100.
+                OtherPercent = 20
             }
         });
     }
