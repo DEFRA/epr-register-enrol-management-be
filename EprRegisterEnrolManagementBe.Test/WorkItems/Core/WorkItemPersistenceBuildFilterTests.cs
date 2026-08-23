@@ -13,6 +13,31 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class WorkItemPersistenceBuildFilterTests
 {
+    private static readonly string[] s_materialsPlastic = ["plastic"];
+    private static readonly string[] s_materialsPlasticAndGlass = ["plastic", "glass"];
+    private static readonly string[] s_materialsWithRegexMetacharacter = ["a.b"];
+    private static readonly string[] s_nationsEngland = ["England"];
+    private static readonly string[] s_nationsEnglandAndScotland = ["England", "Scotland"];
+    private static readonly string[] s_nationsWales = ["Wales"];
+    private static readonly string[] s_stateIdsSubmitted = ["submitted"];
+    private static readonly string[] s_stateIdsSubmittedAndInReview = ["submitted", "in-review"];
+    private static readonly string[] s_stateIdsWithdrawnAndSubmitted = ["withdrawn", "submitted"];
+    private static readonly string[] s_typeIdsReAccreditation = ["re-accreditation"];
+    private static readonly string[] s_typeIdsReAccreditationAndRegistration =
+    [
+        "re-accreditation",
+        "registration",
+    ];
+    private static readonly string[] s_wasteProcessingTypesBothBuckets =
+    [
+        "exporter",
+        "reprocessor",
+    ];
+    private static readonly string[] s_wasteProcessingTypesExporter = ["exporter"];
+    private static readonly string[] s_wasteProcessingTypesExporterMixedCase = ["Exporter"];
+    private static readonly string[] s_wasteProcessingTypesReprocessor = ["reprocessor"];
+    private static readonly string[] s_wasteProcessingTypesUnknown = ["bogus"];
+
     private static readonly IBsonSerializer<WorkItem> s_workItemSerializer =
         BsonSerializer.SerializerRegistry.GetSerializer<WorkItem>();
 
@@ -64,7 +89,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void TypeIdsRenderAsInClause()
     {
-        var doc = Render(new WorkItemQuery(TypeIds: new[] { "re-accreditation", "registration" }));
+        var doc = Render(new WorkItemQuery(TypeIds: s_typeIdsReAccreditationAndRegistration));
 
         var expected = new BsonDocument("typeId", new BsonDocument("$in",
             new BsonArray { "re-accreditation", "registration" }));
@@ -78,7 +103,7 @@ public class WorkItemPersistenceBuildFilterTests
         // every terminal state, so this could only assert the whole document
         // once IncludeArchived: true had suppressed it. The caller's selection
         // is now the entire stateId clause — what you ask for is what you get.
-        var doc = Render(new WorkItemQuery(StateIds: new[] { "submitted", "in-review" }));
+        var doc = Render(new WorkItemQuery(StateIds: s_stateIdsSubmittedAndInReview));
 
         var expected = new BsonDocument("stateId", new BsonDocument("$in",
             new BsonArray { "submitted", "in-review" }));
@@ -105,10 +130,10 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void MixedTerminalAndActiveStateIdsRenderAsOneInClause()
     {
-        var doc = Render(new WorkItemQuery(StateIds: new[] { "withdrawn", "submitted" }));
+        var doc = Render(new WorkItemQuery(StateIds: s_stateIdsWithdrawnAndSubmitted));
 
         var selected = doc["stateId"]["$in"].AsBsonArray.Select(v => v.AsString).ToList();
-        Assert.Equal(new[] { "withdrawn", "submitted" }, selected);
+        Assert.Equal(s_stateIdsWithdrawnAndSubmitted, selected);
         Assert.False(doc["stateId"].AsBsonDocument.Contains("$nin"), "RA-313: no terminal-state exclusion.");
     }
 
@@ -201,8 +226,8 @@ public class WorkItemPersistenceBuildFilterTests
     public void MultipleClausesAreCombined()
     {
         var doc = Render(new WorkItemQuery(
-            TypeIds: new[] { "re-accreditation" },
-            StateIds: new[] { "submitted" },
+            TypeIds: s_typeIdsReAccreditation,
+            StateIds: s_stateIdsSubmitted,
             AssigneeId: "user-1",
             SubmittedBy: "bob"));
 
@@ -217,7 +242,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void NationsRendersAsInClauseOnPayloadNation()
     {
-        var doc = Render(new WorkItemQuery(Nations: new[] { "England", "Scotland" }));
+        var doc = Render(new WorkItemQuery(Nations: s_nationsEnglandAndScotland));
 
         var inArr = doc["payload.nation"]["$in"].AsBsonArray;
         Assert.Equal(2, inArr.Count);
@@ -228,7 +253,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void SingleNationRendersAsInClause()
     {
-        var doc = Render(new WorkItemQuery(Nations: new[] { "Wales" }));
+        var doc = Render(new WorkItemQuery(Nations: s_nationsWales));
 
         Assert.Equal("Wales", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
     }
@@ -253,8 +278,8 @@ public class WorkItemPersistenceBuildFilterTests
     public void NationsAndTypeIdsCombineCorrectly()
     {
         var doc = Render(new WorkItemQuery(
-            TypeIds: new[] { "re-accreditation" },
-            Nations: new[] { "England" }));
+            TypeIds: s_typeIdsReAccreditation,
+            Nations: s_nationsEngland));
 
         Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
         Assert.Equal("England", doc["payload.nation"]["$in"].AsBsonArray[0].AsString);
@@ -377,7 +402,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void SingleMaterialRendersAsAnchoredCaseInsensitiveRegex()
     {
-        var doc = Render(new WorkItemQuery(Materials: new[] { "plastic" }));
+        var doc = Render(new WorkItemQuery(Materials: s_materialsPlastic));
 
         var regex = doc["payload.material"].AsBsonRegularExpression;
         // Anchored so it is an exact-token match, "i" so casing never hides it.
@@ -389,7 +414,7 @@ public class WorkItemPersistenceBuildFilterTests
     public void MultipleMaterialsRenderAsOrOfAnchoredRegexes()
     {
         var doc = Render(new WorkItemQuery(
-            Materials: new[] { "plastic", "glass" }));
+            Materials: s_materialsPlasticAndGlass));
 
         var or = doc["$or"].AsBsonArray;
         Assert.Equal(2, or.Count);
@@ -400,7 +425,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void MaterialEscapesRegexMetacharacters()
     {
-        var doc = Render(new WorkItemQuery(Materials: new[] { "a.b" }));
+        var doc = Render(new WorkItemQuery(Materials: s_materialsWithRegexMetacharacter));
 
         var pattern = doc["payload.material"].AsBsonRegularExpression.Pattern;
         Assert.Equal(@"^a\.b$", pattern);
@@ -427,7 +452,7 @@ public class WorkItemPersistenceBuildFilterTests
     [Fact]
     public void ExporterRendersAsAnchoredCaseInsensitiveRegex()
     {
-        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }));
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: s_wasteProcessingTypesExporter));
 
         var regex = doc["payload.wasteProcessingType"].AsBsonRegularExpression;
         Assert.Equal("^exporter$", regex.Pattern);
@@ -441,7 +466,7 @@ public class WorkItemPersistenceBuildFilterTests
         // ("Exporter" still means exporter) — the rendered pattern is always
         // the fixed literal "^exporter$"; only the match against stored data
         // is case-insensitive ("i" option).
-        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "Exporter" }));
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: s_wasteProcessingTypesExporterMixedCase));
 
         Assert.Equal("^exporter$", doc["payload.wasteProcessingType"].AsBsonRegularExpression.Pattern);
     }
@@ -456,7 +481,7 @@ public class WorkItemPersistenceBuildFilterTests
         // matches everything that isn't a literal "exporter", including an
         // absent or non-string field (confirmed against a real Mongo instance
         // in WorkItemPersistenceMongoIntegrationTests).
-        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "reprocessor" }));
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: s_wasteProcessingTypesReprocessor));
 
         var not = doc["payload.wasteProcessingType"]["$not"];
         Assert.Equal("^exporter$", not.AsBsonRegularExpression.Pattern);
@@ -470,7 +495,7 @@ public class WorkItemPersistenceBuildFilterTests
         // "exporter" falls into the same "not exporter" bucket as
         // "reprocessor" itself — there is no third bucket to drop the value
         // into, and that mirrors the app-wide "anything but exporter" rule.
-        var doc = Render(new WorkItemQuery(WasteProcessingTypes: new[] { "bogus" }));
+        var doc = Render(new WorkItemQuery(WasteProcessingTypes: s_wasteProcessingTypesUnknown));
 
         Assert.Equal(
             "^exporter$",
@@ -483,7 +508,7 @@ public class WorkItemPersistenceBuildFilterTests
         // Exporter and "not exporter" partition every possible item, so
         // selecting both is equivalent to selecting neither.
         var doc = Render(new WorkItemQuery(
-            WasteProcessingTypes: new[] { "exporter", "reprocessor" }));
+            WasteProcessingTypes: s_wasteProcessingTypesBothBuckets));
 
         Assert.Equal(new BsonDocument(), doc);
     }
@@ -508,8 +533,8 @@ public class WorkItemPersistenceBuildFilterTests
     public void WasteProcessingTypesAndTypeIdsCombineCorrectly()
     {
         var doc = Render(new WorkItemQuery(
-            TypeIds: new[] { "re-accreditation" },
-            WasteProcessingTypes: new[] { "exporter" }));
+            TypeIds: s_typeIdsReAccreditation,
+            WasteProcessingTypes: s_wasteProcessingTypesExporter));
 
         Assert.Equal("re-accreditation", doc["typeId"]["$in"].AsBsonArray[0].AsString);
         Assert.Equal("^exporter$", doc["payload.wasteProcessingType"].AsBsonRegularExpression.Pattern);

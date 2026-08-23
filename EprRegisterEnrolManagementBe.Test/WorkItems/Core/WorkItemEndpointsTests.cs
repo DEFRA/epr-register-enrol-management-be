@@ -28,6 +28,15 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class WorkItemEndpointsTests
 {
+    private static readonly string[] s_expectedCapturedStateIds = ["submitted"];
+    private static readonly string[] s_expectedCapturedTypeIds = ["re-accreditation", "other-type"];
+    private static readonly string[] s_expectedStampedPayloadFields =
+    [
+        "applicationReference",
+        "paymentReference",
+    ];
+    private static readonly int[] s_nonObjectPayload = [1, 2, 3];
+
     private const string TypeId = "test-type";
     private readonly MongoIntegrationFixture _fixture;
 
@@ -375,7 +384,7 @@ public class WorkItemEndpointsTests
         // empty. RA-447/CM3: it also stamps paymentReference (the same
         // value) at creation, so exactly those two fields are present.
         Assert.Equal(
-            new[] { "applicationReference", "paymentReference" },
+            s_expectedStampedPayloadFields,
             persisted!.Payload.Names);
         Assert.Matches(@"^AP\d{2}EA$", persisted.Payload["applicationReference"].AsString);
         Assert.Equal(
@@ -392,7 +401,7 @@ public class WorkItemEndpointsTests
 
         var response = await client.PostAsJsonAsync(
             "/work-items",
-            new { typeId = TypeId, payload = new[] { 1, 2, 3 } },
+            new { typeId = TypeId, payload = s_nonObjectPayload },
             cancellationToken
         );
 
@@ -997,8 +1006,8 @@ public class WorkItemEndpointsTests
         var captured = factory.Recording.LastQuery;
         Assert.NotNull(captured);
         Assert.NotNull(captured!.TypeIds);
-        Assert.Equal(new[] { "re-accreditation", "other-type" }, captured.TypeIds);
-        Assert.Equal(new[] { "submitted" }, captured.StateIds);
+        Assert.Equal(s_expectedCapturedTypeIds, captured.TypeIds);
+        Assert.Equal(s_expectedCapturedStateIds, captured.StateIds);
         Assert.Equal("acme", captured.Search);
         Assert.Equal("alice-1", captured.AssigneeId);
         Assert.True(captured.UnassignedOnly);
