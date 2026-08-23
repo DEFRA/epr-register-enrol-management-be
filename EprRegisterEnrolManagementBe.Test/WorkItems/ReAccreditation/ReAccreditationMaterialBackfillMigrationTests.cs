@@ -108,7 +108,7 @@ public class ReAccreditationMaterialBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.Equal("paper", item.Payload["material"].AsString);
     }
 
@@ -123,7 +123,7 @@ public class ReAccreditationMaterialBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.False(item.Payload.Contains("material"));
     }
 
@@ -138,7 +138,7 @@ public class ReAccreditationMaterialBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]

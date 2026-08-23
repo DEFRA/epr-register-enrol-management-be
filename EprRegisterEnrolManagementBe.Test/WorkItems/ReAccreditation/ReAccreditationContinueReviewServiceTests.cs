@@ -77,7 +77,7 @@ public class ReAccreditationContinueReviewServiceTests
         Assert.True(result.IsSuccess);
         Assert.True(result.IsIdempotentReplay);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
     }
 
     [Theory]
@@ -95,7 +95,7 @@ public class ReAccreditationContinueReviewServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
     }
 
     // --------------------------- audit history resolution ---------------------------
