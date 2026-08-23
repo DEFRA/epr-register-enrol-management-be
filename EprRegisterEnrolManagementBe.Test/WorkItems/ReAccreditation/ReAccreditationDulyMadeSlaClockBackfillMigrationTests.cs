@@ -72,7 +72,7 @@ public class ReAccreditationDulyMadeSlaClockBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.Equal(existingClock.StartedAt, item.SlaClock!.StartedAt);
     }
 

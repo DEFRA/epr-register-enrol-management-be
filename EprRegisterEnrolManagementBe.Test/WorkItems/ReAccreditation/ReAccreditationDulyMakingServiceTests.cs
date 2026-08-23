@@ -320,7 +320,7 @@ public class ReAccreditationDulyMakingServiceTests
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         Assert.Equal("updated", workItem.StateId);
         Assert.Null(workItem.SlaClock);
-        await harness.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await harness.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.Empty(harness.HookCalls);
     }
 
@@ -404,7 +404,7 @@ public class ReAccreditationDulyMakingServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         Assert.Equal(stateId, workItem.StateId);
-        await harness.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await harness.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Theory]
@@ -450,7 +450,7 @@ public class ReAccreditationDulyMakingServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
         // Refused before the document is even read.
-        await harness.Persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, default);
+        await harness.Persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, ct);
     }
 
     /// <summary>
@@ -484,7 +484,7 @@ public class ReAccreditationDulyMakingServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         Assert.Equal("submitted", workItem.StateId);
-        await harness.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await harness.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     /// <summary>

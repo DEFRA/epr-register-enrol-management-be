@@ -189,7 +189,7 @@ public class ReAccreditationResumeServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
     }
 
     [Fact]
@@ -406,9 +406,9 @@ public class ReAccreditationResumeServiceTests
         Assert.True(result.IsSuccess);
         Assert.True(result.IsIdempotentReplay);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
         await harness.Persistence.DidNotReceiveWithAnyArgs()
-            .SetPayloadFieldAsync(default, default!, default!, default);
+            .SetPayloadFieldAsync(default, default!, default!, ct);
     }
 
     [Theory]
@@ -435,7 +435,7 @@ public class ReAccreditationResumeServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
     }
 
     // --------------------------- audit history resolution ---------------------------
@@ -538,7 +538,7 @@ public class ReAccreditationResumeServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
         await harness.AuditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!, default);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]
@@ -576,7 +576,7 @@ public class ReAccreditationResumeServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
     }
 
     [Fact]

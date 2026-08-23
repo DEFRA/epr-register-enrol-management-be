@@ -14,7 +14,7 @@ public class StubReExAccreditationClientTests
     {
         var client = new StubReExAccreditationClient();
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(2025, result!.Year);
@@ -61,7 +61,7 @@ public class StubReExAccreditationClientTests
     {
         var client = new StubReExAccreditationClient();
 
-        var result = await client.GetPriorYearAsync(null, null, null);
+        var result = await client.GetPriorYearAsync(null, null, null, TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(DateTime.UtcNow.Year - 1, result!.Year);
