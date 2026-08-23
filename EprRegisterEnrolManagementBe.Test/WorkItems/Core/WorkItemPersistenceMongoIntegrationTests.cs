@@ -24,6 +24,44 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable, IDisposable
 {
+    private static readonly string[] s_expectedDueDateAscending = ["A", "B", "C", "NoClock"];
+    private static readonly string[] s_expectedDueDateDescending = ["B", "A", "NoClock"];
+    private static readonly string[] s_expectedFirstPage = ["a", "b"];
+    private static readonly string[] s_expectedMultiMaterialMatches = ["g", "p"];
+    private static readonly string[] s_expectedNewestSubmittedFirst = ["newer", "older"];
+    private static readonly string[] s_expectedOrganisationAscending =
+    [
+        "Apple",
+        "banana",
+        "Cherry",
+    ];
+    private static readonly string[] s_expectedOrganisationDescending =
+    [
+        "Cherry",
+        "banana",
+        "Apple",
+    ];
+    private static readonly string[] s_expectedReprocessorMatches =
+    [
+        "No Field Co",
+        "Reprocessor Co",
+    ];
+    private static readonly string[] s_expectedSecondPage = ["c", "d"];
+    private static readonly string[] s_expectedStatusRankAscending =
+    [
+        "submitted",
+        "duly-made",
+        "assessment-in-progress",
+        "awaiting-decision",
+        "queried",
+    ];
+    private static readonly string[] s_expectedStatusRankDescending = ["q", "a", "s-new", "s-old"];
+    private static readonly string[] s_expectedThirdPage = ["e"];
+    private static readonly string[] s_materialsPlasticAndGlass = ["plastic", "glass"];
+    private static readonly string[] s_materialsPlasticUpperCase = ["PLASTIC"];
+    private static readonly string[] s_wasteProcessingTypesExporter = ["exporter"];
+    private static readonly string[] s_wasteProcessingTypesReprocessor = ["reprocessor"];
+
     /// <summary>
     /// Deterministic timestamp seed used for every <see cref="WorkItem"/>
     /// constructed in this fixture (epr-6e5). Inlined values were
@@ -423,7 +461,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
 
         var page = await _persistence.QueryAsync(new WorkItemQuery(), ct);
 
-        Assert.Equal(new[] { "newer", "older" }, OrgOrder(page));
+        Assert.Equal(s_expectedNewestSubmittedFirst, OrgOrder(page));
     }
 
     [Fact]
@@ -436,7 +474,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
 
         var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "organisation"), ct);
 
-        Assert.Equal(new[] { "Apple", "banana", "Cherry" }, OrgOrder(page));
+        Assert.Equal(s_expectedOrganisationAscending, OrgOrder(page));
     }
 
     [Fact]
@@ -452,7 +490,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             ct
         );
 
-        Assert.Equal(new[] { "Cherry", "banana", "Apple" }, OrgOrder(page));
+        Assert.Equal(s_expectedOrganisationDescending, OrgOrder(page));
     }
 
     [Fact]
@@ -470,14 +508,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "status"), ct);
 
         Assert.Equal(
-            new[]
-            {
-                "submitted",
-                "duly-made",
-                "assessment-in-progress",
-                "awaiting-decision",
-                "queried",
-            },
+            s_expectedStatusRankAscending,
             page.Items.Select(i => i.StateId).ToArray()
         );
     }
@@ -500,7 +531,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
 
         // Descending workflow rank: queried(4), assessment-in-progress(2), then
         // the two submitted(0) items broken newest-first by the tiebreak.
-        Assert.Equal(new[] { "q", "a", "s-new", "s-old" }, OrgOrder(page));
+        Assert.Equal(s_expectedStatusRankDescending, OrgOrder(page));
     }
 
     [Fact]
@@ -529,9 +560,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             ct
         );
 
-        Assert.Equal(new[] { "a", "b" }, OrgOrder(page1));
-        Assert.Equal(new[] { "c", "d" }, OrgOrder(page2));
-        Assert.Equal(new[] { "e" }, OrgOrder(page3));
+        Assert.Equal(s_expectedFirstPage, OrgOrder(page1));
+        Assert.Equal(s_expectedSecondPage, OrgOrder(page2));
+        Assert.Equal(s_expectedThirdPage, OrgOrder(page3));
         Assert.Equal(5, page1.TotalCount);
         Assert.Equal(5, page2.TotalCount);
         Assert.Equal(2, page1.PageSize);
@@ -577,7 +608,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         var page = await _persistence.QueryAsync(new WorkItemQuery(Sort: "due-date"), ct);
 
         // A (now+10), B (now+30), C (now+79), then the clock-less item last.
-        Assert.Equal(new[] { "A", "B", "C", "NoClock" }, OrgOrder(page));
+        Assert.Equal(s_expectedDueDateAscending, OrgOrder(page));
     }
 
     [Fact]
@@ -611,7 +642,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         );
 
         // Latest deadline first, but the clock-less item still sorts last.
-        Assert.Equal(new[] { "B", "A", "NoClock" }, OrgOrder(page));
+        Assert.Equal(s_expectedDueDateDescending, OrgOrder(page));
     }
 
     [Fact]
@@ -668,7 +699,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         await SeedAsync("g", material: "glass");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(Materials: new[] { "PLASTIC" }),
+            new WorkItemQuery(Materials: s_materialsPlasticUpperCase),
             ct
         );
 
@@ -685,11 +716,11 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         await SeedAsync("w", material: "wood");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(Materials: new[] { "plastic", "glass" }, Sort: "organisation"),
+            new WorkItemQuery(Materials: s_materialsPlasticAndGlass, Sort: "organisation"),
             ct
         );
 
-        Assert.Equal(new[] { "g", "p" }, OrgOrder(page));
+        Assert.Equal(s_expectedMultiMaterialMatches, OrgOrder(page));
     }
 
     // RA-412 (self-review): a real-Mongo round trip for the applicant-type
@@ -707,7 +738,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         await SeedAsync("No Field Co");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }),
+            new WorkItemQuery(WasteProcessingTypes: s_wasteProcessingTypesExporter),
             ct
         );
 
@@ -723,13 +754,13 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         await SeedAsync("No Field Co");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(WasteProcessingTypes: new[] { "reprocessor" }, Sort: "organisation"),
+            new WorkItemQuery(WasteProcessingTypes: s_wasteProcessingTypesReprocessor, Sort: "organisation"),
             ct
         );
 
         // Both the explicit "reprocessor" item AND the item with no field at
         // all match — the pre-RA-314 fallback every other reader applies.
-        Assert.Equal(new[] { "No Field Co", "Reprocessor Co" }, OrgOrder(page));
+        Assert.Equal(s_expectedReprocessorMatches, OrgOrder(page));
     }
 
     [Fact]
@@ -739,7 +770,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         await SeedAsync("Exporter Co", wasteProcessingType: "Exporter");
 
         var page = await _persistence.QueryAsync(
-            new WorkItemQuery(WasteProcessingTypes: new[] { "exporter" }),
+            new WorkItemQuery(WasteProcessingTypes: s_wasteProcessingTypesExporter),
             ct
         );
 
