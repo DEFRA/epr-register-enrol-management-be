@@ -239,18 +239,24 @@ public class ReAccreditationEndpointTests
                 },
                 businessPlan = new
                 {
-                    newInfrastructurePercent = 20,
-                    priceSupportPercent = 20,
-                    businessCollectionsPercent = 20,
-                    communicationsPercent = 20,
+                    newInfrastructurePercent = 15,
+                    priceSupportPercent = 15,
+                    businessCollectionsPercent = 15,
+                    communicationsPercent = 15,
                     newMarketsPercent = 10,
                     newUsesPercent = 10,
+                    // RA-456: 7th category, "Activities or investment not
+                    // covered by the other categories" — the other six
+                    // percentages above were rebalanced (20/20/20/20/10/10 ->
+                    // 15/15/15/15/10/10) so all seven still sum to 100.
+                    otherPercent = 20,
                     newInfrastructureDetail = "New sorting line",
                     priceSupportDetail = "Subsidised collection",
                     businessCollectionsDetail = "Kerbside expansion",
                     communicationsDetail = "Customer newsletter",
                     newMarketsDetail = "Export contracts",
                     newUsesDetail = "Recycled packaging",
+                    otherDetail = "Community recycling outreach programme",
                 },
                 samplingPlan = new
                 {
