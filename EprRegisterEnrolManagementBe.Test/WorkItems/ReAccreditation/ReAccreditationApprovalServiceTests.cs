@@ -204,7 +204,7 @@ public class ReAccreditationApprovalServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
         Assert.Contains("has no stored template snapshot", result.Message);
-        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     // ─────────────────────────── happy path ───────────────────────────

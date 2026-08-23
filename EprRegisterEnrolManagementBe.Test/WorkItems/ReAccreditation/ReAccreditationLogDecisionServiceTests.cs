@@ -78,7 +78,7 @@ public class ReAccreditationLogDecisionServiceTests
             ["submit-for-decision", "reject"],
             harness.AppliedActionIds
         );
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, default);
+        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
     }
 
     /// <summary>
@@ -158,7 +158,7 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.UpstreamNotificationFailed, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, default);
+        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
         // A status-push-failed audit entry is still recorded for support.
         await harness.AuditAppender.Received(1).AppendAsync(
             harness.WorkItem.Id, "status-push-failed", Arg.Any<string>(),
@@ -257,7 +257,7 @@ public class ReAccreditationLogDecisionServiceTests
         );
 
         await harness.PushAdapter.DidNotReceiveWithAnyArgs().PushDecisionStatusChangedAsync(
-            default, default, default!, default!, default!, default!, default!, default, default);
+            default, default, default!, default!, default!, default!, default!, default, ct);
     }
 
     // --------------------------- resumability ---------------------------
@@ -322,7 +322,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, default);
+        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
     }
 
     // --------------------------- idempotency and conflict ---------------------------
@@ -349,7 +349,7 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.True(result.IsSuccess);
         Assert.True(result.IsIdempotentReplay);
         Assert.Empty(harness.AppliedActionIds);
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, default);
+        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
     }
 
     /// <summary>
@@ -381,7 +381,7 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, default);
+        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
     }
 
     // --------------------------- guards ---------------------------
@@ -463,7 +463,7 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
-        await harness.Persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, default);
+        await harness.Persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, ct);
     }
 
     private static ReAccreditationDecisionOutcome Outcome(bool approve) =>

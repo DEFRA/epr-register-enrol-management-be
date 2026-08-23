@@ -62,7 +62,7 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson(raw));
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(expected, result!.TonnageBand);
@@ -90,7 +90,7 @@ public class HttpReExAccreditationClientTests
             """;
         var client = CreateClient(json);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Null(result!.TonnageBand);
@@ -103,7 +103,7 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson("some_future_band"), out var logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal("some_future_band", result!.TonnageBand);
@@ -157,7 +157,7 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson("up_to_500"));
 
-        var result = await client.GetPriorYearAsync(organisationId, registrationId, 2025);
+        var result = await client.GetPriorYearAsync(organisationId, registrationId, 2025, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -167,7 +167,7 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson("up_to_500"));
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", null);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", null, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -181,7 +181,7 @@ public class HttpReExAccreditationClientTests
         var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
         var client = new HttpReExAccreditationClient(httpClient, config, logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
         logger.Received(1).Log(
@@ -205,7 +205,7 @@ public class HttpReExAccreditationClientTests
         var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
         var client = new HttpReExAccreditationClient(httpClient, config, logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
         logger.Received(1).Log(
@@ -220,7 +220,7 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient("null");
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -230,7 +230,7 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson("up_to_500").Replace("reg-1", "reg-other"));
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -250,7 +250,7 @@ public class HttpReExAccreditationClientTests
             """;
         var client = CreateClient(json);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -270,7 +270,7 @@ public class HttpReExAccreditationClientTests
             """;
         var client = CreateClient(json);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -281,7 +281,7 @@ public class HttpReExAccreditationClientTests
         var client = CreateClient(OrganisationJson("up_to_500"));
 
         // OrganisationJson's validFrom is 2025-04-01.
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2024);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2024, TestContext.Current.CancellationToken);
 
         Assert.Null(result);
     }
@@ -316,7 +316,7 @@ public class HttpReExAccreditationClientTests
             """;
         var client = CreateClient(json, out var logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025);
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
         Assert.NotNull(result);
         Assert.Equal(15, result!.BusinessPlan.BusinessCollectionsPercent);

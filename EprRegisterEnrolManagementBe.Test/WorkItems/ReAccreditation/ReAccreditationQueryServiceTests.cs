@@ -88,9 +88,9 @@ public class ReAccreditationQueryServiceTests
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         Assert.Contains(stateId, result.Message);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
         await harness.AuditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!, default);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     // ------------------------- RA-291 self-assignment -------------------------
@@ -166,9 +166,9 @@ public class ReAccreditationQueryServiceTests
         Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
         Assert.Equal("submitted", harness.WorkItem.StateId);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
         await harness.AuditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!, default);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]
@@ -184,7 +184,7 @@ public class ReAccreditationQueryServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .AssignAsync(default, default!, default, default!, default);
+            .AssignAsync(default, default!, default, default!, ct);
     }
 
     // ------------------ RA-291 current-query payload stamp ------------------
@@ -210,7 +210,7 @@ public class ReAccreditationQueryServiceTests
                 && v.AsBsonDocument["raisedBy"].AsString == "alice-1"),
             ct);
         await harness.Persistence.DidNotReceiveWithAnyArgs()
-            .ReplaceAsync(default!, default);
+            .ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -277,7 +277,7 @@ public class ReAccreditationQueryServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
         await harness.Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
     }
 
     [Fact]
@@ -359,7 +359,7 @@ public class ReAccreditationQueryServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
         await harness.AuditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!, default);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]
