@@ -26,6 +26,8 @@ namespace EprRegisterEnrolManagementBe.Test.Integrations.OperatorBackend;
 /// </summary>
 public class HttpOverseasSiteRecyclingOperationsAdapterTests
 {
+    private static readonly string[] s_defaultOperationCodes = ["R3", "R4"];
+
     private const string BaseUrl = "https://operator-backend.example.test";
 
     private static (
@@ -96,7 +98,7 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
         );
 
     private static string SuccessBody(string siteId) =>
-        JsonSerializer.Serialize(new { id = siteId, operationCodes = new[] { "R3", "R4" } });
+        JsonSerializer.Serialize(new { id = siteId, operationCodes = s_defaultOperationCodes });
 
     private static string ValidationFailedBody(string errorCode, string field, string detail) =>
         JsonSerializer.Serialize(
