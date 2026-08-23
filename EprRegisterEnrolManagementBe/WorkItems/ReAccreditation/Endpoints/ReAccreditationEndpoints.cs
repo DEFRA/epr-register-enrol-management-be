@@ -21,6 +21,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 /// </summary>
 internal static class ReAccreditationEndpoints
 {
+    private const string ErrorCodeKey = "errorCode";
+    private const string WrongWorkItemTypeTitle = "Wrong work item type";
+
     private static readonly JsonSerializerOptions s_payloadJsonOptions = new()
     {
         PropertyNameCaseInsensitive = true,
@@ -265,7 +268,7 @@ internal static class ReAccreditationEndpoints
         )
         {
             return TypedResults.Problem(
-                title: "Wrong work item type",
+                title: WrongWorkItemTypeTitle,
                 detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
                 statusCode: StatusCodes.Status400BadRequest
             );
@@ -353,7 +356,7 @@ internal static class ReAccreditationEndpoints
         )
         {
             return TypedResults.Problem(
-                title: "Wrong work item type",
+                title: WrongWorkItemTypeTitle,
                 detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
                 statusCode: StatusCodes.Status400BadRequest
             );
@@ -411,7 +414,7 @@ internal static class ReAccreditationEndpoints
                 statusCode: StatusCodes.Status400BadRequest,
                 extensions: new Dictionary<string, object?>
                 {
-                    ["errorCode"] = validation.ErrorCode,
+                    [ErrorCodeKey] = validation.ErrorCode,
                     ["field"] = ReAccreditationDulyMakingValidator.Field,
                 }
             );
@@ -451,7 +454,7 @@ internal static class ReAccreditationEndpoints
         // out whether a 400 belongs against the date input.
         var extensions =
             result.FailureCode == WorkItemActionFailureCode.UnknownAction
-                ? new Dictionary<string, object?> { ["errorCode"] = "wrong-work-item-type" }
+                ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
                 : null;
 
         return TypedResults.Problem(
@@ -492,7 +495,7 @@ internal static class ReAccreditationEndpoints
             )
         )
             return TypedResults.Problem(
-                title: "Wrong work item type",
+                title: WrongWorkItemTypeTitle,
                 detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
                 statusCode: StatusCodes.Status400BadRequest
             );
@@ -626,7 +629,7 @@ internal static class ReAccreditationEndpoints
                 statusCode: StatusCodes.Status400BadRequest,
                 extensions: new Dictionary<string, object?>
                 {
-                    ["errorCode"] = "invalid-outcome",
+                    [ErrorCodeKey] = "invalid-outcome",
                     ["field"] = "outcome",
                 }
             );
@@ -679,7 +682,7 @@ internal static class ReAccreditationEndpoints
         // out whether a 400 belongs against the outcome input.
         var decisionExtensions =
             result.FailureCode == WorkItemActionFailureCode.UnknownAction
-                ? new Dictionary<string, object?> { ["errorCode"] = "wrong-work-item-type" }
+                ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
                 : null;
 
         return TypedResults.Problem(
@@ -1123,7 +1126,7 @@ internal static class ReAccreditationEndpoints
         )
         {
             return TypedResults.Problem(
-                title: "Wrong work item type",
+                title: WrongWorkItemTypeTitle,
                 detail: $"Work item {id} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.",
                 statusCode: StatusCodes.Status400BadRequest
             );
@@ -1220,7 +1223,7 @@ internal static class ReAccreditationEndpoints
                 statusCode: StatusCodes.Status400BadRequest,
                 extensions: new Dictionary<string, object?>
                 {
-                    ["errorCode"] = result.ErrorCode,
+                    [ErrorCodeKey] = result.ErrorCode,
                     ["field"] = result.Field,
                 }
             ),

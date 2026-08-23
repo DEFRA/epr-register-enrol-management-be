@@ -23,6 +23,50 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IWorkItemSeeder
 {
+    private const string AccreditationYearKey = "accreditationYear";
+    private const string AddressLine1Key = "addressLine1";
+    private const string AddressLine2Key = "addressLine2";
+    private const string BesEvidenceKey = "besEvidence";
+    private const string ChargeAmountPenceKey = "chargeAmountPence";
+    private const string CleanScanStatus = "Clean";
+    private const string CompaniesHouseNumberKey = "companiesHouseNumber";
+    private const string CompanyRegisterAddressPostcodeKey = "companyRegisterAddressPostcode";
+    private const string ComplianceIssuesReportedKey = "complianceIssuesReported";
+    private const string ContactEmailKey = "contactEmail";
+    private const string ContactNameKey = "contactName";
+    private const string ContactPhoneKey = "contactPhone";
+    private const string ContentTypeKey = "contentType";
+    private const string CountryKey = "country";
+    private const string EmailKey = "email";
+    private const string ExporterProcessingType = "exporter";
+    private const string FileIdKey = "fileId";
+    private const string FilenameKey = "filename";
+    private const string FilesKey = "files";
+    private const string FullNameKey = "fullName";
+    private const string IsNewSiteKey = "isNewSite";
+    private const string MaterialKey = "material";
+    private const string OperatorApplicationIdKey = "operatorApplicationId";
+    private const string OperatorEmailKey = "operatorEmail";
+    private const string OrganisationNameKey = "organisationName";
+    private const string OrsIdKey = "orsId";
+    private const string PdfContentType = "application/pdf";
+    private const string PlasticMaterial = "plastic";
+    private const string PreviousAccreditationYearKey = "previousAccreditationYear";
+    private const string RegistrationNumberKey = "registrationNumber";
+    private const string S3BucketField = "s3Bucket";
+    private const string S3KeyField = "s3Key";
+    private const string ScanStatusKey = "scanStatus";
+    private const string SiteAddressKey = "siteAddress";
+    private const string SiteAddressPostcodeKey = "siteAddressPostcode";
+    private const string SiteIdKey = "siteId";
+    private const string SiteNameKey = "siteName";
+    private const string StubAssigneeId = "stub-assign-1";
+    private const string StubAssigneeName = "Stub Assign User";
+    private const string StubPortalClientId = "stub-portal-client";
+    private const string TownOrCityKey = "townOrCity";
+    private const string UploadedAtKey = "uploadedAt";
+    private const string WasteProcessingTypeKey = "wasteProcessingType";
+
     /// <summary>
     /// Sentinel <see cref="WorkItem.AssignedBy"/> value attributed to the
     /// seeder. Distinct from any real user id so the audit log makes the
@@ -184,7 +228,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     spec.ChargeAmountPence,
                     spec.GlassRecyclingProcess
                 ),
-                submittedBy: "stub-portal-client",
+                submittedBy: StubPortalClientId,
                 assignedToId: spec.AssignedToId,
                 assignedToName: spec.AssignedToName,
                 now: now
@@ -200,19 +244,19 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             seedKey: FullPayloadVerificationSeedKey,
             postcode: "EC1A 1BB",
             submittedDaysAgo: 4,
-            stateId: "submitted",
+            stateId: SubmittedStateId,
             payload: new BsonDocument
             {
-                ["organisationName"] = "Full Payload Verification Ltd",
-                ["registrationNumber"] = "EPR-100999",
-                ["operatorApplicationId"] = "app-full-payload-001",
+                [OrganisationNameKey] = "Full Payload Verification Ltd",
+                [RegistrationNumberKey] = "EPR-100999",
+                [OperatorApplicationIdKey] = "app-full-payload-001",
                 // RA-412: this item carries overseasSites/BES evidence below, so
                 // it must declare the real discriminator management-fe's
                 // isExporterApplication() now reads — without it the item reads
                 // as a Reprocessor and the BES/ORS sections stop rendering.
                 // RA-434-processortype independently relies on the same field
                 // for the same reason (its BES/ORS fixture).
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeKey] = ExporterProcessingType,
                 // RA-412 (self-review): AccreditationIdGenerator and
                 // ApplicationReferenceGenerator both require this on the
                 // Exporter branch (the registered-office postcode, per
@@ -221,27 +265,27 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // postcode/nation from siteAddressPostcode below so approving
                 // this fixture actually exercises that distinction instead of
                 // accidentally passing either way.
-                ["companyRegisterAddressPostcode"] = "G2 1AL",
-                ["material"] = "plastic",
-                ["accreditationYear"] = 2026,
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "full.payload@example.com",
+                [CompanyRegisterAddressPostcodeKey] = "G2 1AL",
+                [MaterialKey] = PlasticMaterial,
+                [AccreditationYearKey] = 2026,
+                [PreviousAccreditationYearKey] = 2025,
+                [ComplianceIssuesReportedKey] = 0,
+                [OperatorEmailKey] = "full.payload@example.com",
                 // RA-434: distinct from siteAddress on purpose, so a template
                 // that accidentally aliases the two fields is caught by any
                 // assertion comparing them.
-                ["companiesHouseNumber"] = "12345678",
+                [CompaniesHouseNumberKey] = "12345678",
                 ["companyRegisteredAddress"] = "100 Registered Office Road, London, EC1A 1AB",
-                ["siteAddress"] = "1 Full Payload Lane, London",
-                ["siteAddressPostcode"] = "EC1A 1BB",
+                [SiteAddressKey] = "1 Full Payload Lane, London",
+                [SiteAddressPostcodeKey] = "EC1A 1BB",
                 ["permitNumbers"] = new BsonArray { "WML999000", "PPC888777" },
-                ["chargeAmountPence"] = 327600,
+                [ChargeAmountPenceKey] = 327600,
                 ["paymentReference"] = "PAY-FULL-PAYLOAD-001",
                 ["submittedBy"] = new BsonDocument
                 {
-                    ["fullName"] = "Priya Sharma",
+                    [FullNameKey] = "Priya Sharma",
                     ["jobTitle"] = "Compliance Manager",
-                    ["email"] = "priya.sharma@example.com",
+                    [EmailKey] = "priya.sharma@example.com",
                 },
                 ["prns"] = new BsonDocument
                 {
@@ -250,8 +294,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     {
                         new BsonDocument
                         {
-                            ["fullName"] = "Tom Baker",
-                            ["email"] = "tom.baker@example.com",
+                            [FullNameKey] = "Tom Baker",
+                            [EmailKey] = "tom.baker@example.com",
                         },
                     },
                 },
@@ -272,13 +316,13 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 },
                 ["samplingPlan"] = new BsonDocument
                 {
-                    ["files"] = new BsonArray
+                    [FilesKey] = new BsonArray
                     {
                         new BsonDocument
                         {
-                            ["fileId"] = "sampling-plan-001",
-                            ["filename"] = "sampling-plan.pdf",
-                            ["contentType"] = "application/pdf",
+                            [FileIdKey] = "sampling-plan-001",
+                            [FilenameKey] = "sampling-plan.pdf",
+                            [ContentTypeKey] = PdfContentType,
                             // A real operator submission sends this field as
                             // plain JSON (System.Text.Json serialises DateTime
                             // as an ISO-8601 string), which lands in Mongo as a
@@ -286,16 +330,16 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // DateTime here would round-trip through the API as
                             // `{"$date": "..."}`, which the "Uploaded at" GDS
                             // date filter can't parse (it expects a string).
-                            ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
-                            ["scanStatus"] = "Clean",
+                            [UploadedAtKey] = "2026-06-01T10:00:00.000Z",
+                            [ScanStatusKey] = CleanScanStatus,
                             // Matches the fixture object seeded into floci's
                             // S3 bucket by the mgmt-tests compose stack
                             // (docker/scripts/localstack/10-setup-buckets.sh),
                             // so the download link this seed item exercises
                             // resolves to a real object end-to-end.
-                            ["s3Key"] =
+                            [S3KeyField] =
                                 "sampling-plans/full-payload-verification/sampling-plan.pdf",
-                            ["s3Bucket"] = "epr-register-enrol-sampling-plans",
+                            [S3BucketField] = "epr-register-enrol-sampling-plans",
                         },
                         // RA-295 / AC02: the sampling & inspection plan "could
                         // have other supporting docs and should be listed", so
@@ -304,11 +348,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         // against a template that renders files[0] and stops.
                         new BsonDocument
                         {
-                            ["fileId"] = "sampling-plan-002",
-                            ["filename"] = "sampling-plan-appendix.pdf",
-                            ["contentType"] = "application/pdf",
-                            ["uploadedAt"] = "2026-06-02T10:00:00.000Z",
-                            ["scanStatus"] = "Clean",
+                            [FileIdKey] = "sampling-plan-002",
+                            [FilenameKey] = "sampling-plan-appendix.pdf",
+                            [ContentTypeKey] = PdfContentType,
+                            [UploadedAtKey] = "2026-06-02T10:00:00.000Z",
+                            [ScanStatusKey] = CleanScanStatus,
                             // Backed by a real object in the mgmt-tests
                             // localstack bucket (seeded by
                             // docker/scripts/localstack/10-setup-buckets.sh in
@@ -317,9 +361,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // two s3Keys distinct: an href bug that serves
                             // file one for both documents is invisible to a
                             // filename-only assertion.
-                            ["s3Key"] =
+                            [S3KeyField] =
                                 "sampling-plans/full-payload-verification/sampling-plan-appendix.pdf",
-                            ["s3Bucket"] = "epr-register-enrol-sampling-plans",
+                            [S3BucketField] = "epr-register-enrol-sampling-plans",
                         },
                     },
                 },
@@ -333,24 +377,24 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     {
                         new BsonDocument
                         {
-                            ["siteId"] = 1,
-                            ["siteName"] = "Full Payload Verification Overseas Site",
-                            ["siteAddress"] = "1 Overseas Lane, Rotterdam",
-                            ["country"] = "Netherlands",
-                            ["besEvidence"] = new BsonDocument
+                            [SiteIdKey] = 1,
+                            [SiteNameKey] = "Full Payload Verification Overseas Site",
+                            [SiteAddressKey] = "1 Overseas Lane, Rotterdam",
+                            [CountryKey] = "Netherlands",
+                            [BesEvidenceKey] = new BsonDocument
                             {
-                                ["files"] = new BsonArray
+                                [FilesKey] = new BsonArray
                                 {
                                     new BsonDocument
                                     {
-                                        ["fileId"] = "bes-evidence-001",
-                                        ["filename"] = "bes-evidence.pdf",
-                                        ["contentType"] = "application/pdf",
-                                        ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
-                                        ["scanStatus"] = "Clean",
-                                        ["s3Key"] =
+                                        [FileIdKey] = "bes-evidence-001",
+                                        [FilenameKey] = "bes-evidence.pdf",
+                                        [ContentTypeKey] = PdfContentType,
+                                        [UploadedAtKey] = "2026-06-01T10:00:00.000Z",
+                                        [ScanStatusKey] = CleanScanStatus,
+                                        [S3KeyField] =
                                             "bes-evidence/full-payload-verification/bes-evidence.pdf",
-                                        ["s3Bucket"] = "epr-register-enrol-bes-evidence",
+                                        [S3BucketField] = "epr-register-enrol-bes-evidence",
                                     },
                                 },
                             },
@@ -358,7 +402,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     },
                 },
             },
-            submittedBy: "stub-portal-client",
+            submittedBy: StubPortalClientId,
             now: now
         );
         SetAccreditationNumberFields(
@@ -408,34 +452,34 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             seedKey: OrsInterimAuthoritySeedKey,
             postcode: "EC2A 2BB",
             submittedDaysAgo: 6,
-            stateId: "submitted",
+            stateId: SubmittedStateId,
             payload: new BsonDocument
             {
-                ["organisationName"] = OrsInterimAuthorityOrganisationName,
-                ["registrationNumber"] = "EPR-100292",
-                ["operatorApplicationId"] = "app-ors-interim-authority-001",
+                [OrganisationNameKey] = OrsInterimAuthorityOrganisationName,
+                [RegistrationNumberKey] = "EPR-100292",
+                [OperatorApplicationIdKey] = "app-ors-interim-authority-001",
                 // RA-412: see the same field on the full-payload-verification
                 // item above — this item's overseasSites/ORS sites need it too.
                 // RA-434-processortype independently relies on the same field
                 // for the same reason (this is the RA-292 ORS/BES fixture).
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeKey] = ExporterProcessingType,
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
-                ["companyRegisterAddressPostcode"] = "SA1 1AA",
-                ["material"] = "plastic",
-                ["accreditationYear"] = 2026,
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "ors.verification@example.com",
-                ["companiesHouseNumber"] = "12131415",
-                ["siteAddress"] = "1 Verification Way, London",
-                ["siteAddressPostcode"] = "EC2A 2BB",
-                ["chargeAmountPence"] = 218400,
+                [CompanyRegisterAddressPostcodeKey] = "SA1 1AA",
+                [MaterialKey] = PlasticMaterial,
+                [AccreditationYearKey] = 2026,
+                [PreviousAccreditationYearKey] = 2025,
+                [ComplianceIssuesReportedKey] = 0,
+                [OperatorEmailKey] = "ors.verification@example.com",
+                [CompaniesHouseNumberKey] = "12131415",
+                [SiteAddressKey] = "1 Verification Way, London",
+                [SiteAddressPostcodeKey] = "EC2A 2BB",
+                [ChargeAmountPenceKey] = 218400,
                 ["submittedBy"] = new BsonDocument
                 {
-                    ["fullName"] = "Grace Adeyemi",
+                    [FullNameKey] = "Grace Adeyemi",
                     ["jobTitle"] = "Head of Compliance",
-                    ["email"] = "grace.adeyemi@example.com",
+                    [EmailKey] = "grace.adeyemi@example.com",
                 },
                 // AC03: authority-to-issue contacts, one of each flag state.
                 ["prns"] = new BsonDocument
@@ -445,21 +489,21 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     {
                         new BsonDocument
                         {
-                            ["fullName"] = "Grace Adeyemi",
-                            ["email"] = "grace.adeyemi@example.com",
+                            [FullNameKey] = "Grace Adeyemi",
+                            [EmailKey] = "grace.adeyemi@example.com",
                             ["isNew"] = true,
                         },
                         new BsonDocument
                         {
-                            ["fullName"] = "Martin Cole",
-                            ["email"] = "martin.cole@example.com",
+                            [FullNameKey] = "Martin Cole",
+                            [EmailKey] = "martin.cole@example.com",
                             ["isNew"] = false,
                         },
                         // No isNew key — a pre-RA-292 authoriser record.
                         new BsonDocument
                         {
-                            ["fullName"] = "Priya Nair",
-                            ["email"] = "priya.nair@example.com",
+                            [FullNameKey] = "Priya Nair",
+                            [EmailKey] = "priya.nair@example.com",
                         },
                     },
                 },
@@ -470,18 +514,18 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         // AC01 + AC02 positive case, and the AC04 detail set.
                         new BsonDocument
                         {
-                            ["siteId"] = 1,
-                            ["orsId"] = "ORS-2026-0292",
-                            ["siteName"] = "Rotterdam New Reprocessing Site",
-                            ["siteAddress"] = "1 Havenstraat, Rotterdam",
-                            ["addressLine1"] = "1 Havenstraat",
-                            ["addressLine2"] = "Europoort Industrial Park",
-                            ["townOrCity"] = "Rotterdam",
-                            ["country"] = "Netherlands",
+                            [SiteIdKey] = 1,
+                            [OrsIdKey] = "ORS-2026-0292",
+                            [SiteNameKey] = "Rotterdam New Reprocessing Site",
+                            [SiteAddressKey] = "1 Havenstraat, Rotterdam",
+                            [AddressLine1Key] = "1 Havenstraat",
+                            [AddressLine2Key] = "Europoort Industrial Park",
+                            [TownOrCityKey] = "Rotterdam",
+                            [CountryKey] = "Netherlands",
                             ["coordinates"] = "51.9244, 4.4777",
-                            ["contactName"] = "Johan de Vries",
-                            ["contactEmail"] = "johan.devries@example.com",
-                            ["contactPhone"] = "+31 10 123 4567",
+                            [ContactNameKey] = "Johan de Vries",
+                            [ContactEmailKey] = "johan.devries@example.com",
+                            [ContactPhoneKey] = "+31 10 123 4567",
                             ["operationCode"] = "R3",
                             ["code1"] = "B3011",
                             ["code2"] = "GH013",
@@ -494,19 +538,19 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["conditionsOfExport"] = true,
                             ["isEu"] = true,
                             ["isOecd"] = true,
-                            ["isNewSite"] = true,
+                            [IsNewSiteKey] = true,
                             ["registeredNowAccredited"] = false,
-                            ["besEvidence"] = new BsonDocument
+                            [BesEvidenceKey] = new BsonDocument
                             {
-                                ["files"] = new BsonArray
+                                [FilesKey] = new BsonArray
                                 {
                                     new BsonDocument
                                     {
-                                        ["fileId"] = "ra292-bes-evidence-001",
-                                        ["filename"] = "bes-evidence.pdf",
-                                        ["contentType"] = "application/pdf",
-                                        ["uploadedAt"] = "2026-06-01T10:00:00.000Z",
-                                        ["scanStatus"] = "Clean",
+                                        [FileIdKey] = "ra292-bes-evidence-001",
+                                        [FilenameKey] = "bes-evidence.pdf",
+                                        [ContentTypeKey] = PdfContentType,
+                                        [UploadedAtKey] = "2026-06-01T10:00:00.000Z",
+                                        [ScanStatusKey] = CleanScanStatus,
                                         ["besEvidenceValidFromDate"] = "2026-01-01T00:00:00Z",
                                         ["besEvidenceExpiryDate"] = "2027-01-01T00:00:00Z",
                                         // Deliberately the same S3 object the
@@ -518,27 +562,27 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                         // fileId is distinct because
                                         // download-file.controller.js resolves
                                         // files by fileId within one work item.
-                                        ["s3Key"] =
+                                        [S3KeyField] =
                                             "bes-evidence/full-payload-verification/bes-evidence.pdf",
-                                        ["s3Bucket"] = "epr-register-enrol-bes-evidence",
+                                        [S3BucketField] = "epr-register-enrol-bes-evidence",
                                     },
                                 },
                             },
                             ["interimSite"] = new BsonDocument
                             {
-                                ["siteId"] = 11,
+                                [SiteIdKey] = 11,
                                 ["siteNumber"] = "INT-001",
-                                ["isNewSite"] = true,
-                                ["country"] = "Belgium",
-                                ["siteName"] = "Antwerp Interim Holding Site",
-                                ["addressLine1"] = "12 Scheldelaan",
-                                ["addressLine2"] = "Unit 4",
-                                ["townOrCity"] = "Antwerp",
+                                [IsNewSiteKey] = true,
+                                [CountryKey] = "Belgium",
+                                [SiteNameKey] = "Antwerp Interim Holding Site",
+                                [AddressLine1Key] = "12 Scheldelaan",
+                                [AddressLine2Key] = "Unit 4",
+                                [TownOrCityKey] = "Antwerp",
                                 ["stateOrRegion"] = "Flanders",
                                 ["postcode"] = "2030",
-                                ["contactName"] = "Elke Janssens",
-                                ["contactEmail"] = "elke.janssens@example.com",
-                                ["contactPhone"] = "+32 3 987 6543",
+                                [ContactNameKey] = "Elke Janssens",
+                                [ContactEmailKey] = "elke.janssens@example.com",
+                                [ContactPhoneKey] = "+32 3 987 6543",
                             },
                         },
                         // AC01 + AC02 negative case: an established site and an
@@ -546,18 +590,18 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         // list, and the interim site has no addressLine2.
                         new BsonDocument
                         {
-                            ["siteId"] = 2,
-                            ["orsId"] = "ORS-2024-0042",
-                            ["siteName"] = "Hamburg Established Reprocessing Site",
-                            ["siteAddress"] = "42 Hafenstrasse, Hamburg",
-                            ["addressLine1"] = "42 Hafenstrasse",
-                            ["addressLine2"] = "Building C",
-                            ["townOrCity"] = "Hamburg",
-                            ["country"] = "Germany",
+                            [SiteIdKey] = 2,
+                            [OrsIdKey] = "ORS-2024-0042",
+                            [SiteNameKey] = "Hamburg Established Reprocessing Site",
+                            [SiteAddressKey] = "42 Hafenstrasse, Hamburg",
+                            [AddressLine1Key] = "42 Hafenstrasse",
+                            [AddressLine2Key] = "Building C",
+                            [TownOrCityKey] = "Hamburg",
+                            [CountryKey] = "Germany",
                             ["coordinates"] = "53.5511, 9.9937",
-                            ["contactName"] = "Anna Schmidt",
-                            ["contactEmail"] = "anna.schmidt@example.com",
-                            ["contactPhone"] = "+49 40 555 0142",
+                            [ContactNameKey] = "Anna Schmidt",
+                            [ContactEmailKey] = "anna.schmidt@example.com",
+                            [ContactPhoneKey] = "+49 40 555 0142",
                             ["operationCode"] = "R4",
                             ["code1"] = "B1010",
                             ["code2"] = "GA300",
@@ -568,28 +612,28 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["conditionsOfExport"] = false,
                             ["isEu"] = true,
                             ["isOecd"] = true,
-                            ["isNewSite"] = false,
+                            [IsNewSiteKey] = false,
                             ["registeredNowAccredited"] = true,
                             // The producer always emits besEvidence with a
                             // files array; a site with no evidence yet sends an
                             // EMPTY array rather than omitting the key. That is
                             // its own rendering branch, distinct from both a
                             // populated list and an absent key.
-                            ["besEvidence"] = new BsonDocument { ["files"] = new BsonArray() },
+                            [BesEvidenceKey] = new BsonDocument { [FilesKey] = new BsonArray() },
                             ["interimSite"] = new BsonDocument
                             {
-                                ["siteId"] = 21,
+                                [SiteIdKey] = 21,
                                 ["siteNumber"] = "INT-002",
-                                ["isNewSite"] = false,
-                                ["country"] = "Germany",
-                                ["siteName"] = "Bremen Interim Storage",
-                                ["addressLine1"] = "8 Speicherstrasse",
-                                ["townOrCity"] = "Bremen",
+                                [IsNewSiteKey] = false,
+                                [CountryKey] = "Germany",
+                                [SiteNameKey] = "Bremen Interim Storage",
+                                [AddressLine1Key] = "8 Speicherstrasse",
+                                [TownOrCityKey] = "Bremen",
                                 ["stateOrRegion"] = "Bremen",
                                 ["postcode"] = "28217",
-                                ["contactName"] = "Lukas Braun",
-                                ["contactEmail"] = "lukas.braun@example.com",
-                                ["contactPhone"] = "+49 421 555 0188",
+                                [ContactNameKey] = "Lukas Braun",
+                                [ContactEmailKey] = "lukas.braun@example.com",
+                                [ContactPhoneKey] = "+49 421 555 0188",
                             },
                         },
                         // Pre-RA-292 shape: no isNewSite, no interimSite, no
@@ -609,12 +653,12 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         // null-valued key would misrepresent a real payload.
                         new BsonDocument
                         {
-                            ["siteId"] = 3,
-                            ["orsId"] = "ORS-2023-0007",
-                            ["siteName"] = "Bilbao Legacy Reprocessing Site",
-                            ["siteAddress"] = "7 Muelle Tomas Olabarri, Bilbao",
-                            ["townOrCity"] = "Bilbao",
-                            ["country"] = "Spain",
+                            [SiteIdKey] = 3,
+                            [OrsIdKey] = "ORS-2023-0007",
+                            [SiteNameKey] = "Bilbao Legacy Reprocessing Site",
+                            [SiteAddressKey] = "7 Muelle Tomas Olabarri, Bilbao",
+                            [TownOrCityKey] = "Bilbao",
+                            [CountryKey] = "Spain",
                         },
                         // Non-EU, non-OECD site. Without this the fixture had
                         // no `isEu: false` / `isOecd: false` anywhere, so a
@@ -630,18 +674,18 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         // complete site" is a legitimate shape.
                         new BsonDocument
                         {
-                            ["siteId"] = 4,
-                            ["orsId"] = "ORS-2025-0113",
-                            ["siteName"] = "Port Klang Reprocessing Facility",
-                            ["siteAddress"] = "88 Jalan Pelabuhan, Port Klang",
-                            ["addressLine1"] = "88 Jalan Pelabuhan",
-                            ["addressLine2"] = "Zone 3",
-                            ["townOrCity"] = "Port Klang",
-                            ["country"] = "Malaysia",
+                            [SiteIdKey] = 4,
+                            [OrsIdKey] = "ORS-2025-0113",
+                            [SiteNameKey] = "Port Klang Reprocessing Facility",
+                            [SiteAddressKey] = "88 Jalan Pelabuhan, Port Klang",
+                            [AddressLine1Key] = "88 Jalan Pelabuhan",
+                            [AddressLine2Key] = "Zone 3",
+                            [TownOrCityKey] = "Port Klang",
+                            [CountryKey] = "Malaysia",
                             ["coordinates"] = "3.0044, 101.3928",
-                            ["contactName"] = "Aisyah Rahman",
-                            ["contactEmail"] = "aisyah.rahman@example.com",
-                            ["contactPhone"] = "+60 3 3168 8000",
+                            [ContactNameKey] = "Aisyah Rahman",
+                            [ContactEmailKey] = "aisyah.rahman@example.com",
+                            [ContactPhoneKey] = "+60 3 3168 8000",
                             ["operationCode"] = "R3",
                             ["code1"] = "B3011",
                             ["code2"] = "GH013",
@@ -649,14 +693,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["repatriatedLoads"] = "2",
                             ["isEu"] = false,
                             ["isOecd"] = false,
-                            ["isNewSite"] = false,
+                            [IsNewSiteKey] = false,
                             ["registeredNowAccredited"] = false,
-                            ["besEvidence"] = new BsonDocument { ["files"] = new BsonArray() },
+                            [BesEvidenceKey] = new BsonDocument { [FilesKey] = new BsonArray() },
                         },
                     },
                 },
             },
-            submittedBy: "stub-portal-client",
+            submittedBy: StubPortalClientId,
             now: now
         );
         SetAccreditationNumberFields(
@@ -681,25 +725,25 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             seedKey: GlobalGlassExportsSeedKey,
             postcode: "M1 1AE",
             submittedDaysAgo: 7,
-            stateId: "submitted",
+            stateId: SubmittedStateId,
             payload: new BsonDocument
             {
-                ["organisationName"] = GlobalGlassExportsOrganisationName,
-                ["registrationNumber"] = "EPR-100506",
-                ["operatorApplicationId"] = "app-global-glass-exports-001",
-                ["wasteProcessingType"] = "exporter",
+                [OrganisationNameKey] = GlobalGlassExportsOrganisationName,
+                [RegistrationNumberKey] = "EPR-100506",
+                [OperatorApplicationIdKey] = "app-global-glass-exports-001",
+                [WasteProcessingTypeKey] = ExporterProcessingType,
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
-                ["companyRegisterAddressPostcode"] = "CF10 1AA",
-                ["material"] = "glass",
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "global.glass.exports@example.com",
-                ["companiesHouseNumber"] = "11121314",
-                ["siteAddressPostcode"] = "M1 1AE",
-                ["chargeAmountPence"] = 54600,
+                [CompanyRegisterAddressPostcodeKey] = "CF10 1AA",
+                [MaterialKey] = "glass",
+                [PreviousAccreditationYearKey] = 2025,
+                [ComplianceIssuesReportedKey] = 0,
+                [OperatorEmailKey] = "global.glass.exports@example.com",
+                [CompaniesHouseNumberKey] = "11121314",
+                [SiteAddressPostcodeKey] = "M1 1AE",
+                [ChargeAmountPenceKey] = 54600,
             },
-            submittedBy: "stub-portal-client",
+            submittedBy: StubPortalClientId,
             now: now
         );
         SetAccreditationNumberFields(globalGlassExportsItem.Payload, "500011", "reg-050006");
@@ -723,25 +767,25 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             seedKey: AdditionalInformationExporterSeedKey,
             postcode: "CT16 1AA",
             submittedDaysAgo: 4,
-            stateId: "submitted",
+            stateId: SubmittedStateId,
             payload: new BsonDocument
             {
-                ["organisationName"] = AdditionalInformationExporterOrganisationName,
-                ["registrationNumber"] = "EPR-100434",
-                ["operatorApplicationId"] = "app-additional-info-exporter-001",
-                ["material"] = "plastic",
-                ["accreditationYear"] = 2026,
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "continental.exports@example.com",
-                ["wasteProcessingType"] = "exporter",
-                ["companiesHouseNumber"] = "09876543",
+                [OrganisationNameKey] = AdditionalInformationExporterOrganisationName,
+                [RegistrationNumberKey] = "EPR-100434",
+                [OperatorApplicationIdKey] = "app-additional-info-exporter-001",
+                [MaterialKey] = PlasticMaterial,
+                [AccreditationYearKey] = 2026,
+                [PreviousAccreditationYearKey] = 2025,
+                [ComplianceIssuesReportedKey] = 0,
+                [OperatorEmailKey] = "continental.exports@example.com",
+                [WasteProcessingTypeKey] = ExporterProcessingType,
+                [CompaniesHouseNumberKey] = "09876543",
                 ["companyRegisteredAddress"] = "1 Continental Way, Dover, Kent",
-                ["companyRegisterAddressPostcode"] = "CT16 1AA",
+                [CompanyRegisterAddressPostcodeKey] = "CT16 1AA",
                 ["permitNumbers"] = new BsonArray { "WML123456", "PPC456789" },
-                ["chargeAmountPence"] = 218400,
+                [ChargeAmountPenceKey] = 218400,
             },
-            submittedBy: "stub-portal-client",
+            submittedBy: StubPortalClientId,
             now: now
         );
         SetAccreditationNumberFields(
@@ -764,28 +808,28 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             seedKey: AdditionalInformationReprocessorSeedKey,
             postcode: "SE1 9GF",
             submittedDaysAgo: 4,
-            stateId: "submitted",
+            stateId: SubmittedStateId,
             payload: new BsonDocument
             {
-                ["organisationName"] = AdditionalInformationReprocessorOrganisationName,
-                ["registrationNumber"] = "EPR-100435",
-                ["operatorApplicationId"] = "app-additional-info-reprocessor-001",
-                ["material"] = "plastic",
-                ["accreditationYear"] = 2026,
-                ["previousAccreditationYear"] = 2025,
-                ["complianceIssuesReported"] = 0,
-                ["operatorEmail"] = "thames.reprocessing@example.com",
-                ["companiesHouseNumber"] = "13579246",
+                [OrganisationNameKey] = AdditionalInformationReprocessorOrganisationName,
+                [RegistrationNumberKey] = "EPR-100435",
+                [OperatorApplicationIdKey] = "app-additional-info-reprocessor-001",
+                [MaterialKey] = PlasticMaterial,
+                [AccreditationYearKey] = 2026,
+                [PreviousAccreditationYearKey] = 2025,
+                [ComplianceIssuesReportedKey] = 0,
+                [OperatorEmailKey] = "thames.reprocessing@example.com",
+                [CompaniesHouseNumberKey] = "13579246",
                 // Deliberately DIFFERENT from siteAddress below — a template
                 // that accidentally aliases the two fields would otherwise
                 // pass unnoticed (same reasoning as the exporter fixture).
                 ["companyRegisteredAddress"] = "200 Registered Office Road, London, SE1 9AA",
-                ["siteAddress"] = "1 Thames Reprocessing Way, London",
-                ["siteAddressPostcode"] = "SE1 9GF",
+                [SiteAddressKey] = "1 Thames Reprocessing Way, London",
+                [SiteAddressPostcodeKey] = "SE1 9GF",
                 ["permitNumbers"] = new BsonArray { "WML135792", "PPC468024" },
-                ["chargeAmountPence"] = 218400,
+                [ChargeAmountPenceKey] = 218400,
             },
-            submittedBy: "stub-portal-client",
+            submittedBy: StubPortalClientId,
             now: now
         );
         SetAccreditationNumberFields(
@@ -1000,13 +1044,13 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "acme-recycling",
             "SW1A 1AA",
             1,
-            "submitted",
+            SubmittedStateId,
             "Acme Recycling Ltd",
             "EPR-100023",
             "app-acme-recycling-001",
             "reg-001",
             "500001",
-            "plastic",
+            PlasticMaterial,
             2025,
             0,
             "acme.recycling@example.com",
@@ -1021,13 +1065,13 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "northern-plastics",
             "EH1 3BN",
             3,
-            "submitted",
+            SubmittedStateId,
             "Northern Plastics Co-op",
             "EPR-100087",
             "app-northern-plastics-001",
             "reg-002",
             "500002",
-            "plastic",
+            PlasticMaterial,
             2025,
             1,
             "northern.plastics@example.com",
@@ -1058,8 +1102,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "CF10 1AA",
             327600,
             GlassRecyclingProcess: "glass_re_melt",
-            AssignedToId: "stub-assign-1",
-            AssignedToName: "Stub Assign User"
+            AssignedToId: StubAssigneeId,
+            AssignedToName: StubAssigneeName
         ),
         // Awaiting decision: parked in the intermediate state a pre-RA-410
         // two-step decision left items in, so the single-call /decision
@@ -1074,7 +1118,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "app-coastal-materials-001",
             "reg-004",
             "500004",
-            "plastic",
+            PlasticMaterial,
             2024,
             0,
             "coastal.materials@example.com",
@@ -1082,8 +1126,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "1 Coastal Materials Quay, Belfast",
             "BT1 1AA",
             396500,
-            AssignedToId: "stub-assign-1",
-            AssignedToName: "Stub Assign User"
+            AssignedToId: StubAssigneeId,
+            AssignedToName: StubAssigneeName
         ),
         // Already approved — terminal state, useful for exercising the
         // "no further actions" rendering path.
@@ -1105,21 +1149,21 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "1 Heritage Paper Mill Road, Bristol",
             "BS1 4DJ",
             360400,
-            AssignedToId: "stub-assign-1",
-            AssignedToName: "Stub Assign User"
+            AssignedToId: StubAssigneeId,
+            AssignedToName: StubAssigneeName
         ),
         // Additional Scotland item — submitted, unassigned.
         new(
             "clyde-composites",
             "G1 1AA",
             5,
-            "submitted",
+            SubmittedStateId,
             "Clyde Composites Ltd",
             "EPR-100134",
             "app-clyde-composites-001",
             "reg-006",
             "500006",
-            "plastic",
+            PlasticMaterial,
             2025,
             0,
             "clyde.composites@example.com",
@@ -1148,15 +1192,15 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "SA1 1AA",
             218400,
             GlassRecyclingProcess: "glass_other",
-            AssignedToId: "stub-assign-1",
-            AssignedToName: "Stub Assign User"
+            AssignedToId: StubAssigneeId,
+            AssignedToName: StubAssigneeName
         ),
         // Additional Northern Ireland item — submitted, unassigned.
         new(
             "belfast-fibres",
             "BT7 1AA",
             2,
-            "submitted",
+            SubmittedStateId,
             "Belfast Fibres Co",
             "EPR-100198",
             "app-belfast-fibres-001",

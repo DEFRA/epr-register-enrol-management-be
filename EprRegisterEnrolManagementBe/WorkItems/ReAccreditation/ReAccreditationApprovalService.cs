@@ -59,6 +59,8 @@ internal sealed class ReAccreditationApprovalService(
     TimeProvider? timeProvider = null
 ) : IReAccreditationApprovalService
 {
+    private const string AccreditationIdKey = "accreditationId";
+
     private const int MaxAttempts = 3;
     private const string FromStateId = "awaiting-decision";
     private const string ToStateId = "approved";
@@ -166,7 +168,7 @@ internal sealed class ReAccreditationApprovalService(
             // is still treated as corrupt, exactly as before this change:
             // silently reissuing a number over genuinely unexplained data
             // would mask whatever produced it.
-            var existingAccreditationId = TryReadString(workItem.Payload, "accreditationId");
+            var existingAccreditationId = TryReadString(workItem.Payload, AccreditationIdKey);
             if (!string.IsNullOrWhiteSpace(existingAccreditationId))
             {
                 if (string.Equals(workItem.StateId, ToStateId, StringComparison.OrdinalIgnoreCase))
@@ -410,7 +412,7 @@ internal sealed class ReAccreditationApprovalService(
                 nowUtc,
                 new()
                 {
-                    ["accreditationId"] = accreditationId,
+                    [AccreditationIdKey] = accreditationId,
                     ["startDate"] = accreditationStartDate.ToString("yyyy-MM-dd"),
                     ["accreditationYear"] = accreditationYear.ToString(
                         CultureInfo.InvariantCulture
@@ -541,7 +543,7 @@ internal sealed class ReAccreditationApprovalService(
         // close over and hand to the background job; the queued
         // delegate runs on its own DI scope.
         var workItemId = workItem.Id;
-        var accreditationIdValue = TryReadString(workItem.Payload, "accreditationId");
+        var accreditationIdValue = TryReadString(workItem.Payload, AccreditationIdKey);
 
         await backgroundTaskQueue.QueueAsync(
             async (scopedServices, ct) =>
@@ -553,7 +555,7 @@ internal sealed class ReAccreditationApprovalService(
                     actionDisplayName: "Publishing enqueued",
                     details: new Dictionary<string, string?>
                     {
-                        ["accreditationId"] = accreditationIdValue,
+                        [AccreditationIdKey] = accreditationIdValue,
                     },
                     user,
                     ct

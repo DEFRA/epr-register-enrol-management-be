@@ -30,13 +30,15 @@ internal sealed class ReAccreditationUpdatedStateSnapshotMigration(
     ILogger<ReAccreditationUpdatedStateSnapshotMigration> logger)
     : ReAccreditationSnapshotMigrationBase(logger)
 {
+    private const string ContinueReviewActionLabel = "Continue review";
+
     /// <summary>
     /// Marker state id used to test whether a snapshot already has the v8
     /// state/transitions. Kept in sync with <see cref="ReAccreditationType"/>.
     /// </summary>
     private const string MarkerStateId = "updated";
 
-    private static readonly WorkItemState s_updatedState = new("updated", "Updated");
+    private static readonly WorkItemState s_updatedState = new(MarkerStateId, "Updated");
 
     private static readonly IReadOnlySet<string> s_resumeActionIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
     {
@@ -55,10 +57,10 @@ internal sealed class ReAccreditationUpdatedStateSnapshotMigration(
     // resolution.
     private static readonly IReadOnlyList<WorkItemTransition> s_continueReviewTransitions =
     [
-        new WorkItemTransition("continue-review-during-duly-making", "Continue review", "updated", "submitted", CallerInvocable: false),
-        new WorkItemTransition("continue-review-during-duly-made", "Continue review", "updated", "duly-made", CallerInvocable: false),
-        new WorkItemTransition("continue-review-during-assessment", "Continue review", "updated", "assessment-in-progress", CallerInvocable: false),
-        new WorkItemTransition("continue-review-during-decision", "Continue review", "updated", "awaiting-decision", CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-duly-making", ContinueReviewActionLabel, MarkerStateId, "submitted", CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-duly-made", ContinueReviewActionLabel, MarkerStateId, "duly-made", CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-assessment", ContinueReviewActionLabel, MarkerStateId, "assessment-in-progress", CallerInvocable: false),
+        new WorkItemTransition("continue-review-during-decision", ContinueReviewActionLabel, MarkerStateId, "awaiting-decision", CallerInvocable: false),
     ];
 
     public override string Name => "ReAccreditation: add 'updated' state + continue-review-during-* transitions to snapshot (v7 → v8)";

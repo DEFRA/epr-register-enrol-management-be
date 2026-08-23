@@ -20,6 +20,12 @@ internal sealed class WorkItemEndpointsLogger;
 /// </summary>
 public static class WorkItemEndpoints
 {
+    private const string AbsentValue = "(absent)";
+    private const string CallerClientIdField = "caller.client_id";
+    private const string ErrorMessageField = "error.message";
+    private const string InvalidRequestTitle = "Invalid request";
+    private const string WorkItemTypeIdField = "work_item.type_id";
+
     // Request body size caps (epr-rvz). The work item endpoints all parse
     // their JSON body manually after .DisableValidation(), so without an
     // explicit cap an attacker can POST arbitrarily large payloads and
@@ -103,20 +109,20 @@ public static class WorkItemEndpoints
                 ["http.request.method"] = req.Method,
                 ["url.path"] = req.Path.Value,
                 ["http.request.body"] = loggedBody,
-                ["caller.client_id"] = req.Headers.TryGetValue(
+                [CallerClientIdField] = req.Headers.TryGetValue(
                     "x-cdp-client-id",
                     out var cid
                 )
                     ? cid.ToString()
-                    : "(absent)",
+                    : AbsentValue,
                 ["caller.user_id"] = req.Headers.TryGetValue("x-cdp-user-id", out var uid)
                     ? uid.ToString()
-                    : "(absent)",
+                    : AbsentValue,
                 ["caller.user_name"] = req.Headers.TryGetValue("x-cdp-user-name", out var uname)
                     ? uname.ToString()
-                    : "(absent)",
-                ["http.request.mime_type"] = req.ContentType ?? "(absent)",
-                ["http.request.body.bytes"] = req.ContentLength?.ToString() ?? "(absent)",
+                    : AbsentValue,
+                ["http.request.mime_type"] = req.ContentType ?? AbsentValue,
+                ["http.request.body.bytes"] = req.ContentLength?.ToString() ?? AbsentValue,
             }
         );
 
@@ -127,10 +133,10 @@ public static class WorkItemEndpoints
                 "Work item submission rejected: body is not a JSON object",
                 new Dictionary<string, object?>
                 {
-                    ["error.message"] = $"ValueKind was {body.ValueKind}",
+                    [ErrorMessageField] = $"ValueKind was {body.ValueKind}",
                 }
             );
-            return BadRequest("Invalid request", "Request body must be a JSON object.");
+            return BadRequest(InvalidRequestTitle, "Request body must be a JSON object.");
         }
 
         if (
@@ -145,7 +151,7 @@ public static class WorkItemEndpoints
                 new Dictionary<string, object?> { ["http.request.body"] = loggedBody }
             );
             return BadRequest(
-                "Invalid request",
+                InvalidRequestTitle,
                 "'typeId' is required and must be a non-empty string."
             );
         }
@@ -157,7 +163,7 @@ public static class WorkItemEndpoints
             log.Log(
                 LogLevel.Warning,
                 "Work item submission rejected: unknown typeId",
-                new Dictionary<string, object?> { ["work_item.type_id"] = typeId }
+                new Dictionary<string, object?> { [WorkItemTypeIdField] = typeId }
             );
             return BadRequest(
                 "Unknown work item type",
@@ -181,8 +187,8 @@ public static class WorkItemEndpoints
                 "Work item submission rejected: invalid payload",
                 new Dictionary<string, object?>
                 {
-                    ["work_item.type_id"] = typeId,
-                    ["error.message"] = ex.Message,
+                    [WorkItemTypeIdField] = typeId,
+                    [ErrorMessageField] = ex.Message,
                 },
                 ex
             );
@@ -212,8 +218,8 @@ public static class WorkItemEndpoints
                     "Work item submission rejected: 'source' is not a string",
                     new Dictionary<string, object?>
                     {
-                        ["work_item.type_id"] = typeId,
-                        ["error.message"] = $"'source' ValueKind was {sourceElement.ValueKind}",
+                        [WorkItemTypeIdField] = typeId,
+                        [ErrorMessageField] = $"'source' ValueKind was {sourceElement.ValueKind}",
                     }
                 );
                 return BadRequest("Invalid request body", "'source' must be a string.");
@@ -247,10 +253,10 @@ public static class WorkItemEndpoints
                 "Work item submission threw an unhandled exception",
                 new Dictionary<string, object?>
                 {
-                    ["work_item.type_id"] = typeId,
-                    ["caller.client_id"] = submittedBy ?? "(unknown)",
+                    [WorkItemTypeIdField] = typeId,
+                    [CallerClientIdField] = submittedBy ?? "(unknown)",
                     ["error.type"] = ex.GetType().FullName,
-                    ["error.message"] = ex.Message,
+                    [ErrorMessageField] = ex.Message,
                 },
                 ex
             );
@@ -264,10 +270,10 @@ public static class WorkItemEndpoints
                 "Work item submission failed",
                 new Dictionary<string, object?>
                 {
-                    ["work_item.type_id"] = typeId,
-                    ["caller.client_id"] = submittedBy ?? "(unknown)",
+                    [WorkItemTypeIdField] = typeId,
+                    [CallerClientIdField] = submittedBy ?? "(unknown)",
                     ["error.code"] = result.FailureCode.ToString(),
-                    ["error.message"] = result.Message,
+                    [ErrorMessageField] = result.Message,
                 }
             );
             return result.FailureCode switch
@@ -286,7 +292,7 @@ public static class WorkItemEndpoints
                     statusCode: StatusCodes.Status503ServiceUnavailable
                 ),
                 _ => TypedResults.Problem(
-                    title: "Invalid request",
+                    title: InvalidRequestTitle,
                     detail: result.Message,
                     statusCode: StatusCodes.Status400BadRequest
                 ),
@@ -300,8 +306,8 @@ public static class WorkItemEndpoints
             new Dictionary<string, object?>
             {
                 ["work_item.id"] = workItem.Id.ToString(),
-                ["work_item.type_id"] = typeId,
-                ["caller.client_id"] = submittedBy ?? "(unknown)",
+                [WorkItemTypeIdField] = typeId,
+                [CallerClientIdField] = submittedBy ?? "(unknown)",
             }
         );
         // RA-311/MBE-3: a retried "submit application" call for an
@@ -451,7 +457,7 @@ public static class WorkItemEndpoints
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
-                "Invalid request",
+                InvalidRequestTitle,
                 "Request body must be a JSON object containing 'assigneeId'."
             );
         }
@@ -463,7 +469,7 @@ public static class WorkItemEndpoints
         )
         {
             return BadRequest(
-                "Invalid request",
+                InvalidRequestTitle,
                 "'assigneeId' is required and must be a non-empty string."
             );
         }
@@ -517,7 +523,7 @@ public static class WorkItemEndpoints
         if (body.ValueKind != JsonValueKind.Object)
         {
             return BadRequest(
-                "Invalid request",
+                InvalidRequestTitle,
                 "Request body must be a JSON object containing 'text'."
             );
         }
@@ -529,7 +535,7 @@ public static class WorkItemEndpoints
         )
         {
             return BadRequest(
-                "Invalid request",
+                InvalidRequestTitle,
                 "'text' is required and must be a non-empty string."
             );
         }

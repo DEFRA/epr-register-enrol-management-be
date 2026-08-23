@@ -49,6 +49,8 @@ public class ClientIdAuthenticationHandler(
     IMemoryCache replayCache
 ) : AuthenticationHandler<ClientIdAuthenticationOptions>(options, logger, encoder)
 {
+    private const string AbsentValue = "(absent)";
+
     // Tracks whether the Development header-trust downgrade warning has
     // already been emitted in this process. Atomic CAS keeps it to a single
     // log line even under concurrent first requests.
@@ -405,19 +407,19 @@ public class ClientIdAuthenticationHandler(
             Options.HeaderName,
             Request.Headers.TryGetValue(Options.HeaderName, out var clientId)
                 ? clientId.ToString()
-                : "(absent)",
+                : AbsentValue,
             Options.TimestampHeaderName,
             Request.Headers.TryGetValue(Options.TimestampHeaderName, out var ts)
                 ? ts.ToString()
-                : "(absent)",
+                : AbsentValue,
             Options.NonceHeaderName,
             Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonce)
                 ? nonce.ToString()
-                : "(absent)",
+                : AbsentValue,
             Options.SignatureHeaderName,
             Request.Headers.ContainsKey(Options.SignatureHeaderName),
-            Request.ContentType ?? "(absent)",
-            Request.ContentLength?.ToString() ?? "(absent)"
+            Request.ContentType ?? AbsentValue,
+            Request.ContentLength?.ToString() ?? AbsentValue
         );
 
         Response.StatusCode = 401;
