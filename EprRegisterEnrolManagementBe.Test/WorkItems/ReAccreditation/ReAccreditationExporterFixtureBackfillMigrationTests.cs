@@ -92,7 +92,7 @@ public class ReAccreditationExporterFixtureBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -150,8 +150,8 @@ public class ReAccreditationExporterFixtureBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
-        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, ct);
     }
 
     [Fact]

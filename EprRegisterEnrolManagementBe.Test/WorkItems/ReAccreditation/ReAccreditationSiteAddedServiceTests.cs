@@ -92,7 +92,7 @@ public class ReAccreditationSiteAddedServiceTests
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
         await sut
             .AuditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!, default);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]
@@ -113,7 +113,7 @@ public class ReAccreditationSiteAddedServiceTests
         Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
         await sut
             .AuditAppender.DidNotReceiveWithAnyArgs()
-            .AppendAsync(default, default!, default!, default!, default!, default);
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     // -------------------------------- success -------------------------------

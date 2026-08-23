@@ -236,7 +236,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         }
         finally
         {
-            await factory.GetClient().DropDatabaseAsync(freshDb);
+            await factory.GetClient().DropDatabaseAsync(freshDb, TestContext.Current.CancellationToken);
         }
     }
 
@@ -268,7 +268,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         }
         finally
         {
-            await factory.GetClient().DropDatabaseAsync(freshDb);
+            await factory.GetClient().DropDatabaseAsync(freshDb, TestContext.Current.CancellationToken);
         }
     }
 

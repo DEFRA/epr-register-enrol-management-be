@@ -123,7 +123,7 @@ public class ReAccreditationStatusPushHookTests
         await hook.OnActionAppliedAsync(workItem, actionId, fromStateId, s_user, ct);
 
         await adapter.DidNotReceiveWithAnyArgs().PushStatusChangedAsync(
-            default, default, default!, default!, default!, default!, default!, default, default);
+            default, default, default!, default!, default!, default!, default!, default, ct);
     }
 
     [Theory]
@@ -146,7 +146,7 @@ public class ReAccreditationStatusPushHookTests
         await hook.OnActionAppliedAsync(workItem, actionId, "submitted", s_user, ct);
 
         await adapter.DidNotReceiveWithAnyArgs().PushStatusChangedAsync(
-            default, default, default!, default!, default!, default!, default!, default, default);
+            default, default, default!, default!, default!, default!, default!, default, ct);
     }
 
     [Fact]
@@ -166,7 +166,7 @@ public class ReAccreditationStatusPushHookTests
         await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         await adapter.DidNotReceiveWithAnyArgs().PushStatusChangedAsync(
-            default, default, default!, default!, default!, default!, default!, default, default);
+            default, default, default!, default!, default!, default!, default!, default, ct);
     }
 
     [Fact]

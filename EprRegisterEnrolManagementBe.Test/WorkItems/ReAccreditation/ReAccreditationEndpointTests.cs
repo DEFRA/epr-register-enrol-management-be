@@ -754,7 +754,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         await factory
             .ReExClient.DidNotReceiveWithAnyArgs()
-            .GetPriorYearAsync(default, default, default, default);
+            .GetPriorYearAsync(default, default, default, cancellationToken);
     }
 
     [Fact]

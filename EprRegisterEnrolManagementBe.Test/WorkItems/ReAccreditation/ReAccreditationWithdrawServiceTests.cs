@@ -114,10 +114,10 @@ public class ReAccreditationWithdrawServiceTests
         Assert.Contains(stateId, result.Message);
         await harness
             .Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
         await harness
             .Engine.DidNotReceiveWithAnyArgs()
-            .AddNoteAsync(default, default!, default!, default);
+            .AddNoteAsync(default, default!, default!, ct);
     }
 
     [Fact]
@@ -137,10 +137,10 @@ public class ReAccreditationWithdrawServiceTests
         Assert.True(result.IsIdempotentReplay);
         await harness
             .Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
         await harness
             .Engine.DidNotReceiveWithAnyArgs()
-            .AddNoteAsync(default, default!, default!, default);
+            .AddNoteAsync(default, default!, default!, ct);
     }
 
     [Fact]
@@ -204,7 +204,7 @@ public class ReAccreditationWithdrawServiceTests
         Assert.Equal(WorkItemActionFailureCode.InvalidNote, result.FailureCode);
         await harness
             .Engine.DidNotReceiveWithAnyArgs()
-            .ApplyActionAsync(default, default!, default!, default);
+            .ApplyActionAsync(default, default!, default!, ct);
     }
 
     [Fact]
