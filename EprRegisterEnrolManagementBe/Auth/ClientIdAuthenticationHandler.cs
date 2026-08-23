@@ -328,10 +328,13 @@ public class ClientIdAuthenticationHandler(
             // means the integrity contract with the BFF is broken (env var
             // typo, secret rotation race, misconfigured prod). Trusting the
             // headers in this state would let any caller forge identity.
-            Logger.LogCritical(
-                "ClientIdAuthentication misconfigured: no ClientSecrets are set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
-                hostEnvironment.EnvironmentName
-            );
+            if (Logger.IsEnabled(LogLevel.Critical))
+            {
+                Logger.LogCritical(
+                    "ClientIdAuthentication misconfigured: no ClientSecrets are set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
+                    hostEnvironment.EnvironmentName
+                );
+            }
             return Task.FromResult(
                 AuthenticateResult.Fail("Authentication misconfigured: no client secrets set")
             );

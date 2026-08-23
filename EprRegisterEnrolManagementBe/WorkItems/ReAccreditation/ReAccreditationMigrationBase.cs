@@ -66,10 +66,13 @@ internal abstract class ReAccreditationMigrationBase : IWorkItemMigration
                 catch (WorkItemConcurrencyException ex)
                 {
                     // Another instance migrated this item concurrently; it is already up to date.
-                    Logger.LogDebug(
-                        ex,
-                        "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                        full.Id);
+                    if (Logger.IsEnabled(LogLevel.Debug))
+                    {
+                        Logger.LogDebug(
+                            ex,
+                            "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
+                            full.Id);
+                    }
                     skipped++;
                 }
             }
@@ -126,8 +129,13 @@ internal abstract class ReAccreditationMigrationBase : IWorkItemMigration
     /// "updated / already current" tally; subclasses override where their
     /// wording or extra counters differ.
     /// </summary>
-    protected virtual void LogCompletion(int migrated, int skipped) =>
-        Logger.LogInformation(
-            "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current.",
-            Name, migrated, skipped);
+    protected virtual void LogCompletion(int migrated, int skipped)
+    {
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
+                "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current.",
+                Name, migrated, skipped);
+        }
+    }
 }

@@ -194,12 +194,15 @@ internal sealed class ReAccreditationApprovalService(
                     );
                 }
 
-                logger.LogInformation(
-                    "Work item {WorkItemId} carries a non-standard-format accreditation id "
-                        + "{AccreditationId}; treating it as unset and issuing a real one via the backend.",
-                    workItem.Id,
-                    existingAccreditationId
-                );
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "Work item {WorkItemId} carries a non-standard-format accreditation id "
+                            + "{AccreditationId}; treating it as unset and issuing a real one via the backend.",
+                        workItem.Id,
+                        existingAccreditationId
+                    );
+                }
             }
 
             if (
@@ -447,11 +450,14 @@ internal sealed class ReAccreditationApprovalService(
         // narrow with an assertion.
         var persisted = approved!;
 
-        logger.LogInformation(
-            "Re-accreditation work item {WorkItemId} approved by {UserId}",
-            persisted.Id,
-            user.FindFirstValue("user:id")
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Re-accreditation work item {WorkItemId} approved by {UserId}",
+                persisted.Id,
+                user.FindFirstValue("user:id")
+            );
+        }
 
         await EnqueuePublishingAuditAsync(persisted, user, cancellationToken);
         await InvokeActionAppliedHooksAsync(

@@ -75,9 +75,12 @@ internal sealed class ReAccreditationContinueReviewService(
             // this call.
             if (s_continueTargetStates.Contains(workItem.StateId))
             {
-                logger.LogInformation(
-                    "Continue-review for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
-                    workItemId, workItem.StateId);
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "Continue-review for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
+                        workItemId, workItem.StateId);
+                }
                 return WorkItemActionResult.IdempotentReplay(workItem);
             }
 
@@ -105,9 +108,12 @@ internal sealed class ReAccreditationContinueReviewService(
 
         if (result.IsSuccess)
         {
-            logger.LogInformation(
-                "Re-accreditation work item {WorkItemId} continued from review by {UserId} via {ActionId}",
-                workItemId, user.FindFirstValue("user:id"), continueActionId);
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Re-accreditation work item {WorkItemId} continued from review by {UserId} via {ActionId}",
+                    workItemId, user.FindFirstValue("user:id"), continueActionId);
+            }
         }
 
         return result;

@@ -99,10 +99,13 @@ internal sealed class ReAccreditationWithdrawService(
         {
             // A genuinely concurrent/duplicate withdraw (e.g. a double-click)
             // must not fail the caller's retry.
-            logger.LogInformation(
-                "Withdraw of work item {WorkItemId} is a no-op: already withdrawn.",
-                workItemId
-            );
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Withdraw of work item {WorkItemId} is a no-op: already withdrawn.",
+                    workItemId
+                );
+            }
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
@@ -132,12 +135,15 @@ internal sealed class ReAccreditationWithdrawService(
             return result;
         }
 
-        logger.LogInformation(
-            "Re-accreditation work item {WorkItemId} withdrawn by {UserId} via {ActionId}",
-            workItemId,
-            user.FindFirstValue("user:id"),
-            actionId
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Re-accreditation work item {WorkItemId} withdrawn by {UserId} via {ActionId}",
+                workItemId,
+                user.FindFirstValue("user:id"),
+                actionId
+            );
+        }
 
         // Re-read so the response carries the note the out-of-band write above
         // recorded against its own copy of the document.

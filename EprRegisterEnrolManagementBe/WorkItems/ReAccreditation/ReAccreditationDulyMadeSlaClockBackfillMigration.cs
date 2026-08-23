@@ -60,8 +60,13 @@ internal sealed class ReAccreditationDulyMadeSlaClockBackfillMigration(
         return true;
     }
 
-    protected override void LogCompletion(int migrated, int skipped) =>
-        Logger.LogInformation(
-            "Migration '{Name}' complete: {Backfilled} SLA clocks backfilled, {Skipped} already current.",
-            Name, migrated, skipped);
+    protected override void LogCompletion(int migrated, int skipped)
+    {
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
+                "Migration '{Name}' complete: {Backfilled} SLA clocks backfilled, {Skipped} already current.",
+                Name, migrated, skipped);
+        }
+    }
 }

@@ -103,10 +103,13 @@ internal sealed class ReAccreditationSlaExtendQuerySnapshotMigration(
                 catch (WorkItemConcurrencyException)
                 {
                     // Another instance migrated this item concurrently; it is already up to date.
-                    logger.LogDebug(
-                        "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                        full.Id
-                    );
+                    if (logger.IsEnabled(LogLevel.Debug))
+                    {
+                        logger.LogDebug(
+                            "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
+                            full.Id
+                        );
+                    }
                     skipped++;
                 }
             }
@@ -120,12 +123,15 @@ internal sealed class ReAccreditationSlaExtendQuerySnapshotMigration(
             page++;
         }
 
-        logger.LogInformation(
-            "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current.",
-            Name,
-            migrated,
-            skipped
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current.",
+                Name,
+                migrated,
+                skipped
+            );
+        }
     }
 
     private static bool NeedsMigration(WorkItem workItem) =>

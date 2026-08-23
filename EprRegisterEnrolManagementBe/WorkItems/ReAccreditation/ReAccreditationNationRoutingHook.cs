@@ -107,9 +107,12 @@ internal sealed class ReAccreditationNationRoutingHook(
             try
             {
                 await persistence.ReplaceAsync(item, cancellationToken);
-                logger.LogInformation(
-                    "Work item {WorkItemId} routed to nation {Nation} from postcode {Postcode}.",
-                    workItem.Id, nationString, postcode ?? "(none)");
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "Work item {WorkItemId} routed to nation {Nation} from postcode {Postcode}.",
+                        workItem.Id, nationString, postcode ?? "(none)");
+                }
                 return;
             }
             catch (WorkItemConcurrencyException)

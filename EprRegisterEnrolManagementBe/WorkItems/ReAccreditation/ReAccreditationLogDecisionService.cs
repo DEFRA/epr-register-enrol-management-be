@@ -126,9 +126,12 @@ internal sealed class ReAccreditationLogDecisionService(
         // application is in fact approved and an accreditation id is issued.
         if (string.Equals(workItem.StateId, targetStateId, StringComparison.OrdinalIgnoreCase))
         {
-            logger.LogInformation(
-                "Log-decision for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
-                workItemId, workItem.StateId);
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Log-decision for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
+                    workItemId, workItem.StateId);
+            }
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
@@ -215,9 +218,12 @@ internal sealed class ReAccreditationLogDecisionService(
 
         if (result.IsSuccess)
         {
-            logger.LogInformation(
-                "Re-accreditation work item {WorkItemId} decided as {Outcome} by {UserId}",
-                workItemId, targetStateId, user.FindFirstValue("user:id"));
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Re-accreditation work item {WorkItemId} decided as {Outcome} by {UserId}",
+                    workItemId, targetStateId, user.FindFirstValue("user:id"));
+            }
 
             // Record the single decision push's outcome now the decision has
             // landed, mirroring the audit entries ReAccreditationStatusPushHook

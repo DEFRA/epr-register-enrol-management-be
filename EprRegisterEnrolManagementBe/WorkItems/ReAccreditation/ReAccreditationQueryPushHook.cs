@@ -104,9 +104,12 @@ internal sealed class ReAccreditationQueryPushHook(
                 // not an error, so logged at Debug and audited under a
                 // distinct outcome that must never alert (MBE-F5).
                 details["reason"] = result.ErrorMessage;
-                logger.LogDebug(
-                    "Query push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
-                    workItem.Id, correlationId, result.ErrorMessage);
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug(
+                        "Query push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
+                        workItem.Id, correlationId, result.ErrorMessage);
+                }
                 var appended = await auditAppender.AppendAsync(
                     workItem.Id, "query-push-skipped", "Query push to operator backend skipped", details, user, cancellationToken);
                 if (!appended)

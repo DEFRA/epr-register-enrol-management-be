@@ -108,9 +108,12 @@ internal sealed class SlaBreachBackgroundService(
             {
                 await persistence.ReplaceAsync(full, cancellationToken);
                 breached++;
-                logger.LogInformation(
-                    "SLA breached for work item {WorkItemId} ({TypeId}); clock started {StartedAt}.",
-                    full.Id, full.TypeId, full.SlaClock.StartedAt);
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "SLA breached for work item {WorkItemId} ({TypeId}); clock started {StartedAt}.",
+                        full.Id, full.TypeId, full.SlaClock.StartedAt);
+                }
             }
             catch (WorkItemConcurrencyException)
             {
@@ -122,9 +125,12 @@ internal sealed class SlaBreachBackgroundService(
 
         if (breached > 0 || page.Items.Count > 0)
         {
-            logger.LogInformation(
-                "SLA breach job completed: {Total} items in assessment, {Breached} newly breached.",
-                page.Items.Count, breached);
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "SLA breach job completed: {Total} items in assessment, {Breached} newly breached.",
+                    page.Items.Count, breached);
+            }
         }
     }
 }

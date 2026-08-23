@@ -140,9 +140,12 @@ internal sealed class ReAccreditationQueryService(
             workItemId, actorId, user.FindFirstValue("user:name"), user, cancellationToken);
         if (!assignResult.IsSuccess)
         {
-            logger.LogInformation(
-                "Query of work item {WorkItemId} abandoned: self-assignment to {UserId} failed ({FailureCode}).",
-                workItemId, actorId, assignResult.FailureCode);
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Query of work item {WorkItemId} abandoned: self-assignment to {UserId} failed ({FailureCode}).",
+                    workItemId, actorId, assignResult.FailureCode);
+            }
             return assignResult;
         }
 
@@ -192,10 +195,13 @@ internal sealed class ReAccreditationQueryService(
                 workItemId, actionId);
         }
 
-        logger.LogInformation(
-            "Re-accreditation work item {WorkItemId} queried by {UserId} via {ActionId} " +
-            "against {SectionCount} section(s)",
-            workItemId, user.FindFirstValue("user:id"), actionId, sections.Count);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Re-accreditation work item {WorkItemId} queried by {UserId} via {ActionId} " +
+                "against {SectionCount} section(s)",
+                workItemId, user.FindFirstValue("user:id"), actionId, sections.Count);
+        }
 
         // Re-read so the response carries the query-detail audit entry the
         // out-of-band appender wrote against its own copy of the document.

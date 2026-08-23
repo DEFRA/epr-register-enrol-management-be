@@ -431,26 +431,29 @@ internal static class ReAccreditationIsNewSiteAudit
         // buckets fail in different directions, and a single "at risk" number
         // would hide the failure this classifier actually has: a miscalibrated
         // tell inflating AMBIGUOUS-REFUSED while looking like caution.
-        logger.LogInformation(
-            "epr-2uxy isNewSite audit (READ-ONLY, nothing written). Window {WindowStart:o} to " +
-            "{WindowEnd:o}. Scanned {ItemsScanned} in-window re-accreditation work items " +
-            "carrying overseas sites. Buckets — " +
-            "PROVABLY-CORRUPT (no orsId, unpromoted, no unexplained detail): {SitesProvablyCorrupt}; " +
-            "PROMOTED-CORRECTABLE (no orsId, registeredNowAccredited=true): {SitesPromotedCorrectable}; " +
-            "AMBIGUOUS-REFUSED (no orsId, unpromoted, unexplained detail): {SitesAmbiguousRefused}; " +
-            "ALREADY-CORRECT (operator-added, orsId present): {SitesAlreadyCorrect}; " +
-            "not flagged new: {SitesNotFlaggedNew}. " +
-            // Each placeholder name appears exactly once: a repeated name is a
-            // distinct positional slot to the structured-logging formatter, so
-            // reusing one throws FormatException at render time — invisible to a
-            // test that logs through NullLogger, which never formats.
-            "Total correctable: {SitesCorrectable} sites across {ItemsWithCorrectable} items; " +
-            "refused across {ItemsWithAmbiguous} items.",
-            WindowStart, windowEnd, result.ItemsScanned,
-            result.SitesProvablyCorrupt, result.SitesPromotedCorrectable,
-            result.SitesAmbiguousRefused, result.SitesAlreadyCorrect, result.SitesNotFlaggedNew,
-            result.SitesCorrectable, result.ItemsWithCorrectable.Count,
-            result.ItemsWithAmbiguous.Count);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "epr-2uxy isNewSite audit (READ-ONLY, nothing written). Window {WindowStart:o} to " +
+                "{WindowEnd:o}. Scanned {ItemsScanned} in-window re-accreditation work items " +
+                "carrying overseas sites. Buckets — " +
+                "PROVABLY-CORRUPT (no orsId, unpromoted, no unexplained detail): {SitesProvablyCorrupt}; " +
+                "PROMOTED-CORRECTABLE (no orsId, registeredNowAccredited=true): {SitesPromotedCorrectable}; " +
+                "AMBIGUOUS-REFUSED (no orsId, unpromoted, unexplained detail): {SitesAmbiguousRefused}; " +
+                "ALREADY-CORRECT (operator-added, orsId present): {SitesAlreadyCorrect}; " +
+                "not flagged new: {SitesNotFlaggedNew}. " +
+                // Each placeholder name appears exactly once: a repeated name is a
+                // distinct positional slot to the structured-logging formatter, so
+                // reusing one throws FormatException at render time — invisible to a
+                // test that logs through NullLogger, which never formats.
+                "Total correctable: {SitesCorrectable} sites across {ItemsWithCorrectable} items; " +
+                "refused across {ItemsWithAmbiguous} items.",
+                WindowStart, windowEnd, result.ItemsScanned,
+                result.SitesProvablyCorrupt, result.SitesPromotedCorrectable,
+                result.SitesAmbiguousRefused, result.SitesAlreadyCorrect, result.SitesNotFlaggedNew,
+                result.SitesCorrectable, result.ItemsWithCorrectable.Count,
+                result.ItemsWithAmbiguous.Count);
+        }
 
         if (result.SitesCorrectable == 0 && result.SitesAmbiguousRefused == 0)
         {
@@ -479,10 +482,13 @@ internal static class ReAccreditationIsNewSiteAudit
 
         foreach (var row in result.ItemsWithCorrectable)
         {
-            logger.LogInformation(
-                "epr-2uxy CORRECTABLE {WorkItemId} ref={ApplicationReference} " +
-                "org={OrganisationName} sites={SiteDetail}",
-                row.Id, row.ApplicationReference, row.OrganisationName, Describe(row));
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "epr-2uxy CORRECTABLE {WorkItemId} ref={ApplicationReference} " +
+                    "org={OrganisationName} sites={SiteDetail}",
+                    row.Id, row.ApplicationReference, row.OrganisationName, Describe(row));
+            }
         }
 
         foreach (var row in result.ItemsWithAmbiguous)

@@ -87,18 +87,21 @@ internal sealed class HttpAccreditationNumberAdapter(
         );
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
-        logger.LogInformation(
-            "Requesting accreditation number for organisation {OrganisationId} application "
-                + "{ApplicationId} from {Endpoint} (nation {Nation}, year {Year}, regenerate {Regenerate}, "
-                + "correlation {CorrelationId})",
-            request.OrganisationId,
-            request.ApplicationId,
-            endpoint,
-            request.Nation,
-            request.Year,
-            request.Regenerate,
-            request.CorrelationId
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Requesting accreditation number for organisation {OrganisationId} application "
+                    + "{ApplicationId} from {Endpoint} (nation {Nation}, year {Year}, regenerate {Regenerate}, "
+                    + "correlation {CorrelationId})",
+                request.OrganisationId,
+                request.ApplicationId,
+                endpoint,
+                request.Nation,
+                request.Year,
+                request.Regenerate,
+                request.CorrelationId
+            );
+        }
 
         var body = new BackendRequestBody(
             request.Nation.ToString(),
@@ -161,13 +164,16 @@ internal sealed class HttpAccreditationNumberAdapter(
                 );
             }
 
-            logger.LogInformation(
-                "Accreditation number resolved for organisation {OrganisationId} application "
-                    + "{ApplicationId} (correlation {CorrelationId}).",
-                request.OrganisationId,
-                request.ApplicationId,
-                request.CorrelationId
-            );
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Accreditation number resolved for organisation {OrganisationId} application "
+                        + "{ApplicationId} (correlation {CorrelationId}).",
+                    request.OrganisationId,
+                    request.ApplicationId,
+                    request.CorrelationId
+                );
+            }
             return AccreditationNumberResult.Success(payload.AccreditationReference);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

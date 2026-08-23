@@ -238,11 +238,14 @@ internal sealed class ReAccreditationNotificationHook(
 
         if (string.IsNullOrWhiteSpace(recipient))
         {
-            logger.LogInformation(
-                "Skipping notification for work item {WorkItemId} ({TemplateKey}): payload has no operator email.",
-                workItem.Id,
-                templateKey
-            );
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Skipping notification for work item {WorkItemId} ({TemplateKey}): payload has no operator email.",
+                    workItem.Id,
+                    templateKey
+                );
+            }
             var appended = await auditAppender.AppendAsync(
                 workItem.Id,
                 action: "notification-skipped",
@@ -280,14 +283,17 @@ internal sealed class ReAccreditationNotificationHook(
         // hands off to the Notify client. Combined with the
         // "Notify send starting" entry log in GovukNotifyClient this
         // makes a hanging Notify endpoint diagnosable from logs alone.
-        logger.LogInformation(
-            "Sending {Description} notification for work item {WorkItemId} "
-                + "(template={TemplateKey}, reference={Reference})",
-            description,
-            workItem.Id,
-            templateKey,
-            reference
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Sending {Description} notification for work item {WorkItemId} "
+                    + "(template={TemplateKey}, reference={Reference})",
+                description,
+                workItem.Id,
+                templateKey,
+                reference
+            );
+        }
 
         // RA-211: region drives the reply-to mailbox (NotifyConfig.GetReplyToId);
         // a missing/unresolvable Nation falls back to NotifyConfig.DefaultReplyToId.
@@ -304,14 +310,17 @@ internal sealed class ReAccreditationNotificationHook(
         );
         sw.Stop();
 
-        logger.LogInformation(
-            "Notification dispatch completed for work item {WorkItemId} "
-                + "(template={TemplateKey}, success={NotifySuccess}, durationMs={NotifyDurationMs})",
-            workItem.Id,
-            templateKey,
-            result.IsSuccess,
-            sw.ElapsedMilliseconds
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Notification dispatch completed for work item {WorkItemId} "
+                    + "(template={TemplateKey}, success={NotifySuccess}, durationMs={NotifyDurationMs})",
+                workItem.Id,
+                templateKey,
+                result.IsSuccess,
+                sw.ElapsedMilliseconds
+            );
+        }
 
         var details = new Dictionary<string, string?>
         {
@@ -409,14 +418,17 @@ internal sealed class ReAccreditationNotificationHook(
 
         if (string.IsNullOrWhiteSpace(recipient))
         {
-            logger.LogInformation(
-                "Skipping {Description} notification for work item {WorkItemId} ({TemplateKey}): "
-                    + "no configured regulator mailbox for nation {Nation}.",
-                description,
-                workItem.Id,
-                templateKey,
-                nation?.ToString() ?? "(none)"
-            );
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Skipping {Description} notification for work item {WorkItemId} ({TemplateKey}): "
+                        + "no configured regulator mailbox for nation {Nation}.",
+                    description,
+                    workItem.Id,
+                    templateKey,
+                    nation?.ToString() ?? "(none)"
+                );
+            }
             var skipAppended = await auditAppender.AppendAsync(
                 workItem.Id,
                 action: "notification-skipped",
@@ -457,14 +469,17 @@ internal sealed class ReAccreditationNotificationHook(
             }
         }
 
-        logger.LogInformation(
-            "Sending {Description} notification for work item {WorkItemId} "
-                + "(template={TemplateKey}, reference={Reference})",
-            description,
-            workItem.Id,
-            templateKey,
-            reference
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Sending {Description} notification for work item {WorkItemId} "
+                    + "(template={TemplateKey}, reference={Reference})",
+                description,
+                workItem.Id,
+                templateKey,
+                reference
+            );
+        }
 
         // RA-211: region drives the reply-to mailbox (NotifyConfig.GetReplyToId);
         // pass the same nation we resolved the mailbox from so regulator-facing
@@ -482,14 +497,17 @@ internal sealed class ReAccreditationNotificationHook(
         );
         sw.Stop();
 
-        logger.LogInformation(
-            "Notification dispatch completed for work item {WorkItemId} "
-                + "(template={TemplateKey}, success={NotifySuccess}, durationMs={NotifyDurationMs})",
-            workItem.Id,
-            templateKey,
-            result.IsSuccess,
-            sw.ElapsedMilliseconds
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Notification dispatch completed for work item {WorkItemId} "
+                    + "(template={TemplateKey}, success={NotifySuccess}, durationMs={NotifyDurationMs})",
+                workItem.Id,
+                templateKey,
+                result.IsSuccess,
+                sw.ElapsedMilliseconds
+            );
+        }
 
         var details = new Dictionary<string, string?>
         {

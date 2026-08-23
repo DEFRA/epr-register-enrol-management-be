@@ -136,9 +136,12 @@ internal sealed class ReAccreditationResumeService(
             // this work item was never waiting on this call.
             if (s_resumeTargetStates.Contains(workItem.StateId))
             {
-                logger.LogInformation(
-                    "Resume-from-query for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
-                    workItemId, workItem.StateId);
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "Resume-from-query for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
+                        workItemId, workItem.StateId);
+                }
                 return WorkItemActionResult.IdempotentReplay(workItem);
             }
 
@@ -203,10 +206,13 @@ internal sealed class ReAccreditationResumeService(
                 workItemId, resumeActionId);
         }
 
-        logger.LogInformation(
-            "Re-accreditation work item {WorkItemId} resumed from query by {UserId} via {ActionId} " +
-            "against {SectionCount} section(s)",
-            workItemId, user.FindFirstValue("user:id"), resumeActionId, request.SectionKeys?.Count ?? 0);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Re-accreditation work item {WorkItemId} resumed from query by {UserId} via {ActionId} " +
+                "against {SectionCount} section(s)",
+                workItemId, user.FindFirstValue("user:id"), resumeActionId, request.SectionKeys?.Count ?? 0);
+        }
 
         // Re-read so the response carries the query-responded audit entry
         // the out-of-band appender wrote against its own copy of the document.

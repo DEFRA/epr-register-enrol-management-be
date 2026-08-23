@@ -56,10 +56,16 @@ public static class StartupMigrationRunner
         {
             try
             {
-                logger.LogInformation("Running startup migration {Migration}.", name);
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation("Running startup migration {Migration}.", name);
+                }
                 await using var scope = services.CreateAsyncScope();
                 await migration(scope.ServiceProvider, logger, cancellationToken);
-                logger.LogInformation("Startup migration {Migration} complete.", name);
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation("Startup migration {Migration} complete.", name);
+                }
             }
             catch (Exception ex)
             {

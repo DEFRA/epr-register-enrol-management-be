@@ -138,9 +138,12 @@ internal sealed class ArchiveBackgroundService(
                 {
                     await persistence.ReplaceAsync(full, cancellationToken);
                     stamped++;
-                    logger.LogInformation(
-                        "Archived work item {WorkItemId} ({TypeId}); entered terminal state {StateId} at {EnteredStateAt}.",
-                        full.Id, full.TypeId, full.StateId, enteredTerminalStateAt);
+                    if (logger.IsEnabled(LogLevel.Information))
+                    {
+                        logger.LogInformation(
+                            "Archived work item {WorkItemId} ({TypeId}); entered terminal state {StateId} at {EnteredStateAt}.",
+                            full.Id, full.TypeId, full.StateId, enteredTerminalStateAt);
+                    }
                 }
                 catch (WorkItemConcurrencyException)
                 {
@@ -159,9 +162,12 @@ internal sealed class ArchiveBackgroundService(
 
         if (stamped > 0 || totalScanned > 0)
         {
-            logger.LogInformation(
-                "Archive job completed: {Total} terminal-state items scanned, {Stamped} newly archived.",
-                totalScanned, stamped);
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Archive job completed: {Total} terminal-state items scanned, {Stamped} newly archived.",
+                    totalScanned, stamped);
+            }
         }
     }
 }

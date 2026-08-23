@@ -52,10 +52,15 @@ internal sealed class ReAccreditationMaterialBackfillMigration(
         return true;
     }
 
-    protected override void LogCompletion(int migrated, int skipped) =>
-        Logger.LogInformation(
-            "Migration '{Name}' complete: {Backfilled} materials backfilled, {Skipped} already current or lacked legacy data.",
-            Name, migrated, skipped);
+    protected override void LogCompletion(int migrated, int skipped)
+    {
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
+                "Migration '{Name}' complete: {Backfilled} materials backfilled, {Skipped} already current or lacked legacy data.",
+                Name, migrated, skipped);
+        }
+    }
 
     private static bool NeedsBackfill(BsonDocument payload, out string material)
     {

@@ -291,16 +291,19 @@ internal sealed class ReAccreditationDulyMakingService(
         // cannot see the latter, so narrow with an assertion.
         var persisted = dulyMade!;
 
-        logger.LogInformation(
-            "Re-accreditation work item {WorkItemId} duly made by {UserId} with payment date "
-                + "{PaymentDate}; SLA clock anchored to that date{WaypointDischarge}.",
-            persisted.Id,
-            user.FindFirstValue("user:id"),
-            paymentDate.ToString("yyyy-MM-dd"),
-            dischargedWaypoint
-                ? ", having first left the 'updated' waypoint via continue-review-during-duly-making"
-                : string.Empty
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Re-accreditation work item {WorkItemId} duly made by {UserId} with payment date "
+                    + "{PaymentDate}; SLA clock anchored to that date{WaypointDischarge}.",
+                persisted.Id,
+                user.FindFirstValue("user:id"),
+                paymentDate.ToString("yyyy-MM-dd"),
+                dischargedWaypoint
+                    ? ", having first left the 'updated' waypoint via continue-review-during-duly-making"
+                    : string.Empty
+            );
+        }
 
         // The state change bypassed WorkItemService.ApplyActionAsync, so the
         // generic engine's hook fan-out never ran. Invoke it here: this is what

@@ -94,9 +94,12 @@ internal sealed class WorkItemSeederHostedService(
                 }
             }
 
-            logger.LogInformation(
-                "Seeded {Inserted} new work item(s) across {SeederCount} module seeder(s); {Skipped} already present.",
-                insertedTotal, seeders.Count, skippedTotal);
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Seeded {Inserted} new work item(s) across {SeederCount} module seeder(s); {Skipped} already present.",
+                    insertedTotal, seeders.Count, skippedTotal);
+            }
         }
         catch (Exception ex)
         {

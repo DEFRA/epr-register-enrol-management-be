@@ -114,11 +114,14 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
                     {
                         // Another instance migrated this item concurrently; it is
                         // already up to date.
-                        logger.LogDebug(
-                            "Concurrency conflict on work item {Id}; skipping — another instance "
-                                + "already migrated it.",
-                            full.Id
-                        );
+                        if (logger.IsEnabled(LogLevel.Debug))
+                        {
+                            logger.LogDebug(
+                                "Concurrency conflict on work item {Id}; skipping — another instance "
+                                    + "already migrated it.",
+                                full.Id
+                            );
+                        }
                         skipped++;
                     }
                 }
@@ -152,14 +155,17 @@ internal sealed class ReAccreditationDulyMakeSnapshotMigration(
 
         // `failed` is reported even when zero: a migration that silently
         // skips documents reads as "complete" and hides a permanent gap.
-        logger.LogInformation(
-            "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current, "
-                + "{Failed} skipped after errors.",
-            Name,
-            migrated,
-            skipped,
-            failed
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current, "
+                    + "{Failed} skipped after errors.",
+                Name,
+                migrated,
+                skipped,
+                failed
+            );
+        }
     }
 
     /// <summary>

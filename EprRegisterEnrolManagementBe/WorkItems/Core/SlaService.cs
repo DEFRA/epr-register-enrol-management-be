@@ -177,9 +177,12 @@ public sealed class SlaService : ISlaService
                 $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
         }
 
-        _logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) SLA extended by {AdditionalDuration} (target now {TargetDuration}) by {User}",
-            workItem.Id, workItem.TypeId, additionalDuration, workItem.SlaClock.TargetDuration, DescribeUser(user));
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Work item {WorkItemId} ({TypeId}) SLA extended by {AdditionalDuration} (target now {TargetDuration}) by {User}",
+                workItem.Id, workItem.TypeId, additionalDuration, workItem.SlaClock.TargetDuration, DescribeUser(user));
+        }
 
         await InvokeExtendHooksAsync(workItem, user, cancellationToken);
 
@@ -272,9 +275,12 @@ public sealed class SlaService : ISlaService
                 $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
         }
 
-        _logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) SLA overridden (target now {TargetDuration}, started {StartedAt}) by {User}",
-            workItem.Id, workItem.TypeId, workItem.SlaClock.TargetDuration, workItem.SlaClock.StartedAt, DescribeUser(user));
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Work item {WorkItemId} ({TypeId}) SLA overridden (target now {TargetDuration}, started {StartedAt}) by {User}",
+                workItem.Id, workItem.TypeId, workItem.SlaClock.TargetDuration, workItem.SlaClock.StartedAt, DescribeUser(user));
+        }
 
         return SlaActionResult.Success(workItem);
     }

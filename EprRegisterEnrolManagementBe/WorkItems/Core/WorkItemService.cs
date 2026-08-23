@@ -216,13 +216,16 @@ public sealed class WorkItemService : IWorkItemService
                 type.TypeId, operatorApplicationId, cancellationToken);
             if (existingByOperatorApplicationId is not null)
             {
-                _logger.LogInformation(
-                    "Submit for operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) is a replay; " +
-                        "returning existing work item {WorkItemId} instead of creating a duplicate.",
-                    operatorApplicationId,
-                    type.TypeId,
-                    existingByOperatorApplicationId.Id
-                );
+                if (_logger.IsEnabled(LogLevel.Information))
+                {
+                    _logger.LogInformation(
+                        "Submit for operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) is a replay; " +
+                            "returning existing work item {WorkItemId} instead of creating a duplicate.",
+                        operatorApplicationId,
+                        type.TypeId,
+                        existingByOperatorApplicationId.Id
+                    );
+                }
                 return WorkItemActionResult.IdempotentReplay(existingByOperatorApplicationId);
             }
         }
@@ -299,14 +302,17 @@ public sealed class WorkItemService : IWorkItemService
                 }
             );
 
-            _logger.LogInformation(
-                "Persisting work item {WorkItemId} typeId={TypeId} applicationReference={ApplicationReference} submittedBy={SubmittedBy} (attempt {Attempt})",
-                workItem.Id,
-                type.TypeId,
-                applicationReference,
-                submittedBy,
-                attempt
-            );
+            if (_logger.IsEnabled(LogLevel.Information))
+            {
+                _logger.LogInformation(
+                    "Persisting work item {WorkItemId} typeId={TypeId} applicationReference={ApplicationReference} submittedBy={SubmittedBy} (attempt {Attempt})",
+                    workItem.Id,
+                    type.TypeId,
+                    applicationReference,
+                    submittedBy,
+                    attempt
+                );
+            }
 
             try
             {
@@ -331,13 +337,16 @@ public sealed class WorkItemService : IWorkItemService
                         type.TypeId, operatorApplicationId, cancellationToken);
                 if (winner is not null)
                 {
-                    _logger.LogInformation(
-                        "operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) collided on insert; " +
-                            "treating as a submit replay and returning the existing work item {WorkItemId}.",
-                        operatorApplicationId,
-                        type.TypeId,
-                        winner.Id
-                    );
+                    if (_logger.IsEnabled(LogLevel.Information))
+                    {
+                        _logger.LogInformation(
+                            "operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) collided on insert; " +
+                                "treating as a submit replay and returning the existing work item {WorkItemId}.",
+                            operatorApplicationId,
+                            type.TypeId,
+                            winner.Id
+                        );
+                    }
                     return WorkItemActionResult.IdempotentReplay(winner);
                 }
                 // Extremely unlikely: the winning document is gone by the
@@ -399,14 +408,17 @@ public sealed class WorkItemService : IWorkItemService
             ? payload["applicationReference"].AsString
             : null;
 
-        _logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} applicationReference={ApplicationReference} by {User}",
-            workItem!.Id,
-            workItem.TypeId,
-            workItem.StateId,
-            persistedReference,
-            DescribeUser(user)
-        );
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} applicationReference={ApplicationReference} by {User}",
+                workItem!.Id,
+                workItem.TypeId,
+                workItem.StateId,
+                persistedReference,
+                DescribeUser(user)
+            );
+        }
 
         await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
 
@@ -541,15 +553,18 @@ public sealed class WorkItemService : IWorkItemService
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        _logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
-            workItem.Id,
-            workItem.TypeId,
-            previousState,
-            workItem.StateId,
-            transition.ActionId,
-            DescribeUser(user)
-        );
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
+                workItem.Id,
+                workItem.TypeId,
+                previousState,
+                workItem.StateId,
+                transition.ActionId,
+                DescribeUser(user)
+            );
+        }
 
         await InvokeActionAppliedHooksAsync(
             workItem,
@@ -648,14 +663,17 @@ public sealed class WorkItemService : IWorkItemService
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        _logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
-            workItem.Id,
-            workItem.TypeId,
-            previousAssigneeId ?? "(unassigned)",
-            trimmedAssigneeId,
-            DescribeUser(user)
-        );
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
+                workItem.Id,
+                workItem.TypeId,
+                previousAssigneeId ?? "(unassigned)",
+                trimmedAssigneeId,
+                DescribeUser(user)
+            );
+        }
 
         // RA-237: assignment is a first-class envelope operation, so it must
         // fan out to the post-action hooks explicitly (ApplyActionAsync's hook
@@ -732,13 +750,16 @@ public sealed class WorkItemService : IWorkItemService
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        _logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) unassigned (was {PreviousAssignee}) by {User}",
-            workItem.Id,
-            workItem.TypeId,
-            previousAssigneeId,
-            DescribeUser(user)
-        );
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Work item {WorkItemId} ({TypeId}) unassigned (was {PreviousAssignee}) by {User}",
+                workItem.Id,
+                workItem.TypeId,
+                previousAssigneeId,
+                DescribeUser(user)
+            );
+        }
 
         // RA-237: notify the post-action hooks of the real unassignment.
         // The earlier IdempotentReplay return (already unassigned) skips this.
@@ -820,13 +841,16 @@ public sealed class WorkItemService : IWorkItemService
         {
             return ConcurrencyConflict(workItem.Id);
         }
-        _logger.LogInformation(
-            "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
-            note.Id,
-            workItem.Id,
-            workItem.TypeId,
-            DescribeUser(user)
-        );
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Note {NoteId} added to work item {WorkItemId} ({TypeId}) by {User}",
+                note.Id,
+                workItem.Id,
+                workItem.TypeId,
+                DescribeUser(user)
+            );
+        }
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -1040,13 +1064,16 @@ public sealed class WorkItemService : IWorkItemService
             return null;
         }
 
-        _logger.LogInformation(
-            "Work item {WorkItemId} ({TypeId}) refused {Operation}: terminal state {StateId}",
-            workItem.Id,
-            workItem.TypeId,
-            operation,
-            terminal.Id
-        );
+        if (_logger.IsEnabled(LogLevel.Information))
+        {
+            _logger.LogInformation(
+                "Work item {WorkItemId} ({TypeId}) refused {Operation}: terminal state {StateId}",
+                workItem.Id,
+                workItem.TypeId,
+                operation,
+                terminal.Id
+            );
+        }
 
         // RA-358: the BFF renders ProblemDetails.detail verbatim in a
         // user-facing error banner, so the message must name the case in

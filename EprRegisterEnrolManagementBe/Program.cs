@@ -680,20 +680,23 @@ static void LogNotifyClientRegistration(WebApplication app)
         app.Configuration.GetValue<bool?>(NotifySendingPolicy.SendEmailsKey),
         cdpEnvironment,
         app.Environment.IsDevelopment());
-    app.Logger.LogInformation(
-        "Notify integration: enabled={NotificationsEnabled} client={NotifyClientType} "
-            + "apiKeyConfigured={ApiKeyConfigured} sendingEnabled={NotifySendingEnabled} "
-            + "environment={CdpEnvironment} baseUri={NotifyBaseUri} "
-            + "timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
-        NotifyFeature.NotificationsEnabled(app.Configuration),
-        notifyClient.GetType().FullName,
-        apiKeyConfigured,
-        sendingEnabled,
-        string.IsNullOrWhiteSpace(cdpEnvironment) ? "<unset>" : cdpEnvironment,
-        string.IsNullOrWhiteSpace(notifyOptions.BaseUri) ? "<sdk-default>" : notifyOptions.BaseUri,
-        notifyOptions.RequestTimeoutSeconds,
-        notifyOptions.Templates.Count
-    );
+    if (app.Logger.IsEnabled(LogLevel.Information))
+    {
+        app.Logger.LogInformation(
+            "Notify integration: enabled={NotificationsEnabled} client={NotifyClientType} "
+                + "apiKeyConfigured={ApiKeyConfigured} sendingEnabled={NotifySendingEnabled} "
+                + "environment={CdpEnvironment} baseUri={NotifyBaseUri} "
+                + "timeoutSeconds={NotifyTimeoutSeconds} templates={NotifyTemplateCount}",
+            NotifyFeature.NotificationsEnabled(app.Configuration),
+            notifyClient.GetType().FullName,
+            apiKeyConfigured,
+            sendingEnabled,
+            string.IsNullOrWhiteSpace(cdpEnvironment) ? "<unset>" : cdpEnvironment,
+            string.IsNullOrWhiteSpace(notifyOptions.BaseUri) ? "<sdk-default>" : notifyOptions.BaseUri,
+            notifyOptions.RequestTimeoutSeconds,
+            notifyOptions.Templates.Count
+        );
+    }
 }
 
 [ExcludeFromCodeCoverage]

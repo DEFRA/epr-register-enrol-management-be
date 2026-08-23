@@ -106,16 +106,22 @@ internal sealed class ReAccreditationExporterFixtureBackfillMigration(
             }
             catch (WorkItemConcurrencyException)
             {
-                logger.LogDebug(
-                    "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                    item.Id);
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug(
+                        "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
+                        item.Id);
+                }
                 skipped++;
             }
         }
 
-        logger.LogInformation(
-            "Migration '{Name}' complete: {Backfilled} fixtures backfilled, {Skipped} already current or absent.",
-            Name, backfilled, skipped);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Migration '{Name}' complete: {Backfilled} fixtures backfilled, {Skipped} already current or absent.",
+                Name, backfilled, skipped);
+        }
     }
 
     private static bool AlreadyExporter(MongoDB.Bson.BsonDocument payload) =>

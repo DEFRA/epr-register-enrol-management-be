@@ -151,12 +151,15 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     public async Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default)
     {
         await Collection.InsertOneAsync(workItem, cancellationToken: cancellationToken);
-        Logger.LogInformation(
-            "Submitted work item {WorkItemId} of type {WorkItemTypeId} by {SubmittedBy}",
-            workItem.Id,
-            workItem.TypeId,
-            workItem.SubmittedBy ?? "unknown"
-        );
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
+                "Submitted work item {WorkItemId} of type {WorkItemTypeId} by {SubmittedBy}",
+                workItem.Id,
+                workItem.TypeId,
+                workItem.SubmittedBy ?? "unknown"
+            );
+        }
     }
 
     public async Task<bool> CreateIfAbsentAsync(
@@ -523,13 +526,16 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             throw new WorkItemConcurrencyException(workItem.Id, expectedVersion);
         }
 
-        Logger.LogInformation(
-            "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState} (version {Version})",
-            workItem.Id,
-            workItem.TypeId,
-            workItem.StateId,
-            workItem.Version
-        );
+        if (Logger.IsEnabled(LogLevel.Information))
+        {
+            Logger.LogInformation(
+                "Updated work item {WorkItemId} of type {WorkItemTypeId} now in state {WorkItemState} (version {Version})",
+                workItem.Id,
+                workItem.TypeId,
+                workItem.StateId,
+                workItem.Version
+            );
+        }
     }
 
     public async Task<bool> SetPayloadFieldAsync(

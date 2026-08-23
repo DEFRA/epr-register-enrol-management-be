@@ -114,14 +114,17 @@ internal sealed class HttpOperatorBackendPushAdapter(
         // message/property set. Only its length is logged as a size signal.
         // This matches the rule the paired operator-backend change applies
         // to the same field (RA-311 security note).
-        logger.LogInformation(
-            "Pushing query-raised for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); sections {SectionKeys}, note length {QueryNoteLength}",
-            workItemId,
-            endpoint,
-            correlationId,
-            sectionKeys,
-            queryNote.Length
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Pushing query-raised for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); sections {SectionKeys}, note length {QueryNoteLength}",
+                workItemId,
+                endpoint,
+                correlationId,
+                sectionKeys,
+                queryNote.Length
+            );
+        }
 
         var body = new QueryRaisedPushRequest(queryNote, sectionKeys);
         return await ExecutePushAsync(
@@ -216,16 +219,19 @@ internal sealed class HttpOperatorBackendPushAdapter(
         );
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
-        logger.LogInformation(
-            "Pushing {Operation} for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); {FromStateId} -> {ToStateId} via {ActionId}",
-            operationName,
-            workItemId,
-            endpoint,
-            correlationId,
-            fromStateId,
-            toStateId,
-            actionId
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Pushing {Operation} for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); {FromStateId} -> {ToStateId} via {ActionId}",
+                operationName,
+                workItemId,
+                endpoint,
+                correlationId,
+                fromStateId,
+                toStateId,
+                actionId
+            );
+        }
 
         var body = new StatusChangedPushRequest(
             fromStateId,
@@ -295,13 +301,16 @@ internal sealed class HttpOperatorBackendPushAdapter(
                 );
             }
 
-            logger.LogInformation(
-                "Operator backend {Operation} push succeeded for work item {WorkItemId} (correlation {CorrelationId}); status {Status}.",
-                operationName,
-                workItemId,
-                correlationId,
-                (int)response.StatusCode
-            );
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Operator backend {Operation} push succeeded for work item {WorkItemId} (correlation {CorrelationId}); status {Status}.",
+                    operationName,
+                    workItemId,
+                    correlationId,
+                    (int)response.StatusCode
+                );
+            }
             return OperatorBackendPushResult.Success();
         }
         catch (Exception ex)

@@ -31,9 +31,12 @@ internal sealed class WorkItemMigrationHostedService(
             persistence = serviceProvider.GetService<IWorkItemPersistence>();
             if (persistence is null)
             {
-                logger.LogDebug(
-                    "Work item persistence not available; skipping {Count} migration(s).",
-                    migrations.Count);
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug(
+                        "Work item persistence not available; skipping {Count} migration(s).",
+                        migrations.Count);
+                }
                 return;
             }
         }
@@ -49,8 +52,11 @@ internal sealed class WorkItemMigrationHostedService(
         {
             try
             {
-                logger.LogInformation(
-                    "Applying work item migration: {MigrationName}", migration.Name);
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "Applying work item migration: {MigrationName}", migration.Name);
+                }
                 await migration.ApplyAsync(persistence, cancellationToken);
             }
             catch (Exception ex)

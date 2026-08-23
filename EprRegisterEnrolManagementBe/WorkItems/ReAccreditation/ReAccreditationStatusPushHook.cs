@@ -122,9 +122,12 @@ internal sealed class ReAccreditationStatusPushHook(
                 // not an error, so logged at Debug and audited under a
                 // distinct outcome that must never alert (MBE-F5).
                 details["reason"] = result.ErrorMessage;
-                logger.LogDebug(
-                    "Status push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
-                    workItem.Id, correlationId, result.ErrorMessage);
+                if (logger.IsEnabled(LogLevel.Debug))
+                {
+                    logger.LogDebug(
+                        "Status push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
+                        workItem.Id, correlationId, result.ErrorMessage);
+                }
                 var appended = await auditAppender.AppendAsync(
                     workItem.Id, "status-push-skipped", "Status not sent to OJ (disabled)", details, user, cancellationToken);
                 if (!appended)

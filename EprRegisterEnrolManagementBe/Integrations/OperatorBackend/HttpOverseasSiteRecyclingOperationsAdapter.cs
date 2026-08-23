@@ -85,15 +85,18 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
         );
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
-        logger.LogInformation(
-            "Updating recycling operations for organisation {OrganisationId} application "
-                + "{ApplicationId} site {SiteId} from {Endpoint} (correlation {CorrelationId})",
-            request.OrganisationId,
-            request.ApplicationId,
-            request.SiteId,
-            endpoint,
-            request.CorrelationId
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Updating recycling operations for organisation {OrganisationId} application "
+                    + "{ApplicationId} site {SiteId} from {Endpoint} (correlation {CorrelationId})",
+                request.OrganisationId,
+                request.ApplicationId,
+                request.SiteId,
+                endpoint,
+                request.CorrelationId
+            );
+        }
 
         var body = new BackendRequestBody(request.OperationCodes);
 
@@ -189,14 +192,17 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
 
             var siteJson = await response.Content.ReadAsStringAsync(cancellationToken);
 
-            logger.LogInformation(
-                "Recycling operations updated for organisation {OrganisationId} application "
-                    + "{ApplicationId} site {SiteId} (correlation {CorrelationId}).",
-                request.OrganisationId,
-                request.ApplicationId,
-                request.SiteId,
-                request.CorrelationId
-            );
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Recycling operations updated for organisation {OrganisationId} application "
+                        + "{ApplicationId} site {SiteId} (correlation {CorrelationId}).",
+                    request.OrganisationId,
+                    request.ApplicationId,
+                    request.SiteId,
+                    request.CorrelationId
+                );
+            }
             return OverseasSiteRecyclingOperationsResult.Success(siteJson);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

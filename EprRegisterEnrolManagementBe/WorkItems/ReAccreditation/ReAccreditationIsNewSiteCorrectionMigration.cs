@@ -106,11 +106,14 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             configuration.GetValue<DateTime?>(ReAccreditationIsNewSiteAudit.DeployedAtConfigKey)
             ?? DateTime.UtcNow;
 
-        logger.LogInformation(
-            "epr-2uxy correction starting. Mode={Mode}. Spot-check confirmed by " +
-            "{ConfirmedBy}. Window {WindowStart:o} to {WindowEnd:o}.",
-            apply ? "APPLY" : "DRY RUN (nothing will be written)",
-            confirmedBy, ReAccreditationIsNewSiteAudit.WindowStart, windowEnd);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "epr-2uxy correction starting. Mode={Mode}. Spot-check confirmed by " +
+                "{ConfirmedBy}. Window {WindowStart:o} to {WindowEnd:o}.",
+                apply ? "APPLY" : "DRY RUN (nothing will be written)",
+                confirmedBy, ReAccreditationIsNewSiteAudit.WindowStart, windowEnd);
+        }
 
         var itemsChanged = 0;
         var sitesCorrected = 0;
@@ -169,11 +172,14 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
 
                 if (!apply)
                 {
-                    logger.LogInformation(
-                        "epr-2uxy DRY RUN would correct work item {WorkItemId} " +
-                        "ref={ApplicationReference}: {Sites}",
-                        full.Id, full.Payload.GetValue("applicationReference", "(none)"),
-                        string.Join(", ", corrected));
+                    if (logger.IsEnabled(LogLevel.Information))
+                    {
+                        logger.LogInformation(
+                            "epr-2uxy DRY RUN would correct work item {WorkItemId} " +
+                            "ref={ApplicationReference}: {Sites}",
+                            full.Id, full.Payload.GetValue("applicationReference", "(none)"),
+                            string.Join(", ", corrected));
+                    }
                     continue;
                 }
 
@@ -205,9 +211,12 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
 
                 await persistence.ReplaceAsync(full, cancellationToken);
 
-                logger.LogInformation(
-                    "epr-2uxy corrected work item {WorkItemId}: {Sites}",
-                    full.Id, string.Join(", ", corrected));
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "epr-2uxy corrected work item {WorkItemId}: {Sites}",
+                        full.Id, string.Join(", ", corrected));
+                }
             }
 
             if (result.Items.Count < WorkItemQuery.MaxPageSize)
@@ -223,16 +232,19 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
         // reusing one throws FormatException when the message is rendered —
         // and a test that logs through NullLogger never renders, so it would
         // pass while the real run produced no summary at all.
-        logger.LogInformation(
-            "epr-2uxy correction complete. Mode={Mode}. Items {ItemsVerb}: {ItemsChanged}. " +
-            "Sites {SitesVerb}: {SitesCorrected}. Sites refused as ambiguous (need manual " +
-            "adjudication): {SitesRefusedAmbiguous}.",
-            apply ? "APPLY" : "DRY RUN",
-            apply ? "corrected" : "that would be corrected",
-            itemsChanged,
-            apply ? "corrected" : "that would be corrected",
-            sitesCorrected,
-            sitesRefusedAmbiguous);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "epr-2uxy correction complete. Mode={Mode}. Items {ItemsVerb}: {ItemsChanged}. " +
+                "Sites {SitesVerb}: {SitesCorrected}. Sites refused as ambiguous (need manual " +
+                "adjudication): {SitesRefusedAmbiguous}.",
+                apply ? "APPLY" : "DRY RUN",
+                apply ? "corrected" : "that would be corrected",
+                itemsChanged,
+                apply ? "corrected" : "that would be corrected",
+                sitesCorrected,
+                sitesRefusedAmbiguous);
+        }
     }
 
     /// <summary>

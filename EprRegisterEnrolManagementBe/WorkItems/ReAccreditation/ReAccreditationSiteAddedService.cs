@@ -113,15 +113,18 @@ internal sealed class ReAccreditationSiteAddedService(
             );
         }
 
-        logger.LogInformation(
-            "Recorded site-added notification for work item {WorkItemId}: siteType={SiteType}, "
-                + "orsId={OrsId}, siteNumber={SiteNumber}, isNewSite={IsNewSite}.",
-            workItemId,
-            request.SiteType,
-            request.OrsId,
-            request.SiteNumber,
-            request.IsNewSite
-        );
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Recorded site-added notification for work item {WorkItemId}: siteType={SiteType}, "
+                    + "orsId={OrsId}, siteNumber={SiteNumber}, isNewSite={IsNewSite}.",
+                workItemId,
+                request.SiteType,
+                request.OrsId,
+                request.SiteNumber,
+                request.IsNewSite
+            );
+        }
 
         // Re-read so the response carries the site-added audit entry the
         // out-of-band appender wrote against its own copy of the document.
