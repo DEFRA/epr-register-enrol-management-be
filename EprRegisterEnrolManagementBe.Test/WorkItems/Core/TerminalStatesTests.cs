@@ -8,6 +8,14 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class TerminalStatesTests
 {
+    private static readonly string[] s_expectedSingleTypeTerminalIds = ["approved", "rejected"];
+    private static readonly string[] s_expectedUnionedTerminalIds =
+    [
+        "approved",
+        "withdrawn",
+        "rejected",
+    ];
+
     private static IWorkItemRegistry Registry(params IWorkItemType[] types) =>
         new WorkItemRegistry(types);
 
@@ -25,7 +33,7 @@ public class TerminalStatesTests
 
         var ids = TerminalStates.Ids(registry);
 
-        Assert.Equal(new[] { "approved", "rejected" }.ToHashSet(), ids.ToHashSet());
+        Assert.Equal(s_expectedSingleTypeTerminalIds.ToHashSet(), ids.ToHashSet());
     }
 
     [Fact]
@@ -46,7 +54,7 @@ public class TerminalStatesTests
         var ids = TerminalStates.Ids(registry);
 
         Assert.Equal(
-            new[] { "approved", "withdrawn", "rejected" }.ToHashSet(),
+            s_expectedUnionedTerminalIds.ToHashSet(),
             ids.ToHashSet());
     }
 

@@ -19,6 +19,12 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// </summary>
 public class ReAccreditationSeederTests
 {
+    private static readonly string[] s_seededSubmissionActions =
+    [
+        "work-item-submitted",
+        "routed-to-nation",
+    ];
+
     private static ReAccreditationSeeder BuildSeeder() =>
         new(new NationResolver());
 
@@ -118,7 +124,7 @@ public class ReAccreditationSeederTests
             progressed,
             item =>
             {
-                foreach (var action in new[] { "work-item-submitted", "routed-to-nation" })
+                foreach (var action in s_seededSubmissionActions)
                 {
                     var entry = Assert.Single(item.AuditLog, e => e.Action == action);
                     Assert.Equal("submitted", entry.StateId);

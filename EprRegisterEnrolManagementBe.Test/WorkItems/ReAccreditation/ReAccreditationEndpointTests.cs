@@ -32,6 +32,11 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// </summary>
 public class ReAccreditationEndpointTests
 {
+    private static readonly string[] s_operationCodesR12 = ["R12"];
+    private static readonly string[] s_operationCodesR3 = ["R3"];
+    private static readonly string[] s_operationCodesR3AndR4 = ["R3", "R4"];
+    private static readonly string[] s_operationCodesR5 = ["R5"];
+
     private const string TenantClientId = "test-client";
     private const string DefaultUserId = "alice-1";
     private const string DefaultUserName = "Alice Example";
@@ -3638,7 +3643,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3", "R4" } },
+            new { operationCodes = s_operationCodesR3AndR4 },
             cancellationToken
         );
 
@@ -3653,7 +3658,7 @@ public class ReAccreditationEndpointTests
                     r.OrganisationId == "500027"
                     && r.ApplicationId == "APP-500027"
                     && r.SiteId == RecyclingOperationsSiteId
-                    && r.OperationCodes.SequenceEqual(new[] { "R3", "R4" })
+                    && r.OperationCodes.SequenceEqual(s_operationCodesR3AndR4)
                     && r.UserId == DefaultUserId
                     && r.UserName == DefaultUserName
                 ),
@@ -3681,7 +3686,7 @@ public class ReAccreditationEndpointTests
         var beforeCall = DateTime.UtcNow;
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3", "R4" } },
+            new { operationCodes = s_operationCodesR3AndR4 },
             cancellationToken
         );
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -3698,7 +3703,7 @@ public class ReAccreditationEndpointTests
             .Single(s => s["siteId"].AsString == RecyclingOperationsSiteId);
 
         Assert.Equal(
-            new[] { "R3", "R4" },
+            s_operationCodesR3AndR4,
             site["operationCodes"].AsBsonArray.Select(v => v.AsString).ToArray()
         );
         Assert.Equal(DefaultUserName, site["recyclingOperationsUpdatedBy"].AsString);
@@ -3714,7 +3719,7 @@ public class ReAccreditationEndpointTests
             .Select(s => s.AsBsonDocument)
             .Single(s => s["siteId"].AsString == "site-other");
         Assert.Equal(
-            new[] { "R5" },
+            s_operationCodesR5,
             otherSite["operationCodes"].AsBsonArray.Select(v => v.AsString).ToArray()
         );
         Assert.False(otherSite.Contains("recyclingOperationsUpdatedBy"));
@@ -3755,7 +3760,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/1/recycling-operations",
-            new { operationCodes = new[] { "R3", "R4" } },
+            new { operationCodes = s_operationCodesR3AndR4 },
             cancellationToken
         );
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -3769,7 +3774,7 @@ public class ReAccreditationEndpointTests
             .Single(s => s["siteId"].AsInt32 == 1);
 
         Assert.Equal(
-            new[] { "R3", "R4" },
+            s_operationCodesR3AndR4,
             site["operationCodes"].AsBsonArray.Select(v => v.AsString).ToArray()
         );
         // The lookup must also not have altered siteId's own BSON type.
@@ -3812,7 +3817,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -3825,7 +3830,7 @@ public class ReAccreditationEndpointTests
             .AsBsonArray.Select(s => s.AsBsonDocument)
             .Single(s => s["siteId"].AsInt32 == 999);
         Assert.Equal(
-            new[] { "R5" },
+            s_operationCodesR5,
             untouchedSite["operationCodes"].AsBsonArray.Select(v => v.AsString).ToArray()
         );
     }
@@ -3854,7 +3859,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -3880,7 +3885,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -3909,7 +3914,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -3940,7 +3945,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -3966,7 +3971,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -4018,7 +4023,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -4048,7 +4053,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -4071,7 +4076,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{Guid.NewGuid()}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -4105,7 +4110,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -4139,7 +4144,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -4179,7 +4184,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R12" } },
+            new { operationCodes = s_operationCodesR12 },
             cancellationToken
         );
 
@@ -4216,7 +4221,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 
@@ -4250,7 +4255,7 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PatchAsJsonAsync(
             $"/work-items/re-accreditation/{id}/overseas-sites/{RecyclingOperationsSiteId}/recycling-operations",
-            new { operationCodes = new[] { "R3" } },
+            new { operationCodes = s_operationCodesR3 },
             cancellationToken
         );
 

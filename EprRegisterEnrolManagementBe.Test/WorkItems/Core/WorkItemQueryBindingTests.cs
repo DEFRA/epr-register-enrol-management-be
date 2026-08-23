@@ -10,6 +10,23 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class WorkItemQueryBindingTests
 {
+    private static readonly string[] s_expectedSingleMaterial = ["plastic"];
+    private static readonly string[] s_expectedSingleWasteProcessingType = ["exporter"];
+    private static readonly string[] s_expectedValidNations = ["England", "Wales"];
+    private static readonly string[] s_materialsPlasticGlassAndPaper =
+    [
+        "plastic",
+        "glass",
+        "paper",
+    ];
+    private static readonly string[] s_nationsEnglandAndScotland = ["England", "Scotland"];
+    private static readonly string[] s_nationsWithAnInvalidValue = ["England", "Atlantis", "wales"];
+    private static readonly string[] s_wasteProcessingTypesExporterAndReprocessor =
+    [
+        "exporter",
+        "reprocessor",
+    ];
+
     private static IQueryCollection Q(params (string Key, string Value)[] pairs)
     {
         var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
@@ -103,7 +120,7 @@ public class WorkItemQueryBindingTests
         var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
             StringComparer.OrdinalIgnoreCase)
         {
-            ["nation"] = new Microsoft.Extensions.Primitives.StringValues(new[] { "England", "Scotland" })
+            ["nation"] = new Microsoft.Extensions.Primitives.StringValues(s_nationsEnglandAndScotland)
         };
         var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
 
@@ -146,12 +163,12 @@ public class WorkItemQueryBindingTests
         var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
             StringComparer.OrdinalIgnoreCase)
         {
-            ["nation"] = new Microsoft.Extensions.Primitives.StringValues(new[] { "England", "Atlantis", "wales" })
+            ["nation"] = new Microsoft.Extensions.Primitives.StringValues(s_nationsWithAnInvalidValue)
         };
         var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
 
         Assert.NotNull(query.Nations);
-        Assert.Equal(new[] { "England", "Wales" }.OrderBy(n => n), query.Nations!.OrderBy(n => n));
+        Assert.Equal(s_expectedValidNations.OrderBy(n => n), query.Nations!.OrderBy(n => n));
     }
 
     // ──────────────────────────── IncludeArchived ────────────────────────────
@@ -237,7 +254,7 @@ public class WorkItemQueryBindingTests
         var query = WorkItemQueryBinding.FromQueryString(Q(("material", "plastic")));
 
         Assert.NotNull(query.Materials);
-        Assert.Equal(new[] { "plastic" }, query.Materials!);
+        Assert.Equal(s_expectedSingleMaterial, query.Materials!);
     }
 
     [Fact]
@@ -247,11 +264,11 @@ public class WorkItemQueryBindingTests
             StringComparer.OrdinalIgnoreCase)
         {
             ["material"] = new Microsoft.Extensions.Primitives.StringValues(
-                new[] { "plastic", "glass", "paper" })
+                s_materialsPlasticGlassAndPaper)
         };
         var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
 
-        Assert.Equal(new[] { "plastic", "glass", "paper" }, query.Materials!);
+        Assert.Equal(s_materialsPlasticGlassAndPaper, query.Materials!);
     }
 
     [Fact]
@@ -271,7 +288,7 @@ public class WorkItemQueryBindingTests
         var query = WorkItemQueryBinding.FromQueryString(Q(("wasteProcessingType", "exporter")));
 
         Assert.NotNull(query.WasteProcessingTypes);
-        Assert.Equal(new[] { "exporter" }, query.WasteProcessingTypes!);
+        Assert.Equal(s_expectedSingleWasteProcessingType, query.WasteProcessingTypes!);
     }
 
     [Fact]
@@ -281,11 +298,11 @@ public class WorkItemQueryBindingTests
             StringComparer.OrdinalIgnoreCase)
         {
             ["wasteProcessingType"] = new Microsoft.Extensions.Primitives.StringValues(
-                new[] { "exporter", "reprocessor" })
+                s_wasteProcessingTypesExporterAndReprocessor)
         };
         var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
 
-        Assert.Equal(new[] { "exporter", "reprocessor" }, query.WasteProcessingTypes!);
+        Assert.Equal(s_wasteProcessingTypesExporterAndReprocessor, query.WasteProcessingTypes!);
     }
 
     [Fact]
