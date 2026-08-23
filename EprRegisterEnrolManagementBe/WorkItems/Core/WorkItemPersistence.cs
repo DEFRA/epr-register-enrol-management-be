@@ -281,9 +281,11 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             stages.Add(new BsonDocument("$limit", pageSize));
 
             PipelineDefinition<WorkItem, WorkItem> pipeline = stages;
-            items = await Collection
-                .Aggregate(pipeline, cancellationToken: cancellationToken)
-                .ToListAsync(cancellationToken);
+            using var cursor = await Collection.AggregateAsync(
+                pipeline,
+                cancellationToken: cancellationToken
+            );
+            items = await cursor.ToListAsync(cancellationToken);
         }
 
         return new WorkItemPage(items, totalCount, page, pageSize);
