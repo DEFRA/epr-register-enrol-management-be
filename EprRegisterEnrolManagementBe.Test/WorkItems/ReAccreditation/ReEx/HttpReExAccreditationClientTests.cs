@@ -305,6 +305,7 @@ public class HttpReExAccreditationClientTests
                     ],
                     "incomeBusinessPlan": [
                       { "usageDescription": "Support for business collections", "percentIncomeSpent": 15 },
+                      { "usageDescription": "Activities or investment not covered by the other categories", "percentIncomeSpent": 8 },
                       { "usageDescription": "Some unrecognised category", "percentIncomeSpent": 5 },
                       { "usageDescription": null, "percentIncomeSpent": 5 },
                       { "usageDescription": "Support for business collections", "percentIncomeSpent": null }
@@ -320,6 +321,10 @@ public class HttpReExAccreditationClientTests
 
         Assert.NotNull(result);
         Assert.Equal(15, result!.BusinessPlan.BusinessCollectionsPercent);
+        // RA-456: "Activities or investment not covered by the other
+        // categories" is the 7th category, mapped to OtherPercent the same
+        // way the other six usage descriptions map to their own setters.
+        Assert.Equal(8, result.BusinessPlan.OtherPercent);
         Assert.Equal(string.Empty, result.Authorisers[0].FullName);
         Assert.Equal(string.Empty, result.Authorisers[0].Email);
 

@@ -303,7 +303,13 @@ public class ClientIdAuthenticationTests
 
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            new ClientIdSignaturePayload(ClientId, null, null, factory.FakeTime.GetUtcNow().ToString("O"), "nonce-no-ts")
+            new ClientIdSignaturePayload(
+                ClientId,
+                null,
+                null,
+                factory.FakeTime.GetUtcNow().ToString("O"),
+                "nonce-no-ts"
+            )
         );
 
         using var client = factory.CreateClient();
@@ -472,7 +478,13 @@ public class ClientIdAuthenticationTests
             "x-cdp-auth-signature",
             ClientIdAuthenticationHandler.ComputeSignature(
                 Secret,
-                new ClientIdSignaturePayload(ClientId, null, null, "not-a-valid-timestamp", "nonce-malformed")
+                new ClientIdSignaturePayload(
+                    ClientId,
+                    null,
+                    null,
+                    "not-a-valid-timestamp",
+                    "nonce-malformed"
+                )
             )
         );
 
@@ -829,7 +841,15 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-role-signed";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce, Role: "standard", Nation: "Wales")
+            new ClientIdSignaturePayload(
+                ClientId,
+                null,
+                null,
+                timestamp,
+                nonce,
+                Role: "standard",
+                Nation: "Wales"
+            )
         );
 
         using var client = factory.CreateClient();
@@ -864,7 +884,15 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-role-tampered";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce, Role: "support-readonly", Nation: null)
+            new ClientIdSignaturePayload(
+                ClientId,
+                null,
+                null,
+                timestamp,
+                nonce,
+                Role: "support-readonly",
+                Nation: null
+            )
         );
 
         using var client = factory.CreateClient();
@@ -892,7 +920,15 @@ public class ClientIdAuthenticationTests
         var nonce = "nonce-nation-tampered";
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             Secret,
-            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce, Role: "standard", Nation: "England")
+            new ClientIdSignaturePayload(
+                ClientId,
+                null,
+                null,
+                timestamp,
+                nonce,
+                Role: "standard",
+                Nation: "England"
+            )
         );
 
         using var client = factory.CreateClient();
@@ -902,6 +938,156 @@ public class ClientIdAuthenticationTests
         client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
         // Tampered post-signing: signed for "England", sent as "Wales".
         client.DefaultRequestHeaders.Add("x-cdp-user-nation", "Wales");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Legacy_six_line_v3_signature_without_role_or_nation_is_accepted()
+    {
+        // ADR-0007 — regression for the 2026-08-22 dev outage.
+        // epr-register-enrol-backend signs the ORIGINAL v3 canonical string
+        // (v3\nclientId\nuserId\nuserName\ntimestamp\nnonce) and never sends
+        // x-cdp-user-role / x-cdp-user-nation. Folding role/nation into the
+        // payload as empty strings (PR #142) silently broke every call from
+        // that service with a 401. The signature here is built by
+        // WireFormatReference from the documented wire format, NOT via
+        // ComputeSignature, so a future change to the production canonical
+        // string fails this test instead of being self-consistently wrong
+        // on both sides.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-legacy-form";
+        var signature = WireFormatReference.LegacyV3(
+            Secret,
+            new ClientIdSignaturePayload(
+                ClientId,
+                "applicant@example.test",
+                "An Applicant",
+                timestamp,
+                nonce
+            )
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        client.DefaultRequestHeaders.Add("x-cdp-user-id", "applicant@example.test");
+        client.DefaultRequestHeaders.Add("x-cdp-user-name", "An Applicant");
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Extended_v3_signature_with_empty_role_and_nation_is_accepted()
+    {
+        // ADR-0007: management-fe signs the RA-469 extended form on EVERY
+        // call, with role/nation as empty strings when it has none to
+        // forward — so a request carrying no role/nation header must also
+        // verify against the eight-line form. Built by WireFormatReference
+        // from the documented wire format, not via ComputeSignature.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage(Array.Empty<WorkItem>(), 0, 1, 20));
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-extended-empty";
+        var signature = WireFormatReference.ExtendedV3(
+            Secret,
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce)
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Legacy_signed_request_is_rejected_once_a_role_header_is_added()
+    {
+        // ADR-0007: accepting two forms must not open a downgrade path. A
+        // legacy-signed request (no role/nation signed) that later acquires
+        // an x-cdp-user-role header must fail — once role is present the
+        // only acceptable form is the extended one over the sent value,
+        // which this signature cannot match.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-legacy-plus-role";
+        var signature = WireFormatReference.LegacyV3(
+            Secret,
+            new ClientIdSignaturePayload(ClientId, null, null, timestamp, nonce)
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+        // Added post-signing.
+        client.DefaultRequestHeaders.Add("x-cdp-user-role", "standard");
+
+        var response = await client.GetAsync("/work-items", cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Extended_signed_request_is_rejected_once_its_role_and_nation_headers_are_stripped()
+    {
+        // ADR-0007, the other direction: signed over a real role/nation,
+        // sent without them. Neither the legacy form nor the extended-with-
+        // empties form can match a signature that covered "standard"/"Wales",
+        // so stripping the headers cannot turn a role-gated request into a
+        // role-less one that still verifies.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new BareFactory(
+            clientSecrets: new Dictionary<string, string> { [ClientId] = Secret }
+        );
+
+        var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
+        var nonce = "nonce-role-stripped";
+        var signature = ClientIdAuthenticationHandler.ComputeSignature(
+            Secret,
+            new ClientIdSignaturePayload(
+                ClientId,
+                null,
+                null,
+                timestamp,
+                nonce,
+                Role: "standard",
+                Nation: "Wales"
+            )
+        );
+
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, ClientId);
+        AddTimestampAndNonce(client, timestamp, nonce);
+        client.DefaultRequestHeaders.Add("x-cdp-auth-signature", signature);
+        // x-cdp-user-role / x-cdp-user-nation deliberately NOT sent.
 
         var response = await client.GetAsync("/work-items", cancellationToken);
 

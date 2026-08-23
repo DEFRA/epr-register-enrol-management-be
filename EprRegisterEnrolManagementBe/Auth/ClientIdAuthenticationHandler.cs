@@ -34,6 +34,10 @@ namespace EprRegisterEnrolManagementBe.Auth;
 /// AC17 authorization is deliberately enforced backend-side too, so the
 /// two claims it gates on must carry the same signed-integrity guarantee
 /// as userId/userName rather than arriving as bare, tamperable headers.
+/// Callers that have no role/nation to send — epr-register-enrol-backend,
+/// in both directions — keep signing the original six-line v3 form, and
+/// this handler accepts either form when no role/nation header is present;
+/// see ADR-0007 and <see cref="VerifySignature"/>.
 ///
 /// When no client secrets are configured the handler fails CLOSED in any
 /// non-Development environment (the integrity contract is broken). In
@@ -283,20 +287,17 @@ public class ClientIdAuthenticationHandler(
                 );
             }
 
-            var expectedSignature = ComputeSignature(
-                secret,
-                new ClientIdSignaturePayload(
-                    clientId,
-                    userId,
-                    userName,
-                    timestampHeader,
-                    nonce,
-                    role,
-                    nation
-                )
+            var signaturePayload = new ClientIdSignaturePayload(
+                clientId,
+                userId,
+                userName,
+                timestampHeader,
+                nonce,
+                role,
+                nation
             );
 
-            if (!FixedTimeEquals(providedSignature, expectedSignature))
+            if (!VerifySignature(secret, signaturePayload, providedSignature))
             {
                 Logger.LogWarning(
                     "ClientIdAuthentication: signature mismatch for asserted client id {ClientId}",
@@ -439,32 +440,136 @@ public class ClientIdAuthenticationHandler(
     }
 
     /// <summary>
-    /// Canonical signing payload (v3, RA-469-extended). Order and field
-    /// separators are part of the contract with the BFF: any change here is
-    /// a breaking change and requires a coordinated deploy. The timestamp
-    /// and nonce are non-optional — see ADR-0003. Role/nation were dropped
-    /// from the payload at v3 (see ADR-0005) but RA-469 puts them back for
-    /// callers that supply them: <see cref="ReAccreditationEndpoints"/>'s
+    /// Canonical signing payload (v3). Order and field separators are part
+    /// of the contract with EVERY caller — management-fe and
+    /// epr-register-enrol-backend, the latter in both directions — so any
+    /// change here is a breaking change that needs a coordinated deploy of
+    /// all three services (ADR-0007 records the dev outage that made this
+    /// explicit). The timestamp and nonce are non-optional — see ADR-0003.
+    ///
+    /// Two wire forms exist (ADR-0007):
+    /// <list type="bullet">
+    /// <item><b>Legacy</b> (original v3, ADR-0005):
+    /// <c>v3\nclientId\nuserId\nuserName\ntimestamp\nnonce</c>. This is
+    /// what epr-register-enrol-backend signs on its calls to this service
+    /// and what its inbound CaseManagementAuthenticationHandler verifies on
+    /// our pushes back to it — so this method produces it whenever
+    /// <see cref="ClientIdSignaturePayload.Role"/> and
+    /// <see cref="ClientIdSignaturePayload.Nation"/> are both null.</item>
+    /// <item><b>Extended</b> (RA-469):
+    /// <c>v3\nclientId\nuserId\nuserName\nrole\nnation\ntimestamp\nnonce</c>.
+    /// Role/nation were dropped from the payload at v3 (ADR-0005) but
+    /// RA-469 puts them back: <see cref="ReAccreditationEndpoints"/>'s
     /// recycling-operations endpoint enforces AC17 authorization backend-
     /// side using the resulting user:role/user:nation claims, so those two
     /// values need the same signed-integrity guarantee as userId/userName —
     /// otherwise a party able to alter headers on an already-signed request
     /// (e.g. a misbehaving intermediary) could bypass that authorization
-    /// while the signature still validates.
+    /// while the signature still validates. Produced whenever either role
+    /// or nation is supplied.</item>
+    /// </list>
+    /// The two forms cannot collide: header values cannot contain a newline,
+    /// so a legacy string always has exactly six lines and an extended one
+    /// exactly eight. Inbound verification accepts either form, but only
+    /// when no role/nation header is present — see <see cref="VerifySignature"/>.
     /// </summary>
-    internal static string ComputeSignature(string sharedSecret, ClientIdSignaturePayload payload)
-    {
-        var canonicalPayload = string.Join(
-            '\n',
-            "v3",
-            payload.ClientId,
-            payload.UserId ?? string.Empty,
-            payload.UserName ?? string.Empty,
-            payload.Role ?? string.Empty,
-            payload.Nation ?? string.Empty,
-            payload.Timestamp,
-            payload.Nonce
+    internal static string ComputeSignature(
+        string sharedSecret,
+        ClientIdSignaturePayload payload
+    ) =>
+        payload.Role is null && payload.Nation is null
+            ? ComputeLegacySignature(sharedSecret, payload)
+            : ComputeExtendedSignature(sharedSecret, payload);
+
+    /// <summary>
+    /// The original six-line v3 form — see <see cref="ComputeSignature"/>.
+    /// </summary>
+    internal static string ComputeLegacySignature(
+        string sharedSecret,
+        ClientIdSignaturePayload payload
+    ) =>
+        Hmac(
+            sharedSecret,
+            string.Join(
+                '\n',
+                "v3",
+                payload.ClientId,
+                payload.UserId ?? string.Empty,
+                payload.UserName ?? string.Empty,
+                payload.Timestamp,
+                payload.Nonce
+            )
         );
+
+    /// <summary>
+    /// The RA-469 eight-line v3 form — see <see cref="ComputeSignature"/>.
+    /// Role/nation are signed as empty strings when null; that is exactly
+    /// what management-fe emits on every call, including the ones that
+    /// never forward a role/nation header.
+    /// </summary>
+    internal static string ComputeExtendedSignature(
+        string sharedSecret,
+        ClientIdSignaturePayload payload
+    ) =>
+        Hmac(
+            sharedSecret,
+            string.Join(
+                '\n',
+                "v3",
+                payload.ClientId,
+                payload.UserId ?? string.Empty,
+                payload.UserName ?? string.Empty,
+                payload.Role ?? string.Empty,
+                payload.Nation ?? string.Empty,
+                payload.Timestamp,
+                payload.Nonce
+            )
+        );
+
+    /// <summary>
+    /// Checks <paramref name="providedSignature"/> against every canonical
+    /// form this request could legitimately have been signed with. When a
+    /// role or nation header is present there is exactly one: the extended
+    /// form over the values actually sent. When neither is present BOTH
+    /// forms are acceptable — the legacy six-line form (what
+    /// epr-register-enrol-backend signs) and the extended form with empty
+    /// role/nation (what management-fe signs on every call, including the
+    /// ones that never forward role/nation). Accepting both is safe because
+    /// in that case each form binds the same semantic content and the two
+    /// cannot collide (see <see cref="ComputeSignature"/>); it is NOT a
+    /// downgrade path — a request signed over a real role/nation fails both
+    /// candidates once those headers are stripped, and a legacy-signed
+    /// request fails the only candidate once a role/nation header is added.
+    /// Both candidates are always computed before the result is combined so
+    /// a mismatch costs the same whichever form the caller used.
+    /// </summary>
+    internal static bool VerifySignature(
+        string sharedSecret,
+        ClientIdSignaturePayload payload,
+        string providedSignature
+    )
+    {
+        if (payload.Role is not null || payload.Nation is not null)
+        {
+            return FixedTimeEquals(
+                providedSignature,
+                ComputeExtendedSignature(sharedSecret, payload)
+            );
+        }
+
+        var matchesLegacy = FixedTimeEquals(
+            providedSignature,
+            ComputeLegacySignature(sharedSecret, payload)
+        );
+        var matchesExtended = FixedTimeEquals(
+            providedSignature,
+            ComputeExtendedSignature(sharedSecret, payload)
+        );
+        return matchesLegacy || matchesExtended;
+    }
+
+    private static string Hmac(string sharedSecret, string canonicalPayload)
+    {
         var keyBytes = Encoding.UTF8.GetBytes(sharedSecret);
         var payloadBytes = Encoding.UTF8.GetBytes(canonicalPayload);
         var mac = HMACSHA256.HashData(keyBytes, payloadBytes);
@@ -498,8 +603,10 @@ public class ClientIdAuthenticationHandler(
 /// reads named properties, not positional order; the WIRE order is fixed
 /// inside that method's own payload string. Role/nation default to null so
 /// every caller that has no use for them (e.g. <see cref="OperatorBackendSigning.AddHeaders"/>)
-/// can omit them. Declared top-level (not nested) so every caller in this
-/// namespace can reference it unqualified.
+/// can omit them — and null (as opposed to empty) is also what selects the
+/// legacy six-line wire form, see <see cref="ClientIdAuthenticationHandler.ComputeSignature"/>.
+/// Declared top-level (not nested) so every caller in this namespace can
+/// reference it unqualified.
 /// </summary>
 internal sealed record ClientIdSignaturePayload(
     string ClientId,
