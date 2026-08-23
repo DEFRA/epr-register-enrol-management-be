@@ -115,7 +115,13 @@ signature, are rejected with `401`.
 ### Canonical payload (v3)
 
 Join the following fields with a newline (`\n`), in this order, then compute
-`HMAC-SHA256(key=secret for the asserted clientId, message=payload)` and base64-encode the result:
+`HMAC-SHA256(key=secret for the asserted clientId, message=payload)` and base64-encode the result.
+Two wire forms exist — see `docs/adr/0007-role-nation-in-v3-payload-dual-form.md`
+for which peer uses which and why both are accepted.
+
+**Legacy form** — the original v3 string. This is what `epr-register-enrol-backend`
+signs on its calls to this service, and what it verifies on this service's pushes
+back to it:
 
 ```
 v3
@@ -126,13 +132,34 @@ v3
 {x-cdp-auth-nonce}
 ```
 
+**Extended form (RA-469)** — adds the two role/nation trust headers so they carry
+the same signed-integrity guarantee as user-id/user-name. This is what
+`epr-register-enrol-management-fe` signs on every call (role/nation as `""` when
+it has none to forward), and the **only** form accepted when either
+`x-cdp-user-role` or `x-cdp-user-nation` is present on the request:
+
+```
+v3
+{x-cdp-client-id}
+{x-cdp-user-id or ""}
+{x-cdp-user-name or ""}
+{x-cdp-user-role or ""}
+{x-cdp-user-nation or ""}
+{x-cdp-auth-timestamp}
+{x-cdp-auth-nonce}
+```
+
 Empty-string placeholders must be included for absent optional fields — the
-field count and separator positions are fixed. Role membership is not part
-of the payload — authorization is entirely the BFF's concern (see
+field count and separator positions are fixed within each form. When a request
+carries no role/nation header, either form verifies; when it carries one, only
+the extended form over the sent values does. Apart from the RA-469
+recycling-operations endpoint, role/nation are audit-only claims — authorization
+is otherwise entirely the BFF's concern (see
 `docs/adr/0005-rbac-in-frontend-drop-roles-from-payload.md`). See
-`ClientIdAuthenticationHandler.ComputeSignature` for the authoritative
-implementation and `docs/adr/0003-hmac-canonical-v2-timestamp-nonce.md` for
-the timestamp/nonce rationale.
+`ClientIdAuthenticationHandler.ComputeSignature` / `VerifySignature` for the
+authoritative implementation and
+`docs/adr/0003-hmac-canonical-v2-timestamp-nonce.md` for the timestamp/nonce
+rationale.
 
 ## Operator backend push (RA-311/MBE-1)
 

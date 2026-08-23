@@ -94,9 +94,16 @@ x-cdp-auth-timestamp:     2025-07-08T10:00:00Z
 x-cdp-auth-nonce:         {16-byte random, base64}
 ```
 
-The v3 canonical string is `v3\nclientId\nuserId\nuserName\ntimestamp\nnonce`.
-This is identical to the formula in this repo's `ClientIdAuthenticationHandler.ComputeSignature`.
-Any change to this contract is a breaking change and requires a coordinated deploy.
+The v3 canonical string the operator backend signs is the legacy six-line form
+`v3\nclientId\nuserId\nuserName\ntimestamp\nnonce` — it never sends
+`x-cdp-user-role`/`x-cdp-user-nation`. This repo's
+`ClientIdAuthenticationHandler.ComputeSignature` produces exactly this string for
+a payload with null role/nation, and `VerifySignature` accepts it (alongside the
+RA-469 extended form) whenever no role/nation header is present — see
+`docs/adr/0007-role-nation-in-v3-payload-dual-form.md`. Any change to this
+contract is a breaking change for `epr-register-enrol-backend` in BOTH directions
+(its `HttpCaseWorkingApiAdapter` signs it; its `CaseManagementAuthenticationHandler`
+verifies it on our pushes) and requires a coordinated deploy.
 
 ---
 
