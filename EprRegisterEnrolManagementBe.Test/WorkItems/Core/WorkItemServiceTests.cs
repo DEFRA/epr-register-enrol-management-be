@@ -699,7 +699,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         Assert.True(result.IsIdempotentReplay);
         await hook.DidNotReceiveWithAnyArgs()
-            .OnAssignmentChangedAsync(default!, default, default!, default);
+            .OnAssignmentChangedAsync(default!, default, default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -741,7 +741,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         Assert.True(result.IsIdempotentReplay);
         await hook.DidNotReceiveWithAnyArgs()
-            .OnAssignmentChangedAsync(default!, default, default!, default);
+            .OnAssignmentChangedAsync(default!, default, default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]

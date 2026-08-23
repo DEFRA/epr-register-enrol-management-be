@@ -95,7 +95,7 @@ public class ReAccreditationQueryPushHookTests
         await hook.OnActionAppliedAsync(workItem, actionId, "submitted", s_user, ct);
 
         await adapter.DidNotReceiveWithAnyArgs()
-            .PushQueryRaisedAsync(default, default, default!, default!, default);
+            .PushQueryRaisedAsync(default, default, default!, default!, ct);
     }
 
     [Fact]
@@ -108,7 +108,7 @@ public class ReAccreditationQueryPushHookTests
         await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
 
         await adapter.DidNotReceiveWithAnyArgs()
-            .PushQueryRaisedAsync(default, default, default!, default!, default);
+            .PushQueryRaisedAsync(default, default, default!, default!, ct);
     }
 
     [Fact]

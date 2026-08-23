@@ -112,8 +112,8 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         await BuildSut(Config(enabled: null)).ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, default);
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, ct);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.True(IsNewSiteOf(item, 0));
     }
 
@@ -135,7 +135,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         await BuildSut(Config(confirmedBy: confirmedBy)).ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.True(IsNewSiteOf(item, 0));
     }
 
@@ -153,7 +153,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         await BuildSut(Config(apply: null)).ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.True(IsNewSiteOf(item, 0));
         Assert.DoesNotContain(item.AuditLog, e =>
             e.Action == ReAccreditationIsNewSiteCorrectionMigration.AuditAction);
@@ -190,7 +190,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         await BuildSut(Config()).ApplyAsync(persistence, ct);
 
         Assert.True(IsNewSiteOf(item, 0));
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -294,7 +294,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         await BuildSut(Config()).ApplyAsync(persistence, ct);
 
         Assert.True(IsNewSiteOf(item, 0));
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -342,7 +342,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         await BuildSut(Config()).ApplyAsync(persistence, ct);
 
         Assert.True(IsNewSiteOf(item, 0));
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     // ── Audit trail ──────────────────────────────────────────────────────────
@@ -404,7 +404,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         await BuildSut(Config()).ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -455,7 +455,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         await BuildSut(Config()).ApplyAsync(persistence, ct);
 
         Assert.True(IsNewSiteOf(item, 0));
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -632,6 +632,6 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         await BuildSut(Config()).ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 }

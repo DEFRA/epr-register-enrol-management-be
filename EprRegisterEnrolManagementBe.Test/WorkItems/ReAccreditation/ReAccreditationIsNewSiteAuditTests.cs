@@ -662,7 +662,7 @@ public class ReAccreditationIsNewSiteAuditTests
             .Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(ct);
         Assert.True(after.Single()["payload"]["overseasSites"]["sites"][0]["isNewSite"].AsBoolean);
 
-        factory.GetClient().DropDatabase(databaseName);
+        factory.GetClient().DropDatabase(databaseName, ct);
     }
 
     [Fact]
@@ -700,7 +700,7 @@ public class ReAccreditationIsNewSiteAuditTests
             .Find(FilterDefinition<BsonDocument>.Empty).ToListAsync(ct);
         Assert.True(after.Single()["payload"]["overseasSites"]["sites"][0]["isNewSite"].AsBoolean);
 
-        factory.GetClient().DropDatabase(databaseName);
+        factory.GetClient().DropDatabase(databaseName, ct);
     }
 
     [Fact]
