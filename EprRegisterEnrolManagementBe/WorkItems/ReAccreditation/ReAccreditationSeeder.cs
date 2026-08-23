@@ -255,20 +255,25 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                         },
                     },
                 },
+                // RA-456: businessCollectionsPercent/newMarketsPercent were
+                // trimmed (25->20, 20->15) to make room for the new "other"
+                // category below, so all seven percentages still sum to 100.
                 ["businessPlan"] = new BsonDocument
                 {
                     ["newInfrastructurePercent"] = 20,
                     ["priceSupportPercent"] = 15,
-                    ["businessCollectionsPercent"] = 25,
+                    ["businessCollectionsPercent"] = 20,
                     ["communicationsPercent"] = 10,
-                    ["newMarketsPercent"] = 20,
+                    ["newMarketsPercent"] = 15,
                     ["newUsesPercent"] = 10,
+                    ["otherPercent"] = 10,
                     ["newInfrastructureDetail"] = "New sorting line investment",
                     ["priceSupportDetail"] = "Subsidised collection scheme",
                     ["businessCollectionsDetail"] = "Kerbside collection expansion",
                     ["communicationsDetail"] = "Customer awareness campaign",
                     ["newMarketsDetail"] = "New export contracts secured",
                     ["newUsesDetail"] = "Recycled content packaging trial",
+                    ["otherDetail"] = "Contribution to sector-wide research and development initiatives",
                 },
                 ["samplingPlan"] = new BsonDocument
                 {
