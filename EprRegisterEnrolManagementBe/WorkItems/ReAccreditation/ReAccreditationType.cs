@@ -11,6 +11,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationType : IWorkItemType
 {
+    private const string ContinueReviewActionLabel = "Continue review";
+    private const string QueryActionLabel = "Query";
+    private const string ResumeActionLabel = "Resume";
+    private const string WithdrawActionLabel = "Withdraw";
+
     public const string Id = "re-accreditation";
 
     // RA-324 (AC06): state DisplayNames align with the prototype "Applications"
@@ -245,25 +250,25 @@ internal sealed class ReAccreditationType : IWorkItemType
         // response cannot be queried again.
         new WorkItemTransition(
             "query-during-duly-making",
-            "Query",
+            QueryActionLabel,
             s_submitted.Id,
             s_queried.Id
         ),
         new WorkItemTransition(
             "query-during-duly-made",
-            "Query",
+            QueryActionLabel,
             s_dulyMade.Id,
             s_queried.Id
         ),
         new WorkItemTransition(
             "query-during-assessment",
-            "Query",
+            QueryActionLabel,
             s_assessmentInProgress.Id,
             s_queried.Id
         ),
         new WorkItemTransition(
             "query-during-decision",
-            "Query",
+            QueryActionLabel,
             s_awaitingDecision.Id,
             s_queried.Id
         ),
@@ -286,28 +291,28 @@ internal sealed class ReAccreditationType : IWorkItemType
         // performs, and skipping intermediate states/tasks entirely.
         new WorkItemTransition(
             "resume-during-duly-making",
-            "Resume",
+            ResumeActionLabel,
             s_queried.Id,
             s_updated.Id,
             CallerInvocable: false
         ),
         new WorkItemTransition(
             "resume-during-duly-made",
-            "Resume",
+            ResumeActionLabel,
             s_queried.Id,
             s_updated.Id,
             CallerInvocable: false
         ),
         new WorkItemTransition(
             "resume-during-assessment",
-            "Resume",
+            ResumeActionLabel,
             s_queried.Id,
             s_updated.Id,
             CallerInvocable: false
         ),
         new WorkItemTransition(
             "resume-during-decision",
-            "Resume",
+            ResumeActionLabel,
             s_queried.Id,
             s_updated.Id,
             CallerInvocable: false
@@ -326,28 +331,28 @@ internal sealed class ReAccreditationType : IWorkItemType
         // and could send the item to the wrong (attacker-chosen) stage.
         new WorkItemTransition(
             "continue-review-during-duly-making",
-            "Continue review",
+            ContinueReviewActionLabel,
             s_updated.Id,
             s_submitted.Id,
             CallerInvocable: false
         ),
         new WorkItemTransition(
             "continue-review-during-duly-made",
-            "Continue review",
+            ContinueReviewActionLabel,
             s_updated.Id,
             s_dulyMade.Id,
             CallerInvocable: false
         ),
         new WorkItemTransition(
             "continue-review-during-assessment",
-            "Continue review",
+            ContinueReviewActionLabel,
             s_updated.Id,
             s_assessmentInProgress.Id,
             CallerInvocable: false
         ),
         new WorkItemTransition(
             "continue-review-during-decision",
-            "Continue review",
+            ContinueReviewActionLabel,
             s_updated.Id,
             s_awaitingDecision.Id,
             CallerInvocable: false
@@ -356,25 +361,25 @@ internal sealed class ReAccreditationType : IWorkItemType
         // organisation can withdraw at any point during review.
         new WorkItemTransition(
             "withdraw",
-            "Withdraw",
+            WithdrawActionLabel,
             s_submitted.Id,
             s_withdrawn.Id
         ),
         new WorkItemTransition(
             "withdraw-during-duly-made",
-            "Withdraw",
+            WithdrawActionLabel,
             s_dulyMade.Id,
             s_withdrawn.Id
         ),
         new WorkItemTransition(
             "withdraw-during-assessment",
-            "Withdraw",
+            WithdrawActionLabel,
             s_assessmentInProgress.Id,
             s_withdrawn.Id
         ),
         new WorkItemTransition(
             "withdraw-during-decision",
-            "Withdraw",
+            WithdrawActionLabel,
             s_awaitingDecision.Id,
             s_withdrawn.Id
         ),
@@ -385,7 +390,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         // for the engine's from-state guard to resolve.
         new WorkItemTransition(
             "withdraw-during-query",
-            "Withdraw",
+            WithdrawActionLabel,
             s_queried.Id,
             s_withdrawn.Id
         ),
@@ -397,7 +402,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         // with no ambiguity for the engine's from-state guard to resolve.
         new WorkItemTransition(
             "withdraw-during-updated",
-            "Withdraw",
+            WithdrawActionLabel,
             s_updated.Id,
             s_withdrawn.Id
         ),

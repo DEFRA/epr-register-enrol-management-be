@@ -36,6 +36,8 @@ namespace EprRegisterEnrolManagementBe.Notifications;
 /// </summary>
 internal sealed class GovukNotifyClient : INotifyClient
 {
+    private const string FailureOutcome = "failure";
+
     internal const string EventCategory = "notify";
     internal const string EventAction = "send_email";
 
@@ -80,7 +82,7 @@ internal sealed class GovukNotifyClient : INotifyClient
                 LogLevel.Error,
                 "Notify send aborted: template not configured",
                 BuildProperties(
-                    outcome: "failure",
+                    outcome: FailureOutcome,
                     duration: timer.Elapsed,
                     reference: reference,
                     reason: "template_not_configured",
@@ -180,7 +182,7 @@ internal sealed class GovukNotifyClient : INotifyClient
                 LogLevel.Error,
                 "Notify send failed after retries",
                 BuildProperties(
-                    outcome: "failure",
+                    outcome: FailureOutcome,
                     duration: timer.Elapsed,
                     reference: reference,
                     reason: "send_failed_after_retries",
@@ -263,7 +265,7 @@ internal sealed class GovukNotifyClient : INotifyClient
                         {
                             ["event.category"] = EventCategory,
                             ["event.action"] = EventAction,
-                            ["event.outcome"] = "failure",
+                            ["event.outcome"] = FailureOutcome,
                             ["event.attempt"] = args.AttemptNumber + 1,
                             ["notify.retry_delay_ms"] = (long)args.RetryDelay.TotalMilliseconds,
                         },
@@ -291,7 +293,7 @@ internal sealed class GovukNotifyClient : INotifyClient
                             {
                                 ["event.category"] = EventCategory,
                                 ["event.action"] = EventAction,
-                                ["event.outcome"] = "failure",
+                                ["event.outcome"] = FailureOutcome,
                                 ["event.reason"] = "attempt_timeout",
                                 ["notify.timeout_seconds"] = (long)args.Timeout.TotalSeconds,
                             }

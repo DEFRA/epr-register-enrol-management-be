@@ -64,6 +64,12 @@ internal sealed class ReAccreditationNotificationHook(
     IOptions<OperatorServiceConfig>? operatorServiceOptions = null
 ) : IWorkItemPostActionHook
 {
+    private const string ApplicationQueriedDescription = "Application queried";
+    private const string ApplicationWithdrawnDescription = "Application withdrawn";
+    private const string QueriedTemplateKey = "Queried";
+    private const string ReferenceKey = "reference";
+    private const string WithdrawnTemplateKey = "Withdrawn";
+
     /// <summary>
     /// RA-291 (AC06): base URL of the public operator service, included in
     /// the Queried email. Optional so an unconfigured environment degrades to
@@ -88,15 +94,15 @@ internal sealed class ReAccreditationNotificationHook(
         ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
         ["sla-extend"] = ("SlaExtended", "Determination deadline extended"),
         ["approve"] = ("Decision", "Decision recorded: approved"),
-        ["query-during-duly-making"] = ("Queried", "Application queried"),
-        ["query-during-duly-made"] = ("Queried", "Application queried"),
-        ["query-during-assessment"] = ("Queried", "Application queried"),
-        ["query-during-decision"] = ("Queried", "Application queried"),
-        ["withdraw"] = ("Withdrawn", "Application withdrawn"),
-        ["withdraw-during-duly-made"] = ("Withdrawn", "Application withdrawn"),
-        ["withdraw-during-assessment"] = ("Withdrawn", "Application withdrawn"),
-        ["withdraw-during-decision"] = ("Withdrawn", "Application withdrawn"),
-        ["withdraw-during-query"] = ("Withdrawn", "Application withdrawn"),
+        ["query-during-duly-making"] = (QueriedTemplateKey, ApplicationQueriedDescription),
+        ["query-during-duly-made"] = (QueriedTemplateKey, ApplicationQueriedDescription),
+        ["query-during-assessment"] = (QueriedTemplateKey, ApplicationQueriedDescription),
+        ["query-during-decision"] = (QueriedTemplateKey, ApplicationQueriedDescription),
+        ["withdraw"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
+        ["withdraw-during-duly-made"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
+        ["withdraw-during-assessment"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
+        ["withdraw-during-decision"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
+        ["withdraw-during-query"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
     };
 
     public async Task OnSubmittedAsync(
@@ -250,7 +256,7 @@ internal sealed class ReAccreditationNotificationHook(
                 details: new Dictionary<string, string?>
                 {
                     ["templateKey"] = templateKey,
-                    ["reference"] = reference,
+                    [ReferenceKey] = reference,
                     ["reason"] = "missing-operator-email",
                 },
                 user,
@@ -317,7 +323,7 @@ internal sealed class ReAccreditationNotificationHook(
         {
             ["templateKey"] = templateKey,
             ["recipient"] = recipient,
-            ["reference"] = reference,
+            [ReferenceKey] = reference,
             ["providerMessageId"] = result.ProviderMessageId,
         };
 
@@ -424,7 +430,7 @@ internal sealed class ReAccreditationNotificationHook(
                 details: new Dictionary<string, string?>
                 {
                     ["templateKey"] = templateKey,
-                    ["reference"] = reference,
+                    [ReferenceKey] = reference,
                     ["nation"] = nation?.ToString(),
                     ["reason"] = "missing-regulator-mailbox",
                 },
@@ -447,7 +453,7 @@ internal sealed class ReAccreditationNotificationHook(
         {
             ["organisation_name"] = payload?.OrganisationName ?? string.Empty,
             ["registration_number"] = payload?.RegistrationNumber ?? string.Empty,
-            ["reference"] = reference,
+            [ReferenceKey] = reference,
         };
         if (extraPersonalisation is not null)
         {
@@ -495,7 +501,7 @@ internal sealed class ReAccreditationNotificationHook(
         {
             ["templateKey"] = templateKey,
             ["recipient"] = recipient,
-            ["reference"] = reference,
+            [ReferenceKey] = reference,
             ["nation"] = nation?.ToString(),
             ["providerMessageId"] = result.ProviderMessageId,
         };
@@ -609,7 +615,7 @@ internal sealed class ReAccreditationNotificationHook(
             }
         }
 
-        if (string.Equals(templateKey, "Queried", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(templateKey, QueriedTemplateKey, StringComparison.OrdinalIgnoreCase))
         {
             // RA-291 (AC06): the Queried template body references an
             // ((operator_service_link)) placeholder so the operator can get
@@ -652,7 +658,7 @@ internal sealed class ReAccreditationNotificationHook(
             personalisation["query_reason"] = reason;
         }
 
-        if (string.Equals(templateKey, "Withdrawn", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(templateKey, WithdrawnTemplateKey, StringComparison.OrdinalIgnoreCase))
         {
             // RA-204: the Withdrawn template body references a
             // ((withdrawal_notes)) placeholder carrying the reason the
