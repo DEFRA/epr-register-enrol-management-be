@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Utils.Logging;
@@ -21,33 +23,36 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
     // year's PRNs section already uses (application-details.controller.js's
     // TONNAGE_BAND_LABELS keys off "UpTo500" etc) — without this mapping the
     // raw ReEx code renders unformatted on the Application details page.
-    private static readonly Dictionary<string, string> s_tonnageBandMap =
-        new(StringComparer.OrdinalIgnoreCase)
-        {
-            ["up_to_500"] = "UpTo500",
-            ["up_to_5000"] = "UpTo5000",
-            ["up_to_10000"] = "UpTo10000",
-            ["over_10000"] = "Over10000",
-        };
+    private static readonly Dictionary<string, string> s_tonnageBandMap = new(
+        StringComparer.OrdinalIgnoreCase
+    )
+    {
+        ["up_to_500"] = "UpTo500",
+        ["up_to_5000"] = "UpTo5000",
+        ["up_to_10000"] = "UpTo10000",
+        ["over_10000"] = "Over10000",
+    };
 
-    private static readonly Dictionary<string, Action<PriorYearBusinessPlanDto, int>> s_businessPlanMap =
-        new(StringComparer.Ordinal)
-        {
-            ["New reprocessing infrastructure and maintaining existing infrastructure"]
-                = (dto, v) => dto.NewInfrastructurePercent = v,
-            ["Price support for buying packaging waste or selling recycled packaging waste"]
-                = (dto, v) => dto.PriceSupportPercent = v,
-            ["Support for business collections"]
-                = (dto, v) => dto.BusinessCollectionsPercent = v,
-            ["Communications, including information campaigns"]
-                = (dto, v) => dto.CommunicationsPercent = v,
-            ["Developing new markets for products made from recycled packaging waste"]
-                = (dto, v) => dto.NewMarketsPercent = v,
-            ["Developing new uses for recycled packaging waste"]
-                = (dto, v) => dto.NewUsesPercent = v,
-            ["Activities or investment not covered by the other categories"]
-                = (dto, v) => dto.OtherPercent = v,
-        };
+    private static readonly Dictionary<
+        string,
+        Action<PriorYearBusinessPlanDto, int>
+    > s_businessPlanMap = new(StringComparer.Ordinal)
+    {
+        ["New reprocessing infrastructure and maintaining existing infrastructure"] = (dto, v) =>
+            dto.NewInfrastructurePercent = v,
+        ["Price support for buying packaging waste or selling recycled packaging waste"] = (
+            dto,
+            v
+        ) => dto.PriceSupportPercent = v,
+        ["Support for business collections"] = (dto, v) => dto.BusinessCollectionsPercent = v,
+        ["Communications, including information campaigns"] = (dto, v) =>
+            dto.CommunicationsPercent = v,
+        ["Developing new markets for products made from recycled packaging waste"] = (dto, v) =>
+            dto.NewMarketsPercent = v,
+        ["Developing new uses for recycled packaging waste"] = (dto, v) => dto.NewUsesPercent = v,
+        ["Activities or investment not covered by the other categories"] = (dto, v) =>
+            dto.OtherPercent = v,
+    };
 
     private readonly HttpClient _httpClient;
     private readonly IStructuredLogger<HttpReExAccreditationClient> _log;
@@ -55,7 +60,8 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
     public HttpReExAccreditationClient(
         HttpClient httpClient,
         IOptions<ReExAccreditationConfig> config,
-        IStructuredLogger<HttpReExAccreditationClient> log)
+        IStructuredLogger<HttpReExAccreditationClient> log
+    )
     {
         _log = log;
         var baseUrl = config.Value.BaseUrl;
@@ -68,58 +74,40 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
         string? organisationId,
         string? registrationId,
         int? year,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
-        if (string.IsNullOrWhiteSpace(organisationId) ||
-            string.IsNullOrWhiteSpace(registrationId) ||
-            year is null)
+        if (
+            string.IsNullOrWhiteSpace(organisationId)
+            || string.IsNullOrWhiteSpace(registrationId)
+            || year is null
+        )
         {
             return null;
         }
 
-        ReExOrganisationDto? org;
-        try
-        {
-            using var response = await _httpClient.GetAsync(
-                $"v1/organisations/{Uri.EscapeDataString(organisationId)}",
-                cancellationToken);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _log.Log(
-                    LogLevel.Warning,
-                    "ReEx prior-year lookup failed",
-                    new Dictionary<string, object?>
-                    {
-                        ["reex.organisation_id"] = organisationId,
-                        ["reex.status_code"] = (int)response.StatusCode
-                    });
-                return null;
-            }
-
-            org = await response.Content.ReadFromJsonAsync<ReExOrganisationDto>(s_jsonOptions, cancellationToken);
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-        {
-            _log.Log(
-                LogLevel.Error,
-                "ReEx prior-year request failed",
-                new Dictionary<string, object?> { ["reex.organisation_id"] = organisationId },
-                exception: ex);
+        var org = await FetchOrganisationAsync(organisationId, cancellationToken);
+        if (org is null)
             return null;
-        }
-
-        if (org is null) return null;
 
         var registration = org.Registrations.FirstOrDefault(r => r.Id == registrationId);
-        if (registration is null) return null;
+        if (registration is null)
+            return null;
 
-        var accreditation = org.Accreditations
-            .FirstOrDefault(a => a.Id is not null && a.Id == registration.AccreditationId);
-        if (accreditation is null) return null;
+        var accreditation = org.Accreditations.FirstOrDefault(a =>
+            a.Id is not null && a.Id == registration.AccreditationId
+        );
+        if (accreditation is null)
+            return null;
 
-        if (!DateOnly.TryParse(accreditation.ValidFrom, out var validFrom) ||
-            validFrom.Year != year.Value)
+        if (
+            !DateOnly.TryParse(
+                accreditation.ValidFrom,
+                CultureInfo.InvariantCulture,
+                out var validFrom
+            )
+            || validFrom.Year != year.Value
+        )
         {
             return null;
         }
@@ -128,13 +116,14 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
 
         var tonnageBand = MapTonnageBand(prn?.TonnageBand);
 
-        var authorisers = prn?.Signatories
-            .Select(s => new PriorYearAuthoriserDto
-            {
-                FullName = s.FullName ?? string.Empty,
-                Email = s.Email ?? string.Empty
-            })
-            .ToList() ?? [];
+        var authorisers =
+            prn?.Signatories.Select(s => new PriorYearAuthoriserDto
+                {
+                    FullName = s.FullName ?? string.Empty,
+                    Email = s.Email ?? string.Empty,
+                })
+                .ToList()
+            ?? [];
 
         var businessPlan = MapBusinessPlan(prn?.IncomeBusinessPlan ?? []);
 
@@ -143,8 +132,73 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
             Year = year.Value,
             TonnageBand = tonnageBand,
             Authorisers = authorisers,
-            BusinessPlan = businessPlan
+            BusinessPlan = businessPlan,
         };
+    }
+
+    // Extracted from GetPriorYearAsync (S3776: cognitive complexity) - also keeps the
+    // RA-475 auth-vs-data-gap distinction self-contained rather than nested inside the
+    // caller's own branching.
+    private async Task<ReExOrganisationDto?> FetchOrganisationAsync(
+        string organisationId,
+        CancellationToken cancellationToken
+    )
+    {
+        try
+        {
+            using var response = await _httpClient.GetAsync(
+                $"v1/organisations/{Uri.EscapeDataString(organisationId)}",
+                cancellationToken
+            );
+
+            if (!response.IsSuccessStatusCode)
+            {
+                // RA-475: a 401/403 is never a data condition — it means this
+                // service's ReEx Basic-auth credentials (REEX_API_BASIC_AUTH_USERNAME /
+                // REEX_API_BASIC_AUTH_PASSWORD) or ReExApi:BaseUrl are wrong for the
+                // environment, and EVERY prior-year lookup will fail for as long as
+                // they are. Logged at Error, and named as a credentials problem, so it
+                // is distinguishable from the ordinary "ReEx has no record for this
+                // organisation" 404 it otherwise degrades into identically — which is
+                // how a total outage of this lookup on dev read as routine noise.
+                //
+                // The RETURN is deliberately unchanged: the caller still gets null and
+                // the caseworker still gets an Application details page, just without
+                // the prior-year section. Failing the page over an optional panel would
+                // be a worse outcome than the missing data.
+                var isAuthFailure =
+                    response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+
+                _log.Log(
+                    isAuthFailure ? LogLevel.Error : LogLevel.Warning,
+                    isAuthFailure
+                        ? "ReEx rejected this service's credentials; prior-year lookup is failing for "
+                            + "every application until REEX_API_BASIC_AUTH_* / ReExApi:BaseUrl are corrected"
+                        : "ReEx prior-year lookup failed",
+                    new Dictionary<string, object?>
+                    {
+                        ["reex.organisation_id"] = organisationId,
+                        ["reex.status_code"] = (int)response.StatusCode,
+                    }
+                );
+                return null;
+            }
+
+            return await response.Content.ReadFromJsonAsync<ReExOrganisationDto>(
+                s_jsonOptions,
+                cancellationToken
+            );
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            _log.Log(
+                LogLevel.Error,
+                "ReEx prior-year request failed",
+                new Dictionary<string, object?> { ["reex.organisation_id"] = organisationId },
+                exception: ex
+            );
+            return null;
+        }
     }
 
     private string? MapTonnageBand(string? rawTonnageBand)
@@ -158,7 +212,8 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
         _log.Log(
             LogLevel.Warning,
             "Unrecognised ReEx TonnageBand value",
-            new Dictionary<string, object?> { ["reex.tonnage_band"] = rawTonnageBand });
+            new Dictionary<string, object?> { ["reex.tonnage_band"] = rawTonnageBand }
+        );
         return rawTonnageBand;
     }
 
@@ -176,7 +231,11 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                 _log.Log(
                     LogLevel.Warning,
                     "Unrecognised ReEx business plan usage description",
-                    new Dictionary<string, object?> { ["reex.usage_description"] = item.UsageDescription });
+                    new Dictionary<string, object?>
+                    {
+                        ["reex.usage_description"] = item.UsageDescription,
+                    }
+                );
         }
         return dto;
     }

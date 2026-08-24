@@ -50,7 +50,15 @@ public interface IAccreditationNumberAdapter
 /// registration id).</param>
 /// <param name="Nation">Regulator nation; becomes the number's agency
 /// letter.</param>
-/// <param name="OrgId">The organisation's real numeric Org ID.</param>
+/// <param name="OrgId">The organisation's real numeric Org ID, or null when
+/// this service does not have one. RA-475: null is the NORMAL case for a
+/// genuinely-submitted application — the only organisation id this service
+/// holds is <c>operatorOrganisationId</c>, which is the ReEx organisation id
+/// and is a UUID. The backend resolves the numeric id from ReEx itself (see
+/// <c>AccreditationApplicationEndpoints.ResolveOrgIdAsync</c>) and only falls
+/// back to this value, which is why passing a parsed one is still worth doing
+/// for the numeric seeded/stub organisations that have no ReEx document
+/// behind them.</param>
 /// <param name="Year">Four-digit accreditation year.</param>
 /// <param name="Regenerate">See the interface method's doc comment.</param>
 /// <param name="CorrelationId">One id per logical call, forwarded as the
@@ -62,7 +70,7 @@ public sealed record AccreditationNumberRequest(
     string OrganisationId,
     string ApplicationId,
     Nation Nation,
-    int OrgId,
+    int? OrgId,
     int Year,
     bool Regenerate,
     Guid CorrelationId

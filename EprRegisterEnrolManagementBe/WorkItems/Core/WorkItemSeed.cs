@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -25,8 +26,7 @@ public static class WorkItemSeed
     /// builds. Do not change — that would re-key every seeded item and
     /// break idempotency on existing databases.
     /// </summary>
-    private static readonly Guid s_namespaceId =
-        new("c3f3e9c6-2a8e-4f2a-9e6d-7e7f9a1b2c33");
+    private static readonly Guid s_namespaceId = new("c3f3e9c6-2a8e-4f2a-9e6d-7e7f9a1b2c33");
 
     /// <summary>
     /// Build a stable <see cref="Guid"/> from <paramref name="typeId"/>
@@ -38,6 +38,11 @@ public static class WorkItemSeed
     /// part of the identity and a missing value would silently collide
     /// every seed item under that type.
     /// </exception>
+    [SuppressMessage(
+        "SonarLint",
+        "S4790",
+        Justification = "UUID v5 implementation complies with RFC specifications."
+    )]
     public static Guid DeterministicId(string typeId, string seedKey)
     {
         if (string.IsNullOrWhiteSpace(typeId))

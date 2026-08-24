@@ -674,6 +674,14 @@ internal static class ReAccreditationEndpoints
             // errorCode is attached: the frontend shows a generic try-again.
             WorkItemActionFailureCode.UpstreamNotificationFailed =>
                 StatusCodes.Status500InternalServerError,
+            // RA-475: the same 500 /approve has always given this failure (see
+            // the enum's own doc, and ApproveReAccreditation's switch). It was
+            // simply missing from this switch, so a decision blocked by the
+            // accreditation-number call answered 400 while the identical failure on
+            // /approve answered 500 — and management-fe reads a 400 as a client
+            // validation problem.
+            WorkItemActionFailureCode.AccreditationNumberUnavailable =>
+                StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
         };
 
