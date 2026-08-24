@@ -797,8 +797,18 @@ public class ReAccreditationApprovalServiceTests
             .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
 
+    /// <summary>
+    /// RA-475. This used to assert the opposite — that a non-numeric
+    /// operatorOrganisationId refused approval outright — and that assertion is
+    /// what let the bug ship: every genuinely-submitted application has a ReEx
+    /// organisation UUID here, so on dev NO re-accreditation could be determined,
+    /// while the numeric seeded fixtures every other test uses kept passing.
+    ///
+    /// A UUID is now normal. The adapter is called, OrgId is sent as null, and the
+    /// backend resolves the real numeric org id from ReEx.
+    /// </summary>
     [Fact]
-    public async Task ApproveAsync_returns_InvalidTransition_and_does_not_call_the_adapter_when_org_id_is_not_numeric()
+    public async Task ApproveAsync_approves_and_sends_a_null_org_id_when_the_organisation_id_is_a_reex_guid()
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
@@ -806,7 +816,7 @@ public class ReAccreditationApprovalServiceTests
             payload: new BsonDocument
             {
                 ["organisationName"] = "Acme Ltd",
-                ["operatorOrganisationId"] = "not-a-number",
+                ["operatorOrganisationId"] = "c14854d9-e20a-41b3-87d5-a1fd4bbe2153",
                 ["operatorApplicationId"] = "APP-500027",
                 ["nation"] = "England",
             }
@@ -815,11 +825,46 @@ public class ReAccreditationApprovalServiceTests
 
         var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
 
-        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
-        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        Assert.True(result.IsSuccess);
         await sut
-            .NumberAdapter.DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
+            .NumberAdapter.Received(1)
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Is<AccreditationNumberRequest>(r =>
+                    r.OrganisationId == "c14854d9-e20a-41b3-87d5-a1fd4bbe2153" && r.OrgId == null
+                ),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    /// <summary>
+    /// A numeric organisation id is still forwarded — it is the backend's fallback
+    /// for the seeded/stub organisations ReEx has no document for.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_forwards_a_numeric_organisation_id_as_the_org_id()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["operatorOrganisationId"] = "500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["nation"] = "England",
+            }
+        );
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess);
+        await sut
+            .NumberAdapter.Received(1)
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Is<AccreditationNumberRequest>(r => r.OrgId == 500027),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     /// <summary>

@@ -280,17 +280,11 @@ internal sealed class ReAccreditationApprovalService(
                     freshPayload.Nation is not { } nation
                     || string.IsNullOrWhiteSpace(freshPayload.OperatorOrganisationId)
                     || string.IsNullOrWhiteSpace(freshPayload.OperatorApplicationId)
-                    || !int.TryParse(
-                        freshPayload.OperatorOrganisationId,
-                        NumberStyles.Integer,
-                        CultureInfo.InvariantCulture,
-                        out var orgId
-                    )
                 )
                 {
                     logger.LogError(
                         "Work item {WorkItemId} is missing data required to request an accreditation number "
-                            + "(nation, a numeric operatorOrganisationId, or operatorApplicationId).",
+                            + "(nation, operatorOrganisationId, or operatorApplicationId).",
                         workItem.Id
                     );
                     return WorkItemActionResult.Failure(
@@ -298,6 +292,29 @@ internal sealed class ReAccreditationApprovalService(
                         $"Work item '{workItemId}' is missing data required to issue an accreditation number."
                     );
                 }
+
+                // RA-475: a numeric operatorOrganisationId is a BONUS, never a
+                // requirement. `operatorOrganisationId` is the ReEx organisation id
+                // and is a UUID on every genuinely-submitted application; only the
+                // seeded fixtures carry numeric ones. Requiring it to parse — which
+                // is what RA-448 phase 2 did — refused approval on every real
+                // application, and because the refusal was an InvalidTransition it
+                // reached the caseworker as management-fe's "this application has
+                // changed since you opened it, refresh and try again" on a
+                // determination no refresh could ever fix.
+                //
+                // The number's {OrgId:D6} segment is resolved by the backend from
+                // ReEx's own organisation document, so null here is correct and
+                // expected; a parsed value is passed through only as the backend's
+                // fallback for organisations ReEx has no record of.
+                var orgId = int.TryParse(
+                    freshPayload.OperatorOrganisationId,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var parsedOrgId
+                )
+                    ? parsedOrgId
+                    : (int?)null;
 
                 // RA-448 phase 2 review: OperatorApplicationId is the backend's
                 // {applicationId} route segment — confirmed (not assumed) against

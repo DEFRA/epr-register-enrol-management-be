@@ -3367,6 +3367,41 @@ public class ReAccreditationEndpointTests
         Assert.Equal("approved", persisted!.StateId);
     }
 
+    /// <summary>
+    /// RA-475 regression: a REAL application's <c>operatorOrganisationId</c>
+    /// is the ReEx organisation id — a GUID — never a number. The seeded
+    /// fixtures and every other test in this file use a numeric id
+    /// ("500027"), which is why RA-448 phase 2's <c>int.TryParse</c> gate in
+    /// ReAccreditationApprovalService went unnoticed: on dev it fails for
+    /// every genuinely-submitted application, the failure surfaces as
+    /// InvalidTransition -> 409, and management-fe renders that as "This
+    /// application has changed since you opened it", which no amount of
+    /// refreshing can clear.
+    /// </summary>
+    [Fact]
+    public async Task Decision_approves_when_the_operator_organisation_id_is_a_reex_guid()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var workItem = BuildAssessmentInProgress(id, TenantClientId);
+        workItem.Payload["operatorOrganisationId"] = "c14854d9-e20a-41b3-87d5-a1fd4bbe2153";
+        workItem.Payload["registrationNumber"] = "R25SR500000912AL";
+        await factory.SeedAsync(workItem, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("approved", persisted!.StateId);
+    }
+
     [Fact]
     public async Task Decision_replay_is_idempotent_and_flags_the_replay()
     {
