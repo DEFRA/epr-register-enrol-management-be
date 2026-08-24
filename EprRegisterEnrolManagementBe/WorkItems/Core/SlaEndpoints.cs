@@ -16,6 +16,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// </summary>
 public static class SlaEndpoints
 {
+    private const string InvalidRequestTitle = "Invalid request";
+    private const string InvalidSlaRequestTitle = "Invalid SLA request";
+
     /// <summary>Cap on the SLA endpoint request bodies. Both bodies carry a
     /// reason string and one or two short fields — 10 KB is comfortably
     /// generous and matches the assign / status endpoints.</summary>
@@ -51,26 +54,26 @@ public static class SlaEndpoints
     {
         if (body.ValueKind != JsonValueKind.Object)
         {
-            return Problem("Invalid request",
+            return Problem(InvalidRequestTitle,
                 "Request body must be a JSON object with 'additionalDuration' and 'reason'.",
                 StatusCodes.Status400BadRequest);
         }
 
         if (!TryGetString(body, "additionalDuration", out var rawDuration))
         {
-            return Problem("Invalid request",
+            return Problem(InvalidRequestTitle,
                 "'additionalDuration' is required and must be an ISO-8601 duration string (e.g. 'P14D').",
                 StatusCodes.Status400BadRequest);
         }
         if (!TryParseDuration(rawDuration!, out var additional, out var durationError))
         {
-            return Problem("Invalid SLA request", durationError!,
+            return Problem(InvalidSlaRequestTitle, durationError!,
                 StatusCodes.Status422UnprocessableEntity);
         }
 
         if (!TryGetString(body, "reason", out var reason))
         {
-            return Problem("Invalid request",
+            return Problem(InvalidRequestTitle,
                 "'reason' is required and must be a non-empty string.",
                 StatusCodes.Status422UnprocessableEntity);
         }
@@ -89,20 +92,20 @@ public static class SlaEndpoints
     {
         if (body.ValueKind != JsonValueKind.Object)
         {
-            return Problem("Invalid request",
+            return Problem(InvalidRequestTitle,
                 "Request body must be a JSON object with 'newTargetDuration' and 'reason'.",
                 StatusCodes.Status400BadRequest);
         }
 
         if (!TryGetString(body, "newTargetDuration", out var rawDuration))
         {
-            return Problem("Invalid request",
+            return Problem(InvalidRequestTitle,
                 "'newTargetDuration' is required and must be an ISO-8601 duration string (e.g. 'P21D').",
                 StatusCodes.Status400BadRequest);
         }
         if (!TryParseDuration(rawDuration!, out var newTarget, out var durationError))
         {
-            return Problem("Invalid SLA request", durationError!,
+            return Problem(InvalidSlaRequestTitle, durationError!,
                 StatusCodes.Status422UnprocessableEntity);
         }
 
@@ -116,7 +119,7 @@ public static class SlaEndpoints
                     System.Globalization.DateTimeStyles.RoundtripKind,
                     out var parsedStart))
             {
-                return Problem("Invalid SLA request",
+                return Problem(InvalidSlaRequestTitle,
                     "'newStartedAt' must be an ISO-8601 date-time string when provided.",
                     StatusCodes.Status422UnprocessableEntity);
             }
@@ -125,7 +128,7 @@ public static class SlaEndpoints
 
         if (!TryGetString(body, "reason", out var reason))
         {
-            return Problem("Invalid request",
+            return Problem(InvalidRequestTitle,
                 "'reason' is required and must be a non-empty string.",
                 StatusCodes.Status422UnprocessableEntity);
         }
@@ -176,10 +179,10 @@ public static class SlaEndpoints
             SlaActionFailureCode.WorkItemNotFound => ("Work item not found", StatusCodes.Status404NotFound),
             SlaActionFailureCode.NotAuthorized => ("Forbidden", StatusCodes.Status403Forbidden),
             SlaActionFailureCode.MissingActorIdentity => ("Unauthorized", StatusCodes.Status401Unauthorized),
-            SlaActionFailureCode.InvalidRequest => ("Invalid SLA request", StatusCodes.Status422UnprocessableEntity),
+            SlaActionFailureCode.InvalidRequest => (InvalidSlaRequestTitle, StatusCodes.Status422UnprocessableEntity),
             SlaActionFailureCode.ClockNotStarted => ("SLA clock not started", StatusCodes.Status409Conflict),
             SlaActionFailureCode.ConcurrencyConflict => ("Concurrency conflict", StatusCodes.Status409Conflict),
-            _ => ("Invalid SLA request", StatusCodes.Status400BadRequest)
+            _ => (InvalidSlaRequestTitle, StatusCodes.Status400BadRequest)
         };
         return Problem(title, result.Message ?? title, status);
     }

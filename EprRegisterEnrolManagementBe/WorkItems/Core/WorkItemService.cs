@@ -119,6 +119,8 @@ public sealed record WorkItemEngineProjection(
 
 public sealed class WorkItemService : IWorkItemService
 {
+    private const string SourceKey = "source";
+
     /// <summary>
     /// Maximum number of <c>applicationReference</c> candidates the engine
     /// tries before giving up on a submission. The suffix keyspace is 10^9,
@@ -183,12 +185,12 @@ public sealed class WorkItemService : IWorkItemService
         // server-side below.
         if (
             submissionMetadata != null
-            && submissionMetadata.TryGetValue("source", out var sourceVal)
+            && submissionMetadata.TryGetValue(SourceKey, out var sourceVal)
             && sourceVal != null
-            && !payload.Contains("source")
+            && !payload.Contains(SourceKey)
         )
         {
-            payload["source"] = sourceVal;
+            payload[SourceKey] = sourceVal;
         }
 
         // RA-311/MBE-3: idempotent submit. The operator backend forwards the
@@ -240,7 +242,7 @@ public sealed class WorkItemService : IWorkItemService
         for (var attempt = 1; ; attempt++)
         {
             var applicationReference = _referenceGenerator.Generate(payload, attempt);
-            payload["applicationReference"] = applicationReference;
+            payload[ApplicationReferenceField] = applicationReference;
 
             // RA-447/CM3: the operator backend cannot know applicationReference
             // before management-be generates it, so paymentReference is always
@@ -288,14 +290,14 @@ public sealed class WorkItemService : IWorkItemService
                     ["typeId"] = type.TypeId,
                     ["stateId"] = workItem.StateId,
                     ["templateVersion"] = snapshot.TemplateVersion,
-                    ["source"] =
+                    [SourceKey] =
                         submissionMetadata is not null
-                        && submissionMetadata.TryGetValue("source", out var src)
+                        && submissionMetadata.TryGetValue(SourceKey, out var src)
                             ? src
                             : null,
                     ["clientId"] = user.FindFirstValue("client_id"),
                     ["userId"] = ResolveActorUserId(user),
-                    ["applicationReference"] = applicationReference,
+                    [ApplicationReferenceField] = applicationReference,
                 }
             );
 
@@ -395,8 +397,8 @@ public sealed class WorkItemService : IWorkItemService
             }
         }
 
-        var persistedReference = payload.Contains("applicationReference")
-            ? payload["applicationReference"].AsString
+        var persistedReference = payload.Contains(ApplicationReferenceField)
+            ? payload[ApplicationReferenceField].AsString
             : null;
 
         _logger.LogInformation(

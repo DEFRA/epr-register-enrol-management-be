@@ -26,6 +26,9 @@ internal sealed class ReAccreditationResumeSnapshotMigration(
     ILogger<ReAccreditationResumeSnapshotMigration> logger)
     : ReAccreditationSnapshotMigrationBase(logger)
 {
+    private const string QueriedStateId = "queried";
+    private const string ResumeActionLabel = "Resume";
+
     /// <summary>
     /// Marker transition id used to test whether a snapshot already has the
     /// v7 transitions. Kept in sync with the four literal
@@ -42,10 +45,10 @@ internal sealed class ReAccreditationResumeSnapshotMigration(
     // resolution.
     private static readonly IReadOnlyList<WorkItemTransition> s_newTransitions =
     [
-        new WorkItemTransition("resume-during-duly-making", "Resume", "queried", "submitted", CallerInvocable: false),
-        new WorkItemTransition("resume-during-duly-made", "Resume", "queried", "duly-made", CallerInvocable: false),
-        new WorkItemTransition("resume-during-assessment", "Resume", "queried", "assessment-in-progress", CallerInvocable: false),
-        new WorkItemTransition("resume-during-decision", "Resume", "queried", "awaiting-decision", CallerInvocable: false),
+        new WorkItemTransition("resume-during-duly-making", ResumeActionLabel, QueriedStateId, "submitted", CallerInvocable: false),
+        new WorkItemTransition("resume-during-duly-made", ResumeActionLabel, QueriedStateId, "duly-made", CallerInvocable: false),
+        new WorkItemTransition("resume-during-assessment", ResumeActionLabel, QueriedStateId, "assessment-in-progress", CallerInvocable: false),
+        new WorkItemTransition("resume-during-decision", ResumeActionLabel, QueriedStateId, "awaiting-decision", CallerInvocable: false),
     ];
 
     public override string Name => "ReAccreditation: add resume-during-* transitions to snapshot (v6 → v7)";
