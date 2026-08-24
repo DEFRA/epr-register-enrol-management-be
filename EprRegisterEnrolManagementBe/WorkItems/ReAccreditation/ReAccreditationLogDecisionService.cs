@@ -56,7 +56,8 @@ internal sealed class ReAccreditationLogDecisionService(
     IOperatorBackendPushAdapter pushAdapter,
     IWorkItemAuditAppender auditAppender,
     ILogger<ReAccreditationLogDecisionService> logger,
-    TimeProvider? timeProvider = null) : IReAccreditationLogDecisionService
+    TimeProvider? timeProvider = null
+) : IReAccreditationLogDecisionService
 {
     private const string AssessmentStateId = "assessment-in-progress";
     private const string AwaitingDecisionStateId = "awaiting-decision";
@@ -87,7 +88,8 @@ internal sealed class ReAccreditationLogDecisionService(
         Guid workItemId,
         ReAccreditationDecisionOutcome outcome,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default
+    )
     {
         ArgumentNullException.ThrowIfNull(user);
 
@@ -105,19 +107,26 @@ internal sealed class ReAccreditationLogDecisionService(
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.WorkItemNotFound,
-                $"No work item exists with id '{workItemId}'.");
+                $"No work item exists with id '{workItemId}'."
+            );
         }
 
-        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase))
+        if (
+            !string.Equals(
+                workItem.TypeId,
+                ReAccreditationType.Id,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UnknownAction,
-                $"Work item {workItemId} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'.");
+                $"Work item {workItemId} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'."
+            );
         }
 
-        var targetStateId = outcome == ReAccreditationDecisionOutcome.Approved
-            ? ApprovedStateId
-            : RejectedStateId;
+        var targetStateId =
+            outcome == ReAccreditationDecisionOutcome.Approved ? ApprovedStateId : RejectedStateId;
 
         // A double-click, or a client retrying a response it never received,
         // must not fail. Only a replay of the SAME outcome is a no-op; an item
@@ -128,7 +137,9 @@ internal sealed class ReAccreditationLogDecisionService(
         {
             logger.LogInformation(
                 "Log-decision for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
-                workItemId, workItem.StateId);
+                workItemId,
+                workItem.StateId
+            );
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
@@ -136,13 +147,16 @@ internal sealed class ReAccreditationLogDecisionService(
         // ReAccreditationApprovalService: a decision must be refused on a
         // closed application even when its frozen snapshot is too old to
         // carry terminal metadata.
-        if (string.Equals(workItem.StateId, ApprovedStateId, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(workItem.StateId, RejectedStateId, StringComparison.OrdinalIgnoreCase) ||
-            string.Equals(workItem.StateId, WithdrawnStateId, StringComparison.OrdinalIgnoreCase))
+        if (
+            string.Equals(workItem.StateId, ApprovedStateId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(workItem.StateId, RejectedStateId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(workItem.StateId, WithdrawnStateId, StringComparison.OrdinalIgnoreCase)
+        )
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,
-                $"Work item {workItemId} is in terminal state '{workItem.StateId}'; no decision can be recorded.");
+                $"Work item {workItemId} is in terminal state '{workItem.StateId}'; no decision can be recorded."
+            );
         }
 
         // The two accepted entry states. 'awaiting-decision' is accepted not
@@ -150,74 +164,166 @@ internal sealed class ReAccreditationLogDecisionService(
         // but so that an application stranded mid-hop by an earlier failure,
         // or left there by the pre-RA-410 two-step flow, is finished by the
         // identical call rather than needing a bespoke rescue path.
-        var needsSubmitForDecision =
-            string.Equals(workItem.StateId, AssessmentStateId, StringComparison.OrdinalIgnoreCase);
+        var needsSubmitForDecision = string.Equals(
+            workItem.StateId,
+            AssessmentStateId,
+            StringComparison.OrdinalIgnoreCase
+        );
 
-        if (!needsSubmitForDecision &&
-            !string.Equals(workItem.StateId, AwaitingDecisionStateId, StringComparison.OrdinalIgnoreCase))
+        if (
+            !needsSubmitForDecision
+            && !string.Equals(
+                workItem.StateId,
+                AwaitingDecisionStateId,
+                StringComparison.OrdinalIgnoreCase
+            )
+        )
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
-                $"A decision can only be recorded for a work item in '{AssessmentStateId}' or " +
-                $"'{AwaitingDecisionStateId}', but {workItemId} is in '{workItem.StateId}'.");
+                $"A decision can only be recorded for a work item in '{AssessmentStateId}' or "
+                    + $"'{AwaitingDecisionStateId}', but {workItemId} is in '{workItem.StateId}'."
+            );
+        }
+
+        var actionId =
+            outcome == ReAccreditationDecisionOutcome.Approved ? ApproveActionId : RejectActionId;
+        var actionDisplayName =
+            outcome == ReAccreditationDecisionOutcome.Approved ? "Approve" : "Reject";
+        var toStateDisplayName = ResolveStateDisplayName(workItem, targetStateId);
+        var correlationId = Guid.NewGuid();
+        var occurredAt = _timeProvider.GetUtcNow().UtcDateTime;
+
+        // epr-r9oy PRE-PUSH NUMBER MINT. An approval must mint its
+        // accreditation number BEFORE the OJ push below, not after: the
+        // backend's accreditation-number endpoint refuses once
+        // ApplicationStatus is terminal (RejectIfTerminal), and the push is
+        // exactly what makes it terminal. Minting first — while OJ still
+        // considers the application open — is what makes the mint succeed at
+        // all; minting after left ApproveAsync's own attempt permanently
+        // stuck (AccreditationNumberUnavailable on every retry, because by
+        // then OJ was already terminal). Reject never mints a number, so this
+        // is skipped entirely for that outcome.
+        AccreditationNumberResult? preResolvedAccreditationNumber = null;
+        if (outcome == ReAccreditationDecisionOutcome.Approved)
+        {
+            preResolvedAccreditationNumber = await approvalService.ResolveAccreditationNumberAsync(
+                workItemId,
+                correlationId,
+                cancellationToken
+            );
+
+            if (!preResolvedAccreditationNumber.IsSuccess)
+            {
+                logger.LogError(
+                    "Log-decision for work item {WorkItemId} abandoned: an accreditation number could not "
+                        + "be resolved (correlation {CorrelationId}): {ErrorMessage}. No state was changed.",
+                    workItemId,
+                    correlationId,
+                    preResolvedAccreditationNumber.ErrorMessage
+                );
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.AccreditationNumberUnavailable,
+                    "The re-accreditation decision could not be recorded because an accreditation number "
+                        + "could not be obtained. No change was made; try again shortly."
+                );
+            }
         }
 
         // epr-p86e / RA-410 PRE-COMMIT OJ GATE. Notify the operator journey of
         // the final outcome BEFORE persisting either internal hop. On failure,
         // nothing has been written, so there is nothing to revert — the item
         // stays exactly where it was and the caller gets a generic 500.
-        var actionId = outcome == ReAccreditationDecisionOutcome.Approved ? ApproveActionId : RejectActionId;
-        var actionDisplayName = outcome == ReAccreditationDecisionOutcome.Approved ? "Approve" : "Reject";
-        var toStateDisplayName = ResolveStateDisplayName(workItem, targetStateId);
-        var correlationId = Guid.NewGuid();
-        var occurredAt = _timeProvider.GetUtcNow().UtcDateTime;
-
         var pushResult = await pushAdapter.PushDecisionStatusChangedAsync(
-            workItemId, correlationId, PushFromStateId, targetStateId, toStateDisplayName,
-            actionId, actionDisplayName, occurredAt, cancellationToken);
+            workItemId,
+            correlationId,
+            PushFromStateId,
+            targetStateId,
+            toStateDisplayName,
+            actionId,
+            actionDisplayName,
+            occurredAt,
+            cancellationToken
+        );
 
         if (!pushResult.IsSuccess && !pushResult.IsSkipped)
         {
             logger.LogWarning(
-                "Log-decision for work item {WorkItemId} abandoned: the operator journey could not be " +
-                "notified (correlation {CorrelationId}): {ErrorMessage}. No state was changed.",
-                workItemId, correlationId, pushResult.ErrorMessage);
+                "Log-decision for work item {WorkItemId} abandoned: the operator journey could not be "
+                    + "notified (correlation {CorrelationId}): {ErrorMessage}. No state was changed.",
+                workItemId,
+                correlationId,
+                pushResult.ErrorMessage
+            );
             await AppendStatusPushAuditAsync(
-                workItemId, "status-push-failed", "Status failed to send to OJ",
-                BuildPushDetails(correlationId, actionId, actionDisplayName, targetStateId, toStateDisplayName,
-                    extraKey: "errorMessage", extraValue: pushResult.ErrorMessage),
-                user, cancellationToken);
+                workItemId,
+                "status-push-failed",
+                "Status failed to send to OJ",
+                BuildPushDetails(
+                    correlationId,
+                    actionId,
+                    actionDisplayName,
+                    targetStateId,
+                    toStateDisplayName,
+                    extraKey: "errorMessage",
+                    extraValue: pushResult.ErrorMessage
+                ),
+                user,
+                cancellationToken
+            );
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UpstreamNotificationFailed,
-                "The re-accreditation decision could not be recorded because the operator journey could not " +
-                "be notified. No change was made; try again shortly.");
+                "The re-accreditation decision could not be recorded because the operator journey could not "
+                    + "be notified. No change was made; try again shortly."
+            );
         }
 
         if (needsSubmitForDecision)
         {
             var submitted = await engine.ApplyActionAsync(
-                workItemId, SubmitForDecisionActionId, user, cancellationToken);
+                workItemId,
+                SubmitForDecisionActionId,
+                user,
+                cancellationToken
+            );
 
             if (!submitted.IsSuccess)
             {
                 // Nothing has been written, so the caller can simply retry.
                 logger.LogWarning(
-                    "Log-decision for work item {WorkItemId} abandoned: could not apply " +
-                    "'{ActionId}' ({FailureCode}).",
-                    workItemId, SubmitForDecisionActionId, submitted.FailureCode);
+                    "Log-decision for work item {WorkItemId} abandoned: could not apply "
+                        + "'{ActionId}' ({FailureCode}).",
+                    workItemId,
+                    SubmitForDecisionActionId,
+                    submitted.FailureCode
+                );
                 return submitted;
             }
         }
 
-        var result = outcome == ReAccreditationDecisionOutcome.Approved
-            ? await approvalService.ApproveAsync(workItemId, user, cancellationToken)
-            : await engine.ApplyActionAsync(workItemId, RejectActionId, user, cancellationToken);
+        var result =
+            outcome == ReAccreditationDecisionOutcome.Approved
+                ? await approvalService.ApproveAsync(
+                    workItemId,
+                    user,
+                    cancellationToken,
+                    preResolvedAccreditationNumber
+                )
+                : await engine.ApplyActionAsync(
+                    workItemId,
+                    RejectActionId,
+                    user,
+                    cancellationToken
+                );
 
         if (result.IsSuccess)
         {
             logger.LogInformation(
                 "Re-accreditation work item {WorkItemId} decided as {Outcome} by {UserId}",
-                workItemId, targetStateId, user.FindFirstValue("user:id"));
+                workItemId,
+                targetStateId,
+                user.FindFirstValue("user:id")
+            );
 
             // Record the single decision push's outcome now the decision has
             // landed, mirroring the audit entries ReAccreditationStatusPushHook
@@ -228,17 +334,38 @@ internal sealed class ReAccreditationLogDecisionService(
             if (pushResult.IsSkipped)
             {
                 await AppendStatusPushAuditAsync(
-                    workItemId, "status-push-skipped", "Status not sent to OJ (disabled)",
-                    BuildPushDetails(correlationId, actionId, actionDisplayName, targetStateId, toStateDisplayName,
-                        extraKey: "reason", extraValue: pushResult.ErrorMessage),
-                    user, cancellationToken);
+                    workItemId,
+                    "status-push-skipped",
+                    "Status not sent to OJ (disabled)",
+                    BuildPushDetails(
+                        correlationId,
+                        actionId,
+                        actionDisplayName,
+                        targetStateId,
+                        toStateDisplayName,
+                        extraKey: "reason",
+                        extraValue: pushResult.ErrorMessage
+                    ),
+                    user,
+                    cancellationToken
+                );
             }
             else
             {
                 await AppendStatusPushAuditAsync(
-                    workItemId, "status-push-sent", "Status sent to OJ",
-                    BuildPushDetails(correlationId, actionId, actionDisplayName, targetStateId, toStateDisplayName),
-                    user, cancellationToken);
+                    workItemId,
+                    "status-push-sent",
+                    "Status sent to OJ",
+                    BuildPushDetails(
+                        correlationId,
+                        actionId,
+                        actionDisplayName,
+                        targetStateId,
+                        toStateDisplayName
+                    ),
+                    user,
+                    cancellationToken
+                );
             }
         }
         else
@@ -251,10 +378,13 @@ internal sealed class ReAccreditationLogDecisionService(
             // the gate above, so the replay does not re-notify it needlessly
             // beyond a single idempotent status upsert.
             logger.LogWarning(
-                "Log-decision for work item {WorkItemId} failed at the {Outcome} step ({FailureCode}); " +
-                "the work item is in '{StateId}' and the call may be safely retried.",
-                workItemId, targetStateId, result.FailureCode,
-                result.WorkItem?.StateId ?? AwaitingDecisionStateId);
+                "Log-decision for work item {WorkItemId} failed at the {Outcome} step ({FailureCode}); "
+                    + "the work item is in '{StateId}' and the call may be safely retried.",
+                workItemId,
+                targetStateId,
+                result.FailureCode,
+                result.WorkItem?.StateId ?? AwaitingDecisionStateId
+            );
         }
 
         return result;
@@ -267,9 +397,14 @@ internal sealed class ReAccreditationLogDecisionService(
     /// (<c>errorMessage</c> on a failure, <c>reason</c> on a skip).
     /// </summary>
     private static Dictionary<string, string?> BuildPushDetails(
-        Guid correlationId, string actionId, string actionDisplayName,
-        string toStateId, string toStateDisplayName,
-        string? extraKey = null, string? extraValue = null)
+        Guid correlationId,
+        string actionId,
+        string actionDisplayName,
+        string toStateId,
+        string toStateDisplayName,
+        string? extraKey = null,
+        string? extraValue = null
+    )
     {
         var details = new Dictionary<string, string?>
         {
@@ -288,16 +423,30 @@ internal sealed class ReAccreditationLogDecisionService(
     }
 
     private async Task AppendStatusPushAuditAsync(
-        Guid workItemId, string action, string actionDisplayName,
-        Dictionary<string, string?> details, ClaimsPrincipal user, CancellationToken cancellationToken)
+        Guid workItemId,
+        string action,
+        string actionDisplayName,
+        Dictionary<string, string?> details,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
     {
         var appended = await auditAppender.AppendAsync(
-            workItemId, action, actionDisplayName, details, user, cancellationToken);
+            workItemId,
+            action,
+            actionDisplayName,
+            details,
+            user,
+            cancellationToken
+        );
         if (!appended)
         {
             logger.LogWarning(
                 "{Action} audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                action, workItemId, details.GetValueOrDefault("correlationId"));
+                action,
+                workItemId,
+                details.GetValueOrDefault("correlationId")
+            );
         }
     }
 
@@ -311,8 +460,11 @@ internal sealed class ReAccreditationLogDecisionService(
     private static string ResolveStateDisplayName(WorkItem workItem, string stateId)
     {
         IWorkItemTemplate template = (IWorkItemTemplate?)workItem.TemplateSnapshot ?? s_type;
-        var displayName = template.States.FirstOrDefault(
-            state => string.Equals(state.Id, stateId, StringComparison.OrdinalIgnoreCase))?.DisplayName;
+        var displayName = template
+            .States.FirstOrDefault(state =>
+                string.Equals(state.Id, stateId, StringComparison.OrdinalIgnoreCase)
+            )
+            ?.DisplayName;
         return displayName ?? stateId;
     }
 
@@ -320,7 +472,8 @@ internal sealed class ReAccreditationLogDecisionService(
         string.IsNullOrWhiteSpace(user.FindFirstValue("user:id"))
             ? WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.MissingActorIdentity,
-                "Mutating this work item requires an authenticated end user; " +
-                "the request did not include a 'user:id' claim.")
+                "Mutating this work item requires an authenticated end user; "
+                    + "the request did not include a 'user:id' claim."
+            )
             : null;
 }

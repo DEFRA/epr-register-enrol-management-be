@@ -92,10 +92,34 @@ internal sealed class ReAccreditationApprovalService(
     private readonly IWorkItemPostActionHook[] _postActionHooks = postActionHooks.ToArray();
     private readonly AccreditationConfig _accreditationConfig = accreditationOptions.Value;
 
+    public async Task<AccreditationNumberResult> ResolveAccreditationNumberAsync(
+        Guid workItemId,
+        Guid correlationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        if (workItem is null)
+        {
+            return AccreditationNumberResult.Failure(
+                $"No work item exists with id '{workItemId}'."
+            );
+        }
+
+        var resolution = await ResolveAccreditationNumberForWorkItemAsync(
+            workItem,
+            _accreditationConfig.CurrentYear,
+            correlationId,
+            cancellationToken
+        );
+        return resolution.NumberResult;
+    }
+
     public async Task<WorkItemActionResult> ApproveAsync(
         Guid workItemId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        AccreditationNumberResult? preResolvedAccreditationNumber = null
     )
     {
         ArgumentNullException.ThrowIfNull(user);
@@ -113,7 +137,13 @@ internal sealed class ReAccreditationApprovalService(
         // ask the backend to "reapply" (YY+1) a number it just issued a
         // moment ago on attempt 1, corrupting the count for no reason. See
         // Phase 2 doc AC10/AC11.
-        AccreditationNumberResult? numberResult = null;
+        //
+        // epr-r9oy: seeded from the caller's pre-resolved number when supplied
+        // (see IReAccreditationApprovalService.ApproveAsync's doc comment) so
+        // this method never calls the backend's accreditation-number endpoint
+        // a second time — that endpoint refuses once ApplicationStatus is
+        // terminal, which a caller resolving ahead of an OJ push relies on.
+        AccreditationNumberResult? numberResult = preResolvedAccreditationNumber;
         // RA-448 phase 2: one id for the whole logical approval attempt (not
         // per retry), forwarded to the backend as X-Correlation-Id so this
         // service's logs and the backend's logs for the same request can be
@@ -250,128 +280,41 @@ internal sealed class ReAccreditationApprovalService(
 
             if (numberResult is null)
             {
-                ReAccreditationPayload freshPayload;
-                try
-                {
-                    freshPayload = BsonSerializer.Deserialize<ReAccreditationPayload>(
-                        workItem.Payload ?? new BsonDocument()
-                    );
-                }
-                catch (Exception ex)
-                    when (ex
-                            is BsonSerializationException
-                                or FormatException
-                                or InvalidCastException
-                    )
-                {
-                    logger.LogError(
-                        ex,
-                        "Re-accreditation approval for work item {WorkItemId} aborted: existing payload "
-                            + "could not be deserialised to resolve the fields needed to request an "
-                            + "accreditation number.",
-                        workItem.Id
-                    );
-                    return WorkItemActionResult.Failure(
-                        WorkItemActionFailureCode.InvalidTransition,
-                        $"Work item '{workItemId}' payload is corrupt and cannot be read. "
-                            + "Inspect the server logs for details; a manual data repair may be required."
-                    );
-                }
+                var resolution = await ResolveAccreditationNumberForWorkItemAsync(
+                    workItem,
+                    accreditationYear,
+                    correlationId,
+                    cancellationToken
+                );
 
-                if (
-                    freshPayload.Nation is not { } nation
-                    || string.IsNullOrWhiteSpace(freshPayload.OperatorOrganisationId)
-                    || string.IsNullOrWhiteSpace(freshPayload.OperatorApplicationId)
-                )
+                if (!resolution.NumberResult.IsSuccess)
                 {
-                    logger.LogError(
-                        "Work item {WorkItemId} is missing data required to request an accreditation number "
-                            + "(nation, operatorOrganisationId, or operatorApplicationId).",
-                        workItem.Id
-                    );
-                    return WorkItemActionResult.Failure(
-                        WorkItemActionFailureCode.InvalidTransition,
-                        $"Work item '{workItemId}' is missing data required to issue an accreditation number."
-                    );
-                }
-
-                // RA-475: a numeric operatorOrganisationId is a BONUS, never a
-                // requirement. `operatorOrganisationId` is the ReEx organisation id
-                // and is a UUID on every genuinely-submitted application; only the
-                // seeded fixtures carry numeric ones. Requiring it to parse — which
-                // is what RA-448 phase 2 did — refused approval on every real
-                // application, and because the refusal was an InvalidTransition it
-                // reached the caseworker as management-fe's "this application has
-                // changed since you opened it, refresh and try again" on a
-                // determination no refresh could ever fix.
-                //
-                // The number's {OrgId:D6} segment is resolved by the backend from
-                // ReEx's own organisation document, so null here is correct and
-                // expected; a parsed value is passed through only as the backend's
-                // fallback for organisations ReEx has no record of.
-                var orgId = int.TryParse(
-                    freshPayload.OperatorOrganisationId,
-                    NumberStyles.Integer,
-                    CultureInfo.InvariantCulture,
-                    out var parsedOrgId
-                )
-                    ? parsedOrgId
-                    : (int?)null;
-
-                // RA-448 phase 2 review: OperatorApplicationId is the backend's
-                // {applicationId} route segment — confirmed (not assumed) against
-                // HttpCaseWorkingApiAdapter.BuildPayload in epr-register-enrol-backend,
-                // which sends operatorApplicationId = application.ApplicationId (the
-                // AccreditationApplicationModel's own Mongo id) on every real
-                // submission. OperatorRegistrationId, used here before the fix, is a
-                // different value — the seed-time ReEx registration id — and every
-                // other route on that backend's accreditation-applications group keys
-                // on the document id, not the registration id.
-                //
-                // Regenerate=false, not true: a work item is approved at most once
-                // (the idempotent-return branch above blocks re-approval outright), so
-                // the only time this call runs twice for the SAME application is a
-                // retry after a transient failure — attempt 1 may have already
-                // committed a number the caller never saw acknowledged. Regenerate=true
-                // would ask the backend to bump/reissue on that retry, silently
-                // changing an externally-quoted number; Regenerate=false returns the
-                // already-issued one unchanged when the backend already has one, and
-                // still generates on a genuine first call (see
-                // IAccreditationNumberAdapter's contract) when it doesn't.
-                numberResult =
-                    await accreditationNumberAdapter.GenerateOrUpdateAccreditationNumberAsync(
-                        new AccreditationNumberRequest(
-                            freshPayload.OperatorOrganisationId,
-                            freshPayload.OperatorApplicationId,
-                            nation,
-                            orgId,
-                            accreditationYear,
-                            Regenerate: false,
-                            CorrelationId: correlationId
+                    return resolution.FailureKind switch
+                    {
+                        AccreditationNumberFailureKind.PayloadCorrupt =>
+                            WorkItemActionResult.Failure(
+                                WorkItemActionFailureCode.InvalidTransition,
+                                $"Work item '{workItemId}' payload is corrupt and cannot be read. "
+                                    + "Inspect the server logs for details; a manual data repair may be required."
+                            ),
+                        AccreditationNumberFailureKind.MissingRequiredFields =>
+                            WorkItemActionResult.Failure(
+                                WorkItemActionFailureCode.InvalidTransition,
+                                $"Work item '{workItemId}' is missing data required to issue an accreditation number."
+                            ),
+                        _ => WorkItemActionResult.Failure(
+                            WorkItemActionFailureCode.AccreditationNumberUnavailable,
+                            $"Work item '{workItemId}' could not be approved: an accreditation number could "
+                                + "not be obtained. Try again, or contact support if the problem persists."
                         ),
-                        cancellationToken
-                    );
-
-                if (!numberResult.IsSuccess)
-                {
-                    logger.LogError(
-                        "Failed to resolve an accreditation number for work item {WorkItemId} "
-                            + "(correlation {CorrelationId}): {Error}",
-                        workItem.Id,
-                        correlationId,
-                        numberResult.ErrorMessage
-                    );
-                    return WorkItemActionResult.Failure(
-                        WorkItemActionFailureCode.AccreditationNumberUnavailable,
-                        $"Work item '{workItemId}' could not be approved: an accreditation number could "
-                            + "not be obtained. Try again, or contact support if the problem persists."
-                    );
+                    };
                 }
 
+                numberResult = resolution.NumberResult;
                 // Reused by TryApplyApprovalToPayload below so the same,
                 // not-yet-mutated payload is not deserialised a second time
                 // on the common path (numberResult resolved on attempt 1).
-                numberPayload = freshPayload;
+                numberPayload = resolution.Payload;
             }
 
             var accreditationId = numberResult.AccreditationNumber!;
@@ -482,6 +425,169 @@ internal sealed class ReAccreditationApprovalService(
         );
 
         return WorkItemActionResult.Success(persisted);
+    }
+
+    /// <summary>
+    /// Discriminates why <see cref="AccreditationNumberResolution.NumberResult"/>
+    /// failed, so <see cref="ApproveAsync"/> can reconstruct the exact same
+    /// <see cref="WorkItemActionFailureCode"/> and message it always has for
+    /// each case — a bad/missing payload is caller error (InvalidTransition);
+    /// the backend call itself failing is AccreditationNumberUnavailable.
+    /// <see cref="ResolveAccreditationNumberAsync"/> only needs the result
+    /// itself, not this distinction.
+    /// </summary>
+    private enum AccreditationNumberFailureKind
+    {
+        None,
+        PayloadCorrupt,
+        MissingRequiredFields,
+        AdapterFailure,
+    }
+
+    private sealed record AccreditationNumberResolution(
+        AccreditationNumberResult NumberResult,
+        ReAccreditationPayload? Payload,
+        AccreditationNumberFailureKind FailureKind
+    );
+
+    /// <summary>
+    /// epr-r9oy: the number-resolution step factored out of <see cref="ApproveAsync"/>'s
+    /// retry loop so <see cref="ResolveAccreditationNumberAsync"/> can call it
+    /// standalone. Never throws — every failure mode maps to a
+    /// <see cref="AccreditationNumberResolution.FailureKind"/> instead.
+    /// </summary>
+    private async Task<AccreditationNumberResolution> ResolveAccreditationNumberForWorkItemAsync(
+        WorkItem workItem,
+        int accreditationYear,
+        Guid correlationId,
+        CancellationToken cancellationToken
+    )
+    {
+        ReAccreditationPayload freshPayload;
+        try
+        {
+            freshPayload = BsonSerializer.Deserialize<ReAccreditationPayload>(
+                workItem.Payload ?? new BsonDocument()
+            );
+        }
+        catch (Exception ex)
+            when (ex is BsonSerializationException or FormatException or InvalidCastException)
+        {
+            logger.LogError(
+                ex,
+                "Re-accreditation approval for work item {WorkItemId} aborted: existing payload "
+                    + "could not be deserialised to resolve the fields needed to request an "
+                    + "accreditation number.",
+                workItem.Id
+            );
+            return new AccreditationNumberResolution(
+                AccreditationNumberResult.Failure(
+                    "Work item payload is corrupt and cannot be read."
+                ),
+                null,
+                AccreditationNumberFailureKind.PayloadCorrupt
+            );
+        }
+
+        if (
+            freshPayload.Nation is not { } nation
+            || string.IsNullOrWhiteSpace(freshPayload.OperatorOrganisationId)
+            || string.IsNullOrWhiteSpace(freshPayload.OperatorApplicationId)
+        )
+        {
+            logger.LogError(
+                "Work item {WorkItemId} is missing data required to request an accreditation number "
+                    + "(nation, operatorOrganisationId, or operatorApplicationId).",
+                workItem.Id
+            );
+            return new AccreditationNumberResolution(
+                AccreditationNumberResult.Failure(
+                    "Work item is missing data required to request an accreditation number "
+                        + "(nation, operatorOrganisationId, or operatorApplicationId)."
+                ),
+                null,
+                AccreditationNumberFailureKind.MissingRequiredFields
+            );
+        }
+
+        // RA-475: a numeric operatorOrganisationId is a BONUS, never a
+        // requirement. `operatorOrganisationId` is the ReEx organisation id
+        // and is a UUID on every genuinely-submitted application; only the
+        // seeded fixtures carry numeric ones. Requiring it to parse — which
+        // is what RA-448 phase 2 did — refused approval on every real
+        // application, and because the refusal was an InvalidTransition it
+        // reached the caseworker as management-fe's "this application has
+        // changed since you opened it, refresh and try again" on a
+        // determination no refresh could ever fix.
+        //
+        // The number's {OrgId:D6} segment is resolved by the backend from
+        // ReEx's own organisation document, so null here is correct and
+        // expected; a parsed value is passed through only as the backend's
+        // fallback for organisations ReEx has no record of.
+        var orgId = int.TryParse(
+            freshPayload.OperatorOrganisationId,
+            NumberStyles.Integer,
+            CultureInfo.InvariantCulture,
+            out var parsedOrgId
+        )
+            ? parsedOrgId
+            : (int?)null;
+
+        // RA-448 phase 2 review: OperatorApplicationId is the backend's
+        // {applicationId} route segment — confirmed (not assumed) against
+        // HttpCaseWorkingApiAdapter.BuildPayload in epr-register-enrol-backend,
+        // which sends operatorApplicationId = application.ApplicationId (the
+        // AccreditationApplicationModel's own Mongo id) on every real
+        // submission. OperatorRegistrationId, used here before the fix, is a
+        // different value — the seed-time ReEx registration id — and every
+        // other route on that backend's accreditation-applications group keys
+        // on the document id, not the registration id.
+        //
+        // Regenerate=false, not true: a work item is approved at most once
+        // (the idempotent-return branch above blocks re-approval outright), so
+        // the only time this call runs twice for the SAME application is a
+        // retry after a transient failure — attempt 1 may have already
+        // committed a number the caller never saw acknowledged. Regenerate=true
+        // would ask the backend to bump/reissue on that retry, silently
+        // changing an externally-quoted number; Regenerate=false returns the
+        // already-issued one unchanged when the backend already has one, and
+        // still generates on a genuine first call (see
+        // IAccreditationNumberAdapter's contract) when it doesn't.
+        var numberResult =
+            await accreditationNumberAdapter.GenerateOrUpdateAccreditationNumberAsync(
+                new AccreditationNumberRequest(
+                    freshPayload.OperatorOrganisationId,
+                    freshPayload.OperatorApplicationId,
+                    nation,
+                    orgId,
+                    accreditationYear,
+                    Regenerate: false,
+                    CorrelationId: correlationId
+                ),
+                cancellationToken
+            );
+
+        if (!numberResult.IsSuccess)
+        {
+            logger.LogError(
+                "Failed to resolve an accreditation number for work item {WorkItemId} "
+                    + "(correlation {CorrelationId}): {Error}",
+                workItem.Id,
+                correlationId,
+                numberResult.ErrorMessage
+            );
+            return new AccreditationNumberResolution(
+                numberResult,
+                null,
+                AccreditationNumberFailureKind.AdapterFailure
+            );
+        }
+
+        return new AccreditationNumberResolution(
+            numberResult,
+            freshPayload,
+            AccreditationNumberFailureKind.None
+        );
     }
 
     private bool TryApplyApprovalToPayload(
