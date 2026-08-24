@@ -24,7 +24,9 @@ public class HttpReExAccreditationClientTests
         CreateClient(organisationJson, out _);
 
     private static HttpReExAccreditationClient CreateClient(
-        string organisationJson, out IStructuredLogger<HttpReExAccreditationClient> logger)
+        string organisationJson,
+        out IStructuredLogger<HttpReExAccreditationClient> logger
+    )
     {
         var handler = new StubHttpMessageHandler(organisationJson);
         var httpClient = new HttpClient(handler);
@@ -33,24 +35,25 @@ public class HttpReExAccreditationClientTests
         return new HttpReExAccreditationClient(httpClient, config, logger);
     }
 
-    private static string OrganisationJson(string tonnageBand) => $$"""
-        {
-          "registrations": [
-            { "id": "reg-1", "accreditationId": "acc-1" }
-          ],
-          "accreditations": [
+    private static string OrganisationJson(string tonnageBand) =>
+        $$"""
             {
-              "id": "acc-1",
-              "validFrom": "2025-04-01",
-              "prnIssuance": {
-                "tonnageBand": "{{tonnageBand}}",
-                "signatories": [],
-                "incomeBusinessPlan": []
-              }
+              "registrations": [
+                { "id": "reg-1", "accreditationId": "acc-1" }
+              ],
+              "accreditations": [
+                {
+                  "id": "acc-1",
+                  "validFrom": "2025-04-01",
+                  "prnIssuance": {
+                    "tonnageBand": "{{tonnageBand}}",
+                    "signatories": [],
+                    "incomeBusinessPlan": []
+                  }
+                }
+              ]
             }
-          ]
-        }
-        """;
+            """;
 
     [Theory]
     [InlineData("up_to_500", "UpTo500")]
@@ -62,7 +65,12 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson(raw));
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.NotNull(result);
         Assert.Equal(expected, result!.TonnageBand);
@@ -90,7 +98,12 @@ public class HttpReExAccreditationClientTests
             """;
         var client = CreateClient(json);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.NotNull(result);
         Assert.Null(result!.TonnageBand);
@@ -103,12 +116,18 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson("some_future_band"), out var logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.NotNull(result);
         Assert.Equal("some_future_band", result!.TonnageBand);
 
-        logger.Received(1)
+        logger
+            .Received(1)
             .Log(
                 LogLevel.Warning,
                 Arg.Any<string>(),
@@ -122,28 +141,33 @@ public class HttpReExAccreditationClientTests
     private sealed class StubHttpMessageHandler(string responseJson) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken)
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent(responseJson, Encoding.UTF8, "application/json")
+                Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
             };
             return Task.FromResult(response);
         }
     }
 
-    private sealed class StatusCodeHttpMessageHandler(HttpStatusCode statusCode) : HttpMessageHandler
+    private sealed class StatusCodeHttpMessageHandler(HttpStatusCode statusCode)
+        : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(statusCode));
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => Task.FromResult(new HttpResponseMessage(statusCode));
     }
 
     private sealed class ThrowingHttpMessageHandler(Exception exception) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request, CancellationToken cancellationToken) =>
-            throw exception;
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => throw exception;
     }
 
     [Theory]
@@ -153,11 +177,19 @@ public class HttpReExAccreditationClientTests
     [InlineData("org-1", null)]
     [InlineData("org-1", "")]
     [InlineData("org-1", "   ")]
-    public async Task GetPriorYearAsync_returns_null_for_missing_identifiers(string? organisationId, string? registrationId)
+    public async Task GetPriorYearAsync_returns_null_for_missing_identifiers(
+        string? organisationId,
+        string? registrationId
+    )
     {
         var client = CreateClient(OrganisationJson("up_to_500"));
 
-        var result = await client.GetPriorYearAsync(organisationId, registrationId, 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            organisationId,
+            registrationId,
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
     }
@@ -167,7 +199,12 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson("up_to_500"));
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", null, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            null,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
     }
@@ -181,16 +218,25 @@ public class HttpReExAccreditationClientTests
         var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
         var client = new HttpReExAccreditationClient(httpClient, config, logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
-        logger.Received(1).Log(
-            LogLevel.Warning,
-            Arg.Any<string>(),
-            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
-                (string)p["reex.organisation_id"]! == "org-1" &&
-                (int)p["reex.status_code"]! == (int)HttpStatusCode.NotFound),
-            null);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Warning,
+                Arg.Any<string>(),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["reex.organisation_id"]! == "org-1"
+                    && (int)p["reex.status_code"]! == (int)HttpStatusCode.NotFound
+                ),
+                null
+            );
     }
 
     /// <summary>
@@ -204,7 +250,8 @@ public class HttpReExAccreditationClientTests
     [InlineData(HttpStatusCode.Unauthorized)]
     [InlineData(HttpStatusCode.Forbidden)]
     public async Task GetPriorYearAsync_logs_an_error_naming_the_credentials_when_reex_rejects_them(
-        HttpStatusCode statusCode)
+        HttpStatusCode statusCode
+    )
     {
         var handler = new StatusCodeHttpMessageHandler(statusCode);
         var httpClient = new HttpClient(handler);
@@ -212,27 +259,41 @@ public class HttpReExAccreditationClientTests
         var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
         var client = new HttpReExAccreditationClient(httpClient, config, logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
-        logger.Received(1).Log(
-            LogLevel.Error,
-            Arg.Is<string>(m => m.Contains("REEX_API_BASIC_AUTH", StringComparison.Ordinal)),
-            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
-                (string)p["reex.organisation_id"]! == "org-1" &&
-                (int)p["reex.status_code"]! == (int)statusCode),
-            null);
-        logger.DidNotReceive().Log(
-            LogLevel.Warning,
-            Arg.Any<string>(),
-            Arg.Any<IReadOnlyDictionary<string, object?>>(),
-            Arg.Any<Exception?>());
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                Arg.Is<string>(m => m.Contains("REEX_API_BASIC_AUTH", StringComparison.Ordinal)),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["reex.organisation_id"]! == "org-1"
+                    && (int)p["reex.status_code"]! == (int)statusCode
+                ),
+                null
+            );
+        logger
+            .DidNotReceive()
+            .Log(
+                LogLevel.Warning,
+                Arg.Any<string>(),
+                Arg.Any<IReadOnlyDictionary<string, object?>>(),
+                Arg.Any<Exception?>()
+            );
     }
 
     [Theory]
     [InlineData(typeof(HttpRequestException))]
     [InlineData(typeof(TaskCanceledException))]
-    public async Task GetPriorYearAsync_returns_null_and_logs_an_error_when_the_request_throws(Type exceptionType)
+    public async Task GetPriorYearAsync_returns_null_and_logs_an_error_when_the_request_throws(
+        Type exceptionType
+    )
     {
         var exception = (Exception)Activator.CreateInstance(exceptionType, "boom")!;
         var handler = new ThrowingHttpMessageHandler(exception);
@@ -241,14 +302,24 @@ public class HttpReExAccreditationClientTests
         var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
         var client = new HttpReExAccreditationClient(httpClient, config, logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
-        logger.Received(1).Log(
-            LogLevel.Error,
-            Arg.Any<string>(),
-            Arg.Is<IReadOnlyDictionary<string, object?>>(p => (string)p["reex.organisation_id"]! == "org-1"),
-            exception);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                Arg.Any<string>(),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["reex.organisation_id"]! == "org-1"
+                ),
+                exception
+            );
     }
 
     [Fact]
@@ -256,7 +327,12 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient("null");
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
     }
@@ -266,7 +342,12 @@ public class HttpReExAccreditationClientTests
     {
         var client = CreateClient(OrganisationJson("up_to_500").Replace("reg-1", "reg-other"));
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
     }
@@ -286,7 +367,12 @@ public class HttpReExAccreditationClientTests
             """;
         var client = CreateClient(json);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
     }
@@ -306,7 +392,12 @@ public class HttpReExAccreditationClientTests
             """;
         var client = CreateClient(json);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
     }
@@ -317,7 +408,12 @@ public class HttpReExAccreditationClientTests
         var client = CreateClient(OrganisationJson("up_to_500"));
 
         // OrganisationJson's validFrom is 2025-04-01.
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2024, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2024,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.Null(result);
     }
@@ -342,6 +438,11 @@ public class HttpReExAccreditationClientTests
                     "incomeBusinessPlan": [
                       { "usageDescription": "Support for business collections", "percentIncomeSpent": 15 },
                       { "usageDescription": "Activities or investment not covered by the other categories", "percentIncomeSpent": 8 },
+                      { "usageDescription": "New reprocessing infrastructure and maintaining existing infrastructure", "percentIncomeSpent": 10 },
+                      { "usageDescription": "Price support for buying packaging waste or selling recycled packaging waste", "percentIncomeSpent": 12 },
+                      { "usageDescription": "Communications, including information campaigns", "percentIncomeSpent": 6 },
+                      { "usageDescription": "Developing new markets for products made from recycled packaging waste", "percentIncomeSpent": 9 },
+                      { "usageDescription": "Developing new uses for recycled packaging waste", "percentIncomeSpent": 11 },
                       { "usageDescription": "Some unrecognised category", "percentIncomeSpent": 5 },
                       { "usageDescription": null, "percentIncomeSpent": 5 },
                       { "usageDescription": "Support for business collections", "percentIncomeSpent": null }
@@ -353,7 +454,12 @@ public class HttpReExAccreditationClientTests
             """;
         var client = CreateClient(json, out var logger);
 
-        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
 
         Assert.NotNull(result);
         Assert.Equal(15, result!.BusinessPlan.BusinessCollectionsPercent);
@@ -361,15 +467,24 @@ public class HttpReExAccreditationClientTests
         // categories" is the 7th category, mapped to OtherPercent the same
         // way the other six usage descriptions map to their own setters.
         Assert.Equal(8, result.BusinessPlan.OtherPercent);
+        Assert.Equal(10, result.BusinessPlan.NewInfrastructurePercent);
+        Assert.Equal(12, result.BusinessPlan.PriceSupportPercent);
+        Assert.Equal(6, result.BusinessPlan.CommunicationsPercent);
+        Assert.Equal(9, result.BusinessPlan.NewMarketsPercent);
+        Assert.Equal(11, result.BusinessPlan.NewUsesPercent);
         Assert.Equal(string.Empty, result.Authorisers[0].FullName);
         Assert.Equal(string.Empty, result.Authorisers[0].Email);
 
-        logger.Received(1).Log(
-            LogLevel.Warning,
-            Arg.Any<string>(),
-            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
-                (string)p["reex.usage_description"]! == "Some unrecognised category"),
-            null);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Warning,
+                Arg.Any<string>(),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["reex.usage_description"]! == "Some unrecognised category"
+                ),
+                null
+            );
     }
 
     [Fact]

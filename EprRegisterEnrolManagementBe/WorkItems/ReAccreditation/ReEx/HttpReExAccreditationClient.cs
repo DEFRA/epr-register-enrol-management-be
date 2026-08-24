@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -100,7 +101,11 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
             return null;
 
         if (
-            !DateOnly.TryParse(accreditation.ValidFrom, out var validFrom)
+            !DateOnly.TryParse(
+                accreditation.ValidFrom,
+                CultureInfo.InvariantCulture,
+                out var validFrom
+            )
             || validFrom.Year != year.Value
         )
         {
