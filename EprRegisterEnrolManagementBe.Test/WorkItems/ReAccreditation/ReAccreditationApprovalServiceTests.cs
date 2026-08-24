@@ -1183,4 +1183,126 @@ public class ReAccreditationApprovalServiceTests
             .NumberAdapter.DidNotReceiveWithAnyArgs()
             .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
+
+    // ──────────────── epr-r9oy: pre-resolved accreditation number ────────────────
+    //
+    // ReAccreditationLogDecisionService now mints the accreditation number
+    // BEFORE the operator-journey push (which marks the application terminal
+    // on the backend, and the backend's accreditation-number endpoint refuses
+    // once it is). It passes that already-minted number in here so ApproveAsync
+    // never calls the adapter a second time — a second call would always fail.
+
+    [Fact]
+    public async Task ApproveAsync_uses_the_preresolved_number_and_never_calls_the_adapter()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var preResolved = AccreditationNumberResult.Success("A25ER5000270099WO");
+
+        var result = await sut.Service.ApproveAsync(
+            workItem.Id,
+            DecisionMaker(),
+            ct,
+            preResolvedAccreditationNumber: preResolved
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("A25ER5000270099WO", workItem.Payload!["accreditationId"].AsString);
+        await sut
+            .NumberAdapter.DidNotReceiveWithAnyArgs()
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task ResolveAccreditationNumberAsync_returns_the_adapters_number_without_mutating_the_work_item()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build(accreditationId: "A25ER5000270036WO");
+        var workItem = BuildWorkItem();
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var correlationId = Guid.NewGuid();
+
+        var result = await sut.Service.ResolveAccreditationNumberAsync(
+            workItem.Id,
+            correlationId,
+            ct
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("A25ER5000270036WO", result.AccreditationNumber);
+        Assert.Equal("awaiting-decision", workItem.StateId);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        await sut
+            .NumberAdapter.Received(1)
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Is<AccreditationNumberRequest>(r => r.CorrelationId == correlationId),
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task ResolveAccreditationNumberAsync_returns_failure_for_an_unknown_work_item()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var missingId = Guid.NewGuid();
+
+        var result = await sut.Service.ResolveAccreditationNumberAsync(
+            missingId,
+            Guid.NewGuid(),
+            ct
+        );
+
+        Assert.False(result.IsSuccess);
+        await sut
+            .NumberAdapter.DidNotReceiveWithAnyArgs()
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task ResolveAccreditationNumberAsync_returns_failure_when_the_adapter_call_fails()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        sut.NumberAdapter.GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Any<AccreditationNumberRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(AccreditationNumberResult.Failure("backend unreachable"));
+
+        var result = await sut.Service.ResolveAccreditationNumberAsync(
+            workItem.Id,
+            Guid.NewGuid(),
+            ct
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal("backend unreachable", result.ErrorMessage);
+    }
+
+    [Fact]
+    public async Task ResolveAccreditationNumberAsync_returns_failure_when_required_payload_fields_are_missing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(
+            payload: new BsonDocument { ["organisationName"] = "Acme Ltd" }
+        );
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ResolveAccreditationNumberAsync(
+            workItem.Id,
+            Guid.NewGuid(),
+            ct
+        );
+
+        Assert.False(result.IsSuccess);
+        await sut
+            .NumberAdapter.DidNotReceiveWithAnyArgs()
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
+    }
 }

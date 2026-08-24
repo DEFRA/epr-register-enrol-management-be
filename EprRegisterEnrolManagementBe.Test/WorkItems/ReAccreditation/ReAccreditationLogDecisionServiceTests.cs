@@ -30,7 +30,8 @@ public class ReAccreditationLogDecisionServiceTests
             Substitute.For<IReAccreditationApprovalService>(),
             Substitute.For<IOperatorBackendPushAdapter>(),
             Substitute.For<IWorkItemAuditAppender>(),
-            NullLogger<ReAccreditationLogDecisionService>.Instance);
+            NullLogger<ReAccreditationLogDecisionService>.Instance
+        );
 
         Assert.NotNull(service);
     }
@@ -57,7 +58,14 @@ public class ReAccreditationLogDecisionServiceTests
         // The accreditation id, SLA clock stop, publishing job and decision
         // email all live in the approval service. Reaching 'approved' through
         // the engine instead would silently drop every one of them.
-        await harness.ApprovalService.Received(1).ApproveAsync(harness.WorkItem.Id, harness.User, ct);
+        await harness
+            .ApprovalService.Received(1)
+            .ApproveAsync(
+                harness.WorkItem.Id,
+                harness.User,
+                ct,
+                Arg.Any<AccreditationNumberResult?>()
+            );
     }
 
     [Fact]
@@ -74,21 +82,23 @@ public class ReAccreditationLogDecisionServiceTests
         );
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(
-            ["submit-for-decision", "reject"],
-            harness.AppliedActionIds
-        );
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
+        Assert.Equal(["submit-for-decision", "reject"], harness.AppliedActionIds);
+        await harness
+            .ApprovalService.DidNotReceiveWithAnyArgs()
+            .ApproveAsync(default, default!, ct);
     }
 
     /// <summary>
-    /// The ordering is the point of the whole service: the operator-journey
-    /// push is the gate, so it must land before the hop, which in turn lands
-    /// before the outcome — never after or alongside. Pushing before anything
-    /// is persisted is what makes an OJ failure a clean, no-op 500.
+    /// The ordering is the point of the whole service: for an Approved
+    /// outcome the accreditation number must be minted before anything else,
+    /// because the backend's accreditation-number endpoint refuses once the
+    /// application is terminal — and the operator-journey push right after it
+    /// is exactly what makes it terminal. The push is still the gate for the
+    /// rest of the sequence: it must land before the hop, which in turn lands
+    /// before the outcome — never after or alongside.
     /// </summary>
     [Fact]
-    public async Task Oj_push_precedes_submit_for_decision_which_precedes_the_outcome()
+    public async Task Resolve_number_precedes_oj_push_which_precedes_submit_for_decision_which_precedes_the_outcome()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(stateId: "assessment-in-progress");
@@ -100,7 +110,105 @@ public class ReAccreditationLogDecisionServiceTests
             ct
         );
 
-        Assert.Equal(["oj-push", "submit-for-decision", "approve"], harness.OrderedCalls);
+        Assert.Equal(
+            ["resolve-number", "oj-push", "submit-for-decision", "approve"],
+            harness.OrderedCalls
+        );
+    }
+
+    /// <summary>
+    /// epr-r9oy: Reject never mints a number, so resolving one for a Reject
+    /// outcome would be pure waste — and worse, would call the backend's
+    /// accreditation-number endpoint for an application that will never be
+    /// approved.
+    /// </summary>
+    [Fact]
+    public async Task Rejecting_never_resolves_an_accreditation_number()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+
+        await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Rejected,
+            harness.User,
+            ct
+        );
+
+        await harness
+            .ApprovalService.DidNotReceiveWithAnyArgs()
+            .ResolveAccreditationNumberAsync(default, default, ct);
+    }
+
+    /// <summary>
+    /// epr-r9oy: the number minted ahead of the OJ push is the SAME instance
+    /// forwarded to ApproveAsync — ApproveAsync must not resolve its own,
+    /// second number. A second resolution would hit the backend's
+    /// accreditation-number endpoint after the push above has already made
+    /// the application terminal, and that call always fails.
+    /// </summary>
+    [Fact]
+    public async Task The_number_resolved_ahead_of_the_push_is_forwarded_unchanged_to_approve()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var expected = AccreditationNumberResult.Success("A25ER5000270036WO");
+        var harness = new Harness(stateId: "assessment-in-progress", numberResult: expected);
+
+        await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Approved,
+            harness.User,
+            ct
+        );
+
+        Assert.Same(expected, harness.LastApproveNumberArgument);
+        await harness
+            .ApprovalService.Received(1)
+            .ResolveAccreditationNumberAsync(harness.WorkItem.Id, Arg.Any<Guid>(), ct);
+    }
+
+    /// <summary>
+    /// Mirrors the OJ-push-failure test below: a failed mint must also
+    /// abandon the decision before anything is written, and — critically —
+    /// before the OJ push, which would otherwise mark the application
+    /// terminal on the backend for a decision that never actually completed.
+    /// </summary>
+    [Fact]
+    public async Task A_number_resolution_failure_abandons_the_decision_before_notifying_the_operator_journey()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(
+            stateId: "assessment-in-progress",
+            numberResult: AccreditationNumberResult.Failure("backend unreachable")
+        );
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Approved,
+            harness.User,
+            ct
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.AccreditationNumberUnavailable, result.FailureCode);
+        Assert.Empty(harness.AppliedActionIds);
+        Assert.DoesNotContain("oj-push", harness.OrderedCalls);
+        await harness
+            .PushAdapter.DidNotReceiveWithAnyArgs()
+            .PushDecisionStatusChangedAsync(
+                default,
+                default,
+                default!,
+                default!,
+                default!,
+                default!,
+                default!,
+                default,
+                ct
+            );
+        await harness
+            .ApprovalService.DidNotReceiveWithAnyArgs()
+            .ApproveAsync(default, default!, ct);
     }
 
     // --------------------------- the operator-journey gate ---------------------------
@@ -114,7 +222,10 @@ public class ReAccreditationLogDecisionServiceTests
     [InlineData(true, "approve", "approved")]
     [InlineData(false, "reject", "rejected")]
     public async Task The_oj_push_fires_exactly_once_for_the_final_decision(
-        bool approve, string expectedActionId, string expectedToStateId)
+        bool approve,
+        string expectedActionId,
+        string expectedToStateId
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(stateId: "assessment-in-progress");
@@ -127,9 +238,19 @@ public class ReAccreditationLogDecisionServiceTests
         );
 
         Assert.Equal(1, harness.OrderedCalls.Count(c => c == "oj-push"));
-        await harness.PushAdapter.Received(1).PushDecisionStatusChangedAsync(
-            harness.WorkItem.Id, Arg.Any<Guid>(), "awaiting-decision", expectedToStateId, Arg.Any<string>(),
-            expectedActionId, Arg.Any<string>(), Arg.Any<DateTime>(), ct);
+        await harness
+            .PushAdapter.Received(1)
+            .PushDecisionStatusChangedAsync(
+                harness.WorkItem.Id,
+                Arg.Any<Guid>(),
+                "awaiting-decision",
+                expectedToStateId,
+                Arg.Any<string>(),
+                expectedActionId,
+                Arg.Any<string>(),
+                Arg.Any<DateTime>(),
+                ct
+            );
     }
 
     /// <summary>
@@ -146,7 +267,8 @@ public class ReAccreditationLogDecisionServiceTests
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(
             stateId: "assessment-in-progress",
-            pushResult: OperatorBackendPushResult.Failure("operator journey unreachable"));
+            pushResult: OperatorBackendPushResult.Failure("operator journey unreachable")
+        );
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
@@ -158,11 +280,20 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.UpstreamNotificationFailed, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
+        await harness
+            .ApprovalService.DidNotReceiveWithAnyArgs()
+            .ApproveAsync(default, default!, ct);
         // A status-push-failed audit entry is still recorded for support.
-        await harness.AuditAppender.Received(1).AppendAsync(
-            harness.WorkItem.Id, "status-push-failed", Arg.Any<string>(),
-            Arg.Any<Dictionary<string, string?>>(), harness.User, ct);
+        await harness
+            .AuditAppender.Received(1)
+            .AppendAsync(
+                harness.WorkItem.Id,
+                "status-push-failed",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                harness.User,
+                ct
+            );
     }
 
     /// <summary>
@@ -176,7 +307,8 @@ public class ReAccreditationLogDecisionServiceTests
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(
             stateId: "assessment-in-progress",
-            pushResult: OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
+            pushResult: OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false.")
+        );
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
@@ -186,10 +318,24 @@ public class ReAccreditationLogDecisionServiceTests
         );
 
         Assert.True(result.IsSuccess);
-        await harness.ApprovalService.Received(1).ApproveAsync(harness.WorkItem.Id, harness.User, ct);
-        await harness.AuditAppender.Received(1).AppendAsync(
-            harness.WorkItem.Id, "status-push-skipped", Arg.Any<string>(),
-            Arg.Any<Dictionary<string, string?>>(), harness.User, ct);
+        await harness
+            .ApprovalService.Received(1)
+            .ApproveAsync(
+                harness.WorkItem.Id,
+                harness.User,
+                ct,
+                Arg.Any<AccreditationNumberResult?>()
+            );
+        await harness
+            .AuditAppender.Received(1)
+            .AppendAsync(
+                harness.WorkItem.Id,
+                "status-push-skipped",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                harness.User,
+                ct
+            );
     }
 
     /// <summary>
@@ -210,9 +356,16 @@ public class ReAccreditationLogDecisionServiceTests
             ct
         );
 
-        await harness.AuditAppender.Received(1).AppendAsync(
-            harness.WorkItem.Id, "status-push-sent", "Status sent to OJ",
-            Arg.Any<Dictionary<string, string?>>(), harness.User, ct);
+        await harness
+            .AuditAppender.Received(1)
+            .AppendAsync(
+                harness.WorkItem.Id,
+                "status-push-sent",
+                "Status sent to OJ",
+                Arg.Any<Dictionary<string, string?>>(),
+                harness.User,
+                ct
+            );
     }
 
     [Fact]
@@ -223,10 +376,15 @@ public class ReAccreditationLogDecisionServiceTests
         // follow-up audit write did.
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(stateId: "assessment-in-progress");
-        harness.AuditAppender
-            .AppendAsync(
-                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string?>>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+        harness
+            .AuditAppender.AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
             .Returns(false);
 
         var result = await harness.Service.LogDecisionAsync(
@@ -256,8 +414,19 @@ public class ReAccreditationLogDecisionServiceTests
             ct
         );
 
-        await harness.PushAdapter.DidNotReceiveWithAnyArgs().PushDecisionStatusChangedAsync(
-            default, default, default!, default!, default!, default!, default!, default, ct);
+        await harness
+            .PushAdapter.DidNotReceiveWithAnyArgs()
+            .PushDecisionStatusChangedAsync(
+                default,
+                default,
+                default!,
+                default!,
+                default!,
+                default!,
+                default!,
+                default,
+                ct
+            );
     }
 
     // --------------------------- resumability ---------------------------
@@ -307,10 +476,7 @@ public class ReAccreditationLogDecisionServiceTests
                 Arg.Any<CancellationToken>()
             )
             .Returns(
-                WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.ConcurrencyConflict,
-                    "raced"
-                )
+                WorkItemActionResult.Failure(WorkItemActionFailureCode.ConcurrencyConflict, "raced")
             );
 
         var result = await harness.Service.LogDecisionAsync(
@@ -322,7 +488,9 @@ public class ReAccreditationLogDecisionServiceTests
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
+        await harness
+            .ApprovalService.DidNotReceiveWithAnyArgs()
+            .ApproveAsync(default, default!, ct);
     }
 
     // --------------------------- idempotency and conflict ---------------------------
@@ -349,7 +517,9 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.True(result.IsSuccess);
         Assert.True(result.IsIdempotentReplay);
         Assert.Empty(harness.AppliedActionIds);
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
+        await harness
+            .ApprovalService.DidNotReceiveWithAnyArgs()
+            .ApproveAsync(default, default!, ct);
     }
 
     /// <summary>
@@ -381,7 +551,9 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
-        await harness.ApprovalService.DidNotReceiveWithAnyArgs().ApproveAsync(default, default!, ct);
+        await harness
+            .ApprovalService.DidNotReceiveWithAnyArgs()
+            .ApproveAsync(default, default!, ct);
     }
 
     // --------------------------- guards ---------------------------
@@ -467,9 +639,7 @@ public class ReAccreditationLogDecisionServiceTests
     }
 
     private static ReAccreditationDecisionOutcome Outcome(bool approve) =>
-        approve
-            ? ReAccreditationDecisionOutcome.Approved
-            : ReAccreditationDecisionOutcome.Rejected;
+        approve ? ReAccreditationDecisionOutcome.Approved : ReAccreditationDecisionOutcome.Rejected;
 
     private sealed class Harness
     {
@@ -478,7 +648,9 @@ public class ReAccreditationLogDecisionServiceTests
             bool seedWorkItem = true,
             string typeId = ReAccreditationType.Id,
             bool withUserId = true,
-            OperatorBackendPushResult? pushResult = null)
+            OperatorBackendPushResult? pushResult = null,
+            AccreditationNumberResult? numberResult = null
+        )
         {
             WorkItem = new WorkItem
             {
@@ -497,8 +669,16 @@ public class ReAccreditationLogDecisionServiceTests
             PushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
             PushAdapter
                 .PushDecisionStatusChangedAsync(
-                    Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                    Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+                    Arg.Any<Guid>(),
+                    Arg.Any<Guid>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<DateTime>(),
+                    Arg.Any<CancellationToken>()
+                )
                 .Returns(call =>
                 {
                     OrderedCalls.Add("oj-push");
@@ -508,15 +688,23 @@ public class ReAccreditationLogDecisionServiceTests
             AuditAppender = Substitute.For<IWorkItemAuditAppender>();
             AuditAppender
                 .AppendAsync(
-                    Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
-                    Arg.Any<Dictionary<string, string?>>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+                    Arg.Any<Guid>(),
+                    Arg.Any<string>(),
+                    Arg.Any<string>(),
+                    Arg.Any<Dictionary<string, string?>>(),
+                    Arg.Any<ClaimsPrincipal>(),
+                    Arg.Any<CancellationToken>()
+                )
                 .Returns(true);
 
             Engine = Substitute.For<IWorkItemService>();
             Engine
                 .ApplyActionAsync(
-                    Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<ClaimsPrincipal>(),
-                    Arg.Any<CancellationToken>())
+                    Arg.Any<Guid>(),
+                    Arg.Any<string>(),
+                    Arg.Any<ClaimsPrincipal>(),
+                    Arg.Any<CancellationToken>()
+                )
                 .Returns(call =>
                 {
                     var actionId = call.ArgAt<string>(1);
@@ -526,11 +714,32 @@ public class ReAccreditationLogDecisionServiceTests
                 });
 
             ApprovalService = Substitute.For<IReAccreditationApprovalService>();
+            // epr-r9oy: minted BEFORE the OJ push for an Approved outcome — see
+            // ResolveAccreditationNumberAsync_precedes_oj_push_for_approved below.
+            // Default is a successful mint so the happy paths proceed; the
+            // failure path overrides it via the numberResult parameter.
             ApprovalService
-                .ApproveAsync(Arg.Any<Guid>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+                .ResolveAccreditationNumberAsync(
+                    Arg.Any<Guid>(),
+                    Arg.Any<Guid>(),
+                    Arg.Any<CancellationToken>()
+                )
                 .Returns(_ =>
                 {
+                    OrderedCalls.Add("resolve-number");
+                    return numberResult ?? AccreditationNumberResult.Success("A25ER5000270036WO");
+                });
+            ApprovalService
+                .ApproveAsync(
+                    Arg.Any<Guid>(),
+                    Arg.Any<ClaimsPrincipal>(),
+                    Arg.Any<CancellationToken>(),
+                    Arg.Any<AccreditationNumberResult?>()
+                )
+                .Returns(call =>
+                {
                     OrderedCalls.Add("approve");
+                    LastApproveNumberArgument = call.ArgAt<AccreditationNumberResult?>(3);
                     return WorkItemActionResult.Success(WorkItem);
                 });
 
@@ -549,7 +758,8 @@ public class ReAccreditationLogDecisionServiceTests
                 PushAdapter,
                 AuditAppender,
                 NullLogger<ReAccreditationLogDecisionService>.Instance,
-                new FakeTimeProvider());
+                new FakeTimeProvider()
+            );
         }
 
         public WorkItem WorkItem { get; }
@@ -562,5 +772,6 @@ public class ReAccreditationLogDecisionServiceTests
         public ReAccreditationLogDecisionService Service { get; }
         public List<string> AppliedActionIds { get; } = [];
         public List<string> OrderedCalls { get; } = [];
+        public AccreditationNumberResult? LastApproveNumberArgument { get; private set; }
     }
 }
