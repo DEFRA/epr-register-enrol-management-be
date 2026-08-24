@@ -193,6 +193,42 @@ public class HttpReExAccreditationClientTests
             null);
     }
 
+    /// <summary>
+    /// RA-475. A 401/403 from ReEx is this service's own misconfiguration, not
+    /// "no prior-year record for this organisation", and it fails EVERY lookup until
+    /// it is fixed. It used to log identically to a 404, which is how a total outage
+    /// of the prior-year panel on dev read as ordinary noise. The degraded return is
+    /// deliberately unchanged — only the severity and the message move.
+    /// </summary>
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    public async Task GetPriorYearAsync_logs_an_error_naming_the_credentials_when_reex_rejects_them(
+        HttpStatusCode statusCode)
+    {
+        var handler = new StatusCodeHttpMessageHandler(statusCode);
+        var httpClient = new HttpClient(handler);
+        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
+        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
+        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+
+        var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
+
+        Assert.Null(result);
+        logger.Received(1).Log(
+            LogLevel.Error,
+            Arg.Is<string>(m => m.Contains("REEX_API_BASIC_AUTH", StringComparison.Ordinal)),
+            Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                (string)p["reex.organisation_id"]! == "org-1" &&
+                (int)p["reex.status_code"]! == (int)statusCode),
+            null);
+        logger.DidNotReceive().Log(
+            LogLevel.Warning,
+            Arg.Any<string>(),
+            Arg.Any<IReadOnlyDictionary<string, object?>>(),
+            Arg.Any<Exception?>());
+    }
+
     [Theory]
     [InlineData(typeof(HttpRequestException))]
     [InlineData(typeof(TaskCanceledException))]

@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Utils.Logging;
@@ -86,9 +87,28 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
 
             if (!response.IsSuccessStatusCode)
             {
+                // RA-475: a 401/403 is never a data condition — it means this
+                // service's ReEx Basic-auth credentials (REEX_API_BASIC_AUTH_USERNAME /
+                // REEX_API_BASIC_AUTH_PASSWORD) or ReExApi:BaseUrl are wrong for the
+                // environment, and EVERY prior-year lookup will fail for as long as
+                // they are. Logged at Error, and named as a credentials problem, so it
+                // is distinguishable from the ordinary "ReEx has no record for this
+                // organisation" 404 it otherwise degrades into identically — which is
+                // how a total outage of this lookup on dev read as routine noise.
+                //
+                // The RETURN is deliberately unchanged: the caller still gets null and
+                // the caseworker still gets an Application details page, just without
+                // the prior-year section. Failing the page over an optional panel would
+                // be a worse outcome than the missing data.
+                var isAuthFailure =
+                    response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
+
                 _log.Log(
-                    LogLevel.Warning,
-                    "ReEx prior-year lookup failed",
+                    isAuthFailure ? LogLevel.Error : LogLevel.Warning,
+                    isAuthFailure
+                        ? "ReEx rejected this service's credentials; prior-year lookup is failing for "
+                            + "every application until REEX_API_BASIC_AUTH_* / ReExApi:BaseUrl are corrected"
+                        : "ReEx prior-year lookup failed",
                     new Dictionary<string, object?>
                     {
                         ["reex.organisation_id"] = organisationId,
