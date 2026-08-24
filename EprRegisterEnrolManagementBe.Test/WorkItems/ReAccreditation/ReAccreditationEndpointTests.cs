@@ -3278,6 +3278,42 @@ public class ReAccreditationEndpointTests
         Assert.Equal("awaiting-decision", persisted!.StateId);
     }
 
+    /// <summary>
+    /// RA-475: the same AccreditationNumberUnavailable → 500 mapping the test above exercises
+    /// on /approve, but via the single-call /decision path (LogDecision's own switch), which
+    /// was the actual arm added and previously untested — /approve's switch already had it.
+    /// </summary>
+    [Fact]
+    public async Task Decision_returns_internal_server_error_when_the_accreditation_number_adapter_fails()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var failingNumberAdapter = Substitute.For<IAccreditationNumberAdapter>();
+        failingNumberAdapter
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Any<AccreditationNumberRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(AccreditationNumberResult.Failure("backend unreachable"));
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            numberAdapter: failingNumberAdapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotEqual("approved", persisted!.StateId);
+    }
+
     // --------------------------- RA-410: single-call decision ---------------------------
 
     /// <summary>
