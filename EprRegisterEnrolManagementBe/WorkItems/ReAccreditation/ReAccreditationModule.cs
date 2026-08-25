@@ -81,6 +81,15 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IWorkItemMigration,
             ReAccreditationBusinessPlanOtherCategoryBackfillMigration
         >();
+        // RA-480: backfills submitterContactDetails onto the
+        // additional-information-exporter seed fixture for any environment
+        // that seeded before that field was added — CreateIfAbsentAsync
+        // never updates an already-seeded id. No ordering dependency on any
+        // other migration.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationSubmitterContactDetailsBackfillMigration
+        >();
         // RA-311/MBE-1: adds the resume-during-* transitions to every
         // existing work item's frozen template snapshot (v6 → v7).
         services.AddSingleton<IWorkItemMigration, ReAccreditationResumeSnapshotMigration>();
