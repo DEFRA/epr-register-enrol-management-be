@@ -745,6 +745,16 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["companyRegisterAddressPostcode"] = "CT16 1AA",
                 ["permitNumbers"] = new BsonArray { "WML123456", "PPC456789" },
                 ["chargeAmountPence"] = 218400,
+                // RA-480: populated case for the Additional information tab's four
+                // contact rows. The reprocessor counterpart fixture below deliberately
+                // omits this key, giving mgmt-tests a populated + blank case.
+                ["submitterContactDetails"] = new BsonDocument
+                {
+                    ["fullName"] = "Barton Deckow",
+                    ["email"] = "REEXServiceTeam@defra.gov.uk",
+                    ["phone"] = "0111 478 4919",
+                    ["jobTitle"] = "Human Infrastructure Architect",
+                },
             },
             submittedBy: "stub-portal-client",
             now: now
