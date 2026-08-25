@@ -39,8 +39,10 @@ internal sealed class ReAccreditationSubmitterContactDetailsBackfillMigration(
     private const string Phone = "0111 478 4919";
     private const string JobTitle = "Human Infrastructure Architect";
 
-    public string Name =>
+    private const string MigrationName =
         "ReAccreditation: backfill submitterContactDetails on the additional-information-exporter seed fixture (RA-480)";
+
+    public string Name => MigrationName;
 
     public async Task ApplyAsync(IWorkItemPersistence persistence, CancellationToken cancellationToken)
     {
@@ -50,13 +52,14 @@ internal sealed class ReAccreditationSubmitterContactDetailsBackfillMigration(
 
         if (item is null)
         {
-            logger.LogInformation("Migration '{Name}' complete: fixture absent, nothing to do.", Name);
+            logger.LogInformation(
+                "Migration '{Name}' complete: fixture absent, nothing to do.", MigrationName);
             return;
         }
 
         if (item.Payload.Contains("submitterContactDetails"))
         {
-            logger.LogInformation("Migration '{Name}' complete: already backfilled.", Name);
+            logger.LogInformation("Migration '{Name}' complete: already backfilled.", MigrationName);
             return;
         }
 
@@ -87,13 +90,14 @@ internal sealed class ReAccreditationSubmitterContactDetailsBackfillMigration(
         try
         {
             await persistence.ReplaceAsync(item, cancellationToken);
-            logger.LogInformation("Migration '{Name}' complete: fixture backfilled.", Name);
+            logger.LogInformation("Migration '{Name}' complete: fixture backfilled.", MigrationName);
         }
-        catch (WorkItemConcurrencyException)
+        catch (WorkItemConcurrencyException ex)
         {
             logger.LogDebug(
+                ex,
                 "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                item.Id);
+                id);
         }
     }
 }

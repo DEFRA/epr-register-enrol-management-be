@@ -85,7 +85,7 @@ public class ReAccreditationSubmitterContactDetailsBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.Equal("Already Backfilled", existing["fullName"].AsString);
     }
 
@@ -98,7 +98,7 @@ public class ReAccreditationSubmitterContactDetailsBackfillMigrationTests
         // Must not throw when GetByIdAsync returns null.
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -128,7 +128,8 @@ public class ReAccreditationSubmitterContactDetailsBackfillMigrationTests
             .Returns(Task.FromException(
                 new WorkItemConcurrencyException(item.Id, expectedVersion: 0)));
 
-        // Must not throw.
-        await BuildSut().ApplyAsync(persistence, ct);
+        var exception = await Record.ExceptionAsync(() => BuildSut().ApplyAsync(persistence, ct));
+
+        Assert.Null(exception);
     }
 }
