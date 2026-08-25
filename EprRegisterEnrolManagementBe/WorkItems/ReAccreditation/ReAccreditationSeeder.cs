@@ -748,6 +748,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // RA-480: populated case for the Additional information tab's four
                 // contact rows. The reprocessor counterpart fixture below deliberately
                 // omits this key, giving mgmt-tests a populated + blank case.
+                // CreateIfAbsentAsync never updates an already-seeded id, so
+                // ReAccreditationSubmitterContactDetailsBackfillMigration carries this
+                // same value onto any environment that seeded this fixture before
+                // RA-480.
                 ["submitterContactDetails"] = new BsonDocument
                 {
                     ["fullName"] = "Barton Deckow",
