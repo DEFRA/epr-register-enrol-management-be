@@ -143,22 +143,60 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
     // (operatorOrgNumber, e.g. 500500) once the upstream backend sends it — this is the same
     // value RegulatoryNumberGenerator already embeds into accreditation/registration numbers.
     // Fall back to the last 5 characters of operatorOrganisationId (ReEx's internal ObjectId)
-    // only when operatorOrgNumber is absent — e.g. during the deploy gap before the upstream
-    // backend change reaches this environment, or for payloads with no numeric org number at
-    // all (manually-created case-management work items) — so this generator never regresses
-    // below its pre-fix behaviour.
+    // only when operatorOrgNumber is absent or not a usable 6-digit organisation number — e.g.
+    // during the deploy gap before the upstream backend change reaches this environment, for
+    // payloads with no numeric org number at all (manually-created case-management work items),
+    // or a malformed/out-of-range value — so this generator never regresses below its pre-fix
+    // behaviour, and never embeds a garbage or malformed segment into the reference.
     private static string ResolveOrganisationSegment(BsonDocument payload)
     {
         if (
             payload.TryGetValue("operatorOrgNumber", out var orgNumberValue)
-            && orgNumberValue.IsNumeric
+            && TryGetOrgNumber(orgNumberValue, out var orgNumber)
         )
         {
-            return orgNumberValue.ToInt32().ToString("D6", CultureInfo.InvariantCulture);
+            return orgNumber.ToString("D6", CultureInfo.InvariantCulture);
         }
 
         var organisationId = GetString(payload, "operatorOrganisationId") ?? string.Empty;
         return organisationId.Length > 5 ? organisationId[^5..] : organisationId;
+    }
+
+    // RA-503: IsNumeric admits BsonInt64/BsonDouble/BsonDecimal128, none of which BsonValue.ToInt32()
+    // can be trusted to convert safely from - it silently wraps for an out-of-range Int64/Double
+    // (e.g. long.MaxValue narrows to -1) and throws OverflowException for Decimal128. Validate the
+    // value explicitly instead of trusting the BSON type category alone: reject negative (which would
+    // inject a literal '-' into what the format assumes is a clean alphanumeric reference), reject
+    // non-integral, and cap at 999999 so D6's zero-padding (a MINIMUM width, not a maximum) can never
+    // widen the segment past the intended 6 digits.
+    private static bool TryGetOrgNumber(BsonValue value, out int orgNumber)
+    {
+        orgNumber = 0;
+        if (!value.IsNumeric)
+            return false;
+
+        double asDouble;
+        try
+        {
+            asDouble = value.ToDouble();
+        }
+        catch (Exception ex)
+            when (ex is OverflowException or FormatException or InvalidCastException)
+        {
+            return false;
+        }
+
+        if (
+            double.IsNaN(asDouble)
+            || double.IsInfinity(asDouble)
+            || asDouble < 0
+            || asDouble > 999999
+            || asDouble != Math.Truncate(asDouble)
+        )
+            return false;
+
+        orgNumber = (int)asDouble;
+        return true;
     }
 
     private int ResolveYear(BsonDocument payload)

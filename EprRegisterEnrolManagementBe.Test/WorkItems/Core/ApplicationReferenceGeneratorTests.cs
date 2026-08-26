@@ -194,6 +194,88 @@ public sealed class ApplicationReferenceGeneratorTests
         Assert.Equal("AP26EA0000421AAGL", reference);
     }
 
+    // RA-503: operatorOrgNumber must be validated, not trusted from its BSON type category alone
+    // - IsNumeric admits Int64/Double/Decimal128, none of which ToInt32() can convert safely from
+    // (silent wraparound for Int64/Double, OverflowException for Decimal128), and D6 is a MINIMUM
+    // width, not a cap, so an out-of-range value would otherwise widen the reference unpredictably.
+    // Every invalid case falls back to the legacy operatorOrganisationId behaviour rather than
+    // embedding a garbage/malformed segment or throwing.
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1_000_000)]
+    public void Generate_rejects_an_out_of_range_operatorOrgNumber_and_falls_back(int invalidValue)
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188",
+            operatorOrgNumber: invalidValue
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_rejects_a_non_integral_operatorOrgNumber_and_falls_back()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+        payload["operatorOrgNumber"] = 500500.7;
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_rejects_an_out_of_range_Int64_operatorOrgNumber_without_wrapping()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+        // (int)long.MaxValue silently wraps to -1 - confirm that never reaches the reference.
+        payload["operatorOrgNumber"] = long.MaxValue;
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_rejects_a_Decimal128_operatorOrgNumber_outside_Int32_range_without_throwing()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+        // BsonValue.ToInt32() throws OverflowException for a Decimal128 this large - confirm
+        // Generate degrades to the fallback instead of throwing past the caller.
+        payload["operatorOrgNumber"] = new BsonDecimal128(decimal.MaxValue);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_accepts_operatorOrgNumber_at_the_upper_bound()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, operatorOrgNumber: 999999);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA9999991AAGL", reference);
+    }
+
     [Fact]
     public void Generate_leaves_organisationId_unchanged_when_five_characters_or_fewer()
     {
