@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
@@ -10,10 +11,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// (RA-318). The backend owns reference generation so a client can never
 /// supply, spoof or collide a reference.
 ///
-/// Format (RA-318): <c>AP</c> + 2-digit accreditation year + 2-char
-/// agency code + the last 5 characters of the operator organisation id +
+/// Format (RA-318, org segment revised RA-503): <c>AP</c> + 2-digit
+/// accreditation year + 2-char agency code + the organisation segment +
 /// the last 3 characters of the regulator postcode + the first 2
-/// characters of the material, all upper-cased. The agency code and
+/// characters of the material, all upper-cased. The organisation segment
+/// is the numeric, operator/regulator-safe <c>operatorOrgNumber</c>
+/// (e.g. <c>500500</c>, zero-padded to 6 digits) when the payload
+/// carries it, falling back to the last 5 characters of
+/// <c>operatorOrganisationId</c> (ReEx's internal ObjectId — never
+/// otherwise surfaced to an operator or regulator) only when
+/// <c>operatorOrgNumber</c> is absent; see
+/// <see cref="ResolveOrganisationSegment"/>. The agency code and
 /// postcode suffix are both derived from the same postcode, chosen per
 /// RA-314 AC01/AC02: an Exporter's is their registered office location
 /// (<c>companyRegisterAddressPostcode</c>); a Reprocessor's — and any
@@ -25,17 +33,20 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// observable even though generation still succeeds. The upstream
 /// backend (RA-314) is expected to reject such payloads before they
 /// reach this generator.
-/// The result is truncated to <see cref="MaxLength"/> characters because
-/// this value is also used as a BACS payment reference. Deterministic for a given
-/// payload and <paramref name="attempt"/> of 1 — unlike the previous
-/// random-suffix format, the same submission always yields the same
-/// reference on the first attempt. Payloads with no operator organisation
-/// id (e.g. work items created manually via the case management UI, which
-/// has no such field) can collide when the site postcode and material also
-/// match; <see cref="WorkItemService"/>'s collision-retry loop calls this
-/// again with an incremented <paramref name="attempt"/>, and attempts
-/// beyond the first replace the final character with a disambiguator so
-/// retries actually differ instead of repeating the same value forever.
+/// RA-503: the result is no longer truncated to a fixed length — this
+/// value is no longer used as a BACS payment reference, so the previous
+/// 18-character cap (and the disambiguator's character-replacement
+/// branch that existed to stay within it) has been removed. Deterministic
+/// for a given payload and <paramref name="attempt"/> of 1 — unlike the
+/// previous random-suffix format, the same submission always yields the
+/// same reference on the first attempt. Payloads with no operator
+/// organisation id (e.g. work items created manually via the case
+/// management UI, which has no such field) can collide when the site
+/// postcode and material also match; <see cref="WorkItemService"/>'s
+/// collision-retry loop calls this again with an incremented
+/// <paramref name="attempt"/>, and attempts beyond the first append a
+/// disambiguator character so retries actually differ instead of
+/// repeating the same value forever.
 /// </summary>
 public interface IApplicationReferenceGenerator
 {
@@ -52,9 +63,6 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 {
     /// <summary>Literal prefix every reference carries.</summary>
     public const string Prefix = "AP";
-
-    /// <summary>Maximum reference length — this value doubles as a BACS payment reference.</summary>
-    public const int MaxLength = 18;
 
     private const string DefaultAgencyCode = "EA";
 
@@ -115,28 +123,43 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         var year = ResolveYear(payload);
         var postcode = ResolveRegulatorPostcode(payload);
         var agency = ResolveAgencyCode(postcode);
-        var organisationId = GetString(payload, "operatorOrganisationId") ?? string.Empty;
-        organisationId = organisationId.Length > 5 ? organisationId[^5..] : organisationId;
+        var orgSegment = ResolveOrganisationSegment(payload);
         var postcodeSuffix = PostcodeSuffix(postcode);
         var materialPrefix = MaterialPrefix(GetString(payload, "material"));
 
         var reference =
-            $"{Prefix}{year:D2}{agency}{organisationId}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
+            $"{Prefix}{year:D2}{agency}{orgSegment}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
 
-        if (attempt <= 1)
-        {
-            return reference.Length > MaxLength ? reference[..MaxLength] : reference;
-        }
-
-        // Collision on a prior attempt: keep the reference recognisably
-        // derived from the same payload, but swap the final character for a
-        // disambiguator unique to this attempt so the retry loop actually
-        // converges instead of regenerating the same value forever.
-        var truncated = reference.Length > MaxLength - 1 ? reference[..(MaxLength - 1)] : reference;
-        return truncated + DisambiguatorChar(attempt);
+        // Collision on a prior attempt: append a disambiguator unique to this attempt, keeping
+        // the reference recognisably derived from the same payload, so the retry loop actually
+        // converges instead of regenerating the same value forever. RA-503: no longer truncated
+        // first — this value is no longer used as a BACS payment reference.
+        return attempt <= 1 ? reference : reference + DisambiguatorChar(attempt);
     }
 
     private static char DisambiguatorChar(int attempt) => (char)('0' + (attempt % 10));
+
+    // RA-503: prefer the numeric, operator/regulator-safe organisation number
+    // (operatorOrgNumber, e.g. 500500) once the upstream backend sends it — this is the same
+    // value RegulatoryNumberGenerator already embeds into accreditation/registration numbers.
+    // Fall back to the last 5 characters of operatorOrganisationId (ReEx's internal ObjectId)
+    // only when operatorOrgNumber is absent — e.g. during the deploy gap before the upstream
+    // backend change reaches this environment, or for payloads with no numeric org number at
+    // all (manually-created case-management work items) — so this generator never regresses
+    // below its pre-fix behaviour.
+    private static string ResolveOrganisationSegment(BsonDocument payload)
+    {
+        if (
+            payload.TryGetValue("operatorOrgNumber", out var orgNumberValue)
+            && orgNumberValue.IsNumeric
+        )
+        {
+            return orgNumberValue.ToInt32().ToString("D6", CultureInfo.InvariantCulture);
+        }
+
+        var organisationId = GetString(payload, "operatorOrganisationId") ?? string.Empty;
+        return organisationId.Length > 5 ? organisationId[^5..] : organisationId;
+    }
 
     private int ResolveYear(BsonDocument payload)
     {
