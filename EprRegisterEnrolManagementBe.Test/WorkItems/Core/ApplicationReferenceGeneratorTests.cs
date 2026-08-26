@@ -248,16 +248,39 @@ public sealed class ApplicationReferenceGeneratorTests
         Assert.Equal("AP26EA011881AAGL", reference);
     }
 
-    [Fact]
-    public void Generate_rejects_a_Decimal128_operatorOrgNumber_outside_Int32_range_without_throwing()
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void Generate_rejects_a_non_finite_operatorOrgNumber_without_throwing(
+        double invalidValue
+    )
     {
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(
             accreditationYear: 2026,
             operatorOrganisationId: "6a2fcd74e16883c137d01188"
         );
-        // BsonValue.ToInt32() throws OverflowException for a Decimal128 this large - confirm
-        // Generate degrades to the fallback instead of throwing past the caller.
+        // decimal cannot represent NaN/Infinity, so BsonValue.ToDecimal() throws for these -
+        // confirm Generate degrades to the fallback instead of throwing past the caller.
+        payload["operatorOrgNumber"] = invalidValue;
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_rejects_a_Decimal128_operatorOrgNumber_outside_the_valid_range_without_throwing()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+        // decimal.MaxValue converts to decimal without overflow, so this is rejected by the
+        // >999999 range check rather than the OverflowException catch - either way, Generate
+        // must degrade to the fallback instead of throwing or embedding a garbage segment.
         payload["operatorOrgNumber"] = new BsonDecimal128(decimal.MaxValue);
 
         var reference = generator.Generate(payload);

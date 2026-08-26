@@ -175,10 +175,15 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         if (!value.IsNumeric)
             return false;
 
-        double asDouble;
+        // decimal, not double: SonarCloud S1244 flags exact float/double equality checks (the
+        // classic rounding-error trap), but decimal is an exact fixed-point type - the
+        // integrality check below is precise, not the kind of comparison that rule exists to
+        // catch. This conversion also fails cleanly for NaN/Infinity (a BsonDouble can hold
+        // either), so no separate check is needed for those.
+        decimal asDecimal;
         try
         {
-            asDouble = value.ToDouble();
+            asDecimal = value.ToDecimal();
         }
         catch (Exception ex)
             when (ex is OverflowException or FormatException or InvalidCastException)
@@ -186,16 +191,10 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
             return false;
         }
 
-        if (
-            double.IsNaN(asDouble)
-            || double.IsInfinity(asDouble)
-            || asDouble < 0
-            || asDouble > 999999
-            || asDouble != Math.Truncate(asDouble)
-        )
+        if (asDecimal < 0 || asDecimal > 999999 || asDecimal != Math.Truncate(asDecimal))
             return false;
 
-        orgNumber = (int)asDouble;
+        orgNumber = (int)asDecimal;
         return true;
     }
 
