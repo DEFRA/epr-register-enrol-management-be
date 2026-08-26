@@ -273,7 +273,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     ["communicationsDetail"] = "Customer awareness campaign",
                     ["newMarketsDetail"] = "New export contracts secured",
                     ["newUsesDetail"] = "Recycled content packaging trial",
-                    ["otherDetail"] = "Contribution to sector-wide research and development initiatives",
+                    ["otherDetail"] =
+                        "Contribution to sector-wide research and development initiatives",
                 },
                 ["samplingPlan"] = new BsonDocument
                 {
@@ -371,6 +372,14 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "500009",
             "reg-full-payload-001"
         );
+        // RA-503: operatorOrgNumber is the operator/regulator-safe numeric organisation number a
+        // real submission now carries alongside operatorOrganisationId. Deliberately a DIFFERENT
+        // value from the "500009" above so mgmt-tests' RA-503 e2e coverage can prove the case
+        // header/audit-log/list card prefer this field over operatorOrganisationId, rather than
+        // the two happening to coincide. operatorOrganisationId itself stays untouched at
+        // "500009" — IAccreditationNumberAdapter's numeric fallback parse for seeded/stub
+        // organisations with no real ReEx document behind them depends on it staying numeric.
+        fullPayloadVerificationItem.Payload["operatorOrgNumber"] = 500010;
         yield return fullPayloadVerificationItem;
 
         // RA-292: the ORS / interim-site / authority-to-issue fixture.
