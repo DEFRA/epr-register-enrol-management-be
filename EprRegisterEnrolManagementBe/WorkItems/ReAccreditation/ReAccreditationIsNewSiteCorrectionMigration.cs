@@ -15,7 +15,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <c>orsId</c> discriminator and the ambiguity guard — this migration reuses
 /// <see cref="ReAccreditationIsNewSiteAudit.ClassifySite"/> verbatim rather than
 /// re-deriving the rule, so the thing that decides whether a regulator sees a
-/// genuinely new site has exactly one implementation.
+/// genuinely new site has exactly one implementation. That discriminator is
+/// only valid up to epr-register-enrol-backend's RA-507 (2026-08-27), after
+/// which ReEx-sourced sites carry a real <c>orsId</c> too — see the audit's
+/// docs for why the fixed window still makes this safe, and why <c>windowEnd</c>
+/// must stay pinned before that date on any future run.
 /// </para>
 ///
 /// <para>
@@ -63,7 +67,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
     IConfiguration configuration,
     ILogger<ReAccreditationIsNewSiteCorrectionMigration> logger,
-    TimeProvider? timeProvider = null) : IWorkItemMigration
+    TimeProvider? timeProvider = null
+) : IWorkItemMigration
 {
     public const string EnabledConfigKey = "Diagnostics:Ra292CorrectIsNewSite";
     public const string SpotCheckConfirmedByConfigKey = "Diagnostics:Ra292SpotCheckConfirmedBy";
@@ -78,7 +83,9 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
         "ReAccreditation: correct provably-defaulted overseasSites isNewSite (epr-2uxy)";
 
     public async Task ApplyAsync(
-        IWorkItemPersistence persistence, CancellationToken cancellationToken)
+        IWorkItemPersistence persistence,
+        CancellationToken cancellationToken
+    )
     {
         ArgumentNullException.ThrowIfNull(persistence);
 
@@ -91,13 +98,14 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
         if (string.IsNullOrWhiteSpace(confirmedBy))
         {
             logger.LogError(
-                "epr-2uxy correction is enabled but {SpotCheckKey} is not set, so it will not " +
-                "run. Set it to the name of whoever spot-checked the orsId-absent " +
-                "classification against the operator database. The check exists because orsId " +
-                "is itself client-clobberable: if a client ever stripped it, an operator-added " +
-                "site would masquerade as ReEx-sourced and this migration would hide a " +
-                "genuinely new site from the regulator.",
-                SpotCheckConfirmedByConfigKey);
+                "epr-2uxy correction is enabled but {SpotCheckKey} is not set, so it will not "
+                    + "run. Set it to the name of whoever spot-checked the orsId-absent "
+                    + "classification against the operator database. The check exists because orsId "
+                    + "is itself client-clobberable: if a client ever stripped it, an operator-added "
+                    + "site would masquerade as ReEx-sourced and this migration would hide a "
+                    + "genuinely new site from the regulator.",
+                SpotCheckConfirmedByConfigKey
+            );
             return;
         }
 
@@ -107,10 +115,13 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             ?? DateTime.UtcNow;
 
         logger.LogInformation(
-            "epr-2uxy correction starting. Mode={Mode}. Spot-check confirmed by " +
-            "{ConfirmedBy}. Window {WindowStart:o} to {WindowEnd:o}.",
+            "epr-2uxy correction starting. Mode={Mode}. Spot-check confirmed by "
+                + "{ConfirmedBy}. Window {WindowStart:o} to {WindowEnd:o}.",
             apply ? "APPLY" : "DRY RUN (nothing will be written)",
-            confirmedBy, ReAccreditationIsNewSiteAudit.WindowStart, windowEnd);
+            confirmedBy,
+            ReAccreditationIsNewSiteAudit.WindowStart,
+            windowEnd
+        );
 
         var itemsChanged = 0;
         var sitesCorrected = 0;
@@ -124,15 +135,19 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
                     TypeIds: [ReAccreditationType.Id],
                     Page: page,
                     PageSize: WorkItemQuery.MaxPageSize,
-                    IncludeArchived: true),
-                cancellationToken);
+                    IncludeArchived: true
+                ),
+                cancellationToken
+            );
 
             foreach (var candidate in result.Items)
             {
                 // The date bound is the primary filter. Applied here rather than
                 // in the query so it stays visibly next to the reason for it.
-                if (candidate.SubmittedAt < ReAccreditationIsNewSiteAudit.WindowStart ||
-                    candidate.SubmittedAt >= windowEnd)
+                if (
+                    candidate.SubmittedAt < ReAccreditationIsNewSiteAudit.WindowStart
+                    || candidate.SubmittedAt >= windowEnd
+                )
                 {
                     continue;
                 }
@@ -152,11 +167,13 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
                 foreach (var siteName in refused)
                 {
                     logger.LogWarning(
-                        "epr-2uxy REFUSED to correct work item {WorkItemId} site '{SiteName}': " +
-                        "orsId is missing but operator-entered detail is present, so this may " +
-                        "be an operator-added site whose orsId was stripped rather than a " +
-                        "ReEx-sourced one. Adjudicate by hand against the operator database.",
-                        full.Id, siteName);
+                        "epr-2uxy REFUSED to correct work item {WorkItemId} site '{SiteName}': "
+                            + "orsId is missing but operator-entered detail is present, so this may "
+                            + "be an operator-added site whose orsId was stripped rather than a "
+                            + "ReEx-sourced one. Adjudicate by hand against the operator database.",
+                        full.Id,
+                        siteName
+                    );
                 }
 
                 if (corrected.Count == 0)
@@ -170,10 +187,12 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
                 if (!apply)
                 {
                     logger.LogInformation(
-                        "epr-2uxy DRY RUN would correct work item {WorkItemId} " +
-                        "ref={ApplicationReference}: {Sites}",
-                        full.Id, full.Payload.GetValue("applicationReference", "(none)"),
-                        string.Join(", ", corrected));
+                        "epr-2uxy DRY RUN would correct work item {WorkItemId} "
+                            + "ref={ApplicationReference}: {Sites}",
+                        full.Id,
+                        full.Payload.GetValue("applicationReference", "(none)"),
+                        string.Join(", ", corrected)
+                    );
                     continue;
                 }
 
@@ -184,30 +203,34 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
                     site["isNewSite"] = false;
                 }
 
-                full.AuditLog.Add(new WorkItemAuditEntry
-                {
-                    Action = AuditAction,
-                    ActionDisplayName = AuditActionDisplayName,
-                    CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
-                    CreatedBy = "migration",
-                    CreatedByName = "Migration: epr-2uxy isNewSite correction",
-                    Details = new Dictionary<string, string?>
+                full.AuditLog.Add(
+                    new WorkItemAuditEntry
                     {
-                        ["issue"] = "epr-2uxy",
-                        ["reason"] =
-                            "isNewSite was a wrongly-defaulted true; site has no orsId and no " +
-                            "operator-entered detail, so it is ReEx-sourced and the correct " +
-                            "value is false.",
-                        ["sites"] = string.Join(", ", corrected),
-                        ["spotCheckConfirmedBy"] = confirmedBy
+                        Action = AuditAction,
+                        ActionDisplayName = AuditActionDisplayName,
+                        CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
+                        CreatedBy = "migration",
+                        CreatedByName = "Migration: epr-2uxy isNewSite correction",
+                        Details = new Dictionary<string, string?>
+                        {
+                            ["issue"] = "epr-2uxy",
+                            ["reason"] =
+                                "isNewSite was a wrongly-defaulted true; site has no orsId and no "
+                                + "operator-entered detail, so it is ReEx-sourced and the correct "
+                                + "value is false.",
+                            ["sites"] = string.Join(", ", corrected),
+                            ["spotCheckConfirmedBy"] = confirmedBy,
+                        },
                     }
-                });
+                );
 
                 await persistence.ReplaceAsync(full, cancellationToken);
 
                 logger.LogInformation(
                     "epr-2uxy corrected work item {WorkItemId}: {Sites}",
-                    full.Id, string.Join(", ", corrected));
+                    full.Id,
+                    string.Join(", ", corrected)
+                );
             }
 
             if (result.Items.Count < WorkItemQuery.MaxPageSize)
@@ -224,15 +247,16 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
         // and a test that logs through NullLogger never renders, so it would
         // pass while the real run produced no summary at all.
         logger.LogInformation(
-            "epr-2uxy correction complete. Mode={Mode}. Items {ItemsVerb}: {ItemsChanged}. " +
-            "Sites {SitesVerb}: {SitesCorrected}. Sites refused as ambiguous (need manual " +
-            "adjudication): {SitesRefusedAmbiguous}.",
+            "epr-2uxy correction complete. Mode={Mode}. Items {ItemsVerb}: {ItemsChanged}. "
+                + "Sites {SitesVerb}: {SitesCorrected}. Sites refused as ambiguous (need manual "
+                + "adjudication): {SitesRefusedAmbiguous}.",
             apply ? "APPLY" : "DRY RUN",
             apply ? "corrected" : "that would be corrected",
             itemsChanged,
             apply ? "corrected" : "that would be corrected",
             sitesCorrected,
-            sitesRefusedAmbiguous);
+            sitesRefusedAmbiguous
+        );
     }
 
     /// <summary>
@@ -248,15 +272,19 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
     /// </para>
     /// </summary>
     private static List<(BsonDocument Site, string Label)> PlanCorrections(
-        WorkItem item, out List<string> refused)
+        WorkItem item,
+        out List<string> refused
+    )
     {
         var planned = new List<(BsonDocument, string)>();
         refused = [];
 
-        if (!item.Payload.TryGetValue("overseasSites", out var overseas) ||
-            !overseas.IsBsonDocument ||
-            !overseas.AsBsonDocument.TryGetValue("sites", out var sites) ||
-            !sites.IsBsonArray)
+        if (
+            !item.Payload.TryGetValue("overseasSites", out var overseas)
+            || !overseas.IsBsonDocument
+            || !overseas.AsBsonDocument.TryGetValue("sites", out var sites)
+            || !sites.IsBsonArray
+        )
         {
             return planned;
         }
@@ -273,9 +301,10 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             var site = element.AsBsonDocument;
             // BsonValue.ToString() never returns null; the index fallback covers
             // the case that actually occurs, siteName being absent.
-            var name = site.TryGetValue("siteName", out var siteName) && !siteName.IsBsonNull
-                ? siteName.ToString()!
-                : $"site[{index}]";
+            var name =
+                site.TryGetValue("siteName", out var siteName) && !siteName.IsBsonNull
+                    ? siteName.ToString()!
+                    : $"site[{index}]";
 
             switch (ReAccreditationIsNewSiteAudit.ClassifySite(site))
             {
@@ -290,8 +319,9 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
 
                 case ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousRefused:
                     refused.Add(
-                        $"{name} (refusedBecause: " +
-                        $"{string.Join(", ", ReAccreditationIsNewSiteAudit.RefusalTriggers(site))})");
+                        $"{name} (refusedBecause: "
+                            + $"{string.Join(", ", ReAccreditationIsNewSiteAudit.RefusalTriggers(site))})"
+                    );
                     break;
 
                 default:
