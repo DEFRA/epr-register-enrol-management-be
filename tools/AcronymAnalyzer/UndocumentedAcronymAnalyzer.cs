@@ -13,6 +13,12 @@ namespace AcronymAnalyzer;
 // harder to follow for anyone not already carrying that tribal knowledge.
 // Runs as part of the normal build (dotnet build / dotnet test), the same
 // gate every other compiler diagnostic goes through — no separate CI step.
+//
+// The rule is a case-insensitive whole-file text scan, so it can false-flag
+// a legitimate two-letter collision (e.g. "5 cm wide" for a real unit of
+// measurement) — if that happens, suppress the specific line rather than
+// disabling the rule wholesale: `#pragma warning disable ACR001` above the
+// line, `#pragma warning restore ACR001` below it.
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class UndocumentedAcronymAnalyzer : DiagnosticAnalyzer
 {
