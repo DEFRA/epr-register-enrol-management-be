@@ -236,7 +236,7 @@ public class ReAccreditationStatusPushHookTests
         await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         await auditAppender.Received(1).AppendAsync(
-            workItem.Id, "status-push-sent", "Status sent to OJ",
+            workItem.Id, "status-push-sent", "Status sent to the Registration & Accreditation service",
             Arg.Is<Dictionary<string, string?>>(d =>
                 d["actionDisplayName"] == "Mark as duly made" && d["toStateDisplayName"] == "Duly made"),
             s_user, ct);
@@ -259,7 +259,7 @@ public class ReAccreditationStatusPushHookTests
         // MBE-F5: skipped (deliberately disabled) must never look like a
         // failure — a distinct audit outcome, not status-push-failed.
         await auditAppender.Received(1).AppendAsync(
-            workItem.Id, "status-push-skipped", "Status not sent to OJ (disabled)",
+            workItem.Id, "status-push-skipped", "Status not sent to the Registration & Accreditation service (disabled)",
             Arg.Any<Dictionary<string, string?>>(), s_user, ct);
         await auditAppender.DidNotReceive().AppendAsync(
             workItem.Id, "status-push-failed", Arg.Any<string>(),
@@ -281,7 +281,7 @@ public class ReAccreditationStatusPushHookTests
         await hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         await auditAppender.Received(1).AppendAsync(
-            workItem.Id, "status-push-failed", "Status failed to send to OJ",
+            workItem.Id, "status-push-failed", "Status failed to send to the Registration & Accreditation service",
             Arg.Is<Dictionary<string, string?>>(d => d["errorMessage"] == "connection refused"),
             s_user, ct);
     }

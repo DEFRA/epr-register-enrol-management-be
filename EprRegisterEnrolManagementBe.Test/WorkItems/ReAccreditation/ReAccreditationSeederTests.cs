@@ -915,7 +915,7 @@ public class ReAccreditationSeederTests
     public void Build_exporter_fixture_has_no_site_address()
     {
         // The point of this fixture: re-ex has no site for an exporter, so
-        // the CM frontend's Site address row must fall back to
+        // the Case Management service frontend's Site address row must fall back to
         // companyRegisteredAddress. That fallback has no coverage without a
         // seed item that is genuinely missing siteAddress.
         var exporter = BuildExporterFixture();

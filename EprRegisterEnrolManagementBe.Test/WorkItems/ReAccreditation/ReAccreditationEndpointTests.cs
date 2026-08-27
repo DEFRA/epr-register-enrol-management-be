@@ -1644,7 +1644,7 @@ public class ReAccreditationEndpointTests
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.NotNull(persisted);
         // RA-337: resume-during-* lands on 'updated', not the originating
-        // state, so CM shows an "Updated" status until a caseworker moves
+        // state, so the Case Management service shows an "Updated" status until a caseworker moves
         // it on via continue-review.
         Assert.Equal("updated", persisted!.StateId);
         Assert.Contains(

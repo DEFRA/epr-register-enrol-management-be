@@ -32,20 +32,23 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// the SLA clock stop, the queued publishing job and the decision
 /// notification, and bypassing it would silently drop all four.
 ///
-/// epr-p86e / RA-410: the decision is gated on the operator-journey (OJ)
-/// status push. The OJ push is fired ONCE here, as a pre-commit gate for the
+/// epr-p86e / RA-410: the decision is gated on the Registration &amp;
+/// Accreditation service status push. The Registration &amp; Accreditation
+/// service push is fired ONCE here, as a pre-commit gate for the
 /// final outcome, BEFORE either internal hop is persisted — and the
 /// post-action <see cref="ReAccreditationStatusPushHook"/> is suppressed for
-/// the three decision actions so the push happens exactly once. If OJ cannot
+/// the three decision actions so the push happens exactly once. If the
+/// Registration &amp; Accreditation service cannot
 /// be reached within its retry budget the decision is abandoned with a 500 and
 /// nothing is written, so the item stays exactly where it was rather than
 /// stranding in <c>awaiting-decision</c> (the bug this change fixes: the old
-/// post-commit hook pushed on BOTH hops, and when OJ hung the request's time
+/// post-commit hook pushed on BOTH hops, and when the Registration &amp;
+/// Accreditation service hung the request's time
 /// budget was exhausted, cancelling the token mid-approval). A disabled push
 /// (<see cref="OperatorBackendPushResult.IsSkipped"/>) is a pass — decisions
 /// must still work where the push is switched off.
 ///
-/// The OJ push body is state-transition only (no accreditation id or anything
+/// The Registration &amp; Accreditation service push body is state-transition only (no accreditation id or anything
 /// minted during approval), which is exactly why it can be sent before the
 /// outcome is committed.
 /// </summary>
@@ -68,16 +71,22 @@ internal sealed class ReAccreditationLogDecisionService(
     private const string RejectedStateId = "rejected";
     private const string WithdrawnStateId = "withdrawn";
 
-    // epr-p86e / RA-410: the fromState reported to OJ on the decision push.
+    // epr-p86e / RA-410: the fromState reported to the Registration &
+    // Accreditation service on the decision push.
     //
-    // DELIBERATE CONTRACT-MATCH — CONFIRM WITH THE OJ BACKEND OWNER.
+    // DELIBERATE CONTRACT-MATCH — CONFIRM WITH THE REGISTRATION &
+    // ACCREDITATION SERVICE BACKEND OWNER.
     // The old post-commit push for approve/reject reported fromState
     // 'awaiting-decision' (the item HAD been persisted there by the first hop
     // before the push fired). Here the push fires BEFORE any hop is persisted,
     // so at push time the item is still in 'assessment-in-progress'. We keep
-    // reporting 'awaiting-decision' to match the exact value OJ has always
-    // received, so this change is invisible to the OJ contract. OJ is not in
-    // the test stack and cannot be verified here — whoever owns the OJ backend
+    // reporting 'awaiting-decision' to match the exact value the Registration
+    // & Accreditation service has always
+    // received, so this change is invisible to the Registration &
+    // Accreditation service contract. The Registration & Accreditation
+    // service is not in
+    // the test stack and cannot be verified here — whoever owns the
+    // Registration & Accreditation service backend
     // should confirm it does not care about (or actively expects) this value.
     private const string PushFromStateId = AwaitingDecisionStateId;
 
@@ -195,14 +204,17 @@ internal sealed class ReAccreditationLogDecisionService(
         var occurredAt = _timeProvider.GetUtcNow().UtcDateTime;
 
         // epr-r9oy PRE-PUSH NUMBER MINT. An approval must mint its
-        // accreditation number BEFORE the OJ push below, not after: the
+        // accreditation number BEFORE the Registration & Accreditation
+        // service push below, not after: the
         // backend's accreditation-number endpoint refuses once
         // ApplicationStatus is terminal (RejectIfTerminal), and the push is
-        // exactly what makes it terminal. Minting first — while OJ still
+        // exactly what makes it terminal. Minting first — while the
+        // Registration & Accreditation service still
         // considers the application open — is what makes the mint succeed at
         // all; minting after left ApproveAsync's own attempt permanently
         // stuck (AccreditationNumberUnavailable on every retry, because by
-        // then OJ was already terminal). Reject never mints a number, so this
+        // then the Registration & Accreditation service was already
+        // terminal). Reject never mints a number, so this
         // is skipped entirely for that outcome.
         AccreditationNumberResult? preResolvedAccreditationNumber = null;
         if (outcome == ReAccreditationDecisionOutcome.Approved)
@@ -230,7 +242,7 @@ internal sealed class ReAccreditationLogDecisionService(
             }
         }
 
-        // epr-p86e / RA-410 PRE-COMMIT OJ GATE. Notify the operator journey of
+        // epr-p86e / RA-410 PRE-COMMIT REGISTRATION & ACCREDITATION SERVICE GATE. Notify the operator journey of
         // the final outcome BEFORE persisting either internal hop. On failure,
         // nothing has been written, so there is nothing to revert — the item
         // stays exactly where it was and the caller gets a generic 500.
@@ -258,7 +270,7 @@ internal sealed class ReAccreditationLogDecisionService(
             await AppendStatusPushAuditAsync(
                 workItemId,
                 "status-push-failed",
-                "Status failed to send to OJ",
+                "Status failed to send to the Registration & Accreditation service",
                 BuildPushDetails(
                     correlationId,
                     actionId,
@@ -336,7 +348,7 @@ internal sealed class ReAccreditationLogDecisionService(
                 await AppendStatusPushAuditAsync(
                     workItemId,
                     "status-push-skipped",
-                    "Status not sent to OJ (disabled)",
+                    "Status not sent to the Registration & Accreditation service (disabled)",
                     BuildPushDetails(
                         correlationId,
                         actionId,
@@ -355,7 +367,7 @@ internal sealed class ReAccreditationLogDecisionService(
                 await AppendStatusPushAuditAsync(
                     workItemId,
                     "status-push-sent",
-                    "Status sent to OJ",
+                    "Status sent to the Registration & Accreditation service",
                     BuildPushDetails(
                         correlationId,
                         actionId,
@@ -374,7 +386,7 @@ internal sealed class ReAccreditationLogDecisionService(
             // persisted. That is survivable rather than corrupt: the item now
             // sits in 'awaiting-decision', which this method accepts as an
             // entry state, so replaying the caller's identical request
-            // completes the decision. OJ was already told the final outcome by
+            // completes the decision. The Registration & Accreditation service was already told the final outcome by
             // the gate above, so the replay does not re-notify it needlessly
             // beyond a single idempotent status upsert.
             logger.LogWarning(

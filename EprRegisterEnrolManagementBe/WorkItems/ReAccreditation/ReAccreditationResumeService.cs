@@ -82,7 +82,7 @@ internal sealed class ReAccreditationResumeService(
     /// <see cref="ResumeFromQueryRequest.SectionKeys"/>, a separate field.
     /// <see cref="ResumeFromQueryRequest.Sections"/> is keyed independently
     /// by whatever the operator backend sends, and it sends its own enum
-    /// name, not the CM checkbox key.
+    /// name, not the Case Management service checkbox key.
     ///
     /// Only covers the sections a resubmit can actually change on this
     /// field set: <c>authority-to-issue</c> is deliberately absent — a

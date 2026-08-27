@@ -43,7 +43,7 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     // RA-337: not terminal — a resubmitted-but-not-yet-reviewed application.
     // resume-during-* lands here (instead of jumping straight back to the
-    // originating state) so CM has a distinct status to show a caseworker
+    // originating state) so the Case Management service has a distinct status to show a caseworker
     // that a query response has arrived. continue-review-during-* is the way
     // out, one per originating state, resolved server-side by
     // ReAccreditationContinueReviewService from the resume-during-* action
@@ -80,7 +80,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     // return to the state it was queried from. Items snapshotted before v7
     // have no way out of 'queried' until ReAccreditationResumeSnapshotMigration
     // patches their frozen snapshot.
-    // v8 (RA-337): CM previously showed the pre-query state's label
+    // v8 (RA-337): the Case Management service previously showed the pre-query state's label
     // immediately after a resume, with no signal that a response had
     // arrived — the resume-during-* transitions now land on a new
     // non-terminal 'updated' state instead of jumping straight back to the

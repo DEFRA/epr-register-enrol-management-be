@@ -7,7 +7,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <summary>
 /// RA-368: post-action hook that pushes every re-accreditation state
 /// transition to the operator backend, so its own record of application
-/// progress reflects CM's lifecycle beyond the query/resume round-trip
+/// progress reflects the Case Management service's lifecycle beyond the query/resume round-trip
 /// already covered by <see cref="ReAccreditationQueryPushHook"/>.
 ///
 /// Fires from every generic transition (<see cref="WorkItemService.ApplyActionAsync"/>)
@@ -22,7 +22,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// Skips every action whose declared <see cref="WorkItemTransition.ToStateId"/>
 /// is <c>queried</c> (query keeps its own richer <c>/query</c> push, see
 /// <see cref="ReAccreditationQueryPushHook"/>) or <c>withdrawn</c> (withdrawal
-/// is out of scope for RA-368 — CM's own caseworker-facing withdraw UI is
+/// is out of scope for RA-368 — the Case Management service's own caseworker-facing withdraw UI is
 /// being hidden by a separate, future ticket). Those are derived from
 /// <see cref="ReAccreditationType.Transitions"/> itself, rather than
 /// restating the individual action ids, so a future query/withdraw
@@ -108,7 +108,7 @@ internal sealed class ReAccreditationStatusPushHook(
             if (result.IsSuccess)
             {
                 var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-sent", "Status sent to OJ", details, user, cancellationToken);
+                    workItem.Id, "status-push-sent", "Status sent to the Registration & Accreditation service", details, user, cancellationToken);
                 if (!appended)
                 {
                     logger.LogWarning(
@@ -126,7 +126,7 @@ internal sealed class ReAccreditationStatusPushHook(
                     "Status push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
                     workItem.Id, correlationId, result.ErrorMessage);
                 var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-skipped", "Status not sent to OJ (disabled)", details, user, cancellationToken);
+                    workItem.Id, "status-push-skipped", "Status not sent to the Registration & Accreditation service (disabled)", details, user, cancellationToken);
                 if (!appended)
                 {
                     logger.LogWarning(
@@ -141,7 +141,7 @@ internal sealed class ReAccreditationStatusPushHook(
                     "Push of status-changed for work item {WorkItemId} (correlation {CorrelationId}) failed: {ErrorMessage}",
                     workItem.Id, correlationId, result.ErrorMessage);
                 var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-failed", "Status failed to send to OJ", details, user, cancellationToken);
+                    workItem.Id, "status-push-failed", "Status failed to send to the Registration & Accreditation service", details, user, cancellationToken);
                 if (!appended)
                 {
                     logger.LogWarning(

@@ -2129,8 +2129,8 @@ public class WorkItemServiceTests : IAsyncDisposable
     public async Task Submit_is_idempotent_for_a_retried_operatorApplicationId()
     {
         // RA-311/MBE-3: the operator backend forwards the operator's
-        // original "submit application" call and may retry it after OJ
-        // FE's 5s client timeout even though the first attempt already
+        // original "submit application" call and may retry it after the
+        // Registration & Accreditation service frontend's 5s client timeout even though the first attempt already
         // succeeded here (this round trip can take up to 100s). A retried
         // submit carrying the same operatorApplicationId must hand back
         // the SAME work item rather than creating a second one.
