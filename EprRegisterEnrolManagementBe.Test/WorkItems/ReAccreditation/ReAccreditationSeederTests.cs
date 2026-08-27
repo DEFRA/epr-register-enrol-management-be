@@ -936,5 +936,68 @@ public class ReAccreditationSeederTests
         Assert.True(permitNumbers.Count > 1, "Needs more than one permit number to exercise the comma-joined rendering.");
         Assert.All(permitNumbers, p => Assert.False(string.IsNullOrWhiteSpace(p.AsString)));
     }
+
+    // ── RA-483: removed ("deselected") overseas sites ────────────────────────
+
+    /// <summary>
+    /// The full-payload fixture's overseas sites, located the way mgmt-tests
+    /// locates the item — by the organisation name the list is searchable on.
+    /// </summary>
+    private static BsonArray FullPayloadOverseasSites()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        var fullPayload = items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString == "Full Payload Verification Ltd");
+
+        return fullPayload.Payload["overseasSites"]["sites"].AsBsonArray;
+    }
+
+    [Fact]
+    public void Build_full_payload_fixture_carries_a_selected_and_a_deselected_overseas_site()
+    {
+        // RA-483. Both polarities must sit on the SAME work item: a fixture
+        // carrying only the removed site cannot tell "case management filters
+        // deselected sites" from "case management renders no sites at all".
+        var sites = FullPayloadOverseasSites();
+
+        var selected = sites.Single(s => s["siteName"].AsString == "Full Payload Verification Overseas Site");
+        var removed = sites.Single(s => s["siteName"].AsString == "Removed Overseas Site");
+
+        Assert.True(selected["selected"].AsBoolean);
+        Assert.False(removed["selected"].AsBoolean);
+    }
+
+    [Fact]
+    public void Build_full_payload_fixture_removed_overseas_site_keeps_the_values_mgmt_tests_assert_on()
+    {
+        // The e2e spec asserts these exact strings are ABSENT from the
+        // work-item screen. Renaming them here silently turns that assertion
+        // into one that passes for the wrong reason.
+        var removed = FullPayloadOverseasSites()
+            .Single(s => s["siteName"].AsString == "Removed Overseas Site");
+
+        Assert.Equal(2, removed["siteId"].AsInt32);
+        Assert.Equal("2 Withdrawn Weg, Hamburg", removed["siteAddress"].AsString);
+        Assert.Equal("Germany", removed["country"].AsString);
+        Assert.Empty(removed["besEvidence"]["files"].AsBsonArray);
+    }
+
+    [Fact]
+    public void Build_full_payload_fixture_only_the_removed_overseas_site_is_german()
+    {
+        // mgmt-tests proves the removed site is hidden partly by asserting
+        // "Germany" never appears on the screen. Another site on this item
+        // using the same country would make that assertion unsatisfiable.
+        var sites = FullPayloadOverseasSites();
+
+        Assert.Equal(
+            1,
+            sites.Count(s =>
+                s.AsBsonDocument.Contains("country") && s["country"].AsString == "Germany"));
+        Assert.Equal(
+            "Removed Overseas Site",
+            sites.Single(s => s["country"].AsString == "Germany")["siteName"].AsString);
+    }
 }
 
