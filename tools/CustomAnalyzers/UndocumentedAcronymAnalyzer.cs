@@ -5,7 +5,7 @@ using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.Diagnostics;
 using Microsoft.CodeAnalysis.Text;
 
-namespace AcronymAnalyzer;
+namespace CustomAnalyzers;
 
 // Guards against "OJ" and "CM" creeping back into the codebase after the
 // chore/rename-oj-cm-acronyms cleanup: both were undocumented two-letter
