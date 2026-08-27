@@ -111,11 +111,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
     private static ClaimsPrincipal UserWithRoles(string userId, params string[] roles)
     {
-        var claims = new List<Claim>
-        {
-            new("client_id", "test-client"),
-            new("user:id", userId),
-        };
+        var claims = new List<Claim> { new("client_id", "test-client"), new("user:id", userId) };
         foreach (var role in roles)
         {
             claims.Add(new Claim(ClaimTypes.Role, role));
@@ -184,15 +180,7 @@ public class WorkItemServiceTests : IAsyncDisposable
     public async Task ApplyAction_transitions_via_a_different_declared_action()
     {
         var type = BuildType(
-            transitions:
-            [
-                new WorkItemTransition(
-                    "withdraw",
-                    "Withdraw",
-                    "submitted",
-                    "rejected"
-                ),
-            ]
+            transitions: [new WorkItemTransition("withdraw", "Withdraw", "submitted", "rejected")]
         );
         var workItem = await SeedAsync();
 
@@ -272,12 +260,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         var workItem = await SeedAsync(stateId: "state-b");
 
         var result = await BuildService(type)
-            .ApplyActionAsync(
-                workItem.Id,
-                "ping",
-                User(),
-                TestContext.Current.CancellationToken
-            );
+            .ApplyActionAsync(workItem.Id, "ping", User(), TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -308,12 +291,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         var workItem = await SeedAsync(stateId: "state-c");
 
         var result = await BuildService(type)
-            .ApplyActionAsync(
-                workItem.Id,
-                "ping",
-                User(),
-                TestContext.Current.CancellationToken
-            );
+            .ApplyActionAsync(workItem.Id, "ping", User(), TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
@@ -323,15 +301,7 @@ public class WorkItemServiceTests : IAsyncDisposable
     public async Task ApplyAction_returns_ConcurrencyConflict_when_persistence_throws()
     {
         var type = BuildType(
-            transitions:
-            [
-                new WorkItemTransition(
-                    "approve",
-                    "Approve",
-                    "submitted",
-                    "approved"
-                ),
-            ]
+            transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
         );
         var workItem = await SeedAsync();
         var racingService = BuildRacingService(type, workItem.Id);
@@ -382,12 +352,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             [
                 new WorkItemTransition("approve", "Approve", "submitted", "approved"),
                 new WorkItemTransition("reject", "Reject", "submitted", "rejected"),
-                new WorkItemTransition(
-                    "withdraw",
-                    "Withdraw",
-                    "submitted",
-                    "rejected"
-                ),
+                new WorkItemTransition("withdraw", "Withdraw", "submitted", "rejected"),
             ]
         );
         // Project is a pure read-only function over an in-memory document
@@ -407,7 +372,8 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         Assert.Equal(
             ["approve", "reject", "withdraw"],
-            projection.AvailableActions.Select(a => a.ActionId).OrderBy(a => a).ToArray());
+            projection.AvailableActions.Select(a => a.ActionId).OrderBy(a => a).ToArray()
+        );
     }
 
     [Fact]
@@ -421,11 +387,20 @@ public class WorkItemServiceTests : IAsyncDisposable
             transitions:
             [
                 new WorkItemTransition(
-                    "resume-a", "Resume", "submitted", "approved", CallerInvocable: false),
+                    "resume-a",
+                    "Resume",
+                    "submitted",
+                    "approved",
+                    CallerInvocable: false
+                ),
                 new WorkItemTransition(
-                    "resume-b", "Resume", "submitted", "rejected", CallerInvocable: false),
-                new WorkItemTransition(
-                    "withdraw", "Withdraw", "submitted", "rejected"),
+                    "resume-b",
+                    "Resume",
+                    "submitted",
+                    "rejected",
+                    CallerInvocable: false
+                ),
+                new WorkItemTransition("withdraw", "Withdraw", "submitted", "rejected"),
             ]
         );
         var workItem = new WorkItem
@@ -454,10 +429,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var type = BuildType(
             transitions:
             [
-                new WorkItemTransition(
-                    "approve", "Approve", "submitted", "approved"),
-                new WorkItemTransition(
-                    "reject", "Reject", "submitted", "rejected"),
+                new WorkItemTransition("approve", "Approve", "submitted", "approved"),
+                new WorkItemTransition("reject", "Reject", "submitted", "rejected"),
             ]
         );
         var workItem = new WorkItem
@@ -474,7 +447,8 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         Assert.Equal(
             ["approve", "reject"],
-            projection.AvailableActions.Select(a => a.ActionId).OrderBy(a => a).ToArray());
+            projection.AvailableActions.Select(a => a.ActionId).OrderBy(a => a).ToArray()
+        );
         await Task.CompletedTask;
     }
 
@@ -488,7 +462,12 @@ public class WorkItemServiceTests : IAsyncDisposable
             transitions:
             [
                 new WorkItemTransition(
-                    "resume-a", "Resume", "submitted", "approved", CallerInvocable: false),
+                    "resume-a",
+                    "Resume",
+                    "submitted",
+                    "approved",
+                    CallerInvocable: false
+                ),
             ]
         );
         var workItem = new WorkItem
@@ -581,7 +560,11 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(registeredType)
             .ApplyActionAsync(
-                workItem.Id, "approve", User(), TestContext.Current.CancellationToken);
+                workItem.Id,
+                "approve",
+                User(),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
@@ -596,14 +579,21 @@ public class WorkItemServiceTests : IAsyncDisposable
         // claim-absent case already covered above.
         var type = BuildType();
         var workItem = await SeedAsync();
-        var user = new ClaimsPrincipal(new ClaimsIdentity(
-        [
-            new Claim("client_id", "test-client"),
-            new Claim("user:id", "   "),
-        ], "test"));
+        var user = new ClaimsPrincipal(
+            new ClaimsIdentity(
+                [new Claim("client_id", "test-client"), new Claim("user:id", "   ")],
+                "test"
+            )
+        );
 
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "alice-1", "Alice", user, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                user,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
@@ -618,8 +608,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         var workItem = await SeedAsync();
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "alice-1", "Alice Example", actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice Example",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -641,8 +637,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildServiceWithHook(type, hook).AssignAsync(
-            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+        var result = await BuildServiceWithHook(type, hook)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.True(result.IsSuccess);
         await hook.Received(1)
@@ -668,8 +670,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
         var actor = UserWithRoles("actor-1", "assign");
-        await BuildServiceWithHook(type, hook).AssignAsync(
-            workItem.Id, "carol-1", "Carol", actor, TestContext.Current.CancellationToken);
+        await BuildServiceWithHook(type, hook)
+            .AssignAsync(
+                workItem.Id,
+                "carol-1",
+                "Carol",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         await hook.Received(1)
             .OnAssignmentChangedAsync(
@@ -694,12 +702,23 @@ public class WorkItemServiceTests : IAsyncDisposable
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildServiceWithHook(type, hook).AssignAsync(
-            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+        var result = await BuildServiceWithHook(type, hook)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.True(result.IsIdempotentReplay);
         await hook.DidNotReceiveWithAnyArgs()
-            .OnAssignmentChangedAsync(default!, default, default!, TestContext.Current.CancellationToken);
+            .OnAssignmentChangedAsync(
+                default!,
+                default,
+                default!,
+                TestContext.Current.CancellationToken
+            );
     }
 
     [Fact]
@@ -716,8 +735,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
         var actor = UserWithRoles("actor-1", "assign");
-        await BuildServiceWithHook(type, hook).UnassignAsync(
-            workItem.Id, actor, TestContext.Current.CancellationToken);
+        await BuildServiceWithHook(type, hook)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         await hook.Received(1)
             .OnAssignmentChangedAsync(
@@ -736,12 +755,17 @@ public class WorkItemServiceTests : IAsyncDisposable
         var hook = Substitute.For<IWorkItemPostActionHook>();
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildServiceWithHook(type, hook).UnassignAsync(
-            workItem.Id, actor, TestContext.Current.CancellationToken);
+        var result = await BuildServiceWithHook(type, hook)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsIdempotentReplay);
         await hook.DidNotReceiveWithAnyArgs()
-            .OnAssignmentChangedAsync(default!, default, default!, TestContext.Current.CancellationToken);
+            .OnAssignmentChangedAsync(
+                default!,
+                default,
+                default!,
+                TestContext.Current.CancellationToken
+            );
     }
 
     [Fact]
@@ -759,8 +783,14 @@ public class WorkItemServiceTests : IAsyncDisposable
             .Returns(Task.FromException(new InvalidOperationException("notify down")));
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildServiceWithHook(type, hook).AssignAsync(
-            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+        var result = await BuildServiceWithHook(type, hook)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         // The hook's failure is swallowed; the assignment mutation persisted.
         Assert.True(result.IsSuccess);
@@ -781,8 +811,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         });
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "carol-1", "Carol", actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "carol-1",
+                "Carol",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -804,8 +840,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         });
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.True(result.IsSuccess);
         Assert.True(
@@ -825,8 +867,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         var type = BuildType();
         var workItem = await SeedAsync();
 
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "alice-1", "Alice", UserWithoutActorId(), TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                UserWithoutActorId(),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
@@ -846,8 +894,12 @@ public class WorkItemServiceTests : IAsyncDisposable
             w.AssignedBy = "old-actor";
         });
 
-        var result = await BuildService(type).UnassignAsync(
-            workItem.Id, UserWithoutActorId(), TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .UnassignAsync(
+                workItem.Id,
+                UserWithoutActorId(),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
@@ -884,8 +936,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         var workItem = await SeedAsync(stateId: stateId);
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
@@ -908,17 +966,20 @@ public class WorkItemServiceTests : IAsyncDisposable
     public async Task Unassign_is_rejected_when_work_item_is_in_a_terminal_state(string stateId)
     {
         var type = BuildTypeWithTerminalStates();
-        var workItem = await SeedAsync(stateId: stateId, configure: w =>
-        {
-            w.AssignedToId = "alice-1";
-            w.AssignedToName = "Alice";
-            w.AssignedAt = InitialNow;
-            w.AssignedBy = "old-actor";
-        });
+        var workItem = await SeedAsync(
+            stateId: stateId,
+            configure: w =>
+            {
+                w.AssignedToId = "alice-1";
+                w.AssignedToName = "Alice";
+                w.AssignedAt = InitialNow;
+                w.AssignedBy = "old-actor";
+            }
+        );
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).UnassignAsync(
-            workItem.Id, actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
@@ -937,21 +998,25 @@ public class WorkItemServiceTests : IAsyncDisposable
         // Re-assigning a closed case to whoever already holds it must still be
         // refused rather than answered with a misleading 200 + replay header.
         var type = BuildTypeWithTerminalStates();
-        var workItem = await SeedAsync(stateId: "withdrawn", configure: w =>
-        {
-            w.AssignedToId = "alice-1";
-            w.AssignedToName = "Alice";
-            w.AssignedAt = InitialNow;
-            w.AssignedBy = "old-actor";
-        });
-
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id,
-            "alice-1",
-            "Alice",
-            UserWithRoles("actor-1", "assign"),
-            TestContext.Current.CancellationToken
+        var workItem = await SeedAsync(
+            stateId: "withdrawn",
+            configure: w =>
+            {
+                w.AssignedToId = "alice-1";
+                w.AssignedToName = "Alice";
+                w.AssignedAt = InitialNow;
+                w.AssignedBy = "old-actor";
+            }
         );
+
+        var result = await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                UserWithRoles("actor-1", "assign"),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
         Assert.False(result.IsIdempotentReplay);
@@ -963,11 +1028,12 @@ public class WorkItemServiceTests : IAsyncDisposable
         var type = BuildTypeWithTerminalStates();
         var workItem = await SeedAsync(stateId: "withdrawn");
 
-        var result = await BuildService(type).UnassignAsync(
-            workItem.Id,
-            UserWithRoles("actor-1", "assign"),
-            TestContext.Current.CancellationToken
-        );
+        var result = await BuildService(type)
+            .UnassignAsync(
+                workItem.Id,
+                UserWithRoles("actor-1", "assign"),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
         Assert.False(result.IsIdempotentReplay);
@@ -994,13 +1060,14 @@ public class WorkItemServiceTests : IAsyncDisposable
             configure: w => w.TemplateSnapshot = WorkItemTemplateSnapshot.Capture(snapshotType)
         );
 
-        var result = await BuildService(BuildType()).AssignAsync(
-            workItem.Id,
-            "alice-1",
-            "Alice",
-            UserWithRoles("actor-1", "assign"),
-            TestContext.Current.CancellationToken
-        );
+        var result = await BuildService(BuildType())
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                UserWithRoles("actor-1", "assign"),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
     }
@@ -1012,13 +1079,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         // rather than failing closed on a state the template never declared.
         var workItem = await SeedAsync(stateId: "some-unmodelled-state");
 
-        var result = await BuildService(BuildType()).AssignAsync(
-            workItem.Id,
-            "alice-1",
-            "Alice",
-            UserWithRoles("actor-1", "assign"),
-            TestContext.Current.CancellationToken
-        );
+        var result = await BuildService(BuildType())
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                UserWithRoles("actor-1", "assign"),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.True(result.IsSuccess);
         Assert.Equal("alice-1", (await GetAsync(workItem.Id)).AssignedToId);
@@ -1057,13 +1125,14 @@ public class WorkItemServiceTests : IAsyncDisposable
     {
         var workItem = await SeedUnresolvableTemplateItemAsync();
 
-        var result = await BuildService(BuildType()).AssignAsync(
-            workItem.Id,
-            "alice-1",
-            "Alice",
-            UserWithRoles("actor-1", "assign"),
-            TestContext.Current.CancellationToken
-        );
+        var result = await BuildService(BuildType())
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                UserWithRoles("actor-1", "assign"),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
@@ -1080,11 +1149,12 @@ public class WorkItemServiceTests : IAsyncDisposable
     {
         var workItem = await SeedUnresolvableTemplateItemAsync();
 
-        var result = await BuildService(BuildType()).UnassignAsync(
-            workItem.Id,
-            UserWithRoles("actor-1", "assign"),
-            TestContext.Current.CancellationToken
-        );
+        var result = await BuildService(BuildType())
+            .UnassignAsync(
+                workItem.Id,
+                UserWithRoles("actor-1", "assign"),
+                TestContext.Current.CancellationToken
+            );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.UnknownAction, result.FailureCode);
@@ -1101,8 +1171,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var workItem = await SeedAsync();
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "   ", null, actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(workItem.Id, "   ", null, actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidAssignment, result.FailureCode);
@@ -1113,8 +1183,14 @@ public class WorkItemServiceTests : IAsyncDisposable
     {
         var type = BuildType();
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).AssignAsync(
-            Guid.NewGuid(), "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(
+                Guid.NewGuid(),
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
@@ -1125,8 +1201,8 @@ public class WorkItemServiceTests : IAsyncDisposable
     {
         var type = BuildType();
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).UnassignAsync(
-            Guid.NewGuid(), actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .UnassignAsync(Guid.NewGuid(), actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
@@ -1154,7 +1230,8 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Assign_standard_user_can_assign_to_someone_else(/* RA-323 */)
+    public async Task Assign_standard_user_can_assign_to_someone_else( /* RA-323 */
+    )
     {
         // RA-323: every caseworker holds the same role, so a caller without
         // any special role can still assign/re-assign to anyone.
@@ -1166,8 +1243,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         });
 
         var actor = UserWithRoles("alice-1", "standard");
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "carol-1", "Carol", actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "carol-1",
+                "Carol",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -1187,7 +1270,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         });
 
         var actor = UserWithRoles("actor-2", "assign");
-        var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -1206,7 +1290,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var workItem = await SeedAsync();
 
         var actor = UserWithRoles("actor-1", "assign");
-        var result = await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess);
         Assert.True(
@@ -1219,7 +1304,8 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Unassign_succeeds_for_standard_user(/* RA-323 */)
+    public async Task Unassign_succeeds_for_standard_user( /* RA-323 */
+    )
     {
         var type = BuildType();
         var workItem = await SeedAsync(configure: w =>
@@ -1377,15 +1463,7 @@ public class WorkItemServiceTests : IAsyncDisposable
     public async Task Audit_ApplyAction_records_from_and_to_state()
     {
         var type = BuildType(
-            transitions:
-            [
-                new WorkItemTransition(
-                    "withdraw",
-                    "Withdraw",
-                    "submitted",
-                    "rejected"
-                ),
-            ]
+            transitions: [new WorkItemTransition("withdraw", "Withdraw", "submitted", "rejected")]
         );
         var workItem = await SeedAsync();
 
@@ -1449,8 +1527,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         });
 
         var actor = UserWithRoles("alice-1", "assign");
-        await BuildService(type).AssignAsync(
-            workItem.Id, "carol-1", "Carol Example", actor, TestContext.Current.CancellationToken);
+        await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "carol-1",
+                "Carol Example",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         var fetched = await GetAsync(workItem.Id);
         var entry = Assert.Single(fetched.AuditLog);
@@ -1474,8 +1558,14 @@ public class WorkItemServiceTests : IAsyncDisposable
         });
 
         var actor = UserWithRoles("actor-1", "assign");
-        await BuildService(type).AssignAsync(
-            workItem.Id, "alice-1", "Alice", actor, TestContext.Current.CancellationToken);
+        await BuildService(type)
+            .AssignAsync(
+                workItem.Id,
+                "alice-1",
+                "Alice",
+                actor,
+                TestContext.Current.CancellationToken
+            );
 
         var fetched = await GetAsync(workItem.Id);
         Assert.Empty(fetched.AuditLog);
@@ -1488,8 +1578,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var workItem = await SeedAsync();
 
         var actor = UserWithRoles("alice-1", "standard");
-        var result = await BuildService(type).AssignAsync(
-            workItem.Id, "   ", "Bob", actor, TestContext.Current.CancellationToken);
+        var result = await BuildService(type)
+            .AssignAsync(workItem.Id, "   ", "Bob", actor, TestContext.Current.CancellationToken);
 
         Assert.False(result.IsSuccess);
         var fetched = await GetAsync(workItem.Id);
@@ -1507,7 +1597,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         });
 
         var actor = UserWithRoles("actor-1", "assign");
-        await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        await BuildService(type)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         var fetched = await GetAsync(workItem.Id);
         var entry = Assert.Single(fetched.AuditLog);
@@ -1525,7 +1616,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var workItem = await SeedAsync();
 
         var actor = UserWithRoles("actor-1", "assign");
-        await BuildService(type).UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
+        await BuildService(type)
+            .UnassignAsync(workItem.Id, actor, TestContext.Current.CancellationToken);
 
         var fetched = await GetAsync(workItem.Id);
         Assert.Empty(fetched.AuditLog);
@@ -1833,12 +1925,12 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Submit_stamps_paymentReference_to_match_the_generated_applicationReference()
+    public async Task Submit_NoOperatorSuppliedPaymentReference_FallsBackToTheGeneratedApplicationReference()
     {
-        // RA-447/CM3: paymentReference used to stay null forever (the operator
-        // backend cannot know applicationReference before management-be
-        // generates it). Now that the reference is generated here, it is
-        // stamped as the payment reference too.
+        // RA-447/CM3: paymentReference used to stay null forever (the operator backend cannot
+        // know applicationReference before management-be generates it). RA-503: the operator
+        // backend now sends its own real bank reference in most cases (see the test below) -
+        // this fallback covers a payload with none, e.g. a submitter that predates that change.
         var type = BuildType();
 
         var result = await BuildService(type)
@@ -1857,6 +1949,75 @@ public class WorkItemServiceTests : IAsyncDisposable
             fetched.Payload["applicationReference"].AsString,
             fetched.Payload["paymentReference"].AsString
         );
+    }
+
+    // RA-503: the operator's real, nation-specific bank payment reference (buildPaymentReference
+    // in epr-register-enrol-frontend) must be preserved exactly as sent, never overwritten by the
+    // locally-generated applicationReference - they are different values by design (the operator
+    // already quoted this one on their bank transfer).
+    [Fact]
+    public async Task Submit_OperatorSuppliedPaymentReference_IsPreservedRatherThanOverwritten()
+    {
+        var type = BuildType();
+        var payload = new BsonDocument { ["paymentReference"] = "PR/PK/REP/500500" };
+
+        var result = await BuildService(type)
+            .SubmitAsync(
+                type,
+                payload,
+                "test-client",
+                AuditUser(),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        Assert.True(result.IsSuccess);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        Assert.Equal("PR/PK/REP/500500", fetched.Payload["paymentReference"].AsString);
+        Assert.NotEqual(
+            fetched.Payload["applicationReference"].AsString,
+            fetched.Payload["paymentReference"].AsString
+        );
+    }
+
+    // RA-503: the retry loop regenerates applicationReference on each collision attempt, but the
+    // operator-supplied paymentReference must stay fixed across every attempt - it was captured
+    // once, before the loop, precisely so a later attempt's fresh applicationReference can never
+    // leak into it. Uses ScriptedReferenceGenerator (same collision-forcing pattern as
+    // Submit_retries_on_a_unique_reference_collision_and_succeeds below) rather than relying on
+    // the real generator producing two colliding values.
+    [Fact]
+    public async Task Submit_OperatorSuppliedPaymentReference_SurvivesAnApplicationReferenceCollisionRetry()
+    {
+        var type = BuildType();
+        const string Taken = "RA-333333333";
+        const string Free = "RA-444444444";
+        await SeedAsync(configure: w =>
+            w.Payload = new BsonDocument { ["applicationReference"] = Taken }
+        );
+
+        var generator = new ScriptedReferenceGenerator(Taken, Free);
+        var service = new WorkItemService(
+            new WorkItemRegistry([type]),
+            _persistence,
+            NullLogger<WorkItemService>.Instance,
+            _time,
+            referenceGenerator: generator
+        );
+
+        var payload = new BsonDocument { ["paymentReference"] = "PR/PK/REP/500500" };
+        var result = await service.SubmitAsync(
+            type,
+            payload,
+            "test-client",
+            AuditUser(),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(2, generator.CallCount);
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        Assert.Equal(Free, fetched.Payload["applicationReference"].AsString);
+        Assert.Equal("PR/PK/REP/500500", fetched.Payload["paymentReference"].AsString);
     }
 
     [Fact]
@@ -1975,26 +2136,28 @@ public class WorkItemServiceTests : IAsyncDisposable
         // the SAME work item rather than creating a second one.
         var type = BuildType();
 
-        var first = await BuildService(type).SubmitAsync(
-            type,
-            new BsonDocument { ["operatorApplicationId"] = "app-001" },
-            "test-client",
-            AuditUser(),
-            cancellationToken: TestContext.Current.CancellationToken
-        );
+        var first = await BuildService(type)
+            .SubmitAsync(
+                type,
+                new BsonDocument { ["operatorApplicationId"] = "app-001" },
+                "test-client",
+                AuditUser(),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
         Assert.True(first.IsSuccess);
         Assert.False(first.IsIdempotentReplay);
 
         // A fresh payload instance with the same operatorApplicationId,
         // mirroring a real retried HTTP POST rather than reusing the first
         // call's (now server-mutated) BsonDocument.
-        var second = await BuildService(type).SubmitAsync(
-            type,
-            new BsonDocument { ["operatorApplicationId"] = "app-001" },
-            "test-client",
-            AuditUser(),
-            cancellationToken: TestContext.Current.CancellationToken
-        );
+        var second = await BuildService(type)
+            .SubmitAsync(
+                type,
+                new BsonDocument { ["operatorApplicationId"] = "app-001" },
+                "test-client",
+                AuditUser(),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
 
         Assert.True(second.IsSuccess);
         Assert.True(second.IsIdempotentReplay);
@@ -2025,8 +2188,12 @@ public class WorkItemServiceTests : IAsyncDisposable
             AuditUser(),
             cancellationToken: TestContext.Current.CancellationToken
         );
-        await hook.Received(1).OnSubmittedAsync(
-            Arg.Any<WorkItem>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+        await hook.Received(1)
+            .OnSubmittedAsync(
+                Arg.Any<WorkItem>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            );
 
         var second = await service.SubmitAsync(
             type,
@@ -2039,8 +2206,12 @@ public class WorkItemServiceTests : IAsyncDisposable
         Assert.True(second.IsIdempotentReplay);
         // Still exactly the one call from the original submission — the
         // replay path returns before the hook fan-out runs again.
-        await hook.Received(1).OnSubmittedAsync(
-            Arg.Any<WorkItem>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+        await hook.Received(1)
+            .OnSubmittedAsync(
+                Arg.Any<WorkItem>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -2052,14 +2223,22 @@ public class WorkItemServiceTests : IAsyncDisposable
         // identical submissions must still create two distinct work items.
         var type = BuildType();
 
-        var first = await BuildService(type).SubmitAsync(
-            type, new BsonDocument(), "test-client", AuditUser(),
-            cancellationToken: TestContext.Current.CancellationToken
-        );
-        var second = await BuildService(type).SubmitAsync(
-            type, new BsonDocument(), "test-client", AuditUser(),
-            cancellationToken: TestContext.Current.CancellationToken
-        );
+        var first = await BuildService(type)
+            .SubmitAsync(
+                type,
+                new BsonDocument(),
+                "test-client",
+                AuditUser(),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+        var second = await BuildService(type)
+            .SubmitAsync(
+                type,
+                new BsonDocument(),
+                "test-client",
+                AuditUser(),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
 
         Assert.True(first.IsSuccess);
         Assert.True(second.IsSuccess);
@@ -2117,8 +2296,8 @@ public class WorkItemServiceTests : IAsyncDisposable
             Guid workItemId,
             string fieldName,
             BsonValue value,
-            CancellationToken cancellationToken = default) =>
-            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+            CancellationToken cancellationToken = default
+        ) => inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
 
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
@@ -2134,8 +2313,15 @@ public class WorkItemServiceTests : IAsyncDisposable
         ) => inner.GetByIdAsync(id, cancellationToken);
 
         public Task<WorkItem?> FindByOperatorApplicationIdAsync(
-            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default
-        ) => inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
+            string typeId,
+            string operatorApplicationId,
+            CancellationToken cancellationToken = default
+        ) =>
+            inner.FindByOperatorApplicationIdAsync(
+                typeId,
+                operatorApplicationId,
+                cancellationToken
+            );
 
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,
