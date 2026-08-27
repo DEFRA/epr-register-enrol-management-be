@@ -121,7 +121,7 @@ jobs:
           echo "tag=$SHA" >> "$GITHUB_OUTPUT"
 
       - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
-        uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@516b4dc663d3bd49f3094be664a7dc50137131eb # main
+        uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@e394d25bcb30acbec5758eda265aba402376f3d9 # main
         with:
           management-be: ${{ github.sha }}
           management-fe: ${{ steps.build-fe.outputs.tag }}
