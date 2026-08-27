@@ -28,7 +28,8 @@ public sealed class UndocumentedAcronymAnalyzer : DiagnosticAnalyzer
     // identifiers (anywhere the token is bounded by non-word characters).
     private static readonly Regex s_wordPattern = new(
         @"\b(OJ|CM)\b",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase
+        RegexOptions.Compiled | RegexOptions.IgnoreCase,
+        TimeSpan.FromSeconds(1)
     );
 
     // Splits an identifier into its camelCase/PascalCase segments, so a
@@ -38,7 +39,8 @@ public sealed class UndocumentedAcronymAnalyzer : DiagnosticAnalyzer
     // change separates it from its neighbours.
     private static readonly Regex s_segmentPattern = new(
         @"[A-Z]+(?=[A-Z][a-z]|$|[^A-Za-z])|[A-Z]?[a-z]+",
-        RegexOptions.Compiled
+        RegexOptions.Compiled,
+        TimeSpan.FromSeconds(1)
     );
 
     private static readonly DiagnosticDescriptor s_rule = new(
