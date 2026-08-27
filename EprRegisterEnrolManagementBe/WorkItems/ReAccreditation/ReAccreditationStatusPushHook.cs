@@ -107,14 +107,9 @@ internal sealed class ReAccreditationStatusPushHook(
 
             if (result.IsSuccess)
             {
-                var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-sent", "Status sent to the Registration & Accreditation service", details, user, cancellationToken);
-                if (!appended)
-                {
-                    logger.LogWarning(
-                        "status-push-sent audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                        workItem.Id, correlationId);
-                }
+                await AppendPushAuditEntryAsync(
+                    workItem, "status-push-sent", "Status sent to the Registration & Accreditation service",
+                    details, user, correlationId, cancellationToken);
             }
             else if (result.IsSkipped)
             {
@@ -125,14 +120,9 @@ internal sealed class ReAccreditationStatusPushHook(
                 logger.LogDebug(
                     "Status push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
                     workItem.Id, correlationId, result.ErrorMessage);
-                var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-skipped", "Status not sent to the Registration & Accreditation service (disabled)", details, user, cancellationToken);
-                if (!appended)
-                {
-                    logger.LogWarning(
-                        "status-push-skipped audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                        workItem.Id, correlationId);
-                }
+                await AppendPushAuditEntryAsync(
+                    workItem, "status-push-skipped", "Status not sent to the Registration & Accreditation service (disabled)",
+                    details, user, correlationId, cancellationToken);
             }
             else
             {
@@ -140,14 +130,9 @@ internal sealed class ReAccreditationStatusPushHook(
                 logger.LogError(
                     "Push of status-changed for work item {WorkItemId} (correlation {CorrelationId}) failed: {ErrorMessage}",
                     workItem.Id, correlationId, result.ErrorMessage);
-                var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-failed", "Status failed to send to the Registration & Accreditation service", details, user, cancellationToken);
-                if (!appended)
-                {
-                    logger.LogWarning(
-                        "status-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                        workItem.Id, correlationId);
-                }
+                await AppendPushAuditEntryAsync(
+                    workItem, "status-push-failed", "Status failed to send to the Registration & Accreditation service",
+                    details, user, correlationId, cancellationToken);
             }
         }
         catch (Exception ex)
@@ -163,6 +148,25 @@ internal sealed class ReAccreditationStatusPushHook(
     public Task OnAssignmentChangedAsync(
         WorkItem workItem, WorkItemAssignmentChange change, ClaimsPrincipal user, CancellationToken cancellationToken) =>
         Task.CompletedTask;
+
+    private async Task AppendPushAuditEntryAsync(
+        WorkItem workItem,
+        string action,
+        string message,
+        Dictionary<string, string?> details,
+        ClaimsPrincipal user,
+        Guid correlationId,
+        CancellationToken cancellationToken)
+    {
+        var appended = await auditAppender.AppendAsync(
+            workItem.Id, action, message, details, user, cancellationToken);
+        if (!appended)
+        {
+            logger.LogWarning(
+                "{Action} audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
+                action, workItem.Id, correlationId);
+        }
+    }
 
     /// <summary>
     /// Every action id whose declared transition <em>moves</em> a work item
