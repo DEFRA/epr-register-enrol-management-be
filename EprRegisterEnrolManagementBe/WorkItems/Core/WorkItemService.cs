@@ -214,13 +214,17 @@ public sealed class WorkItemService : IWorkItemService
 
         if (operatorApplicationId is not null)
         {
-            var existingByOperatorApplicationId = await _persistence.FindByOperatorApplicationIdAsync(
-                type.TypeId, operatorApplicationId, cancellationToken);
+            var existingByOperatorApplicationId =
+                await _persistence.FindByOperatorApplicationIdAsync(
+                    type.TypeId,
+                    operatorApplicationId,
+                    cancellationToken
+                );
             if (existingByOperatorApplicationId is not null)
             {
                 _logger.LogInformation(
-                    "Submit for operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) is a replay; " +
-                        "returning existing work item {WorkItemId} instead of creating a duplicate.",
+                    "Submit for operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) is a replay; "
+                        + "returning existing work item {WorkItemId} instead of creating a duplicate.",
                     operatorApplicationId,
                     type.TypeId,
                     existingByOperatorApplicationId.Id
@@ -230,6 +234,20 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
+
+        // RA-503: the operator backend now sends the operator's real, nation-specific bank
+        // payment reference (buildPaymentReference in epr-register-enrol-frontend, e.g.
+        // PR/PK/REP/500500 - the exact string shown to the operator on their submit-confirmation
+        // and view-payment-details pages) directly in the submission payload. Captured once,
+        // before the retry loop, so a regenerated applicationReference on a later attempt can
+        // never overwrite it - unlike applicationReference, this value doesn't depend on attempt
+        // and must stay exactly what the operator was told to quote.
+        var operatorPaymentReference =
+            payload.TryGetValue("paymentReference", out var operatorPaymentReferenceValue)
+            && operatorPaymentReferenceValue.IsString
+            && !string.IsNullOrWhiteSpace(operatorPaymentReferenceValue.AsString)
+                ? operatorPaymentReferenceValue.AsString
+                : null;
 
         // RA-219: the backend owns the applicationReference. Generate one
         // server-side and persist; on the (rare) unique-index collision
@@ -244,15 +262,11 @@ public sealed class WorkItemService : IWorkItemService
             var applicationReference = _referenceGenerator.Generate(payload, attempt);
             payload[ApplicationReferenceField] = applicationReference;
 
-            // RA-447/CM3: the operator backend cannot know applicationReference
-            // before management-be generates it, so paymentReference is always
-            // null on initial submit (RA-316, deliberate). Now that the
-            // reference exists, stamp it as the payment reference too — the
-            // application reference *is* the payment reference for this
-            // service, so this is a real persisted value (not a display-time
-            // fallback) that never changes after creation. No backfill: only
-            // work items created from this point on carry it.
-            payload["paymentReference"] = applicationReference;
+            // RA-503: prefer the operator-supplied payment reference captured above. Fall back
+            // to applicationReference only when the payload never carried one - a submitter that
+            // predates this (RA-447/CM3, RA-316) or a source that doesn't send it, so this is
+            // never left blank rather than because the two are meant to be interchangeable.
+            payload["paymentReference"] = operatorPaymentReference ?? applicationReference;
 
             workItem = new WorkItem
             {
@@ -330,12 +344,15 @@ public sealed class WorkItemService : IWorkItemService
                 var winner = operatorApplicationId is null
                     ? null
                     : await _persistence.FindByOperatorApplicationIdAsync(
-                        type.TypeId, operatorApplicationId, cancellationToken);
+                        type.TypeId,
+                        operatorApplicationId,
+                        cancellationToken
+                    );
                 if (winner is not null)
                 {
                     _logger.LogInformation(
-                        "operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) collided on insert; " +
-                            "treating as a submit replay and returning the existing work item {WorkItemId}.",
+                        "operatorApplicationId {OperatorApplicationId} (typeId {TypeId}) collided on insert; "
+                            + "treating as a submit replay and returning the existing work item {WorkItemId}.",
                         operatorApplicationId,
                         type.TypeId,
                         winner.Id
@@ -487,11 +504,7 @@ public sealed class WorkItemService : IWorkItemService
         // InvalidTransition message below still names a valid from-state.
         var transition =
             actionTransitions.FirstOrDefault(t =>
-                string.Equals(
-                    t.FromStateId,
-                    workItem!.StateId,
-                    StringComparison.OrdinalIgnoreCase
-                )
+                string.Equals(t.FromStateId, workItem!.StateId, StringComparison.OrdinalIgnoreCase)
             ) ?? actionTransitions[0];
 
         if (TerminalStates.Find(template, workItem!.StateId) is { } currentTerminalState)
@@ -745,7 +758,11 @@ public sealed class WorkItemService : IWorkItemService
         // RA-237: notify the post-action hooks of the real unassignment.
         // The earlier IdempotentReplay return (already unassigned) skips this.
         await InvokeAssignmentChangedHooksAsync(
-            workItem, WorkItemAssignmentChange.Unassigned, user, cancellationToken);
+            workItem,
+            WorkItemAssignmentChange.Unassigned,
+            user,
+            cancellationToken
+        );
 
         return WorkItemActionResult.Success(workItem);
     }
@@ -1299,7 +1316,8 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem workItem,
         WorkItemAssignmentChange change,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         foreach (var hook in _postActionHooks)
         {
@@ -1309,11 +1327,14 @@ public sealed class WorkItemService : IWorkItemService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex,
+                _logger.LogError(
+                    ex,
                     "Post-action assignment hook {HookType} failed for work item {WorkItemId} change {Change}",
-                    hook.GetType().FullName, workItem.Id, change);
+                    hook.GetType().FullName,
+                    workItem.Id,
+                    change
+                );
             }
         }
     }
-
 }
