@@ -8,12 +8,13 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <summary>
 /// RA-318: unit coverage for the deterministic, payload-derived
 /// applicationReference generator. Format:
-/// AP + 2-digit year + 2-char agency + last 5 chars of organisationId +
-/// last 3 chars of postcode + first 2 chars of material, upper-cased,
-/// capped at <see cref="ApplicationReferenceGenerator.MaxLength"/> chars
-/// (this value doubles as a BACS payment reference). Attempts beyond the
-/// first (the collision-retry path) replace the final character with a
-/// disambiguator.
+/// AP + 2-digit year + 2-char agency + organisation segment (RA-503: the
+/// numeric operatorOrgNumber zero-padded to 6 digits when present,
+/// otherwise the last 5 chars of the legacy operatorOrganisationId) +
+/// last 3 chars of postcode + first 2 chars of material, upper-cased.
+/// No longer capped to a fixed length (RA-503 — this value is no longer
+/// used as a BACS payment reference). Attempts beyond the first (the
+/// collision-retry path) append a disambiguator character.
 /// </summary>
 public sealed class ApplicationReferenceGeneratorTests
 {
@@ -27,6 +28,7 @@ public sealed class ApplicationReferenceGeneratorTests
     private static BsonDocument MakePayload(
         object? accreditationYear = null,
         string? operatorOrganisationId = "50002",
+        int? operatorOrgNumber = null,
         string? siteAddressPostcode = "SW1A 1AA",
         string? material = "Glass"
     )
@@ -36,6 +38,8 @@ public sealed class ApplicationReferenceGeneratorTests
             doc["accreditationYear"] = BsonValue.Create(accreditationYear);
         if (operatorOrganisationId is not null)
             doc["operatorOrganisationId"] = operatorOrganisationId;
+        if (operatorOrgNumber is not null)
+            doc["operatorOrgNumber"] = operatorOrgNumber.Value;
         if (siteAddressPostcode is not null)
             doc["siteAddress"] = new BsonDocument { ["postcode"] = siteAddressPostcode };
         if (material is not null)
@@ -49,6 +53,7 @@ public sealed class ApplicationReferenceGeneratorTests
     private static BsonDocument MakeFlatPayload(
         object? accreditationYear = null,
         string? operatorOrganisationId = "50002",
+        int? operatorOrgNumber = null,
         string? siteAddressPostcode = "SW1A 1AA",
         string? material = "Glass",
         string? wasteProcessingType = null,
@@ -60,6 +65,8 @@ public sealed class ApplicationReferenceGeneratorTests
             doc["accreditationYear"] = BsonValue.Create(accreditationYear);
         if (operatorOrganisationId is not null)
             doc["operatorOrganisationId"] = operatorOrganisationId;
+        if (operatorOrgNumber is not null)
+            doc["operatorOrgNumber"] = operatorOrgNumber.Value;
         doc["siteAddress"] = "1 Example Street, Example Town";
         if (siteAddressPostcode is not null)
             doc["siteAddressPostcode"] = siteAddressPostcode;
@@ -140,7 +147,156 @@ public sealed class ApplicationReferenceGeneratorTests
 
         // Only the last 5 chars of the raw id ("01188") appear, not the full 24-char id.
         Assert.Equal("AP26EA011881AAGL", reference);
-        Assert.True(reference.Length < ApplicationReferenceGenerator.MaxLength);
+    }
+
+    // RA-503: operatorOrgNumber (numeric, operator/regulator-safe) takes priority over the
+    // legacy operatorOrganisationId (ReEx's internal ObjectId) when both are present.
+    [Fact]
+    public void Generate_prefers_the_numeric_operatorOrgNumber_over_operatorOrganisationId()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188",
+            operatorOrgNumber: 500500
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA5005001AAGL", reference);
+        Assert.DoesNotContain("01188", reference, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // RA-503: falls back to the legacy last-5-characters-of-operatorOrganisationId behaviour
+    // when operatorOrgNumber is absent - e.g. the deploy gap before the upstream backend sends
+    // it, so the generator never regresses below its pre-fix behaviour.
+    [Fact]
+    public void Generate_falls_back_to_operatorOrganisationId_when_operatorOrgNumber_is_absent()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, operatorOrganisationId: "50002");
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA500021AAGL", reference);
+    }
+
+    // RA-503: operatorOrgNumber is zero-padded to 6 digits, matching the RegulatoryNumberGenerator
+    // format this value is designed to be consistent with.
+    [Fact]
+    public void Generate_zero_pads_operatorOrgNumber_to_six_digits()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, operatorOrgNumber: 42);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA0000421AAGL", reference);
+    }
+
+    // RA-503: operatorOrgNumber must be validated, not trusted from its BSON type category alone
+    // - IsNumeric admits Int64/Double/Decimal128, none of which ToInt32() can convert safely from
+    // (silent wraparound for Int64/Double, OverflowException for Decimal128), and D6 is a MINIMUM
+    // width, not a cap, so an out-of-range value would otherwise widen the reference unpredictably.
+    // Every invalid case falls back to the legacy operatorOrganisationId behaviour rather than
+    // embedding a garbage/malformed segment or throwing.
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(1_000_000)]
+    public void Generate_rejects_an_out_of_range_operatorOrgNumber_and_falls_back(int invalidValue)
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188",
+            operatorOrgNumber: invalidValue
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_rejects_a_non_integral_operatorOrgNumber_and_falls_back()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+        payload["operatorOrgNumber"] = 500500.7;
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_rejects_an_out_of_range_Int64_operatorOrgNumber_without_wrapping()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+        // (int)long.MaxValue silently wraps to -1 - confirm that never reaches the reference.
+        payload["operatorOrgNumber"] = long.MaxValue;
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Theory]
+    [InlineData(double.NaN)]
+    [InlineData(double.PositiveInfinity)]
+    [InlineData(double.NegativeInfinity)]
+    public void Generate_rejects_a_non_finite_operatorOrgNumber_without_throwing(
+        double invalidValue
+    )
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+        // decimal cannot represent NaN/Infinity, so BsonValue.ToDecimal() throws for these -
+        // confirm Generate degrades to the fallback instead of throwing past the caller.
+        payload["operatorOrgNumber"] = invalidValue;
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_rejects_a_Decimal128_operatorOrgNumber_outside_the_valid_range_without_throwing()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(
+            accreditationYear: 2026,
+            operatorOrganisationId: "6a2fcd74e16883c137d01188"
+        );
+        // decimal.MaxValue converts to decimal without overflow, so this is rejected by the
+        // >999999 range check rather than the OverflowException catch - either way, Generate
+        // must degrade to the fallback instead of throwing or embedding a garbage segment.
+        payload["operatorOrgNumber"] = new BsonDecimal128(decimal.MaxValue);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA011881AAGL", reference);
+    }
+
+    [Fact]
+    public void Generate_accepts_operatorOrgNumber_at_the_upper_bound()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, operatorOrgNumber: 999999);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("AP26EA9999991AAGL", reference);
     }
 
     [Fact]
@@ -183,20 +339,6 @@ public sealed class ApplicationReferenceGeneratorTests
     }
 
     [Fact]
-    public void Generate_never_exceeds_MaxLength()
-    {
-        var generator = new ApplicationReferenceGenerator();
-        var payload = MakePayload(
-            accreditationYear: 2026,
-            operatorOrganisationId: "999999999999999999999999999999"
-        );
-
-        var reference = generator.Generate(payload);
-
-        Assert.True(reference.Length <= ApplicationReferenceGenerator.MaxLength);
-    }
-
-    [Fact]
     public void Generate_with_attempt_greater_than_one_differs_from_the_first_attempt()
     {
         var generator = new ApplicationReferenceGenerator();
@@ -206,7 +348,6 @@ public sealed class ApplicationReferenceGeneratorTests
         var second = generator.Generate(payload, attempt: 2);
 
         Assert.NotEqual(first, second);
-        Assert.True(second.Length <= ApplicationReferenceGenerator.MaxLength);
     }
 
     [Fact]
@@ -223,14 +364,8 @@ public sealed class ApplicationReferenceGeneratorTests
         Assert.Equal(attempts.Count, attempts.Distinct().Count());
     }
 
-    // No payload can push a reference to MaxLength (18) any more: with the
-    // organisationId now capped to 5 chars, the longest possible reference is
-    // 2 (prefix) + 2 (year) + 2 (agency) + 5 (organisationId) + 3 (postcode) +
-    // 2 (material) = 16 chars. The "replace final char at MaxLength"
-    // disambiguator branch in Generate is therefore unreachable via the
-    // public API; Generate_disambiguator_extends_a_short_reference_rather_than_replacing_a_character
-    // below covers the (now universal) short-reference disambiguator path.
-
+    // RA-503: the disambiguator branch always appends now (no MaxLength truncation to replace a
+    // character within), so this covers Generate's only disambiguator path.
     [Fact]
     public void Generate_disambiguator_extends_a_short_reference_rather_than_replacing_a_character()
     {

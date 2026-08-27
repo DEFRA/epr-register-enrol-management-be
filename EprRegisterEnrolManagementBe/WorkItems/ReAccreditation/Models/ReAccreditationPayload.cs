@@ -148,22 +148,20 @@ internal sealed record ReAccreditationPayload
     public int? ChargeAmountPence { get; init; }
 
     /// <summary>
-    /// RA-316: the operator's payment reference, displayed read-only alongside
+    /// RA-316/RA-503: the operator's payment reference, displayed read-only alongside
     /// <see cref="ChargeAmountPence"/> on the duly-making page.
     ///
-    /// Optional and structurally absent on every initial submission: the
-    /// operator backend builds its payload before this service has generated the
-    /// application reference, so it has nothing to send.
+    /// RA-503: genuinely operator-supplied on every real submission -
+    /// epr-register-enrol-frontend computes the nation-specific bank reference
+    /// (buildPaymentReference, e.g. <c>PR/PK/REP/500500</c>) and sends it in the submission
+    /// payload; WorkItemService.SubmitAsync preserves it rather than overwriting it with the
+    /// generated <see cref="ApplicationReference"/>. This is the exact string the operator's
+    /// own "Payment details" page rendered under the literal label "Payment reference"
+    /// alongside the sort code and account number - the reference they actually quoted on
+    /// the bank transfer, now the same value the regulator sees here.
     ///
-    /// When absent, the correct value to display is
-    /// <see cref="ApplicationReference"/>. That is not a loose approximation —
-    /// the operator's own "Payment details" page renders
-    /// <c>accreditationReference</c> under the literal label "Payment reference"
-    /// alongside the sort code and account number, so it is the reference the
-    /// operator actually quotes on the bank transfer. This field is therefore an
-    /// OVERRIDE: use it when present, fall back to the application reference
-    /// otherwise. It exists as a slot for a genuinely distinct payment reference
-    /// in a later story.
+    /// Still nullable and still falls back to <see cref="ApplicationReference"/> when absent -
+    /// a work item created before this fix, or by a submitter that doesn't send it.
     /// </summary>
     public string? PaymentReference { get; init; }
 
