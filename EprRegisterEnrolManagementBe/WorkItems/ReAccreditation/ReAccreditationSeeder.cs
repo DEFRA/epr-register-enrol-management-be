@@ -343,6 +343,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["siteName"] = "Full Payload Verification Overseas Site",
                             ["siteAddress"] = "1 Overseas Lane, Rotterdam",
                             ["country"] = "Netherlands",
+                            // RA-483: the still-selected half of the pair below.
+                            // Stated explicitly rather than left absent so this
+                            // site proves `selected: true` renders, not merely
+                            // that the absent-key default does.
+                            ["selected"] = true,
                             ["besEvidence"] = new BsonDocument
                             {
                                 ["files"] = new BsonArray
@@ -360,6 +365,32 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                     },
                                 },
                             },
+                        },
+                        // RA-483: an overseas site the OPERATOR REMOVED before
+                        // submitting. `selected: false` is the producer's
+                        // marker for a deselected site; case management must
+                        // not display it at all. Do not delete this site as
+                        // noise — mgmt-tests asserts that neither "Removed
+                        // Overseas Site" nor "Germany" appears anywhere on the
+                        // work-item screen, and the bug it guards (RA-483) was
+                        // exactly a removed ORS still showing to the regulator.
+                        // A filtering regression therefore fails as a visible
+                        // site, which is only distinguishable from a passing
+                        // run because a genuinely selected site sits above it.
+                        new BsonDocument
+                        {
+                            ["siteId"] = 2,
+                            ["siteName"] = "Removed Overseas Site",
+                            ["siteAddress"] = "2 Withdrawn Weg, Hamburg",
+                            ["country"] = "Germany",
+                            ["selected"] = false,
+                            // Empty file list rather than an absent key: the
+                            // producer always emits besEvidence with a files
+                            // array (see the RA-292 fixture below). Keeping it
+                            // present means a filtering regression surfaces as
+                            // "the removed site is visible" and not as an
+                            // unrelated template crash on a missing key.
+                            ["besEvidence"] = new BsonDocument { ["files"] = new BsonArray() },
                         },
                     },
                 },
