@@ -14,6 +14,7 @@ service.
 - [Running with Docker Compose](#running-with-docker-compose)
 - [Endpoints](#endpoints)
 - [Authentication](#authentication)
+- [Configuration](#configuration)
 - [Testing](#testing)
 - [Frontend integration](#frontend-integration)
 - [Licence](#licence)
@@ -153,6 +154,81 @@ endpoint is anonymous and remains reachable without authentication.
 For local exploration without crafting cURL commands by hand, use the
 Swagger UI explorer at <http://localhost:8085/swagger> with its built-in
 stub-user picker — see [Local development](#local-development) above.
+
+## Configuration
+
+Config is loaded via ASP.NET Core's standard providers; nested `Section:Key`
+config binds from `SECTION__KEY` env vars, while CDP-secrets-tab items use a
+flat `UPPER_SNAKE_CASE` name instead. See
+[`docs/cdp-deployment.md`](docs/cdp-deployment.md) for the authoritative
+per-environment list — the tables below summarise it.
+
+### Service-to-service auth
+
+| Variable | Secret? | Description |
+| --- | --- | --- |
+| `AUTH_SHARED_SECRET__BACKEND` | Yes | Verifies inbound signed requests from `epr-register-enrol-backend` — must match backend's `CASE_MANAGEMENT_API_SHARED_SECRET` exactly |
+| `AUTH_SHARED_SECRET__MANAGEMENT_FE` | Yes | Verifies inbound signed requests from `epr-register-enrol-management-fe` — must match management-fe's `BACKEND_API_SHARED_SECRET` exactly |
+| `OPERATOR_BACKEND_SHARED_SECRET` | Yes | Signs this service's outbound query-note push to `epr-register-enrol-backend` — must match backend's `AUTH_SHARED_SECRET__MANAGEMENT_BE` exactly |
+| `Auth__BackendClientId` | No | Expected `x-cdp-client-id` on inbound calls from backend (default `epr-register-enrol-backend`) |
+| `Auth__ManagementFeClientId` | No | Expected `x-cdp-client-id` on inbound calls from management-fe (default `frontend`) — must differ from `Auth__BackendClientId` or the service throws at first request |
+| `OperatorBackendApi__Enabled` | No | Master switch for the outbound query-note push to backend. `false` locally, `true` in dev/test/perf-test/ext-test/prod |
+| `OperatorBackendApi__Url` | No | Base URL of `epr-register-enrol-backend` |
+| `OperatorBackendApi__ClientId` | No | `clientId` this service asserts on its outbound push (default `epr-register-enrol-management-be`) — must match backend's `CaseManagementAuth:ExpectedClientId` |
+
+All three secret-shaped values above are optional in Development (the
+handler falls back to header-trust mode, and the outbound push is disabled
+by default) but required in every other environment.
+
+### External ReEx accreditation API
+
+| Variable | Secret? | Description |
+| --- | --- | --- |
+| `ReExApi__BaseUrl` | No | Base URL of the external ReEx accreditation API |
+| `REEX_API_BASIC_AUTH_USERNAME` | Yes | Basic Auth username — pulls prior-year accreditation/tonnage/business-plan data into re-accreditation work items |
+| `REEX_API_BASIC_AUTH_PASSWORD` | Yes | Basic Auth password |
+
+Blank in Development — `StubReExAccreditationClient` runs instead.
+
+### GOV.UK Notify
+
+| Variable | Secret? | Description |
+| --- | --- | --- |
+| `NOTIFY_API_KEY` | Yes | GOV.UK Notify API key |
+| `Notify__Enabled` | No | Master switch for all outbound Notify email + `notification-*` audit entries. `false` in every environment today (RA-422) |
+| `Notify__BaseUri` | No | Optional override for the Notify SDK base URI |
+| `NOTIFY_SENDEMAILS` | No | Force-overrides the `ENVIRONMENT`-derived decision on whether Notify sends are actually dispatched — used to smoke-test a real send locally |
+
+See [Local development](#local-development) above for the full local
+Notify-testing walkthrough.
+
+### Database and misc
+
+| Variable | Secret? | Description |
+| --- | --- | --- |
+| `Mongo__DatabaseUri` | No | MongoDB connection string (default `mongodb://127.0.0.1:27017`; IAM auth in deployed environments) |
+| `Mongo__DatabaseName` | No | MongoDB database name (default `epr-register-case-management`) |
+| `OPERATOR_SERVICE_BASE_URL` | No | Public frontend URL, used for the "back to your application" link in query-notification emails |
+| `Cors__AllowedOrigins` | No | CORS allow-list (array). Empty = deny-all |
+| `Accreditation__CurrentYear` | No | Current accreditation year for business logic |
+| `ArchiveJob__IntervalHours` / `ArchiveJob__BatchSize` | No | Background archive job tuning |
+| `WorkItems__SeedOnStartup` | No | Seeds fixture work items on boot. `true` in Development only |
+| `ENVIRONMENT` | No | Platform environment name (`local`/`dev`/`test`/`perf-test`/`ext-test`/`prod`) |
+
+### Example local/testing values
+
+```bash
+AUTH_SHARED_SECRET__BACKEND=local-fake-backend-shared-secret-do-not-use
+AUTH_SHARED_SECRET__MANAGEMENT_FE=local-fake-managementfe-shared-secret-do-not-use
+OPERATOR_BACKEND_SHARED_SECRET=local-fake-operator-backend-shared-secret-do-not-use
+REEX_API_BASIC_AUTH_USERNAME=local-dev-user
+REEX_API_BASIC_AUTH_PASSWORD=local-dev-fake-password
+NOTIFY_API_KEY=local-dev-not-a-real-notify-key
+```
+
+A fresh `dotnet run` needs none of these to boot or pass its own health
+check — Development falls back to header-trust auth, a stub ReEx client, a
+no-op Notify client, and `OperatorBackendApi__Enabled=false` by default.
 
 ## Testing
 
