@@ -589,7 +589,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                 ["contactName"] = "Elke Janssens",
                                 ["contactEmail"] = "elke.janssens@example.com",
                                 ["contactPhone"] = "+32 3 987 6543",
-                                // RA-486: mandatory R12/R13 plus an optional R3 — an array,
+                                // RA-486: mandatory R12 plus an optional R3 — an array,
                                 // proving toDisplayLines()'s array branch (Bremen below
                                 // covers the bare-string branch).
                                 ["operationCodes"] = new BsonArray { "R12", "R3" },
