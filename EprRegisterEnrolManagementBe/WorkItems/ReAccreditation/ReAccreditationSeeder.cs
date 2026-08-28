@@ -528,6 +528,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["contactEmail"] = "johan.devries@example.com",
                             ["contactPhone"] = "+31 10 123 4567",
                             ["operationCode"] = "R3",
+                            // RA-486: the structured array HttpCaseWorkingApiAdapter now
+                            // sends (mgmt-tests' RA-486 fixtures read this, not the legacy
+                            // singular field above, which nothing in management-fe reads
+                            // any more but which stays for anything else still keyed off it).
+                            ["operationCodes"] = new BsonArray { "R3", "R12" },
                             ["code1"] = "B3011",
                             ["code2"] = "GH013",
                             ["code3"] = "Y48",
@@ -584,6 +589,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                 ["contactName"] = "Elke Janssens",
                                 ["contactEmail"] = "elke.janssens@example.com",
                                 ["contactPhone"] = "+32 3 987 6543",
+                                // RA-486: mandatory R12/R13 plus an optional R3 — an array,
+                                // proving toDisplayLines()'s array branch (Bremen below
+                                // covers the bare-string branch).
+                                ["operationCodes"] = new BsonArray { "R12", "R3" },
                             },
                         },
                         // AC01 + AC02 negative case: an established site and an
@@ -604,6 +613,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["contactEmail"] = "anna.schmidt@example.com",
                             ["contactPhone"] = "+49 40 555 0142",
                             ["operationCode"] = "R4",
+                            ["operationCodes"] = new BsonArray { "R4" },
                             ["code1"] = "B1010",
                             ["code2"] = "GA300",
                             ["code3"] = "Y23",
@@ -635,6 +645,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                 ["contactName"] = "Lukas Braun",
                                 ["contactEmail"] = "lukas.braun@example.com",
                                 ["contactPhone"] = "+49 421 555 0188",
+                                // RA-486: a single mandatory code, seeded as a bare string
+                                // rather than a one-element array — proves toDisplayLines()
+                                // also accepts the non-array shape (Antwerp above covers
+                                // the array branch).
+                                ["operationCodes"] = "R13",
                             },
                         },
                         // Pre-RA-292 shape: no isNewSite, no interimSite, no
@@ -688,6 +703,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["contactEmail"] = "aisyah.rahman@example.com",
                             ["contactPhone"] = "+60 3 3168 8000",
                             ["operationCode"] = "R3",
+                            // Empty rather than absent — the AC7 "no codes" state on a
+                            // site that also has no associated interim site.
+                            ["operationCodes"] = new BsonArray(),
                             ["code1"] = "B3011",
                             ["code2"] = "GH013",
                             ["code3"] = "Y48",
