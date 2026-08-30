@@ -402,17 +402,16 @@ public class ReAccreditationStatusPushHookTests
             .Returns<OperatorBackendPushResult>(_ => throw new InvalidOperationException("boom"));
         var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 
-        // Should not throw — neither the synchronous hook call (obviously,
-        // since it no longer calls the adapter inline) nor the queued job
-        // itself, which is what would run on the background worker.
-        await sut.Hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
-
         Func<IServiceProvider, CancellationToken, Task>? captured = null;
         sut.Queue
             .QueueAsync(
                 Arg.Do<Func<IServiceProvider, CancellationToken, Task>>(j => captured = j),
                 Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
+
+        // Should not throw — the synchronous hook call only enqueues, so it
+        // can't observe the adapter throwing; the queued job itself (what
+        // would run on the background worker) must swallow it independently.
         await sut.Hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
         Assert.NotNull(captured);
