@@ -33,7 +33,6 @@ public class ReAccreditationLifecycleTests
         var type = new ReAccreditationType();
         var persistence = Substitute.For<IWorkItemPersistence>();
         var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
         notifyClient
             .SendEmailAsync(
                 Arg.Any<string>(),
@@ -43,23 +42,11 @@ public class ReAccreditationLifecycleTests
                 cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg-id"));
-        var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
-        pushAdapter
-            .PushStatusChangedAsync(
-                Arg.Any<Guid>(),
-                Arg.Any<Guid>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<DateTime>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(OperatorBackendPushResult.Skipped("test"));
+        // RA-519: the hook only hands the push off to the background queue
+        // now, so this walk-through test — which doesn't assert on the push
+        // itself — just needs a no-op queue, not a wired-up adapter.
         var statusPushHook = new ReAccreditationStatusPushHook(
-            pushAdapter,
-            auditAppender,
+            Substitute.For<IBackgroundTaskQueue>(),
             NullLogger<ReAccreditationStatusPushHook>.Instance
         );
         // RA-316: duly making is an explicit regulator action carrying a payment

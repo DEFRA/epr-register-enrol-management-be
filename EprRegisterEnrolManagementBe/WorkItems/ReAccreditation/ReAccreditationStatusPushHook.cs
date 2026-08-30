@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -47,10 +48,22 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// disabled, <c>OperatorBackendApi:Enabled=false</c>) is kept distinct from
 /// <c>status-push-failed</c> (an attempted push that errored) — same MBE-F5
 /// rationale. A failed audit append is logged, not retried.
+///
+/// RA-519: this hook is invoked synchronously, inside the very request that
+/// triggered the transition — which, for CM's own resume-from-query flow,
+/// is a request CM's own webhook endpoint initiated into this service in
+/// the first place. Awaiting the push (a callback back into that same CM
+/// endpoint, <c>.../case-management/{workItemId}/status</c>) inline here
+/// would re-enter CM's write path while its own originating request is
+/// still in flight, racing CM's write to the same document and risking a
+/// lost update. So the push (and the audit entry it produces) is deferred
+/// onto <see cref="IBackgroundTaskQueue"/> — the same fire-and-forget
+/// mechanism <see cref="ReAccreditationApprovalService.EnqueuePublishingAuditAsync"/>
+/// uses — so this hook (and the request it runs inside) always returns
+/// before the callback fires, never blocking on or racing CM's own write.
 /// </summary>
 internal sealed class ReAccreditationStatusPushHook(
-    IOperatorBackendPushAdapter pushAdapter,
-    IWorkItemAuditAppender auditAppender,
+    IBackgroundTaskQueue backgroundTaskQueue,
     ILogger<ReAccreditationStatusPushHook> logger) : IWorkItemPostActionHook
 {
     private static readonly ReAccreditationType s_type = new();
@@ -78,85 +91,116 @@ internal sealed class ReAccreditationStatusPushHook(
         // every log line, and every audit entry for this push.
         var correlationId = Guid.NewGuid();
 
+        // RA-519: capture everything the deferred job needs as plain values
+        // up front — the work item and ClaimsPrincipal are in-memory state,
+        // safe to close over, but the job itself must resolve its own scoped
+        // services (adapter, audit appender) fresh, since it runs after this
+        // request — and its DI scope — has ended.
+        var workItemId = workItem.Id;
+        var toStateId = workItem.StateId;
+        var toStateDisplayName = ResolveStateDisplayName(workItem, toStateId);
+        var actionDisplayName = ResolveActionDisplayName(workItem, actionId);
+        var occurredAt = workItem.LastModifiedAt;
+
         try
         {
-            var toStateId = workItem.StateId;
-            var toStateDisplayName = ResolveStateDisplayName(workItem, toStateId);
-            var actionDisplayName = ResolveActionDisplayName(workItem, actionId);
-            var occurredAt = workItem.LastModifiedAt;
-
-            var result = await pushAdapter.PushStatusChangedAsync(
-                workItem.Id, correlationId, fromStateId, toStateId, toStateDisplayName,
-                actionId, actionDisplayName, occurredAt, cancellationToken);
-
-            // actionDisplayName/toStateDisplayName are included here (not
-            // just on the wire push) because management-fe's audit-log
-            // projection (statusPushDetailRows / summariseAuditEntry) reads
-            // details.actionDisplayName / details.toStateDisplayName,
-            // falling back to the raw ids only when absent — the canonical
-            // action-entry key set documented in docs/work-items.md.
-            var details = new Dictionary<string, string?>
-            {
-                ["actionId"] = actionId,
-                ["actionDisplayName"] = actionDisplayName,
-                ["fromStateId"] = fromStateId,
-                ["toStateId"] = toStateId,
-                ["toStateDisplayName"] = toStateDisplayName,
-                ["correlationId"] = correlationId.ToString(),
-            };
-
-            if (result.IsSuccess)
-            {
-                var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-sent", "Status sent to OJ", details, user, cancellationToken);
-                if (!appended)
+            await backgroundTaskQueue.QueueAsync(
+                async (scopedServices, ct) =>
                 {
-                    logger.LogWarning(
-                        "status-push-sent audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                        workItem.Id, correlationId);
-                }
-            }
-            else if (result.IsSkipped)
-            {
-                // Deliberately disabled (OperatorBackendApi:Enabled=false) —
-                // not an error, so logged at Debug and audited under a
-                // distinct outcome that must never alert (MBE-F5).
-                details["reason"] = result.ErrorMessage;
-                logger.LogDebug(
-                    "Status push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
-                    workItem.Id, correlationId, result.ErrorMessage);
-                var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-skipped", "Status not sent to OJ (disabled)", details, user, cancellationToken);
-                if (!appended)
-                {
-                    logger.LogWarning(
-                        "status-push-skipped audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                        workItem.Id, correlationId);
-                }
-            }
-            else
-            {
-                details["errorMessage"] = result.ErrorMessage;
-                logger.LogError(
-                    "Push of status-changed for work item {WorkItemId} (correlation {CorrelationId}) failed: {ErrorMessage}",
-                    workItem.Id, correlationId, result.ErrorMessage);
-                var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "status-push-failed", "Status failed to send to OJ", details, user, cancellationToken);
-                if (!appended)
-                {
-                    logger.LogWarning(
-                        "status-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                        workItem.Id, correlationId);
-                }
-            }
+                    // The queued job runs long after this hook (and the
+                    // request it was called from) has returned, on
+                    // QueuedHostedService's own loop — so it must uphold the
+                    // same never-throws contract independently: a bad push
+                    // must not take the background worker down or leave a
+                    // "queued" job silently unaccounted for.
+                    try
+                    {
+                        var adapter = scopedServices.GetRequiredService<IOperatorBackendPushAdapter>();
+                        var appender = scopedServices.GetRequiredService<IWorkItemAuditAppender>();
+
+                        var result = await adapter.PushStatusChangedAsync(
+                            workItemId, correlationId, fromStateId, toStateId, toStateDisplayName,
+                            actionId, actionDisplayName, occurredAt, ct);
+
+                        // actionDisplayName/toStateDisplayName are included
+                        // here (not just on the wire push) because
+                        // management-fe's audit-log projection
+                        // (statusPushDetailRows / summariseAuditEntry) reads
+                        // details.actionDisplayName / details.toStateDisplayName,
+                        // falling back to the raw ids only when absent — the
+                        // canonical action-entry key set documented in
+                        // docs/work-items.md.
+                        var details = new Dictionary<string, string?>
+                        {
+                            ["actionId"] = actionId,
+                            ["actionDisplayName"] = actionDisplayName,
+                            ["fromStateId"] = fromStateId,
+                            ["toStateId"] = toStateId,
+                            ["toStateDisplayName"] = toStateDisplayName,
+                            ["correlationId"] = correlationId.ToString(),
+                        };
+
+                        if (result.IsSuccess)
+                        {
+                            var appended = await appender.AppendAsync(
+                                workItemId, "status-push-sent", "Status sent to OJ", details, user, ct);
+                            if (!appended)
+                            {
+                                logger.LogWarning(
+                                    "status-push-sent audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
+                                    workItemId, correlationId);
+                            }
+                        }
+                        else if (result.IsSkipped)
+                        {
+                            // Deliberately disabled (OperatorBackendApi:Enabled=false) —
+                            // not an error, so logged at Debug and audited under a
+                            // distinct outcome that must never alert (MBE-F5).
+                            details["reason"] = result.ErrorMessage;
+                            logger.LogDebug(
+                                "Status push skipped for work item {WorkItemId} (correlation {CorrelationId}): {Reason}",
+                                workItemId, correlationId, result.ErrorMessage);
+                            var appended = await appender.AppendAsync(
+                                workItemId, "status-push-skipped", "Status not sent to OJ (disabled)", details, user, ct);
+                            if (!appended)
+                            {
+                                logger.LogWarning(
+                                    "status-push-skipped audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
+                                    workItemId, correlationId);
+                            }
+                        }
+                        else
+                        {
+                            details["errorMessage"] = result.ErrorMessage;
+                            logger.LogError(
+                                "Push of status-changed for work item {WorkItemId} (correlation {CorrelationId}) failed: {ErrorMessage}",
+                                workItemId, correlationId, result.ErrorMessage);
+                            var appended = await appender.AppendAsync(
+                                workItemId, "status-push-failed", "Status failed to send to OJ", details, user, ct);
+                            if (!appended)
+                            {
+                                logger.LogWarning(
+                                    "status-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
+                                    workItemId, correlationId);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogError(
+                            ex, "Unexpected failure pushing status-changed for work item {WorkItemId} (correlation {CorrelationId}).",
+                            workItemId, correlationId);
+                    }
+                },
+                cancellationToken);
         }
         catch (Exception ex)
         {
-            // Hooks must never throw — a push failure must not unwind the
-            // already-persisted transition.
+            // Hooks must never throw — a failure to even enqueue the push
+            // must not unwind the already-persisted transition.
             logger.LogError(
-                ex, "Unexpected failure pushing status-changed for work item {WorkItemId} (correlation {CorrelationId}).",
-                workItem.Id, correlationId);
+                ex, "Unexpected failure queueing status-changed push for work item {WorkItemId} (correlation {CorrelationId}).",
+                workItemId, correlationId);
         }
     }
 
