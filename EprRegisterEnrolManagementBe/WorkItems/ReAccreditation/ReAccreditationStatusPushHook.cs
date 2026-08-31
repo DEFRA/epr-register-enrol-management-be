@@ -128,12 +128,14 @@ internal sealed class ReAccreditationStatusPushHook(
         // see the class doc comment above.
         var propagatedHeaders = headerPropagationValues.Headers;
 
+        var pushContext = new StatusPushContext(
+            workItemId, correlationId, fromStateId, toStateId, toStateDisplayName,
+            actionId, actionDisplayName, occurredAt, propagatedHeaders, user);
+
         try
         {
             await backgroundTaskQueue.QueueAsync(
-                (scopedServices, ct) => RunQueuedPushAsync(
-                    scopedServices, workItemId, correlationId, fromStateId, toStateId, toStateDisplayName,
-                    actionId, actionDisplayName, occurredAt, propagatedHeaders, user, ct),
+                (scopedServices, ct) => RunQueuedPushAsync(scopedServices, pushContext, ct),
                 cancellationToken);
         }
         catch (Exception ex)
@@ -156,16 +158,7 @@ internal sealed class ReAccreditationStatusPushHook(
     /// </summary>
     private async Task RunQueuedPushAsync(
         IServiceProvider scopedServices,
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        IDictionary<string, StringValues>? propagatedHeaders,
-        ClaimsPrincipal user,
+        StatusPushContext context,
         CancellationToken ct)
     {
         try
@@ -179,14 +172,14 @@ internal sealed class ReAccreditationStatusPushHook(
             // instance) isn't required for correctness, but keeps this
             // job's DI usage consistent with the adapter/appender below.
             scopedServices.GetRequiredService<HeaderPropagationValues>().Headers =
-                propagatedHeaders ?? new Dictionary<string, StringValues>();
+                context.PropagatedHeaders ?? new Dictionary<string, StringValues>();
 
             var adapter = scopedServices.GetRequiredService<IOperatorBackendPushAdapter>();
             var appender = scopedServices.GetRequiredService<IWorkItemAuditAppender>();
 
             var result = await adapter.PushStatusChangedAsync(
-                workItemId, correlationId, fromStateId, toStateId, toStateDisplayName,
-                actionId, actionDisplayName, occurredAt, ct);
+                context.WorkItemId, context.CorrelationId, context.FromStateId, context.ToStateId,
+                context.ToStateDisplayName, context.ActionId, context.ActionDisplayName, context.OccurredAt, ct);
 
             // actionDisplayName/toStateDisplayName are included here (not
             // just on the wire push) because management-fe's audit-log
@@ -196,23 +189,43 @@ internal sealed class ReAccreditationStatusPushHook(
             // action-entry key set documented in docs/work-items.md.
             var details = new Dictionary<string, string?>
             {
-                ["actionId"] = actionId,
-                ["actionDisplayName"] = actionDisplayName,
-                ["fromStateId"] = fromStateId,
-                ["toStateId"] = toStateId,
-                ["toStateDisplayName"] = toStateDisplayName,
-                ["correlationId"] = correlationId.ToString(),
+                ["actionId"] = context.ActionId,
+                ["actionDisplayName"] = context.ActionDisplayName,
+                ["fromStateId"] = context.FromStateId,
+                ["toStateId"] = context.ToStateId,
+                ["toStateDisplayName"] = context.ToStateDisplayName,
+                ["correlationId"] = context.CorrelationId.ToString(),
             };
 
-            await RecordPushOutcomeAsync(result, appender, workItemId, correlationId, details, user, ct);
+            await RecordPushOutcomeAsync(
+                result, appender, context.WorkItemId, context.CorrelationId, details, context.User, ct);
         }
         catch (Exception ex)
         {
             logger.LogError(
                 ex, "Unexpected failure pushing status-changed for work item {WorkItemId} (correlation {CorrelationId}).",
-                workItemId, correlationId);
+                context.WorkItemId, context.CorrelationId);
         }
     }
+
+    /// <summary>
+    /// RA-519 follow-up: the deferred job's own inputs, bundled so the
+    /// closure handed to <see cref="IBackgroundTaskQueue.QueueAsync"/> and
+    /// <see cref="RunQueuedPushAsync"/> take a single value instead of the
+    /// ten separate plain-value parameters <see cref="OnActionAppliedAsync"/>
+    /// captures (Sonar's parameter-count gate).
+    /// </summary>
+    private sealed record StatusPushContext(
+        Guid WorkItemId,
+        Guid CorrelationId,
+        string FromStateId,
+        string ToStateId,
+        string ToStateDisplayName,
+        string ActionId,
+        string ActionDisplayName,
+        DateTime OccurredAt,
+        IDictionary<string, StringValues>? PropagatedHeaders,
+        ClaimsPrincipal User);
 
     /// <summary>
     /// Records the <c>status-push-sent</c> / <c>status-push-skipped</c> /
