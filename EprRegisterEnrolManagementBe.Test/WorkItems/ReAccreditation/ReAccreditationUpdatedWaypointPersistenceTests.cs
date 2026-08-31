@@ -5,6 +5,7 @@ using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
@@ -368,6 +369,7 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         var queue = new RecordingBackgroundTaskQueue();
         var statusPushHook = new ReAccreditationStatusPushHook(
             queue,
+            new HeaderPropagationValues(),
             NullLogger<ReAccreditationStatusPushHook>.Instance
         );
 
@@ -377,6 +379,7 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         var scopedServices = new ServiceCollection()
             .AddSingleton<IOperatorBackendPushAdapter>(pushAdapter)
             .AddSingleton<IWorkItemAuditAppender>(auditAppender)
+            .AddSingleton(new HeaderPropagationValues())
             .BuildServiceProvider();
 
         var service = new ReAccreditationDulyMakingService(

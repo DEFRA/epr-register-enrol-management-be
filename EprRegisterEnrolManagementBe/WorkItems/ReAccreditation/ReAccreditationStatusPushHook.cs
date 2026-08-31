@@ -2,6 +2,8 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using Microsoft.AspNetCore.HeaderPropagation;
+using Microsoft.Extensions.Primitives;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -61,9 +63,27 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// mechanism <see cref="ReAccreditationApprovalService.EnqueuePublishingAuditAsync"/>
 /// uses — so this hook (and the request it runs inside) always returns
 /// before the callback fires, never blocking on or racing CM's own write.
+///
+/// RA-519 follow-up: <see cref="HeaderPropagationValues.Headers"/> is backed
+/// by a static <c>AsyncLocal</c> that <c>app.UseHeaderPropagation()</c>
+/// populates only for the lifetime of an inbound HTTP request — the DI
+/// registration for <see cref="HeaderPropagationValues"/> itself is a
+/// singleton, so the same instance is injected everywhere, but its
+/// <c>Headers</c> getter/setter reads/writes that AsyncLocal, meaning it's
+/// still request-scoped in practice. The queued job below runs on
+/// <see cref="QueuedHostedService"/>'s own loop, entirely outside that
+/// request's async flow, so the adapter's <c>"DefaultClient"</c> — wired with
+/// <c>AddHeaderPropagation()</c> — would otherwise throw
+/// (<c>HeaderPropagationValues.Headers has not been initialized</c>) the
+/// moment <see cref="HeaderPropagationMessageHandler"/> tries to build the
+/// outbound request. The allow-listed headers (tracing/correlation ids only —
+/// see <c>ConfigureHeaderPropagation</c> in Program.cs) are read here, while
+/// still inside the request, and written back into the queued job's own
+/// AsyncLocal context before the adapter call.
 /// </summary>
 internal sealed class ReAccreditationStatusPushHook(
     IBackgroundTaskQueue backgroundTaskQueue,
+    HeaderPropagationValues headerPropagationValues,
     ILogger<ReAccreditationStatusPushHook> logger) : IWorkItemPostActionHook
 {
     private static readonly ReAccreditationType s_type = new();
@@ -102,6 +122,12 @@ internal sealed class ReAccreditationStatusPushHook(
         var actionDisplayName = ResolveActionDisplayName(workItem, actionId);
         var occurredAt = workItem.LastModifiedAt;
 
+        // RA-519 follow-up: snapshot the allow-listed propagated headers
+        // (tracing/correlation ids only) while still inside the request's
+        // AsyncLocal context, so the queued job can restore them for itself —
+        // see the class doc comment above.
+        var propagatedHeaders = headerPropagationValues.Headers;
+
         try
         {
             await backgroundTaskQueue.QueueAsync(
@@ -115,6 +141,18 @@ internal sealed class ReAccreditationStatusPushHook(
                     // "queued" job silently unaccounted for.
                     try
                     {
+                        // Restore the captured headers into this job's own
+                        // AsyncLocal context before the adapter builds its
+                        // outbound request — otherwise HeaderPropagationMessageHandler
+                        // throws, since nothing populates this AsyncLocal
+                        // outside an HTTP request. HeaderPropagationValues is a
+                        // DI singleton, so resolving it here (rather than
+                        // closing over the constructor-injected instance) isn't
+                        // required for correctness, but keeps this job's DI
+                        // usage consistent with the adapter/appender below.
+                        scopedServices.GetRequiredService<HeaderPropagationValues>().Headers =
+                            propagatedHeaders ?? new Dictionary<string, StringValues>();
+
                         var adapter = scopedServices.GetRequiredService<IOperatorBackendPushAdapter>();
                         var appender = scopedServices.GetRequiredService<IWorkItemAuditAppender>();
 

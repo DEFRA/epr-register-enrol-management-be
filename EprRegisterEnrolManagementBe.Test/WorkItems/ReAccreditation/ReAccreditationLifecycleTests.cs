@@ -6,6 +6,7 @@ using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
@@ -47,6 +48,7 @@ public class ReAccreditationLifecycleTests
         // itself — just needs a no-op queue, not a wired-up adapter.
         var statusPushHook = new ReAccreditationStatusPushHook(
             Substitute.For<IBackgroundTaskQueue>(),
+            new HeaderPropagationValues(),
             NullLogger<ReAccreditationStatusPushHook>.Instance
         );
         // RA-316: duly making is an explicit regulator action carrying a payment

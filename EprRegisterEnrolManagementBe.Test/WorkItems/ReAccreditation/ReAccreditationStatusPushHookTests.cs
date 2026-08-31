@@ -3,6 +3,7 @@ using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
@@ -94,7 +95,7 @@ public class ReAccreditationStatusPushHookTests
         var queue = Substitute.For<IBackgroundTaskQueue>();
 
         var hook = new ReAccreditationStatusPushHook(
-            queue, NullLogger<ReAccreditationStatusPushHook>.Instance);
+            queue, new HeaderPropagationValues(), NullLogger<ReAccreditationStatusPushHook>.Instance);
         return new Sut(hook, queue, adapter, auditAppender);
     }
 
@@ -108,6 +109,7 @@ public class ReAccreditationStatusPushHookTests
         var services = new ServiceCollection();
         services.AddSingleton(sut.Adapter);
         services.AddSingleton(sut.AuditAppender);
+        services.AddSingleton(new HeaderPropagationValues());
         return services.BuildServiceProvider();
     }
 
