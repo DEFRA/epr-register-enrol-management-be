@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -53,6 +54,7 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
             httpClientFactory,
             config,
             NullLogger<HttpOverseasSiteRecyclingOperationsAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpOverseasSiteRecyclingOperationsAdapter>>(),
             FastRetryPipeline()
         );
         return (adapter, handler);

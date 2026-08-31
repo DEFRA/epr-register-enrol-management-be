@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -52,6 +53,7 @@ public class HttpAccreditationNumberAdapterTests
             httpClientFactory,
             config,
             NullLogger<HttpAccreditationNumberAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>(),
             FastRetryPipeline()
         );
         return (adapter, handler);
@@ -385,7 +387,8 @@ public class HttpAccreditationNumberAdapterTests
         var adapter = new HttpAccreditationNumberAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpAccreditationNumberAdapter>.Instance
+            NullLogger<HttpAccreditationNumberAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>()
         );
         handler.Respond(HttpStatusCode.OK, SuccessBody("A25ER5000270036WO"));
 
@@ -413,7 +416,8 @@ public class HttpAccreditationNumberAdapterTests
         var adapter = new HttpAccreditationNumberAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpAccreditationNumberAdapter>.Instance
+            NullLogger<HttpAccreditationNumberAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>()
         );
         handler.RespondSequence(
             (HttpStatusCode.InternalServerError, "boom"),

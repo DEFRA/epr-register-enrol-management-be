@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -43,6 +44,7 @@ public class HttpOperatorBackendPushAdapterTests
 
         var adapter = new HttpOperatorBackendPushAdapter(
             httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpOperatorBackendPushAdapter>>(),
             FastRetryPipeline(maxRetryAttempts: 2), FastRetryPipeline(maxRetryAttempts: 5));
         return (adapter, handler);
     }
@@ -90,7 +92,8 @@ public class HttpOperatorBackendPushAdapterTests
         // No retryPipeline argument: forces the constructor to call the
         // real, private BuildRetryPipeline.
         var adapter = new HttpOperatorBackendPushAdapter(
-            httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance);
+            httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpOperatorBackendPushAdapter>>());
         return (adapter, handler);
     }
 
