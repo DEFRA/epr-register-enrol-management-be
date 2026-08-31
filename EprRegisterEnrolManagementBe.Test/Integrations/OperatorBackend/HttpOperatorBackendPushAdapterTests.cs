@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -29,7 +30,8 @@ public class HttpOperatorBackendPushAdapterTests
     private static readonly string[] s_sectionKeys = ["business-plan", "prn-tonnage"];
 
     private static (HttpOperatorBackendPushAdapter Adapter, FakeHttpMessageHandler Handler) BuildSut(
-        string? sharedSecret = null, string? url = BaseUrl)
+        string? sharedSecret = null, string? url = BaseUrl,
+        IStructuredLogger<HttpOperatorBackendPushAdapter>? structuredLogger = null)
     {
         var handler = new FakeHttpMessageHandler();
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
@@ -44,7 +46,7 @@ public class HttpOperatorBackendPushAdapterTests
 
         var adapter = new HttpOperatorBackendPushAdapter(
             httpClientFactory, config, NullLogger<HttpOperatorBackendPushAdapter>.Instance,
-            Substitute.For<IStructuredLogger<HttpOperatorBackendPushAdapter>>(),
+            structuredLogger ?? Substitute.For<IStructuredLogger<HttpOperatorBackendPushAdapter>>(),
             FastRetryPipeline(maxRetryAttempts: 2), FastRetryPipeline(maxRetryAttempts: 5));
         return (adapter, handler);
     }
@@ -228,6 +230,45 @@ public class HttpOperatorBackendPushAdapterTests
 
         Assert.False(result.IsSuccess);
         Assert.NotNull(result.ErrorMessage);
+    }
+
+    /// <summary>
+    /// RA-519-follow-up review: the non-success-status logging (shared by every
+    /// public push method via ExecutePushAsync) must not leak the raw response
+    /// body into the log message (CDP's OpenSearch ingestion pipeline always
+    /// indexes `message` regardless of field allow-listing) — the body may only
+    /// reach the structured properties dictionary under a key CDP's allow-list
+    /// drops, while the non-sensitive work-item/correlation identifiers must
+    /// stay in the message so they remain searchable.
+    /// </summary>
+    [Fact]
+    public async Task PushQueryRaisedAsync_non_success_status_logs_the_body_only_as_a_structured_property_not_in_the_message()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var structuredLogger = Substitute.For<IStructuredLogger<HttpOperatorBackendPushAdapter>>();
+        var (adapter, handler) = BuildSut(structuredLogger: structuredLogger);
+        const string sensitiveBody = "internal failure, contact ops@example.com";
+        handler.Respond(HttpStatusCode.InternalServerError, sensitiveBody);
+        var workItemId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+
+        await adapter.PushQueryRaisedAsync(workItemId, correlationId, "why", s_sectionKeys, ct);
+
+        structuredLogger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                Arg.Is<string>(m =>
+                    !m.Contains(sensitiveBody, StringComparison.Ordinal)
+                    && m.Contains(workItemId.ToString(), StringComparison.Ordinal)
+                    && m.Contains(correlationId.ToString(), StringComparison.Ordinal)
+                ),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["http.response.body"]! == sensitiveBody
+                    && (int)p["http.response.status_code"]! == 500
+                ),
+                null
+            );
     }
 
     [Fact]

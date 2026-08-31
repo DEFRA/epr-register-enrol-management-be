@@ -139,16 +139,10 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
                 var conflictBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 structuredLogger.Log(
                     LogLevel.Warning,
-                    "Backend returned 409 for overseas site recycling operations update",
-                    new Dictionary<string, object?>
-                    {
-                        ["http.request.endpoint"] = endpoint,
-                        ["organisation.id"] = request.OrganisationId,
-                        ["application.id"] = request.ApplicationId,
-                        ["site.id"] = request.SiteId,
-                        ["correlation.id"] = request.CorrelationId,
-                        ["http.response.body"] = conflictBody,
-                    }
+                    $"Backend returned 409 from {endpoint} for organisation {request.OrganisationId} "
+                        + $"application {request.ApplicationId} site {request.SiteId} "
+                        + $"(correlation {request.CorrelationId})",
+                    new Dictionary<string, object?> { ["http.response.body"] = conflictBody }
                 );
                 return OverseasSiteRecyclingOperationsResult.Conflict(
                     string.IsNullOrWhiteSpace(conflictBody)
@@ -162,16 +156,10 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
                 var validationBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 structuredLogger.Log(
                     LogLevel.Warning,
-                    "Backend returned 400 for overseas site recycling operations update",
-                    new Dictionary<string, object?>
-                    {
-                        ["http.request.endpoint"] = endpoint,
-                        ["organisation.id"] = request.OrganisationId,
-                        ["application.id"] = request.ApplicationId,
-                        ["site.id"] = request.SiteId,
-                        ["correlation.id"] = request.CorrelationId,
-                        ["http.response.body"] = validationBody,
-                    }
+                    $"Backend returned 400 from {endpoint} for organisation {request.OrganisationId} "
+                        + $"application {request.ApplicationId} site {request.SiteId} "
+                        + $"(correlation {request.CorrelationId})",
+                    new Dictionary<string, object?> { ["http.response.body"] = validationBody }
                 );
                 return ParseValidationFailure(validationBody, logger);
             }
@@ -181,15 +169,12 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 structuredLogger.Log(
                     LogLevel.Error,
-                    "Backend returned an unexpected status for overseas site recycling operations update",
+                    $"Backend returned {(int)response.StatusCode} from {endpoint} for organisation "
+                        + $"{request.OrganisationId} application {request.ApplicationId} site "
+                        + $"{request.SiteId} (correlation {request.CorrelationId})",
                     new Dictionary<string, object?>
                     {
                         ["http.response.status_code"] = (int)response.StatusCode,
-                        ["http.request.endpoint"] = endpoint,
-                        ["organisation.id"] = request.OrganisationId,
-                        ["application.id"] = request.ApplicationId,
-                        ["site.id"] = request.SiteId,
-                        ["correlation.id"] = request.CorrelationId,
                         ["http.response.body"] = responseBody,
                     }
                 );

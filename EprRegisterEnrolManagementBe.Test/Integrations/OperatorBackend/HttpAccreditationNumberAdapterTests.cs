@@ -4,6 +4,7 @@ using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -33,7 +34,12 @@ public class HttpAccreditationNumberAdapterTests
     private static (
         HttpAccreditationNumberAdapter Adapter,
         FakeHttpMessageHandler Handler
-    ) BuildSut(string? sharedSecret = null, string? url = BaseUrl, bool enabled = true)
+    ) BuildSut(
+        string? sharedSecret = null,
+        string? url = BaseUrl,
+        bool enabled = true,
+        IStructuredLogger<HttpAccreditationNumberAdapter>? structuredLogger = null
+    )
     {
         var handler = new FakeHttpMessageHandler();
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
@@ -53,7 +59,7 @@ public class HttpAccreditationNumberAdapterTests
             httpClientFactory,
             config,
             NullLogger<HttpAccreditationNumberAdapter>.Instance,
-            Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>(),
+            structuredLogger ?? Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>(),
             FastRetryPipeline()
         );
         return (adapter, handler);
@@ -271,6 +277,42 @@ public class HttpAccreditationNumberAdapterTests
 
         Assert.False(result.IsSuccess);
         Assert.NotNull(result.ErrorMessage);
+    }
+
+    /// <summary>
+    /// RA-519-follow-up review: the non-success-status logging must not leak the raw
+    /// response body into the log message (CDP's OpenSearch ingestion pipeline always
+    /// indexes `message` regardless of field allow-listing) — the body may only reach
+    /// the structured properties dictionary under a key CDP's allow-list drops, while
+    /// the non-sensitive organisation/application/correlation identifiers must stay in
+    /// the message so they remain searchable.
+    /// </summary>
+    [Fact]
+    public async Task Non_success_status_logs_the_body_only_as_a_structured_property_not_in_the_message()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var structuredLogger = Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>();
+        var (adapter, handler) = BuildSut(structuredLogger: structuredLogger);
+        const string sensitiveBody = "internal failure, contact ops@example.com";
+        handler.Respond(HttpStatusCode.InternalServerError, sensitiveBody);
+
+        await Call(adapter, ct, organisationId: "org-6", applicationId: "app-6");
+
+        structuredLogger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                Arg.Is<string>(m =>
+                    !m.Contains(sensitiveBody, StringComparison.Ordinal)
+                    && m.Contains("org-6", StringComparison.Ordinal)
+                    && m.Contains("app-6", StringComparison.Ordinal)
+                ),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["http.response.body"]! == sensitiveBody
+                    && (int)p["http.response.status_code"]! == 500
+                ),
+                null
+            );
     }
 
     /// <summary>

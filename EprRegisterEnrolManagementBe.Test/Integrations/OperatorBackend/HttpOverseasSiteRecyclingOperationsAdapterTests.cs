@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Logging;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -34,7 +35,12 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
     private static (
         HttpOverseasSiteRecyclingOperationsAdapter Adapter,
         FakeHttpMessageHandler Handler
-    ) BuildSut(string? sharedSecret = null, string? url = BaseUrl, bool enabled = true)
+    ) BuildSut(
+        string? sharedSecret = null,
+        string? url = BaseUrl,
+        bool enabled = true,
+        IStructuredLogger<HttpOverseasSiteRecyclingOperationsAdapter>? structuredLogger = null
+    )
     {
         var handler = new FakeHttpMessageHandler();
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
@@ -54,7 +60,8 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
             httpClientFactory,
             config,
             NullLogger<HttpOverseasSiteRecyclingOperationsAdapter>.Instance,
-            Substitute.For<IStructuredLogger<HttpOverseasSiteRecyclingOperationsAdapter>>(),
+            structuredLogger
+                ?? Substitute.For<IStructuredLogger<HttpOverseasSiteRecyclingOperationsAdapter>>(),
             FastRetryPipeline()
         );
         return (adapter, handler);
@@ -334,6 +341,105 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
         var result = await Call(adapter, ct);
 
         Assert.Equal(OverseasSiteRecyclingOperationsOutcome.Conflict, result.Outcome);
+    }
+
+    /// <summary>
+    /// RA-519-follow-up review: the 409/400/other-error logging must not leak the raw
+    /// response body into the log message (CDP's OpenSearch ingestion pipeline always
+    /// indexes `message` regardless of field allow-listing) — the body may only reach
+    /// the structured properties dictionary under a key CDP's allow-list drops, while
+    /// the non-sensitive organisation/application/site/correlation identifiers must stay
+    /// in the message so they remain searchable.
+    /// </summary>
+    [Fact]
+    public async Task Backend_409_logs_the_body_only_as_a_structured_property_not_in_the_message()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var structuredLogger = Substitute.For<
+            IStructuredLogger<HttpOverseasSiteRecyclingOperationsAdapter>
+        >();
+        var (adapter, handler) = BuildSut(structuredLogger: structuredLogger);
+        const string sensitiveBody = "already updated by someone@example.com";
+        handler.Respond(HttpStatusCode.Conflict, sensitiveBody);
+
+        await Call(adapter, ct, organisationId: "org-9", applicationId: "app-9", siteId: "site-9");
+
+        structuredLogger
+            .Received(1)
+            .Log(
+                LogLevel.Warning,
+                Arg.Is<string>(m =>
+                    !m.Contains(sensitiveBody, StringComparison.Ordinal)
+                    && m.Contains("org-9", StringComparison.Ordinal)
+                    && m.Contains("app-9", StringComparison.Ordinal)
+                    && m.Contains("site-9", StringComparison.Ordinal)
+                ),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["http.response.body"]! == sensitiveBody
+                ),
+                null
+            );
+    }
+
+    [Fact]
+    public async Task Backend_400_logs_the_body_only_as_a_structured_property_not_in_the_message()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var structuredLogger = Substitute.For<
+            IStructuredLogger<HttpOverseasSiteRecyclingOperationsAdapter>
+        >();
+        var (adapter, handler) = BuildSut(structuredLogger: structuredLogger);
+        const string sensitiveBody = "rejected: contact bob@example.com for help";
+        handler.Respond(HttpStatusCode.BadRequest, sensitiveBody);
+
+        await Call(adapter, ct, organisationId: "org-8", applicationId: "app-8", siteId: "site-8");
+
+        structuredLogger
+            .Received(1)
+            .Log(
+                LogLevel.Warning,
+                Arg.Is<string>(m =>
+                    !m.Contains(sensitiveBody, StringComparison.Ordinal)
+                    && m.Contains("org-8", StringComparison.Ordinal)
+                    && m.Contains("app-8", StringComparison.Ordinal)
+                    && m.Contains("site-8", StringComparison.Ordinal)
+                ),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["http.response.body"]! == sensitiveBody
+                ),
+                null
+            );
+    }
+
+    [Fact]
+    public async Task Backend_5xx_logs_the_body_only_as_a_structured_property_not_in_the_message()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var structuredLogger = Substitute.For<
+            IStructuredLogger<HttpOverseasSiteRecyclingOperationsAdapter>
+        >();
+        var (adapter, handler) = BuildSut(structuredLogger: structuredLogger);
+        const string sensitiveBody = "internal failure, session token abc123 expired";
+        handler.Respond(HttpStatusCode.InternalServerError, sensitiveBody);
+
+        await Call(adapter, ct, organisationId: "org-7", applicationId: "app-7", siteId: "site-7");
+
+        structuredLogger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                Arg.Is<string>(m =>
+                    !m.Contains(sensitiveBody, StringComparison.Ordinal)
+                    && m.Contains("org-7", StringComparison.Ordinal)
+                    && m.Contains("app-7", StringComparison.Ordinal)
+                    && m.Contains("site-7", StringComparison.Ordinal)
+                ),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["http.response.body"]! == sensitiveBody
+                    && (int)p["http.response.status_code"]! == 500
+                ),
+                null
+            );
     }
 
     [Fact]

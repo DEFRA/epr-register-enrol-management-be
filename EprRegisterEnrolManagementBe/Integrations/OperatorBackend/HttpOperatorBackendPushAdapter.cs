@@ -286,13 +286,11 @@ internal sealed class HttpOperatorBackendPushAdapter(
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 structuredLogger.Log(
                     LogLevel.Error,
-                    "Operator backend returned an unexpected status for a push",
+                    $"Operator backend returned {(int)response.StatusCode} from {endpoint} for "
+                        + $"work item {workItemId} (correlation {correlationId})",
                     new Dictionary<string, object?>
                     {
                         ["http.response.status_code"] = (int)response.StatusCode,
-                        ["http.request.endpoint"] = endpoint,
-                        ["work_item.id"] = workItemId,
-                        ["correlation.id"] = correlationId,
                         ["http.response.body"] = responseBody,
                     }
                 );
