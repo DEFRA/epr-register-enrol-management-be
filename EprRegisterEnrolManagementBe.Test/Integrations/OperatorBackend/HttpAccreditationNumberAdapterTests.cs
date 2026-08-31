@@ -282,10 +282,12 @@ public class HttpAccreditationNumberAdapterTests
     /// <summary>
     /// RA-519-follow-up review: the non-success-status logging must not leak the raw
     /// response body into the log message (CDP's OpenSearch ingestion pipeline always
-    /// indexes `message` regardless of field allow-listing) — the body may only reach
-    /// the structured properties dictionary under a key CDP's allow-list drops, while
-    /// the non-sensitive organisation/application/correlation identifiers must stay in
-    /// the message so they remain searchable.
+    /// indexes `message` regardless of field allow-listing) — the body must only reach
+    /// the structured properties dictionary under a key CDP's allow-list drops. The
+    /// message stays a static string with no interpolated values at all, matching this
+    /// codebase's established <see cref="IStructuredLogger{T}"/> convention (see
+    /// HttpReExAccreditationClient.cs): every identifier, sensitive or not, goes in the
+    /// properties dictionary, never the message.
     /// </summary>
     [Fact]
     public async Task Non_success_status_logs_the_body_only_as_a_structured_property_not_in_the_message()
@@ -304,12 +306,14 @@ public class HttpAccreditationNumberAdapterTests
                 LogLevel.Error,
                 Arg.Is<string>(m =>
                     !m.Contains(sensitiveBody, StringComparison.Ordinal)
-                    && m.Contains("org-6", StringComparison.Ordinal)
-                    && m.Contains("app-6", StringComparison.Ordinal)
+                    && !m.Contains("org-6", StringComparison.Ordinal)
+                    && !m.Contains("app-6", StringComparison.Ordinal)
                 ),
                 Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
                     (string)p["http.response.body"]! == sensitiveBody
                     && (int)p["http.response.status_code"]! == 500
+                    && (string)p["organisation.id"]! == "org-6"
+                    && (string)p["application.id"]! == "app-6"
                 ),
                 null
             );

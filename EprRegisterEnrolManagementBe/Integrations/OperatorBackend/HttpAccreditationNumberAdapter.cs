@@ -129,11 +129,13 @@ internal sealed class HttpAccreditationNumberAdapter(
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
                 structuredLogger.Log(
                     LogLevel.Error,
-                    $"Backend returned {(int)response.StatusCode} from {endpoint} for organisation "
-                        + $"{request.OrganisationId} application {request.ApplicationId} "
-                        + $"(correlation {request.CorrelationId})",
+                    "Backend returned non-success status for accreditation number request",
                     new Dictionary<string, object?>
                     {
+                        ["http.request.endpoint"] = endpoint,
+                        ["organisation.id"] = request.OrganisationId,
+                        ["application.id"] = request.ApplicationId,
+                        ["correlation.id"] = request.CorrelationId,
                         ["http.response.status_code"] = (int)response.StatusCode,
                         ["http.response.body"] = responseBody,
                     }

@@ -346,10 +346,12 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
     /// <summary>
     /// RA-519-follow-up review: the 409/400/other-error logging must not leak the raw
     /// response body into the log message (CDP's OpenSearch ingestion pipeline always
-    /// indexes `message` regardless of field allow-listing) — the body may only reach
-    /// the structured properties dictionary under a key CDP's allow-list drops, while
-    /// the non-sensitive organisation/application/site/correlation identifiers must stay
-    /// in the message so they remain searchable.
+    /// indexes `message` regardless of field allow-listing) — the body must only reach
+    /// the structured properties dictionary under a key CDP's allow-list drops. The
+    /// message stays a static string with no interpolated values at all, matching this
+    /// codebase's established <see cref="IStructuredLogger{T}"/> convention (see
+    /// HttpReExAccreditationClient.cs): every identifier, sensitive or not, goes in the
+    /// properties dictionary, never the message.
     /// </summary>
     [Fact]
     public async Task Backend_409_logs_the_body_only_as_a_structured_property_not_in_the_message()
@@ -370,12 +372,15 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
                 LogLevel.Warning,
                 Arg.Is<string>(m =>
                     !m.Contains(sensitiveBody, StringComparison.Ordinal)
-                    && m.Contains("org-9", StringComparison.Ordinal)
-                    && m.Contains("app-9", StringComparison.Ordinal)
-                    && m.Contains("site-9", StringComparison.Ordinal)
+                    && !m.Contains("org-9", StringComparison.Ordinal)
+                    && !m.Contains("app-9", StringComparison.Ordinal)
+                    && !m.Contains("site-9", StringComparison.Ordinal)
                 ),
                 Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
                     (string)p["http.response.body"]! == sensitiveBody
+                    && (string)p["organisation.id"]! == "org-9"
+                    && (string)p["application.id"]! == "app-9"
+                    && (string)p["site.id"]! == "site-9"
                 ),
                 null
             );
@@ -400,12 +405,15 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
                 LogLevel.Warning,
                 Arg.Is<string>(m =>
                     !m.Contains(sensitiveBody, StringComparison.Ordinal)
-                    && m.Contains("org-8", StringComparison.Ordinal)
-                    && m.Contains("app-8", StringComparison.Ordinal)
-                    && m.Contains("site-8", StringComparison.Ordinal)
+                    && !m.Contains("org-8", StringComparison.Ordinal)
+                    && !m.Contains("app-8", StringComparison.Ordinal)
+                    && !m.Contains("site-8", StringComparison.Ordinal)
                 ),
                 Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
                     (string)p["http.response.body"]! == sensitiveBody
+                    && (string)p["organisation.id"]! == "org-8"
+                    && (string)p["application.id"]! == "app-8"
+                    && (string)p["site.id"]! == "site-8"
                 ),
                 null
             );
@@ -430,13 +438,16 @@ public class HttpOverseasSiteRecyclingOperationsAdapterTests
                 LogLevel.Error,
                 Arg.Is<string>(m =>
                     !m.Contains(sensitiveBody, StringComparison.Ordinal)
-                    && m.Contains("org-7", StringComparison.Ordinal)
-                    && m.Contains("app-7", StringComparison.Ordinal)
-                    && m.Contains("site-7", StringComparison.Ordinal)
+                    && !m.Contains("org-7", StringComparison.Ordinal)
+                    && !m.Contains("app-7", StringComparison.Ordinal)
+                    && !m.Contains("site-7", StringComparison.Ordinal)
                 ),
                 Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
                     (string)p["http.response.body"]! == sensitiveBody
                     && (int)p["http.response.status_code"]! == 500
+                    && (string)p["organisation.id"]! == "org-7"
+                    && (string)p["application.id"]! == "app-7"
+                    && (string)p["site.id"]! == "site-7"
                 ),
                 null
             );

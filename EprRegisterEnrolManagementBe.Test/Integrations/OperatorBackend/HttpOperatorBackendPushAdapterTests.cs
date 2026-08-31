@@ -236,10 +236,12 @@ public class HttpOperatorBackendPushAdapterTests
     /// RA-519-follow-up review: the non-success-status logging (shared by every
     /// public push method via ExecutePushAsync) must not leak the raw response
     /// body into the log message (CDP's OpenSearch ingestion pipeline always
-    /// indexes `message` regardless of field allow-listing) — the body may only
+    /// indexes `message` regardless of field allow-listing) — the body must only
     /// reach the structured properties dictionary under a key CDP's allow-list
-    /// drops, while the non-sensitive work-item/correlation identifiers must
-    /// stay in the message so they remain searchable.
+    /// drops. The message stays a static string with no interpolated values at
+    /// all, matching this codebase's established <see cref="IStructuredLogger{T}"/>
+    /// convention (see HttpReExAccreditationClient.cs): every identifier, sensitive
+    /// or not, goes in the properties dictionary, never the message.
     /// </summary>
     [Fact]
     public async Task PushQueryRaisedAsync_non_success_status_logs_the_body_only_as_a_structured_property_not_in_the_message()
@@ -260,12 +262,14 @@ public class HttpOperatorBackendPushAdapterTests
                 LogLevel.Error,
                 Arg.Is<string>(m =>
                     !m.Contains(sensitiveBody, StringComparison.Ordinal)
-                    && m.Contains(workItemId.ToString(), StringComparison.Ordinal)
-                    && m.Contains(correlationId.ToString(), StringComparison.Ordinal)
+                    && !m.Contains(workItemId.ToString(), StringComparison.Ordinal)
+                    && !m.Contains(correlationId.ToString(), StringComparison.Ordinal)
                 ),
                 Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
                     (string)p["http.response.body"]! == sensitiveBody
                     && (int)p["http.response.status_code"]! == 500
+                    && (Guid)p["work_item.id"]! == workItemId
+                    && (Guid)p["correlation.id"]! == correlationId
                 ),
                 null
             );
