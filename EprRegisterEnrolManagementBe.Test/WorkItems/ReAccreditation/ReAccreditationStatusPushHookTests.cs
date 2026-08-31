@@ -178,7 +178,7 @@ public class ReAccreditationStatusPushHookTests
         await sut.Queue.Received(1).QueueAsync(
             Arg.Any<Func<IServiceProvider, CancellationToken, Task>>(), ct);
         await sut.Adapter.DidNotReceiveWithAnyArgs().PushStatusChangedAsync(
-            default, default, default!, default!, default!, default!, default!, default, default);
+            default, default, default!, default!, default!, default!, default!, default, ct);
     }
 
     [Theory]
@@ -200,7 +200,7 @@ public class ReAccreditationStatusPushHookTests
 
         await sut.Hook.OnActionAppliedAsync(workItem, actionId, fromStateId, s_user, ct);
 
-        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
     }
 
     [Theory]
@@ -222,7 +222,7 @@ public class ReAccreditationStatusPushHookTests
 
         await sut.Hook.OnActionAppliedAsync(workItem, actionId, "submitted", s_user, ct);
 
-        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
     }
 
     [Fact]
@@ -241,7 +241,7 @@ public class ReAccreditationStatusPushHookTests
 
         await sut.Hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
 
-        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
     }
 
     [Fact]
@@ -437,6 +437,9 @@ public class ReAccreditationStatusPushHookTests
             .Returns<Task>(_ => throw new InvalidOperationException("queue full"));
         var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 
-        await sut.Hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct);
+        var exception = await Record.ExceptionAsync(
+            () => sut.Hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct));
+
+        Assert.Null(exception);
     }
 }
