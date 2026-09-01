@@ -7,22 +7,61 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EprRegisterEnrolManagementB
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "EprRegisterEnrolManagementBe.Test", "EprRegisterEnrolManagementBe.Test\EprRegisterEnrolManagementBe.Test.csproj", "{5CB86A4A-162D-4A20-9403-5BB89D671BF6}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{07C2787E-EAC7-C090-1BA3-A61EC2A24D84}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CustomAnalyzers", "tools\CustomAnalyzers\CustomAnalyzers.csproj", "{196FF402-091D-49E4-B0AA-67E4869D5C0D}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
+		Debug|x64 = Debug|x64
+		Debug|x86 = Debug|x86
 		Release|Any CPU = Release|Any CPU
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
+		Release|x64 = Release|x64
+		Release|x86 = Release|x86
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Debug|x64.Build.0 = Debug|Any CPU
+		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Debug|x86.Build.0 = Debug|Any CPU
 		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Release|x64.ActiveCfg = Release|Any CPU
+		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Release|x64.Build.0 = Release|Any CPU
+		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Release|x86.ActiveCfg = Release|Any CPU
+		{7D935959-D3BE-4EDC-BAEC-541C72741633}.Release|x86.Build.0 = Release|Any CPU
 		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Debug|x64.Build.0 = Debug|Any CPU
+		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Debug|x86.Build.0 = Debug|Any CPU
 		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Release|x64.ActiveCfg = Release|Any CPU
+		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Release|x64.Build.0 = Release|Any CPU
+		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Release|x86.ActiveCfg = Release|Any CPU
+		{5CB86A4A-162D-4A20-9403-5BB89D671BF6}.Release|x86.Build.0 = Release|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Debug|x64.Build.0 = Debug|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Debug|x86.Build.0 = Debug|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Release|x64.ActiveCfg = Release|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Release|x64.Build.0 = Release|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Release|x86.ActiveCfg = Release|Any CPU
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D}.Release|x86.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{196FF402-091D-49E4-B0AA-67E4869D5C0D} = {07C2787E-EAC7-C090-1BA3-A61EC2A24D84}
 	EndGlobalSection
 EndGlobal

@@ -15,7 +15,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// snapshot is captured once, at submission). Without this migration, every
 /// re-accreditation work item submitted before this deploy — including any
 /// already sitting in <c>queried</c> today — would resume straight back to
-/// its originating state on the old v7 path, never showing "Updated" in CM.
+/// its originating state on the old v7 path, never showing "Updated" in the Case Management service.
 /// This mirrors <see cref="ReAccreditationResumeSnapshotMigration"/>'s
 /// v6→v7 precedent, but retargets existing transitions instead of only
 /// adding new ones, and — like that migration — never changes any work

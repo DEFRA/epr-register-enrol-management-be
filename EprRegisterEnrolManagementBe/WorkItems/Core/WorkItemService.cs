@@ -195,7 +195,7 @@ public sealed class WorkItemService : IWorkItemService
 
         // RA-311/MBE-3: idempotent submit. The operator backend forwards the
         // operator's original "submit application" call and may retry it
-        // after OJ FE's client-side timeout even though the first attempt
+        // after the Registration & Accreditation service frontend's client-side timeout even though the first attempt
         // already succeeded here (CDP logs show a 5s client timeout against
         // a round-trip that can take up to 100s). When the payload carries
         // an operatorApplicationId, a submit for one already on file is

@@ -19,7 +19,7 @@ internal static class NotifyTestConstants
 /// <summary>
 /// RA-422: the central <c>Notify:Enabled</c> flag (default false) gates BOTH
 /// the outbound <see cref="INotifyClient"/> AND the re-accreditation
-/// notification post-action hook — the single hook that both sends CM email
+/// notification post-action hook — the single hook that both sends Case Management service email
 /// and writes every <c>notification-*</c> audit entry. These tests pin the
 /// full wiring matrix (flag × API-key) for the registered client and for the
 /// presence of <see cref="ReAccreditationNotificationHook"/> in the

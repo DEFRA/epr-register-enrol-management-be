@@ -619,7 +619,7 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         // RA-311/MBE-3: the operator backend forwards the operator's own
         // "submit application" call and may retry it after a client-side
         // timeout even though the original request already succeeded here
-        // (CDP logs show OJ FE aborting at 5s while this round-trip can take
+        // (CDP logs show the Registration & Accreditation service frontend aborting at 5s while this round-trip can take
         // up to 100s). Unique + sparse on the same principle as
         // applicationReference above: only documents that actually carry
         // payload.operatorApplicationId are constrained, so items submitted

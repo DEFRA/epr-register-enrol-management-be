@@ -4,6 +4,7 @@ WORKDIR /src
 COPY EprRegisterEnrolManagementBe.sln ./
 COPY EprRegisterEnrolManagementBe/EprRegisterEnrolManagementBe.csproj EprRegisterEnrolManagementBe/
 COPY EprRegisterEnrolManagementBe.Test/EprRegisterEnrolManagementBe.Test.csproj EprRegisterEnrolManagementBe.Test/
+COPY tools/CustomAnalyzers/CustomAnalyzers.csproj tools/CustomAnalyzers/
 RUN dotnet restore EprRegisterEnrolManagementBe.sln
 COPY . .
 RUN dotnet publish EprRegisterEnrolManagementBe -c Release -o /app/publish /p:UseAppHost=false

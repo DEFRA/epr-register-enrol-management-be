@@ -1644,7 +1644,7 @@ public class ReAccreditationEndpointTests
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.NotNull(persisted);
         // RA-337: resume-during-* lands on 'updated', not the originating
-        // state, so CM shows an "Updated" status until a caseworker moves
+        // state, so the Case Management service shows an "Updated" status until a caseworker moves
         // it on via continue-review.
         Assert.Equal("updated", persisted!.StateId);
         Assert.Contains(
@@ -1699,8 +1699,9 @@ public class ReAccreditationEndpointTests
 
     /// <summary>
     /// RA-523 AC01/AC02: the case worker queries an application that nobody
-    /// owns, the operator resubmits, and the application comes back to CM in
-    /// the querying case worker's hands — end to end through the real query and
+    /// owns, the operator resubmits, and the application comes back to the
+    /// Case Management service in the querying case worker's hands — end to
+    /// end through the real query and
     /// resume endpoints, with the resume driven by the operator as it is in
     /// production.
     /// </summary>
@@ -1753,7 +1754,7 @@ public class ReAccreditationEndpointTests
     }
 
     /// <summary>
-    /// RA-523 reproduction. CM offers unassign unconditionally on any
+    /// RA-523 reproduction. The Case Management service offers unassign unconditionally on any
     /// non-terminal item, <c>queried</c> included, so the RA-291 self-assign is
     /// not durable across the query window. Before this fix nothing
     /// re-established ownership when the operator resubmitted, so the
@@ -1778,7 +1779,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.OK, queryResponse.StatusCode);
 
         // The query window: somebody drops the application while it waits on
-        // the operator. CM allows this on a queried item.
+        // the operator. The Case Management service allows this on a queried item.
         var unassign = await client.PostAsync(
             $"/work-items/{id}/unassign",
             content: null,

@@ -31,7 +31,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // establishes. The clock is started once, by
         // ReAccreditationDulyMakingService, and payment-received no longer
         // touches it.
-        // RA-422: outbound CM email + every notification-* audit entry flow
+        // RA-422: outbound Case Management service email + every notification-* audit entry flow
         // through this one hook, so gating its registration on the central
         // Notify:Enabled flag is the single chokepoint for both concerns. When
         // notifications are disabled the hook is never registered, so no email

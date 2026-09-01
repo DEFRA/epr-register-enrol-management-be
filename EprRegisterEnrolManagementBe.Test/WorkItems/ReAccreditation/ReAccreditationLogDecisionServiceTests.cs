@@ -98,7 +98,7 @@ public class ReAccreditationLogDecisionServiceTests
     /// before the outcome — never after or alongside.
     /// </summary>
     [Fact]
-    public async Task Resolve_number_precedes_oj_push_which_precedes_submit_for_decision_which_precedes_the_outcome()
+    public async Task Resolve_number_precedes_registration_accreditation_push_which_precedes_submit_for_decision_which_precedes_the_outcome()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(stateId: "assessment-in-progress");
@@ -111,7 +111,7 @@ public class ReAccreditationLogDecisionServiceTests
         );
 
         Assert.Equal(
-            ["resolve-number", "oj-push", "submit-for-decision", "approve"],
+            ["resolve-number", "registration-accreditation-push", "submit-for-decision", "approve"],
             harness.OrderedCalls
         );
     }
@@ -141,7 +141,7 @@ public class ReAccreditationLogDecisionServiceTests
     }
 
     /// <summary>
-    /// epr-r9oy: the number minted ahead of the OJ push is the SAME instance
+    /// epr-r9oy: the number minted ahead of the Registration & Accreditation service push is the SAME instance
     /// forwarded to ApproveAsync — ApproveAsync must not resolve its own,
     /// second number. A second resolution would hit the backend's
     /// accreditation-number endpoint after the push above has already made
@@ -168,9 +168,9 @@ public class ReAccreditationLogDecisionServiceTests
     }
 
     /// <summary>
-    /// Mirrors the OJ-push-failure test below: a failed mint must also
+    /// Mirrors the Registration & Accreditation service push-failure test below: a failed mint must also
     /// abandon the decision before anything is written, and — critically —
-    /// before the OJ push, which would otherwise mark the application
+    /// before the Registration & Accreditation service push, which would otherwise mark the application
     /// terminal on the backend for a decision that never actually completed.
     /// </summary>
     [Fact]
@@ -192,7 +192,7 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.AccreditationNumberUnavailable, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
-        Assert.DoesNotContain("oj-push", harness.OrderedCalls);
+        Assert.DoesNotContain("registration-accreditation-push", harness.OrderedCalls);
         await harness
             .PushAdapter.DidNotReceiveWithAnyArgs()
             .PushDecisionStatusChangedAsync(
@@ -214,14 +214,14 @@ public class ReAccreditationLogDecisionServiceTests
     // --------------------------- the operator-journey gate ---------------------------
 
     /// <summary>
-    /// epr-p86e / RA-410: the OJ push is fired exactly once — for the final
+    /// epr-p86e / RA-410: the Registration & Accreditation service push is fired exactly once — for the final
     /// decision only, never for the internal submit-for-decision waypoint — and
     /// with the deliberate 'awaiting-decision' fromState contract-match.
     /// </summary>
     [Theory]
     [InlineData(true, "approve", "approved")]
     [InlineData(false, "reject", "rejected")]
-    public async Task The_oj_push_fires_exactly_once_for_the_final_decision(
+    public async Task The_registration_accreditation_push_fires_exactly_once_for_the_final_decision(
         bool approve,
         string expectedActionId,
         string expectedToStateId
@@ -237,7 +237,7 @@ public class ReAccreditationLogDecisionServiceTests
             ct
         );
 
-        Assert.Equal(1, harness.OrderedCalls.Count(c => c == "oj-push"));
+        Assert.Equal(1, harness.OrderedCalls.Count(c => c == "registration-accreditation-push"));
         await harness
             .PushAdapter.Received(1)
             .PushDecisionStatusChangedAsync(
@@ -254,7 +254,7 @@ public class ReAccreditationLogDecisionServiceTests
     }
 
     /// <summary>
-    /// The whole point: OJ unreachable after the retry budget means the
+    /// The whole point: the Registration & Accreditation service unreachable after the retry budget means the
     /// decision is abandoned before anything is written. No hop, no approval,
     /// the item stays put, and the caller gets an UpstreamNotificationFailed
     /// the endpoint maps to a 500.
@@ -262,7 +262,7 @@ public class ReAccreditationLogDecisionServiceTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task An_oj_push_failure_records_no_state_change_and_maps_to_500(bool approve)
+    public async Task A_registration_accreditation_push_failure_records_no_state_change_and_maps_to_500(bool approve)
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(
@@ -298,11 +298,11 @@ public class ReAccreditationLogDecisionServiceTests
 
     /// <summary>
     /// A disabled push (Skipped) is a pass, not a failure — a decision must
-    /// still complete in an environment where the OJ push is switched off, and
+    /// still complete in an environment where the Registration & Accreditation service push is switched off, and
     /// it is recorded under the non-alerting status-push-skipped outcome.
     /// </summary>
     [Fact]
-    public async Task A_skipped_oj_push_still_completes_the_decision()
+    public async Task A_skipped_registration_accreditation_push_still_completes_the_decision()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(
@@ -361,7 +361,7 @@ public class ReAccreditationLogDecisionServiceTests
             .AppendAsync(
                 harness.WorkItem.Id,
                 "status-push-sent",
-                "Status sent to OJ",
+                "Status sent to the Registration & Accreditation service",
                 Arg.Any<Dictionary<string, string?>>(),
                 harness.User,
                 ct
@@ -399,7 +399,7 @@ public class ReAccreditationLogDecisionServiceTests
 
     /// <summary>
     /// The push is gated behind the same guards as the hops: a decision refused
-    /// on a guard (here a conflicting terminal outcome) must not notify OJ.
+    /// on a guard (here a conflicting terminal outcome) must not notify the Registration & Accreditation service.
     /// </summary>
     [Fact]
     public async Task A_guard_failure_does_not_notify_the_operator_journey()
@@ -681,7 +681,7 @@ public class ReAccreditationLogDecisionServiceTests
                 )
                 .Returns(call =>
                 {
-                    OrderedCalls.Add("oj-push");
+                    OrderedCalls.Add("registration-accreditation-push");
                     return pushResult ?? OperatorBackendPushResult.Success();
                 });
 
@@ -714,8 +714,8 @@ public class ReAccreditationLogDecisionServiceTests
                 });
 
             ApprovalService = Substitute.For<IReAccreditationApprovalService>();
-            // epr-r9oy: minted BEFORE the OJ push for an Approved outcome — see
-            // ResolveAccreditationNumberAsync_precedes_oj_push_for_approved below.
+            // epr-r9oy: minted BEFORE the Registration & Accreditation service push for an Approved outcome — see
+            // ResolveAccreditationNumberAsync_precedes_registration_accreditation_push_for_approved below.
             // Default is a successful mint so the happy paths proceed; the
             // failure path overrides it via the numberResult parameter.
             ApprovalService

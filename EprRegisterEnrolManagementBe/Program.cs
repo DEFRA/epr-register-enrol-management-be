@@ -530,7 +530,7 @@ static void ConfigureNotifications(
 
     var apiKey = configuration.GetValue<string>("NOTIFY_API_KEY");
 
-    // RA-422: outbound CM email is centrally disabled via Notify:Enabled
+    // RA-422: outbound Case Management service email is centrally disabled via Notify:Enabled
     // (default false). Register the no-op client when notifications are
     // disabled OR no API key is configured — belt-and-braces, so no real email
     // can leave even if something resolves INotifyClient directly. The

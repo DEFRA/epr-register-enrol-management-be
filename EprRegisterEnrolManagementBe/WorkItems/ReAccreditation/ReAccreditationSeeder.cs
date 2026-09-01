@@ -772,7 +772,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // "Additional information" tab (companiesHouseNumber,
         // companyRegisteredAddress, permitNumbers) and — the point of this
         // fixture — NO siteAddress at all. Re-ex has no site for an exporter,
-        // so the CM frontend falls back to companyRegisteredAddress for the
+        // so the Case Management service frontend falls back to companyRegisteredAddress for the
         // Site address row; every other seed item is reprocessor-shaped
         // (siteAddress present) and cannot exercise that branch.
         //

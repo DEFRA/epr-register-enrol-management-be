@@ -142,7 +142,7 @@ internal sealed class ReAccreditationApprovalService(
         // (see IReAccreditationApprovalService.ApproveAsync's doc comment) so
         // this method never calls the backend's accreditation-number endpoint
         // a second time — that endpoint refuses once ApplicationStatus is
-        // terminal, which a caller resolving ahead of an OJ push relies on.
+        // terminal, which a caller resolving ahead of a Registration & Accreditation service push relies on.
         AccreditationNumberResult? numberResult = preResolvedAccreditationNumber;
         // RA-448 phase 2: one id for the whole logical approval attempt (not
         // per retry), forwarded to the backend as X-Correlation-Id so this
