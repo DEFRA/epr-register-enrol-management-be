@@ -244,9 +244,10 @@ internal sealed class ReAccreditationResumeService(
     /// raised the query, once the operator's resubmission has landed.
     ///
     /// <see cref="ReAccreditationQueryService"/> self-assigns at query time
-    /// (RA-291) and the CM query page promises exactly that, but that
-    /// assignment is not durable across the query window: CM offers
-    /// unassign/reassign unconditionally on any non-terminal item, <c>queried</c>
+    /// (RA-291) and the Case Management service query page promises exactly
+    /// that, but that assignment is not durable across the query window: the
+    /// Case Management service offers unassign/reassign unconditionally on
+    /// any non-terminal item, <c>queried</c>
     /// included, so an application can sit in <c>queried</c> owned by nobody.
     /// Nothing then re-established ownership when the operator resubmitted, so
     /// the work item came back <c>updated</c> and unassigned — the reported
