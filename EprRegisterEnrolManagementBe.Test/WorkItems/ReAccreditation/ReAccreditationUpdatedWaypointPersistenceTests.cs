@@ -2,8 +2,11 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using Microsoft.AspNetCore.HeaderPropagation;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using NSubstitute;
@@ -35,6 +38,16 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// "the last submitted-state task was ticked" to "the regulator pressed Duly
 /// make and gave a payment date", but the persistence hazard is identical and so
 /// is the declared path through the state machine.
+///
+/// RA-519: the push (and the out-of-band audit write it performs) is now
+/// deferred onto <see cref="IBackgroundTaskQueue"/> rather than happening
+/// inline inside <c>CompleteDulyMakingAsync</c>, so the specific hazard this
+/// suite was written for — the push's write landing between the service's
+/// own two saves — is now structurally impossible (the push cannot run until
+/// after the request, and therefore the service's own save, has completed).
+/// The tests still drain the queued job (via <see cref="RecordingBackgroundTaskQueue"/>)
+/// straight after the service call, so the "one save, then the push" ordering
+/// and the survival of the push's audit entry both stay pinned.
 /// </summary>
 public class ReAccreditationUpdatedWaypointPersistenceTests
     : IAsyncDisposable
@@ -81,11 +94,11 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         var ct = TestContext.Current.CancellationToken;
         var workItem = await SeedWorkItemAsync(ct);
         var pushes = new List<(string ActionId, string FromStateId)>();
-        var service = BuildService(pushes);
+        var sut = BuildService(pushes);
 
         // The defect surfaced here as an unhandled WorkItemConcurrencyException
         // bubbling out as a 500.
-        var result = await service.CompleteDulyMakingAsync(
+        var result = await sut.Service.CompleteDulyMakingAsync(
             workItem.Id,
             s_paymentDate,
             s_user,
@@ -93,6 +106,10 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         );
 
         Assert.True(result.IsSuccess);
+
+        // RA-519: the push (and its audit write) is now queued, not inline —
+        // drain it so the assertions below still see its effects.
+        await sut.Queue.DrainAsync(sut.ScopedServices, ct);
 
         // Assert against the document read back from Mongo, not the in-memory
         // instance — a save that never landed would still look right in memory.
@@ -138,9 +155,9 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         var ct = TestContext.Current.CancellationToken;
         var workItem = await SeedWorkItemAsync(ct, stateId: "submitted", withResume: false);
         var pushes = new List<(string ActionId, string FromStateId)>();
-        var service = BuildService(pushes);
+        var sut = BuildService(pushes);
 
-        var result = await service.CompleteDulyMakingAsync(
+        var result = await sut.Service.CompleteDulyMakingAsync(
             workItem.Id,
             s_paymentDate,
             s_user,
@@ -148,6 +165,9 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         );
 
         Assert.True(result.IsSuccess);
+
+        // RA-519: drain the queued push job before asserting on its effects.
+        await sut.Queue.DrainAsync(sut.ScopedServices, ct);
 
         var stored = await _persistence.GetByIdAsync(workItem.Id, ct);
         Assert.Equal("duly-made", stored!.StateId);
@@ -168,9 +188,9 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         var ct = TestContext.Current.CancellationToken;
         var workItem = await SeedWorkItemAsync(ct, resumeActionId: "resume-during-assessment");
         var pushes = new List<(string ActionId, string FromStateId)>();
-        var service = BuildService(pushes);
+        var sut = BuildService(pushes);
 
-        var result = await service.CompleteDulyMakingAsync(
+        var result = await sut.Service.CompleteDulyMakingAsync(
             workItem.Id,
             s_paymentDate,
             s_user,
@@ -250,12 +270,52 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
     }
 
     /// <summary>
+    /// RA-519: <see cref="IBackgroundTaskQueue"/> test double that records
+    /// queued jobs instead of running them (the real
+    /// <c>QueuedHostedService</c> isn't hosted in this test), so the test can
+    /// drain them itself once it wants to observe the deferred push's
+    /// effects — mirroring what the real hosted worker does, but under the
+    /// test's own control instead of racing it on a background thread.
+    /// </summary>
+    private sealed class RecordingBackgroundTaskQueue : IBackgroundTaskQueue
+    {
+        private readonly List<Func<IServiceProvider, CancellationToken, Task>> _jobs = [];
+
+        public Task QueueAsync(
+            Func<IServiceProvider, CancellationToken, Task> workItem,
+            CancellationToken cancellationToken = default)
+        {
+            _jobs.Add(workItem);
+            return Task.CompletedTask;
+        }
+
+        public ValueTask<Func<IServiceProvider, CancellationToken, Task>> DequeueAsync(
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException("This test double is drained directly via DrainAsync.");
+
+        public async Task DrainAsync(IServiceProvider scopedServices, CancellationToken cancellationToken)
+        {
+            var jobs = _jobs.ToArray();
+            _jobs.Clear();
+            foreach (var job in jobs)
+            {
+                await job(scopedServices, cancellationToken);
+            }
+        }
+    }
+
+    private sealed record Sut(
+        ReAccreditationDulyMakingService Service,
+        RecordingBackgroundTaskQueue Queue,
+        IServiceProvider ScopedServices);
+
+    /// <summary>
     /// Everything real except the two outbound integrations (Notify and the
     /// operator-backend push adapter). In particular the audit appender is the
     /// genuine <see cref="WorkItemAuditAppender"/>, because its
     /// re-read-and-replace is the write that broke optimistic concurrency.
     /// </summary>
-    private ReAccreditationDulyMakingService BuildService(
+    private Sut BuildService(
         List<(string ActionId, string FromStateId)> pushes
     )
     {
@@ -306,18 +366,30 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
             NullLogger<ReAccreditationNotificationHook>.Instance
         );
 
+        var queue = new RecordingBackgroundTaskQueue();
         var statusPushHook = new ReAccreditationStatusPushHook(
-            pushAdapter,
-            auditAppender,
+            queue,
+            new HeaderPropagationValues(),
             NullLogger<ReAccreditationStatusPushHook>.Instance
         );
 
-        return new ReAccreditationDulyMakingService(
+        // The DI scope the deferred job resolves its adapter/appender from —
+        // the real audit appender (so its re-read-and-replace write is
+        // genuinely exercised) and the mocked push adapter.
+        var scopedServices = new ServiceCollection()
+            .AddSingleton<IOperatorBackendPushAdapter>(pushAdapter)
+            .AddSingleton<IWorkItemAuditAppender>(auditAppender)
+            .AddSingleton(new HeaderPropagationValues())
+            .BuildServiceProvider();
+
+        var service = new ReAccreditationDulyMakingService(
             _persistence,
             new WorkItemRegistry([new ReAccreditationType()]),
             [notificationHook, statusPushHook],
             TimeProvider.System,
             NullLogger<ReAccreditationDulyMakingService>.Instance
         );
+
+        return new Sut(service, queue, scopedServices);
     }
 }

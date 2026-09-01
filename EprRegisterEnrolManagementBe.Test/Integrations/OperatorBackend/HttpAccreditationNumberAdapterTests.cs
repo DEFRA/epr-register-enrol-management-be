@@ -2,7 +2,9 @@ using System.Net;
 using System.Net.Http;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -32,7 +34,12 @@ public class HttpAccreditationNumberAdapterTests
     private static (
         HttpAccreditationNumberAdapter Adapter,
         FakeHttpMessageHandler Handler
-    ) BuildSut(string? sharedSecret = null, string? url = BaseUrl, bool enabled = true)
+    ) BuildSut(
+        string? sharedSecret = null,
+        string? url = BaseUrl,
+        bool enabled = true,
+        IStructuredLogger<HttpAccreditationNumberAdapter>? structuredLogger = null
+    )
     {
         var handler = new FakeHttpMessageHandler();
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
@@ -52,6 +59,7 @@ public class HttpAccreditationNumberAdapterTests
             httpClientFactory,
             config,
             NullLogger<HttpAccreditationNumberAdapter>.Instance,
+            structuredLogger ?? Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>(),
             FastRetryPipeline()
         );
         return (adapter, handler);
@@ -272,6 +280,46 @@ public class HttpAccreditationNumberAdapterTests
     }
 
     /// <summary>
+    /// RA-519-follow-up review: the non-success-status logging must not leak the raw
+    /// response body into the log message (CDP's OpenSearch ingestion pipeline always
+    /// indexes `message` regardless of field allow-listing) — the body must only reach
+    /// the structured properties dictionary under a key CDP's allow-list drops. The
+    /// message stays a static string with no interpolated values at all, matching this
+    /// codebase's established <see cref="IStructuredLogger{T}"/> convention (see
+    /// HttpReExAccreditationClient.cs): every identifier, sensitive or not, goes in the
+    /// properties dictionary, never the message.
+    /// </summary>
+    [Fact]
+    public async Task Non_success_status_logs_the_body_only_as_a_structured_property_not_in_the_message()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var structuredLogger = Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>();
+        var (adapter, handler) = BuildSut(structuredLogger: structuredLogger);
+        const string sensitiveBody = "internal failure, contact ops@example.com";
+        handler.Respond(HttpStatusCode.InternalServerError, sensitiveBody);
+
+        await Call(adapter, ct, organisationId: "org-6", applicationId: "app-6");
+
+        structuredLogger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                Arg.Is<string>(m =>
+                    !m.Contains(sensitiveBody, StringComparison.Ordinal)
+                    && !m.Contains("org-6", StringComparison.Ordinal)
+                    && !m.Contains("app-6", StringComparison.Ordinal)
+                ),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["http.response.body"]! == sensitiveBody
+                    && (int)p["http.response.status_code"]! == 500
+                    && (string)p["organisation.id"]! == "org-6"
+                    && (string)p["application.id"]! == "app-6"
+                ),
+                null
+            );
+    }
+
+    /// <summary>
     /// RA-448 phase 2 review follow-up: genuine caller-token cancellation
     /// (request aborted, upstream timeout) must propagate as a cancellation,
     /// not be converted into an AccreditationNumberResult.Failure the caller
@@ -385,7 +433,8 @@ public class HttpAccreditationNumberAdapterTests
         var adapter = new HttpAccreditationNumberAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpAccreditationNumberAdapter>.Instance
+            NullLogger<HttpAccreditationNumberAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>()
         );
         handler.Respond(HttpStatusCode.OK, SuccessBody("A25ER5000270036WO"));
 
@@ -413,7 +462,8 @@ public class HttpAccreditationNumberAdapterTests
         var adapter = new HttpAccreditationNumberAdapter(
             httpClientFactory,
             config,
-            NullLogger<HttpAccreditationNumberAdapter>.Instance
+            NullLogger<HttpAccreditationNumberAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>()
         );
         handler.RespondSequence(
             (HttpStatusCode.InternalServerError, "boom"),

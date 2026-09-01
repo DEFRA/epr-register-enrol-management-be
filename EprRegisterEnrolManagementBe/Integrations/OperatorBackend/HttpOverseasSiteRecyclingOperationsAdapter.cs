@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
@@ -41,6 +42,7 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
     IHttpClientFactory httpClientFactory,
     IOptions<OperatorBackendApiConfig> config,
     ILogger<HttpOverseasSiteRecyclingOperationsAdapter> logger,
+    IStructuredLogger<HttpOverseasSiteRecyclingOperationsAdapter> structuredLogger,
     ResiliencePipeline<HttpResponseMessage>? retryPipeline = null
 ) : IOverseasSiteRecyclingOperationsAdapter
 {
@@ -135,15 +137,18 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
             if (response.StatusCode == System.Net.HttpStatusCode.Conflict)
             {
                 var conflictBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogWarning(
-                    "Backend returned 409 from {Endpoint} for organisation {OrganisationId} "
-                        + "application {ApplicationId} site {SiteId} (correlation {CorrelationId}): {Body}",
-                    endpoint,
-                    request.OrganisationId,
-                    request.ApplicationId,
-                    request.SiteId,
-                    request.CorrelationId,
-                    conflictBody
+                structuredLogger.Log(
+                    LogLevel.Warning,
+                    "Backend returned 409 conflict for recycling operations update",
+                    new Dictionary<string, object?>
+                    {
+                        ["http.request.endpoint"] = endpoint,
+                        ["organisation.id"] = request.OrganisationId,
+                        ["application.id"] = request.ApplicationId,
+                        ["site.id"] = request.SiteId,
+                        ["correlation.id"] = request.CorrelationId,
+                        ["http.response.body"] = conflictBody,
+                    }
                 );
                 return OverseasSiteRecyclingOperationsResult.Conflict(
                     string.IsNullOrWhiteSpace(conflictBody)
@@ -155,15 +160,18 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
             if (response.StatusCode == System.Net.HttpStatusCode.BadRequest)
             {
                 var validationBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogWarning(
-                    "Backend returned 400 from {Endpoint} for organisation {OrganisationId} "
-                        + "application {ApplicationId} site {SiteId} (correlation {CorrelationId}): {Body}",
-                    endpoint,
-                    request.OrganisationId,
-                    request.ApplicationId,
-                    request.SiteId,
-                    request.CorrelationId,
-                    validationBody
+                structuredLogger.Log(
+                    LogLevel.Warning,
+                    "Backend returned 400 validation failure for recycling operations update",
+                    new Dictionary<string, object?>
+                    {
+                        ["http.request.endpoint"] = endpoint,
+                        ["organisation.id"] = request.OrganisationId,
+                        ["application.id"] = request.ApplicationId,
+                        ["site.id"] = request.SiteId,
+                        ["correlation.id"] = request.CorrelationId,
+                        ["http.response.body"] = validationBody,
+                    }
                 );
                 return ParseValidationFailure(validationBody, logger);
             }
@@ -171,16 +179,19 @@ internal sealed class HttpOverseasSiteRecyclingOperationsAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogError(
-                    "Backend returned {Status} from {Endpoint} for organisation {OrganisationId} "
-                        + "application {ApplicationId} site {SiteId} (correlation {CorrelationId}): {Body}",
-                    (int)response.StatusCode,
-                    endpoint,
-                    request.OrganisationId,
-                    request.ApplicationId,
-                    request.SiteId,
-                    request.CorrelationId,
-                    responseBody
+                structuredLogger.Log(
+                    LogLevel.Error,
+                    "Backend returned non-success status for recycling operations update",
+                    new Dictionary<string, object?>
+                    {
+                        ["http.request.endpoint"] = endpoint,
+                        ["organisation.id"] = request.OrganisationId,
+                        ["application.id"] = request.ApplicationId,
+                        ["site.id"] = request.SiteId,
+                        ["correlation.id"] = request.CorrelationId,
+                        ["http.response.status_code"] = (int)response.StatusCode,
+                        ["http.response.body"] = responseBody,
+                    }
                 );
                 return OverseasSiteRecyclingOperationsResult.TransientFailure(
                     $"Backend returned {(int)response.StatusCode} from {endpoint}."

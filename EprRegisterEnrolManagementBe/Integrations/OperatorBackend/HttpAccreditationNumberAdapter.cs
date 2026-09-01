@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
 using Polly.Retry;
@@ -48,6 +49,7 @@ internal sealed class HttpAccreditationNumberAdapter(
     IHttpClientFactory httpClientFactory,
     IOptions<OperatorBackendApiConfig> config,
     ILogger<HttpAccreditationNumberAdapter> logger,
+    IStructuredLogger<HttpAccreditationNumberAdapter> structuredLogger,
     ResiliencePipeline<HttpResponseMessage>? retryPipeline = null
 ) : IAccreditationNumberAdapter
 {
@@ -125,15 +127,18 @@ internal sealed class HttpAccreditationNumberAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogError(
-                    "Backend returned {Status} from {Endpoint} for organisation {OrganisationId} "
-                        + "application {ApplicationId} (correlation {CorrelationId}): {Body}",
-                    (int)response.StatusCode,
-                    endpoint,
-                    request.OrganisationId,
-                    request.ApplicationId,
-                    request.CorrelationId,
-                    responseBody
+                structuredLogger.Log(
+                    LogLevel.Error,
+                    "Backend returned non-success status for accreditation number request",
+                    new Dictionary<string, object?>
+                    {
+                        ["http.request.endpoint"] = endpoint,
+                        ["organisation.id"] = request.OrganisationId,
+                        ["application.id"] = request.ApplicationId,
+                        ["correlation.id"] = request.CorrelationId,
+                        ["http.response.status_code"] = (int)response.StatusCode,
+                        ["http.response.body"] = responseBody,
+                    }
                 );
                 return AccreditationNumberResult.Failure(
                     $"Backend returned {(int)response.StatusCode} from {endpoint}."
