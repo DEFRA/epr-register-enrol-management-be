@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using EprRegisterEnrolManagementBe.Auth;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Polly;
@@ -50,6 +51,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
     IHttpClientFactory httpClientFactory,
     IOptions<OperatorBackendApiConfig> config,
     ILogger<HttpOperatorBackendPushAdapter> logger,
+    IStructuredLogger<HttpOperatorBackendPushAdapter> structuredLogger,
     ResiliencePipeline<HttpResponseMessage>? retryPipeline = null,
     ResiliencePipeline<HttpResponseMessage>? decisionRetryPipeline = null
 ) : IOperatorBackendPushAdapter
@@ -282,13 +284,18 @@ internal sealed class HttpOperatorBackendPushAdapter(
             if (!response.IsSuccessStatusCode)
             {
                 var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
-                logger.LogError(
-                    "Operator backend returned {Status} from {Endpoint} for work item {WorkItemId} (correlation {CorrelationId}): {Body}",
-                    (int)response.StatusCode,
-                    endpoint,
-                    workItemId,
-                    correlationId,
-                    responseBody
+                structuredLogger.Log(
+                    LogLevel.Error,
+                    "Operator backend returned non-success status for push",
+                    new Dictionary<string, object?>
+                    {
+                        ["http.request.endpoint"] = endpoint,
+                        ["operation.name"] = operationName,
+                        ["work_item.id"] = workItemId,
+                        ["correlation.id"] = correlationId,
+                        ["http.response.status_code"] = (int)response.StatusCode,
+                        ["http.response.body"] = responseBody,
+                    }
                 );
                 return OperatorBackendPushResult.Failure(
                     $"Operator backend returned {(int)response.StatusCode} from {endpoint}."
