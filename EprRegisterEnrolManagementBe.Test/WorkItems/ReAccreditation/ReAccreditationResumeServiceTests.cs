@@ -699,6 +699,59 @@ public class ReAccreditationResumeServiceTests
     }
 
     /// <summary>
+    /// RA-523: the restore must not fail the resume even when the engine
+    /// THROWS rather than returning a failure code — an infrastructure fault
+    /// (Mongo blip, driver timeout) would otherwise surface an already-persisted
+    /// resubmission to the operator backend as a 5xx, the exact failure mode
+    /// running the restore after the transition exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task Resume_still_succeeds_when_the_assignment_restore_throws()
+    {
+        var harness = new Harness(
+            "query-during-assessment",
+            querierId: "carol-3",
+            querierName: "Carol Example");
+        harness.Engine
+            .AssignAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns<Task<WorkItemActionResult>>(_ => throw new TimeoutException("mongo is having a moment"));
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, s_request, harness.User, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    /// <summary>
+    /// RA-523: a cancellation raised by the caller's own token is NOT swallowed
+    /// — that is the caller abandoning the request, not the restore failing.
+    /// </summary>
+    [Fact]
+    public async Task Resume_propagates_a_caller_cancellation_from_the_assignment_restore()
+    {
+        var harness = new Harness(
+            "query-during-assessment",
+            querierId: "carol-3",
+            querierName: "Carol Example");
+        using var cts = new CancellationTokenSource();
+        harness.Engine
+            .AssignAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns<Task<WorkItemActionResult>>(_ =>
+            {
+                cts.Cancel();
+                throw new OperationCanceledException(cts.Token);
+            });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => harness.Service.ResumeFromQueryAsync(
+                harness.WorkItem.Id, s_request, harness.User, cts.Token));
+    }
+
+    /// <summary>
     /// RA-523: the resume transition's post-action hooks write to the same
     /// document, some on the background queue, so the restore routinely loses
     /// the optimistic-concurrency race. It retries rather than dropping the

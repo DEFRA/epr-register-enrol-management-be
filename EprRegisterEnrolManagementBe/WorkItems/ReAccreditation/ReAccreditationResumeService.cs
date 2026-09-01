@@ -268,9 +268,50 @@ internal sealed class ReAccreditationResumeService(
     /// Runs AFTER the transition, and a failure here never fails the resume:
     /// the state change is already persisted and is what the operator backend's
     /// contract depends on, so a lost assignment is logged, not surfaced as a
-    /// 4xx/5xx that would make the operator's resubmission look rejected.
+    /// 4xx/5xx that would make the operator's resubmission look rejected. That
+    /// holds for a thrown infrastructure fault (a Mongo blip, a driver timeout)
+    /// just as much as for a failure code, hence the catch-all here — without
+    /// it, an exception out of <see cref="IWorkItemService.AssignAsync"/> would
+    /// surface a completed, already-persisted resubmission to the operator
+    /// backend as a 5xx, which is exactly the failure mode the ordering
+    /// decision above exists to prevent.
+    ///
+    /// A cancellation raised by the caller's own token is deliberately NOT
+    /// swallowed: that is the caller giving up on the request, not the restore
+    /// failing, and the rest of the pipeline needs to see it.
     /// </summary>
     private async Task RestoreQuerierAssignmentAsync(
+        Guid workItemId,
+        WorkItem? current,
+        WorkItemAuditEntry queryEntry,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RestoreQuerierAssignmentCoreAsync(
+                workItemId, current, queryEntry, user, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Work item {WorkItemId} resumed from query but the assignment could not be " +
+                "restored to the querying case worker {UserId}; it remains unassigned.",
+                workItemId, queryEntry.CreatedBy);
+        }
+    }
+
+    /// <summary>
+    /// The restore itself. Always called through
+    /// <see cref="RestoreQuerierAssignmentAsync"/>, which owns the guarantee
+    /// that nothing here can fail the resume.
+    /// </summary>
+    private async Task RestoreQuerierAssignmentCoreAsync(
         Guid workItemId,
         WorkItem? current,
         WorkItemAuditEntry queryEntry,
