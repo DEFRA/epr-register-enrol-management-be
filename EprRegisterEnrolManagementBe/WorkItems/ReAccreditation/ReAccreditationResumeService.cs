@@ -19,12 +19,18 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// than a static from-state map, since the "from" state here is always
 /// <c>queried</c> — (b) stamping the resubmitted section values and file
 /// references onto the payload so they are captured before the transition,
-/// and (c) appending the <c>query-responded</c> audit entry (AC07/AC08).
+/// (c) appending the <c>query-responded</c> audit entry (AC07/AC08), and
+/// (d) RA-523: restoring the querying case worker's assignment when the
+/// application comes back owned by nobody — see
+/// <see cref="RestoreQuerierAssignmentAsync"/>.
 ///
 /// Write order mirrors <see cref="ReAccreditationQueryService"/>: patch the
 /// payload field before the transition (so a future notification/push hook
 /// reading it inside <see cref="IWorkItemService.ApplyActionAsync"/> would
-/// see it), transition, then audit.
+/// see it), transition, then audit. The RA-523 assignment restore comes last,
+/// deliberately: unlike the query's self-assign it is a consequence of a
+/// completed resume, so it must never leave an assigned-but-un-resumed item
+/// behind, and its failure must never fail the operator's resubmission.
 /// </summary>
 internal sealed class ReAccreditationResumeService(
     IWorkItemPersistence persistence,
@@ -38,6 +44,16 @@ internal sealed class ReAccreditationResumeService(
     public const string AuditAction = "query-responded";
     public const string AuditActionDisplayName = "Query responded";
     public const string LatestSectionsPayloadField = "latestSections";
+
+    /// <summary>
+    /// RA-523: how many times the post-resume assignment restore will retry a
+    /// concurrency conflict before giving up. See
+    /// <see cref="RestoreQuerierAssignmentAsync"/>.
+    /// </summary>
+    private const int MaxAssignAttempts = 4;
+
+    /// <summary>Base backoff between assignment-restore attempts; scaled by attempt number.</summary>
+    private static readonly TimeSpan s_assignRetryDelay = TimeSpan.FromMilliseconds(25);
 
     /// <summary>
     /// States a work item can validly be resumed into. Used to tell a
@@ -147,12 +163,17 @@ internal sealed class ReAccreditationResumeService(
                 $"Work item {workItemId} is in state '{workItem.StateId}' and cannot be resumed from a query.");
         }
 
-        var queryActionId = workItem
+        // RA-523: keep the whole query audit entry, not just its actionId — its
+        // CreatedBy/CreatedByName identify the case worker who raised the
+        // query, which RestoreQuerierAssignmentAsync needs once the resume has
+        // landed.
+        var queryEntry = workItem
             .AuditLog
             .Where(entry => string.Equals(entry.Action, ReAccreditationQueryService.AuditAction, StringComparison.Ordinal))
             .OrderByDescending(entry => entry.CreatedAt)
-            .Select(entry => entry.Details.GetValueOrDefault("actionId"))
-            .FirstOrDefault(actionId => actionId is not null);
+            .FirstOrDefault(entry => entry.Details.GetValueOrDefault("actionId") is not null);
+
+        var queryActionId = queryEntry?.Details.GetValueOrDefault("actionId");
 
         if (queryActionId is null
             || !s_resumeActionByQueryAction.TryGetValue(queryActionId, out var resumeActionId))
@@ -208,10 +229,106 @@ internal sealed class ReAccreditationResumeService(
             "against {SectionCount} section(s)",
             workItemId, user.FindFirstValue("user:id"), resumeActionId, request.SectionKeys?.Count ?? 0);
 
+        await RestoreQuerierAssignmentAsync(
+            workItemId, result.WorkItem, queryEntry!, user, cancellationToken);
+
         // Re-read so the response carries the query-responded audit entry
-        // the out-of-band appender wrote against its own copy of the document.
+        // the out-of-band appender wrote against its own copy of the document,
+        // plus any assignment RestoreQuerierAssignmentAsync just re-established.
         var refreshed = await persistence.GetByIdAsync(workItemId, cancellationToken);
         return refreshed is null ? result : WorkItemActionResult.Success(refreshed);
+    }
+
+    /// <summary>
+    /// RA-523: put the application back in the hands of the case worker who
+    /// raised the query, once the operator's resubmission has landed.
+    ///
+    /// <see cref="ReAccreditationQueryService"/> self-assigns at query time
+    /// (RA-291) and the CM query page promises exactly that, but that
+    /// assignment is not durable across the query window: CM offers
+    /// unassign/reassign unconditionally on any non-terminal item, <c>queried</c>
+    /// included, so an application can sit in <c>queried</c> owned by nobody.
+    /// Nothing then re-established ownership when the operator resubmitted, so
+    /// the work item came back <c>updated</c> and unassigned — the reported
+    /// defect. This closes that gap at the only point that can: the resume.
+    ///
+    /// Deliberately conditional on the item being <b>unassigned</b>. An item a
+    /// supervisor handed to a different case worker mid-query is theirs; yanking
+    /// it back to the original querier on an operator-driven resubmission would
+    /// silently undo a deliberate human decision. (Re-assigning to the querier
+    /// when they already hold it would be an engine no-op anyway.)
+    ///
+    /// Routed through <see cref="IWorkItemService.AssignAsync"/> rather than
+    /// written onto the document so the normal <c>assigned</c> audit entry and
+    /// the RA-237 OfficerAssignment notification fire exactly as they do for a
+    /// manual assign (AC05). It is attributed to the resume caller — the
+    /// operator's resubmission is genuinely what caused it — while the
+    /// <c>assigneeId</c>/<c>assigneeName</c> detail names the case worker.
+    ///
+    /// Runs AFTER the transition, and a failure here never fails the resume:
+    /// the state change is already persisted and is what the operator backend's
+    /// contract depends on, so a lost assignment is logged, not surfaced as a
+    /// 4xx/5xx that would make the operator's resubmission look rejected.
+    /// </summary>
+    private async Task RestoreQuerierAssignmentAsync(
+        Guid workItemId,
+        WorkItem? current,
+        WorkItemAuditEntry queryEntry,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        if (current is null || !string.IsNullOrWhiteSpace(current.AssignedToId))
+        {
+            return;
+        }
+
+        var querierId = queryEntry.CreatedBy;
+        if (string.IsNullOrWhiteSpace(querierId))
+        {
+            // Pre-RA-97 / machine-raised query entries carry no actor. Nothing
+            // to restore to; leave the item unassigned for a caseworker to pick up.
+            logger.LogWarning(
+                "Work item {WorkItemId} resumed from query while unassigned, but the query audit " +
+                "entry records no raising user, so no assignment could be restored.",
+                workItemId);
+            return;
+        }
+
+        // The resume transition's post-action hooks (notification, status push,
+        // SLA) write to the same document, some of them on the background queue,
+        // so this assignment routinely loses the optimistic-concurrency race
+        // with a write that landed between AssignAsync's own read and its
+        // replace. AssignAsync re-reads on every call, so simply retrying is
+        // enough — same bounded-retry shape as ReAccreditationNationRoutingHook.
+        // The delay is a real timer, deliberately not the injected TimeProvider:
+        // it is a backoff, not a timestamp, and tests substitute time.
+        for (var attempt = 1; attempt <= MaxAssignAttempts; attempt++)
+        {
+            var assignResult = await engine.AssignAsync(
+                workItemId, querierId, queryEntry.CreatedByName, user, cancellationToken);
+
+            if (assignResult.IsSuccess || assignResult.IsIdempotentReplay)
+            {
+                logger.LogInformation(
+                    "Work item {WorkItemId} re-assigned to the querying case worker {UserId} " +
+                    "after resume from query.",
+                    workItemId, querierId);
+                return;
+            }
+
+            if (assignResult.FailureCode != WorkItemActionFailureCode.ConcurrencyConflict
+                || attempt == MaxAssignAttempts)
+            {
+                logger.LogError(
+                    "Work item {WorkItemId} resumed from query but could not be re-assigned to the " +
+                    "querying case worker {UserId} ({FailureCode}) after {Attempts} attempt(s); " +
+                    "it remains unassigned.",
+                    workItemId, querierId, assignResult.FailureCode, attempt);
+                return;
+            }
+
+            await Task.Delay(s_assignRetryDelay * attempt, cancellationToken);
+        }
     }
 
     /// <summary>
