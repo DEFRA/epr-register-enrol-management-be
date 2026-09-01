@@ -72,6 +72,14 @@ public class ReAccreditationResumeServiceTests
             .ApplyActionAsync(
                 Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
             .Returns(WorkItemActionResult.Success(workItem));
+        // RA-523: the query audit entry above names a raising user and the work
+        // item is unassigned, so the resume restores the assignment through the
+        // engine on its way out.
+        engine
+            .AssignAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(WorkItemActionResult.Success(workItem));
         auditAppender
             .AppendAsync(
                 Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
@@ -591,6 +599,189 @@ public class ReAccreditationResumeServiceTests
             harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, s_request, null!, ct));
     }
 
+    // ------------------------- RA-523: assignment restore -------------------------
+
+    /// <summary>
+    /// RA-523 AC02: an application that comes back from the operator owned by
+    /// nobody is handed to the case worker who raised the query, read off that
+    /// query's own audit entry, and routed through the engine so the normal
+    /// `assigned` audit entry and RA-237 notification fire (AC05).
+    /// </summary>
+    [Fact]
+    public async Task Resume_assigns_an_unassigned_item_to_the_querying_case_worker()
+    {
+        var harness = new Harness(
+            "query-during-assessment",
+            querierId: "carol-3",
+            querierName: "Carol Example");
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, s_request, harness.User, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        await harness.Engine.Received(1).AssignAsync(
+            harness.WorkItem.Id,
+            "carol-3",
+            "Carol Example",
+            harness.User,
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// RA-523: an application a colleague deliberately took over mid-query stays
+    /// theirs — an operator-driven resubmission must not undo a human decision.
+    /// </summary>
+    [Fact]
+    public async Task Resume_leaves_an_already_assigned_item_alone()
+    {
+        var harness = new Harness(
+            "query-during-assessment",
+            querierId: "carol-3",
+            querierName: "Carol Example",
+            assignedToId: "bob-2",
+            assignedToName: "Bob Example");
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, s_request, harness.User, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        await harness.Engine.DidNotReceive().AssignAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+            Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// RA-523: a query audit entry that records no raising user (a pre-RA-97 or
+    /// machine-raised entry) leaves nothing to restore to. The resume itself
+    /// still succeeds — the state change is what the operator backend depends on.
+    /// </summary>
+    [Fact]
+    public async Task Resume_succeeds_when_the_query_entry_names_no_raising_user()
+    {
+        var harness = new Harness("query-during-assessment");
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, s_request, harness.User, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        await harness.Engine.DidNotReceive().AssignAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+            Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// RA-523: a failed assignment restore must never fail the operator's
+    /// resubmission — the transition is already persisted, so reporting an error
+    /// would make a completed resume look rejected.
+    /// </summary>
+    [Fact]
+    public async Task Resume_still_succeeds_when_the_assignment_restore_fails()
+    {
+        var harness = new Harness(
+            "query-during-assessment",
+            querierId: "carol-3",
+            querierName: "Carol Example");
+        harness.Engine
+            .AssignAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidAssignment, "nope"));
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, s_request, harness.User, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        // A non-concurrency failure is not retried — there is nothing to settle.
+        await harness.Engine.Received(1).AssignAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+            Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// RA-523: the restore must not fail the resume even when the engine
+    /// THROWS rather than returning a failure code — an infrastructure fault
+    /// (Mongo blip, driver timeout) would otherwise surface an already-persisted
+    /// resubmission to the operator backend as a 5xx, the exact failure mode
+    /// running the restore after the transition exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task Resume_still_succeeds_when_the_assignment_restore_throws()
+    {
+        var harness = new Harness(
+            "query-during-assessment",
+            querierId: "carol-3",
+            querierName: "Carol Example");
+        harness.Engine
+            .AssignAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns<Task<WorkItemActionResult>>(_ => throw new TimeoutException("mongo is having a moment"));
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, s_request, harness.User, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+    }
+
+    /// <summary>
+    /// RA-523: a cancellation raised by the caller's own token is NOT swallowed
+    /// — that is the caller abandoning the request, not the restore failing.
+    /// </summary>
+    [Fact]
+    public async Task Resume_propagates_a_caller_cancellation_from_the_assignment_restore()
+    {
+        var harness = new Harness(
+            "query-during-assessment",
+            querierId: "carol-3",
+            querierName: "Carol Example");
+        using var cts = new CancellationTokenSource();
+        harness.Engine
+            .AssignAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns<Task<WorkItemActionResult>>(_ =>
+            {
+                cts.Cancel();
+                throw new OperationCanceledException(cts.Token);
+            });
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => harness.Service.ResumeFromQueryAsync(
+                harness.WorkItem.Id, s_request, harness.User, cts.Token));
+    }
+
+    /// <summary>
+    /// RA-523: the resume transition's post-action hooks write to the same
+    /// document, some on the background queue, so the restore routinely loses
+    /// the optimistic-concurrency race. It retries rather than dropping the
+    /// assignment.
+    /// </summary>
+    [Fact]
+    public async Task Resume_retries_the_assignment_restore_after_a_concurrency_conflict()
+    {
+        var harness = new Harness(
+            "query-during-assessment",
+            querierId: "carol-3",
+            querierName: "Carol Example");
+        harness.Engine
+            .AssignAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+                Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(
+                _ => WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.ConcurrencyConflict, "conflict"),
+                _ => WorkItemActionResult.Success(harness.WorkItem));
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, s_request, harness.User, TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        await harness.Engine.Received(2).AssignAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+            Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
     private sealed class Harness
     {
         public Harness(
@@ -598,13 +789,19 @@ public class ReAccreditationResumeServiceTests
             string stateId = "queried",
             bool seedWorkItem = true,
             string typeId = ReAccreditationType.Id,
-            string submittedBy = TenantClientId)
+            string submittedBy = TenantClientId,
+            string? querierId = null,
+            string? querierName = null,
+            string? assignedToId = null,
+            string? assignedToName = null)
         {
             WorkItem = new WorkItem
             {
                 TypeId = typeId,
                 StateId = stateId,
                 SubmittedBy = submittedBy,
+                AssignedToId = assignedToId,
+                AssignedToName = assignedToName,
             };
 
             if (queryActionId is not null)
@@ -614,6 +811,8 @@ public class ReAccreditationResumeServiceTests
                     Action = ReAccreditationQueryService.AuditAction,
                     ActionDisplayName = "Application queried",
                     CreatedAt = s_now.UtcDateTime.AddHours(-1),
+                    CreatedBy = querierId,
+                    CreatedByName = querierName,
                     Details = new Dictionary<string, string?> { ["actionId"] = queryActionId },
                 });
             }
@@ -633,6 +832,11 @@ public class ReAccreditationResumeServiceTests
                 .ApplyActionAsync(
                     Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<ClaimsPrincipal>(),
                     Arg.Any<CancellationToken>())
+                .Returns(WorkItemActionResult.Success(WorkItem));
+            Engine
+                .AssignAsync(
+                    Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string?>(),
+                    Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
                 .Returns(WorkItemActionResult.Success(WorkItem));
 
             AuditAppender = Substitute.For<IWorkItemAuditAppender>();
