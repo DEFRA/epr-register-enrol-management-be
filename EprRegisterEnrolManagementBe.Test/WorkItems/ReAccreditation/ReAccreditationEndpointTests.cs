@@ -1671,6 +1671,181 @@ public class ReAccreditationEndpointTests
         );
     }
 
+    /// <summary>
+    /// RA-523 helper: drive resume-from-query the way production does — the
+    /// operator backend (HttpCaseWorkingApiAdapter) calls it as the OPERATOR,
+    /// sending the responder's email / full name as x-cdp-user-id /
+    /// x-cdp-user-name, never as the case worker who raised the query.
+    /// </summary>
+    private static async Task<HttpResponseMessage> ResumeAsOperatorAsync(
+        HttpClient client,
+        Guid id,
+        CancellationToken cancellationToken
+    )
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"/work-items/re-accreditation/{id}/resume-from-query"
+        )
+        {
+            Content = JsonContent.Create(ResumeBody()),
+        };
+        request.Headers.Remove("x-cdp-user-id");
+        request.Headers.Remove("x-cdp-user-name");
+        request.Headers.Add("x-cdp-user-id", "olive@operator.example.com");
+        request.Headers.Add("x-cdp-user-name", "Olive Operator");
+        return await client.SendAsync(request, cancellationToken);
+    }
+
+    /// <summary>
+    /// RA-523 AC01/AC02: the case worker queries an application that nobody
+    /// owns, the operator resubmits, and the application comes back to CM in
+    /// the querying case worker's hands — end to end through the real query and
+    /// resume endpoints, with the resume driven by the operator as it is in
+    /// production.
+    /// </summary>
+    [Fact]
+    public async Task ResumeFromQuery_leaves_an_unassigned_queried_item_with_the_querying_case_worker()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var seeded = BuildInState(id, "submitted", TenantClientId);
+        Assert.Null(seeded.AssignedToId);
+        await factory.SeedAsync(seeded, cancellationToken);
+
+        var queryResponse = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query",
+            QueryBody(),
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, queryResponse.StatusCode);
+
+        // AC01: querying an unassigned application self-assigns it (RA-291).
+        var afterQuery = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(DefaultUserId, afterQuery!.AssignedToId);
+
+        var resumeResponse = await ResumeAsOperatorAsync(client, id, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resumeResponse.StatusCode);
+
+        // AC03: the state change is unchanged.
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("updated", persisted!.StateId);
+
+        // AC02: still the querying case worker's, and visible on the read model
+        // the BFF consumes.
+        Assert.Equal(DefaultUserId, persisted.AssignedToId);
+        Assert.Equal(DefaultUserName, persisted.AssignedToName);
+
+        var body = await resumeResponse.Content.ReadFromJsonAsync<WorkItemResponse>(
+            cancellationToken
+        );
+        Assert.Equal(DefaultUserId, body!.AssignedToId);
+        Assert.Equal(DefaultUserName, body.AssignedToName);
+
+        var detail = await client.GetFromJsonAsync<WorkItemResponse>(
+            $"/work-items/{id}",
+            cancellationToken
+        );
+        Assert.Equal(DefaultUserId, detail!.AssignedToId);
+    }
+
+    /// <summary>
+    /// RA-523 reproduction. CM offers unassign unconditionally on any
+    /// non-terminal item, <c>queried</c> included, so the RA-291 self-assign is
+    /// not durable across the query window. Before this fix nothing
+    /// re-established ownership when the operator resubmitted, so the
+    /// application came back <c>updated</c> and owned by nobody — exactly what
+    /// the bug reports. AC02/AC05.
+    /// </summary>
+    [Fact]
+    public async Task ResumeFromQuery_restores_the_querying_case_worker_when_the_item_was_unassigned()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var queryResponse = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query",
+            QueryBody(),
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, queryResponse.StatusCode);
+
+        // The query window: somebody drops the application while it waits on
+        // the operator. CM allows this on a queried item.
+        var unassign = await client.PostAsync(
+            $"/work-items/{id}/unassign",
+            content: null,
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, unassign.StatusCode);
+        var whileQueried = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Null(whileQueried!.AssignedToId);
+
+        var resumeResponse = await ResumeAsOperatorAsync(client, id, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resumeResponse.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("updated", persisted!.StateId);
+        Assert.Equal(DefaultUserId, persisted.AssignedToId);
+        Assert.Equal(DefaultUserName, persisted.AssignedToName);
+
+        // AC05: the restore is audited like any other assignment, and names the
+        // case worker it went to rather than silently mutating the envelope.
+        var assigned = persisted.AuditLog.Last(a => a.Action == "assigned");
+        Assert.Equal(DefaultUserId, assigned.Details.GetValueOrDefault("assigneeId"));
+        Assert.Equal(DefaultUserName, assigned.Details.GetValueOrDefault("assigneeName"));
+
+        var body = await resumeResponse.Content.ReadFromJsonAsync<WorkItemResponse>(
+            cancellationToken
+        );
+        Assert.Equal(DefaultUserId, body!.AssignedToId);
+    }
+
+    /// <summary>
+    /// RA-523: an application a colleague deliberately took over mid-query
+    /// stays theirs. An operator-driven resubmission must not silently undo a
+    /// human re-assignment.
+    /// </summary>
+    [Fact]
+    public async Task ResumeFromQuery_leaves_an_item_reassigned_mid_query_with_its_new_owner()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var queryResponse = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query",
+            QueryBody(),
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, queryResponse.StatusCode);
+
+        var reassign = await client.PostAsJsonAsync(
+            $"/work-items/{id}/assign",
+            new { assigneeId = "bob-2", assigneeName = "Bob Example" },
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, reassign.StatusCode);
+
+        var resumeResponse = await ResumeAsOperatorAsync(client, id, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resumeResponse.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("updated", persisted!.StateId);
+        Assert.Equal("bob-2", persisted.AssignedToId);
+        Assert.Equal("Bob Example", persisted.AssignedToName);
+    }
+
     [Fact]
     public async Task ResumeFromQuery_is_idempotent_on_a_duplicate_call()
     {
