@@ -12,6 +12,27 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 internal sealed class ReAccreditationType : IWorkItemType
 {
     private const string ContinueReviewActionLabel = "Continue review";
+    private const string PaymentReceivedActionLabel = "Payment received";
+    // RA-523: DELIBERATELY NOT PaymentReceivedActionLabel. Sharing a
+    // DisplayName across from-states is the convention here
+    // (WithdrawActionLabel is used by six transitions); this one breaks it on
+    // purpose.
+    //
+    // On the duly-made screen the caseworker is asserting that payment has
+    // arrived. On the updated waypoint no payment event has occurred at all —
+    // the operator answered a query, and the caseworker is accepting that
+    // answer and moving to assessment. Both transitions END in
+    // assessment-in-progress, which is why the notification hook describes
+    // both as "Assessment started"; only the duly-made one is TRIGGERED by a
+    // payment. A button asserting payment where none happened is the same
+    // class of misleading control this ticket exists to remove.
+    //
+    // Note "Payment received" is already a legacy label on the duly-made
+    // screen: RA-316 moved payment-date capture to duly-make, so the payment
+    // is recorded a step EARLIER than the button that names it. Reusing the
+    // wording here would spread that inaccuracy to a second screen rather
+    // than contain it.
+    private const string StartAssessmentActionLabel = "Start assessment";
     private const string QueryActionLabel = "Query";
     private const string ResumeActionLabel = "Resume";
     private const string WithdrawActionLabel = "Withdraw";
@@ -137,7 +158,26 @@ internal sealed class ReAccreditationType : IWorkItemType
     // sla-extend transition from 'queried' until
     // ReAccreditationSlaExtendQuerySnapshotMigration patches their frozen
     // snapshot.
-    public string TemplateVersion => "v13";
+    // v14 (RA-523): added payment-received-during-duly-made
+    // (updated -> assessment-in-progress), the origin-aware sibling of
+    // payment-received, so an application queried after being duly made moves
+    // FORWARD to assessment once the operator responds instead of returning to
+    // 'duly-made' via continue-review-during-duly-made. Only the duly-made
+    // origin is affected: ReAccreditationPaymentReceivedService resolves the
+    // origin from the item's own audit history and refuses every other one, so
+    // a 'submitted'-origin item still goes through duly making.
+    // continue-review-during-duly-made is deliberately RETAINED rather than
+    // removed — ReAccreditationUpdatedOrigin.ResolveOriginatingStateId derives
+    // the origin by looking that transition's ToStateId up in the item's own
+    // snapshot, so removing it would null the origin for exactly the items
+    // this change exists for, and the frontend would lose the discriminator it
+    // renders the new call to action from. It is simply no longer offered:
+    // CallerInvocable: false already keeps it out of AvailableActions, and the
+    // "Continue review" button is a frontend CTA keyed off originStateId.
+    // Items snapshotted before v14 cannot take the new route until
+    // ReAccreditationPaymentReceivedDulyMadeSnapshotMigration patches their
+    // frozen snapshot.
+    public string TemplateVersion => "v14";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -175,9 +215,58 @@ internal sealed class ReAccreditationType : IWorkItemType
         ),
         new WorkItemTransition(
             "payment-received",
-            "Payment received",
+            PaymentReceivedActionLabel,
             s_dulyMade.Id,
             s_assessmentInProgress.Id
+        ),
+        // RA-523: the origin-aware sibling of payment-received above.
+        //
+        // A regulator queries an application that has already been duly made,
+        // the operator responds, and the item lands in the 'updated' waypoint
+        // (RA-337). Before this, the only way onwards was
+        // continue-review-during-duly-made, which returned it to 'duly-made' —
+        // so an application that had already been duly made came back to the
+        // regulator as "Duly made" a second time. This carries it forward to
+        // assessment instead: exactly where payment-received would have taken
+        // it had the query never been raised.
+        //
+        // Scoped to the duly-made origin ONLY. An item queried out of
+        // 'submitted' has never been duly made and MUST still go through duly
+        // making, which is what anchors the SLA clock to the payment date.
+        // ReAccreditationPaymentReceivedService enforces that with a POSITIVE
+        // origin check, so every other origin is refused rather than silently
+        // acquiring new behaviour.
+        //
+        // CallerInvocable is false, and that is load-bearing rather than
+        // stylistic: this shares FromStateId 'updated' with the four
+        // continue-review-during-* transitions and withdraw-during-updated, so
+        // the engine's from-state guard cannot tell them apart. Left
+        // invocable, a caller holding a 'submitted'-origin item in 'updated'
+        // could POST /work-items/{id}/actions/payment-received-during-duly-made
+        // and skip duly making altogether — no payment date captured and
+        // therefore NO SLA CLOCK EVER STARTED, plus no DulyMade notification.
+        // That is a strictly worse version of the bypass the RA-311/MBE-1
+        // security review introduced this flag for.
+        //
+        // The action id is deliberately DISTINCT from 'payment-received'
+        // rather than a second same-id entry like the two sla-extend
+        // self-loops. sla-extend can share an id because both its entries are
+        // CallerInvocable: true; these two differ. Both
+        // ReAccreditationNotificationHook.s_actionTemplates and
+        // ReAccreditationStatusPushHook.BuildExcludedActionIds key on action
+        // id, so a shared id would make one id carry two security postures and
+        // two notification meanings.
+        //
+        // The id stays in the payment-received family because it names the
+        // transition it is structurally a sibling of; the DisplayName does
+        // not, because it is what a human reads. See
+        // StartAssessmentActionLabel for why the wording has to differ.
+        new WorkItemTransition(
+            "payment-received-during-duly-made",
+            StartAssessmentActionLabel,
+            s_updated.Id,
+            s_assessmentInProgress.Id,
+            CallerInvocable: false
         ),
         // SLA extension is a self-loop on assessment-in-progress so an
         // assessor can record an extension at any time during assessment.

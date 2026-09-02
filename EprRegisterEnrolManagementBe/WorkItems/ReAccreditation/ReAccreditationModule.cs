@@ -57,6 +57,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // from the item's audit history. Purely a projection-time field — no
         // stored field, no template bump, no migration.
         services.AddSingleton<IWorkItemOriginStateResolver, ReAccreditationOriginStateResolver>();
+        // RA-523: pure add of the payment-received-during-duly-made transition to
+        // every frozen snapshot (v13 -> v14). Without it the items this story
+        // exists for — already sitting in 'updated' today — keep only the
+        // Continue review route back to 'duly-made'. Never changes StateId.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationPaymentReceivedDulyMadeSnapshotMigration
+        >();
         services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSnapshotMigration>();
         services.AddSingleton<
             IWorkItemMigration,
@@ -196,6 +204,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // RA-337: bespoke continue-review workflow (audit-derived
         // continue-review-during-* action) that carries a work item on from
         // 'updated' once a caseworker has reviewed a query resubmission.
+        // RA-523: carries a work item queried AFTER duly making forward out of
+        // the 'updated' waypoint into assessment, rather than back to
+        // 'duly-made' via continue-review. Module-scoped interface, like every
+        // other service here, so the folder stays self-contained.
+        services.AddSingleton<
+            IReAccreditationPaymentReceivedService,
+            ReAccreditationPaymentReceivedService
+        >();
         services.AddSingleton<
             IReAccreditationContinueReviewService,
             ReAccreditationContinueReviewService

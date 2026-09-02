@@ -12,7 +12,8 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        Assert.Equal("v13", _type.TemplateVersion);
+        // RA-523: v14 adds payment-received-during-duly-made.
+        Assert.Equal("v14", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
