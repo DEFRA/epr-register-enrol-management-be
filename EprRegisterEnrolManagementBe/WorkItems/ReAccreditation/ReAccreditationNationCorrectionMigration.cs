@@ -21,11 +21,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// (the registration's own <c>submittedToRegulator</c>, via <see cref="RegulatorNationMapper"/>),
 /// so a corrected value is exactly what a fresh submission would have carried. It is still
 /// gated behind <see cref="EnabledConfigKey"/> (off by default), and applies every correction
-/// it makes directly rather than offering a separate dry-run report: the team running this has
-/// no access to this service's logs, so a log-only preview would be unreviewable anyway. The
-/// review mechanism is the <c>nation-corrected</c> audit entry (below) each correction leaves
-/// on the work item itself — visible on that item's own page in the case management UI, which
-/// the team can reach — recording exactly what changed and why, after the fact.
+/// it makes directly rather than offering a separate dry-run report: a dry run reviewed before
+/// flipping to apply would need its own deployment cycle, and deployment approval here takes
+/// days — a live-then-review loop is faster and no less safe, since the review mechanism is the
+/// <c>nation-corrected</c> audit entry (below) each correction leaves on the work item itself,
+/// visible on that item's own page in the case management UI, recording exactly what changed
+/// and why, after the fact.
 /// </para>
 ///
 /// <para>

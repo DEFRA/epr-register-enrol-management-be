@@ -164,9 +164,9 @@ public class ReAccreditationNationCorrectionMigrationTests
     [Fact]
     public async Task ApplyAsync_corrects_the_payload_and_records_an_audit_entry()
     {
-        // No separate dry-run mode: the team running this migration has no access to this
-        // service's logs, so a log-only preview would be unreviewable. Every correction is
-        // applied directly and reviewed afterwards via the nation-corrected audit entry it
+        // No separate dry-run mode: a dry run reviewed before flipping to apply would need
+        // its own deployment cycle, and deployment approval here takes days. Every correction
+        // is applied directly and reviewed afterwards via the nation-corrected audit entry it
         // leaves on the work item itself (visible in the case management UI).
         var ct = TestContext.Current.CancellationToken;
         var item = BuildBrokenItem(currentNation: Nation.England);
