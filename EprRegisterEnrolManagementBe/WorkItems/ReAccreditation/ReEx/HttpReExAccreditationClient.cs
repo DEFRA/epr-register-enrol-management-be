@@ -3,6 +3,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Utils.Logging;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -134,6 +135,42 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
             Authorisers = authorisers,
             BusinessPlan = businessPlan,
         };
+    }
+
+    public async Task<Nation?> GetNationAsync(
+        string? organisationId,
+        string? registrationId,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (string.IsNullOrWhiteSpace(organisationId) || string.IsNullOrWhiteSpace(registrationId))
+        {
+            return null;
+        }
+
+        var org = await FetchOrganisationAsync(organisationId, cancellationToken);
+        if (org is null)
+            return null;
+
+        var registration = org.Registrations.FirstOrDefault(r => r.Id == registrationId);
+        if (registration is null)
+            return null;
+
+        if (!RegulatorNationMapper.TryMap(registration.SubmittedToRegulator, out var nation))
+        {
+            _log.Log(
+                LogLevel.Warning,
+                "Unrecognised regulator code for ReEx registration",
+                new Dictionary<string, object?>
+                {
+                    ["reex.organisation_id"] = organisationId,
+                    ["reex.registration_id"] = registrationId,
+                    ["reex.regulator_code"] = registration.SubmittedToRegulator,
+                }
+            );
+        }
+
+        return nation;
     }
 
     // Extracted from GetPriorYearAsync (S3776: cognitive complexity) - also keeps the

@@ -279,8 +279,8 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
     // sends siteAddress as a plain string plus a separate flat
     // siteAddressPostcode key (HttpCaseWorkingApiAdapter.BuildPayload), while
     // the case-management admin UI nests it as siteAddress.postcode (matching
-    // its Joi schema and ReAccreditationNationRoutingHook.ExtractPostcode).
-    // Support both rather than picking one and silently losing the other.
+    // its Joi schema). Support both rather than picking one and silently
+    // losing the other.
     private static string? ExtractPostcode(BsonDocument payload)
     {
         var flat = GetString(payload, "siteAddressPostcode");

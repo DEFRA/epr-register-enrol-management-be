@@ -10,6 +10,14 @@ internal sealed class ReExRegistrationDto
 {
     public string? Id { get; init; }
     public string? AccreditationId { get; init; }
+
+    /// <summary>
+    /// RA-526: the regulator code (<c>ea</c>/<c>nrw</c>/<c>sepa</c>/<c>niea</c>) this
+    /// registration was submitted to. Mapped to a <see cref="Nation"/> via
+    /// <see cref="RegulatorNationMapper"/> — the sole authoritative source for which
+    /// nation an application belongs to, replacing postcode-derived guessing.
+    /// </summary>
+    public string? SubmittedToRegulator { get; init; }
 }
 
 internal sealed class ReExAccreditationDto

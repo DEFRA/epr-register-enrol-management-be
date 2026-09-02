@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using EprRegisterEnrolManagementBe.Utils.Logging;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -140,11 +141,16 @@ public class HttpReExAccreditationClientTests
 
     private sealed class StubHttpMessageHandler(string responseJson) : HttpMessageHandler
     {
+        // RA-526: lets a test assert ReEx was never called at all (e.g. a missing-identifier
+        // short-circuit), which the other tests here never needed to distinguish.
+        public int RequestCount { get; private set; }
+
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken
         )
         {
+            RequestCount++;
             var response = new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
@@ -497,5 +503,116 @@ public class HttpReExAccreditationClientTests
         _ = new HttpReExAccreditationClient(httpClient, config, logger);
 
         Assert.Null(httpClient.BaseAddress);
+    }
+
+    // ---------------- RA-526: GetNationAsync ----------------
+
+    private static string OrganisationJsonWithRegulator(string regulatorCode) =>
+        $$"""
+            {
+              "registrations": [
+                { "id": "reg-1", "submittedToRegulator": "{{regulatorCode}}" }
+              ]
+            }
+            """;
+
+    [Theory]
+    [InlineData("ea", "England")]
+    [InlineData("nrw", "Wales")]
+    [InlineData("sepa", "Scotland")]
+    [InlineData("niea", "NorthernIreland")]
+    [InlineData("EA", "England")]
+    public async Task GetNationAsync_maps_regulator_code_to_nation(string code, string expected)
+    {
+        var client = CreateClient(OrganisationJsonWithRegulator(code));
+
+        var result = await client.GetNationAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(Enum.Parse<Nation>(expected), result);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_unrecognised_regulator_code_defaults_to_England_and_logs_a_warning()
+    {
+        var client = CreateClient(OrganisationJsonWithRegulator("not-a-real-regulator"), out var logger);
+
+        var result = await client.GetNationAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(Nation.England, result);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Warning,
+                Arg.Any<string>(),
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["reex.organisation_id"]! == "org-1"
+                    && (string)p["reex.registration_id"]! == "reg-1"
+                ),
+                null
+            );
+    }
+
+    [Fact]
+    public async Task GetNationAsync_registration_not_found_returns_null()
+    {
+        var client = CreateClient(OrganisationJsonWithRegulator("ea"));
+
+        var result = await client.GetNationAsync(
+            "org-1",
+            "does-not-exist",
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Null(result);
+    }
+
+    [Theory]
+    [InlineData(null, "reg-1")]
+    [InlineData("org-1", null)]
+    public async Task GetNationAsync_missing_identifier_returns_null_without_calling_ReEx(
+        string? organisationId,
+        string? registrationId
+    )
+    {
+        var handler = new StubHttpMessageHandler(OrganisationJsonWithRegulator("ea"));
+        var httpClient = new HttpClient(handler);
+        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
+        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
+        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+
+        var result = await client.GetNationAsync(
+            organisationId,
+            registrationId,
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Null(result);
+        Assert.Equal(0, handler.RequestCount);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_returns_null_on_a_non_success_status_code()
+    {
+        var handler = new StatusCodeHttpMessageHandler(HttpStatusCode.NotFound);
+        var httpClient = new HttpClient(handler);
+        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
+        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
+        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+
+        var result = await client.GetNationAsync(
+            "org-1",
+            "reg-1",
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Null(result);
     }
 }

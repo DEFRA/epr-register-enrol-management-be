@@ -19,8 +19,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 public sealed class ApplicationReferenceGeneratorTests
 {
     // The case-management admin UI nests the postcode under
-    // payload.siteAddress.postcode (matching its Joi schema and
-    // ReAccreditationNationRoutingHook.ExtractPostcode) — this fixture
+    // payload.siteAddress.postcode (matching its Joi schema) — this fixture
     // mirrors that shape. The operator-facing backend BFF instead sends a
     // flat siteAddressPostcode key alongside a string siteAddress
     // (HttpCaseWorkingApiAdapter.BuildPayload); see MakeFlatPayload below

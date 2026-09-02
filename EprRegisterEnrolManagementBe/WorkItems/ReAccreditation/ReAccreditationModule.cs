@@ -140,6 +140,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // which is worse than the defect it fixes). Safe to register
         // unconditionally: with no configuration it returns immediately.
         services.AddSingleton<IWorkItemMigration, ReAccreditationIsNewSiteCorrectionMigration>();
+        // RA-526: corrects payload.nation on work items routed by the pre-RA-526 hook, which
+        // always silently defaulted to England on real submissions. Unlike the epr-2uxy
+        // migration above, the correction source is authoritative (a fresh ReEx lookup, not a
+        // heuristic) so there is no spot-check gate - just the standard enabled/apply pair. Safe
+        // to register unconditionally: with no configuration it returns immediately.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationNationCorrectionMigration>();
         // RA-132: module-scoped approval service that owns the bespoke
         // approval workflow (id issuance, SLA clock stop, queued publishing).
         // RA-410: module-scoped service that owns the single-call decision
