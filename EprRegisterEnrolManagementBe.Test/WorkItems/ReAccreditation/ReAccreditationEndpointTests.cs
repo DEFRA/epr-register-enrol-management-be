@@ -1617,13 +1617,16 @@ public class ReAccreditationEndpointTests
     }
 
     [Theory]
-    [InlineData("query-during-duly-making", "resume-during-duly-making")]
-    [InlineData("query-during-duly-made", "resume-during-duly-made")]
-    [InlineData("query-during-assessment", "resume-during-assessment")]
-    [InlineData("query-during-decision", "resume-during-decision")]
-    public async Task ResumeFromQuery_moves_the_application_to_updated(
+    // RA-523: resume-during-duly-made lands in assessment-in-progress
+    // (decision-ready); the other three still land on the 'updated' waypoint.
+    [InlineData("query-during-duly-making", "resume-during-duly-making", "updated")]
+    [InlineData("query-during-duly-made", "resume-during-duly-made", "assessment-in-progress")]
+    [InlineData("query-during-assessment", "resume-during-assessment", "updated")]
+    [InlineData("query-during-decision", "resume-during-decision", "updated")]
+    public async Task ResumeFromQuery_moves_the_application_to_its_resume_destination(
         string queryActionId,
-        string expectedResumeActionId
+        string expectedResumeActionId,
+        string expectedStateId
     )
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -1643,10 +1646,9 @@ public class ReAccreditationEndpointTests
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.NotNull(persisted);
-        // RA-337: resume-during-* lands on 'updated', not the originating
-        // state, so the Case Management service shows an "Updated" status until a caseworker moves
-        // it on via continue-review.
-        Assert.Equal("updated", persisted!.StateId);
+        // RA-337/RA-523: three resume-during-* land on 'updated'; the
+        // duly-made origin lands decision-ready in 'assessment-in-progress'.
+        Assert.Equal(expectedStateId, persisted!.StateId);
         Assert.Contains(
             persisted.AuditLog,
             a =>
@@ -2043,237 +2045,50 @@ public class ReAccreditationEndpointTests
         Assert.Equal("queried", persisted!.StateId);
     }
 
-    // ------------------------------ RA-523 PaymentReceived ------------------------------
-
+    /// <summary>
+    /// RA-523: the whole point of the ticket. An application queried after it
+    /// was duly made must, on the operator's response, arrive decision-ready in
+    /// 'assessment-in-progress' (not the 'updated' waypoint), be handed back to
+    /// the case worker who raised the query, and keep the SLA clock that was
+    /// anchored at duly making — no forward button, no return to 'duly-made'.
+    /// </summary>
     [Fact]
-    public async Task PaymentReceived_moves_a_duly_made_origin_application_forward_to_assessment()
+    public async Task ResumeFromQuery_lands_a_duly_made_origin_item_decision_ready_assigned_with_its_clock()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            BuildUpdated(id, TenantClientId, "resume-during-duly-made"),
-            cancellationToken
-        );
+        var seeded = BuildQueried(id, TenantClientId, "query-during-duly-made");
+        // The query was raised by DefaultUserId (BuildQueried stamps CreatedBy),
+        // then the item was left unassigned during the query window.
+        seeded.AssignedToId = null;
+        seeded.AssignedToName = null;
+        var slaStartedAt = new DateTime(2025, 11, 3, 0, 0, 0, DateTimeKind.Utc);
+        seeded.SlaClock = new WorkItemSlaClock { StartedAt = slaStartedAt };
+        await factory.SeedAsync(seeded, cancellationToken);
 
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/payment-received",
-            content: null,
-            cancellationToken
-        );
-
+        var response = await ResumeAsOperatorAsync(client, id, cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.NotNull(persisted);
-        // The point of the story: forward to assessment, NOT back to duly-made.
+        // Decision-ready, not the 'updated' waypoint, and never back to 'duly-made'.
         Assert.Equal("assessment-in-progress", persisted!.StateId);
-        Assert.Contains(
-            persisted.AuditLog,
-            a =>
-                a.Action == "action-applied"
-                && a.Details.GetValueOrDefault("actionId") == "payment-received-during-duly-made"
-        );
+        // Re-assigned to the querying case worker (the parent RA-523 fix, which
+        // runs in the resume regardless of landing state).
+        Assert.Equal(DefaultUserId, persisted.AssignedToId);
+        // The SLA clock anchored at duly making is untouched: no restart,
+        // no second sla-clock-started entry.
+        Assert.NotNull(persisted.SlaClock);
+        Assert.Equal(slaStartedAt, persisted.SlaClock!.StartedAt);
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "sla-clock-started");
+        // The forward hop is the resume itself — no continue-review / payment hop.
         Assert.DoesNotContain(
             persisted.AuditLog,
             a => a.Details.GetValueOrDefault("actionId") == "continue-review-during-duly-made"
         );
-    }
-
-    /// <summary>
-    /// RA-523's whole reason for existing: the case worker must not lose the
-    /// application. Also pins that the hop leaves the SLA clock alone — it was
-    /// anchored to the entered payment date at duly making and must not be
-    /// restarted here.
-    /// </summary>
-    [Fact]
-    public async Task PaymentReceived_preserves_the_assignment_and_the_sla_clock()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        var seed = BuildUpdated(id, TenantClientId, "resume-during-duly-made");
-        seed.AssignedToId = DefaultUserId;
-        seed.AssignedToName = DefaultUserName;
-        seed.AssignedAt = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
-        seed.AssignedBy = DefaultUserId;
-        var slaStartedAt = new DateTime(2025, 11, 3, 0, 0, 0, DateTimeKind.Utc);
-        seed.SlaClock = new WorkItemSlaClock { StartedAt = slaStartedAt };
-        await factory.SeedAsync(seed, cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/payment-received",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("assessment-in-progress", persisted!.StateId);
-        Assert.Equal(DefaultUserId, persisted.AssignedToId);
-        Assert.Equal(DefaultUserName, persisted.AssignedToName);
-        Assert.NotNull(persisted.SlaClock);
-        Assert.Equal(slaStartedAt, persisted.SlaClock!.StartedAt);
-        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "sla-clock-started");
-    }
-
-    /// <summary>
-    /// The regression guard. An application queried out of 'submitted' has
-    /// never been duly made, so it must still route through duly making —
-    /// skipping it would leave an application under assessment with no SLA
-    /// clock running.
-    /// </summary>
-    [Theory]
-    [InlineData("resume-during-duly-making")]
-    [InlineData("resume-during-assessment")]
-    [InlineData("resume-during-decision")]
-    public async Task PaymentReceived_refuses_every_origin_other_than_duly_made(
-        string resumeActionId
-    )
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            BuildUpdated(id, TenantClientId, resumeActionId),
-            cancellationToken
-        );
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/payment-received",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        // Refused before any write: the item has not budged.
-        Assert.Equal("updated", persisted!.StateId);
-    }
-
-    /// <summary>
-    /// The security boundary, end to end. payment-received-during-duly-made is
-    /// CallerInvocable: false, so the generic action route must refuse it even
-    /// for the origin where the bespoke route would succeed — otherwise a
-    /// caller could drive it on a 'submitted'-origin item and skip duly making.
-    /// </summary>
-    [Theory]
-    [InlineData("resume-during-duly-made")]
-    [InlineData("resume-during-duly-making")]
-    public async Task PaymentReceived_transition_cannot_be_driven_through_the_generic_action_route(
-        string resumeActionId
-    )
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            BuildUpdated(id, TenantClientId, resumeActionId),
-            cancellationToken
-        );
-
-        var response = await client.PostAsync(
-            $"/work-items/{id}/actions/payment-received-during-duly-made",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("updated", persisted!.StateId);
-
-        // Positive control. On its own the 400 above proves nothing: the
-        // generic route answers 400 "Invalid action" for a completely unknown
-        // action id too (both map to UnknownAction), so this test would pass
-        // just as happily against a build that had never heard of the
-        // transition — it would go green on the day someone deleted the
-        // feature. Driving the bespoke route to a real 200 in the same run is
-        // what makes the 400 mean "declared, and deliberately unreachable this
-        // way" rather than "not declared at all".
-        //
-        // Only the duly-made origin can reach 200; the other origin is
-        // legitimately refused by the origin guard, which is covered by
-        // PaymentReceived_refuses_every_origin_other_than_duly_made.
-        if (resumeActionId == "resume-during-duly-made")
-        {
-            var viaBespokeRoute = await client.PostAsync(
-                $"/work-items/re-accreditation/{id}/payment-received",
-                content: null,
-                cancellationToken
-            );
-
-            Assert.Equal(HttpStatusCode.OK, viaBespokeRoute.StatusCode);
-
-            var afterBespokeRoute = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-            Assert.Equal("assessment-in-progress", afterBespokeRoute!.StateId);
-        }
-    }
-
-    [Fact]
-    public async Task PaymentReceived_is_idempotent_on_a_duplicate_call()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            BuildUpdated(id, TenantClientId, "resume-during-duly-made"),
-            cancellationToken
-        );
-
-        var first = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/payment-received",
-            content: null,
-            cancellationToken
-        );
-        var second = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/payment-received",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
-        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
-
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("assessment-in-progress", persisted!.StateId);
-    }
-
-    [Fact]
-    public async Task PaymentReceived_returns_unauthorized_without_a_forwarded_user_id()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            BuildUpdated(id, TenantClientId, "resume-during-duly-made"),
-            cancellationToken
-        );
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/payment-received",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("updated", persisted!.StateId);
     }
 
     // ------------------------------- RA-337 ContinueReview -------------------------------

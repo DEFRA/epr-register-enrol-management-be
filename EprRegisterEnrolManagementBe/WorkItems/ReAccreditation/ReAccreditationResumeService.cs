@@ -61,14 +61,25 @@ internal sealed class ReAccreditationResumeService(
     /// that has moved on to some other, unrelated state (which is a real
     /// conflict, not a replay).
     ///
-    /// RA-337: resume-during-* now lands on the single 'updated' waypoint
-    /// state rather than jumping straight back to the originating state, so
-    /// 'updated' is the only valid resume target — even though a caseworker
-    /// may since have moved the item on further via continue-review-during-*,
-    /// that is a distinct, later step this service has no opinion on.
+    /// RA-337: three of the four resume-during-* land on the single 'updated'
+    /// waypoint rather than jumping straight back to the originating state.
+    /// RA-523: resume-during-duly-made instead lands on
+    /// 'assessment-in-progress' — an application queried after being duly made
+    /// is decision-ready once the operator responds, so it skips the waypoint.
+    /// Both are therefore valid resume destinations for the idempotent-replay
+    /// check: a duplicate resume whose item is already in either state is a
+    /// replay, not a conflict. 'assessment-in-progress' is reached by other
+    /// routes too, but this set is consulted only when the item is NOT in
+    /// 'queried' (a resume that has already happened), so treating it as a
+    /// replay is correct for the duly-made origin and harmless for the rest —
+    /// their resume never leaves them there.
     /// </summary>
     private static readonly IReadOnlySet<string> s_resumeTargetStates =
-        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "updated" };
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "updated",
+            "assessment-in-progress",
+        };
 
     /// <summary>
     /// Inverse of <see cref="ReAccreditationQueryService"/>'s

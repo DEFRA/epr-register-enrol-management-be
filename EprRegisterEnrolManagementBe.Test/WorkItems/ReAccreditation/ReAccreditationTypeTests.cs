@@ -12,7 +12,7 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        // RA-523: v14 adds payment-received-during-duly-made.
+        // RA-523: v14 retargets resume-during-duly-made to assessment-in-progress.
         Assert.Equal("v14", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
@@ -73,8 +73,11 @@ public class ReAccreditationTypeTests
     [InlineData("query-during-decision", "awaiting-decision", "queried")]
     // RA-311/MBE-1: the inverse of the four query-during-* transitions above.
     // RA-337: these land on 'updated', not the originating state directly.
+    // RA-523: except resume-during-duly-made, which lands decision-ready in
+    // assessment-in-progress (an already-duly-made application needs no
+    // waypoint once the operator responds).
     [InlineData("resume-during-duly-making", "queried", "updated")]
-    [InlineData("resume-during-duly-made", "queried", "updated")]
+    [InlineData("resume-during-duly-made", "queried", "assessment-in-progress")]
     [InlineData("resume-during-assessment", "queried", "updated")]
     [InlineData("resume-during-decision", "queried", "updated")]
     // RA-337: the inverse of the four resume-during-* transitions above.

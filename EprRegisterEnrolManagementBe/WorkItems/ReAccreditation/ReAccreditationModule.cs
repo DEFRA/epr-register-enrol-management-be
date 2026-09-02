@@ -57,13 +57,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // from the item's audit history. Purely a projection-time field — no
         // stored field, no template bump, no migration.
         services.AddSingleton<IWorkItemOriginStateResolver, ReAccreditationOriginStateResolver>();
-        // RA-523: pure add of the payment-received-during-duly-made transition to
-        // every frozen snapshot (v13 -> v14). Without it the items this story
-        // exists for — already sitting in 'updated' today — keep only the
-        // Continue review route back to 'duly-made'. Never changes StateId.
+        // RA-523: retargets resume-during-duly-made in every frozen snapshot
+        // from 'updated' to 'assessment-in-progress' (v13 -> v14), so an
+        // application queried after being duly made arrives decision-ready on
+        // resume instead of returning to 'duly-made'. Pure retarget of one
+        // transition's ToStateId; never changes a live StateId.
         services.AddSingleton<
             IWorkItemMigration,
-            ReAccreditationPaymentReceivedDulyMadeSnapshotMigration
+            ReAccreditationResumeDulyMadeAssessmentSnapshotMigration
         >();
         services.AddSingleton<IWorkItemMigration, ReAccreditationDulyMadeSnapshotMigration>();
         services.AddSingleton<
@@ -204,14 +205,10 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // RA-337: bespoke continue-review workflow (audit-derived
         // continue-review-during-* action) that carries a work item on from
         // 'updated' once a caseworker has reviewed a query resubmission.
-        // RA-523: carries a work item queried AFTER duly making forward out of
-        // the 'updated' waypoint into assessment, rather than back to
-        // 'duly-made' via continue-review. Module-scoped interface, like every
-        // other service here, so the folder stays self-contained.
-        services.AddSingleton<
-            IReAccreditationPaymentReceivedService,
-            ReAccreditationPaymentReceivedService
-        >();
+        // RA-523: for the duly-made origin this is now dead for new items —
+        // resume-during-duly-made lands straight in assessment-in-progress — but
+        // it is retained for the other origins and for legacy items already in
+        // 'updated'.
         services.AddSingleton<
             IReAccreditationContinueReviewService,
             ReAccreditationContinueReviewService

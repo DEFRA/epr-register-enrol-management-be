@@ -185,24 +185,6 @@ internal static class ReAccreditationEndpoints
             .WithName("ContinueReAccreditationReview")
             .RequireAuthorization();
 
-        // RA-523: caseworker-facing endpoint that carries a work item queried
-        // AFTER it was duly made FORWARD out of 'updated' into assessment,
-        // instead of back to 'duly-made' via /continue-review. No body — both
-        // the action and the originating state are resolved server-side from the
-        // work item's own audit history.
-        //
-        // This is the ONLY way in: payment-received-during-duly-made is declared
-        // CallerInvocable: false precisely so the generic action route cannot
-        // drive it. It shares FromStateId 'updated' with the four
-        // continue-review-during-* transitions, so the engine's from-state guard
-        // cannot separate them; routing through the generic handler would let a
-        // caller holding a 'submitted'-origin item skip duly making altogether —
-        // no payment date captured and therefore no SLA clock ever started.
-        group
-            .MapPost("/{id:guid}/payment-received", RecordPaymentReceived)
-            .WithName("RecordReAccreditationPaymentReceived")
-            .RequireAuthorization();
-
         // RA-252: called by the operator backend when an operator withdraws
         // their application. Like /query, the caller never names an action —
         // the correct withdraw/withdraw-during-* transition is resolved
@@ -1005,65 +987,6 @@ internal static class ReAccreditationEndpoints
             title: "Could not continue re-accreditation review",
             detail: result.Message,
             statusCode: continueStatus
-        );
-    }
-
-    /// <summary>
-    /// RA-523: carry a re-accreditation work item that was queried AFTER being
-    /// duly made forward out of the non-terminal <c>updated</c> waypoint into
-    /// assessment — where <c>payment-received</c> would have taken it had the
-    /// query never been raised — instead of returning it to <c>duly-made</c>.
-    ///
-    /// No body. The action is fixed and the originating state is derived
-    /// server-side from the work item's own audit history; an origin other than
-    /// <c>duly-made</c> is refused with 409, so an application queried out of
-    /// <c>submitted</c> still has to go through duly making. A work item that
-    /// has already reached <c>assessment-in-progress</c> succeeds as an
-    /// idempotent replay, so a double-click does not fail the caller.
-    /// </summary>
-    public static async Task<
-        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
-    > RecordPaymentReceived(
-        [FromRoute] Guid id,
-        HttpContext httpContext,
-        [FromServices] IReAccreditationPaymentReceivedService paymentReceivedService,
-        [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken
-    )
-    {
-        var result = await paymentReceivedService.RecordPaymentReceivedAsync(
-            id,
-            httpContext.User,
-            cancellationToken
-        );
-
-        if (result.IsIdempotentReplay)
-        {
-            httpContext.Response.Headers[WorkItemEndpoints.IdempotentReplayHeader] = "true";
-        }
-
-        if (result.IsSuccess)
-        {
-            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
-        }
-
-        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
-        {
-            return TypedResults.NotFound();
-        }
-
-        var paymentStatus = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.InvalidTransition
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        return TypedResults.Problem(
-            title: "Could not record re-accreditation payment received",
-            detail: result.Message,
-            statusCode: paymentStatus
         );
     }
 

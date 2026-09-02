@@ -92,11 +92,6 @@ internal sealed class ReAccreditationNotificationHook(
         // come out identical to the ones it replaces.
         ["duly-make"] = ("DulyMade", "Application marked duly made"),
         ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
-        // RA-523: the origin-aware sibling reaches the SAME destination state, so
-        // the operator must get the same "assessment has started" email and the
-        // same audit description. Omitting it would silently make the notification
-        // depend on which route the caseworker happened to take.
-        ["payment-received-during-duly-made"] = ("AssessmentInProgress", "Assessment started"),
         ["sla-extend"] = ("SlaExtended", "Determination deadline extended"),
         ["approve"] = ("Decision", "Decision recorded: approved"),
         ["query-during-duly-making"] = (QueriedTemplateKey, ApplicationQueriedDescription),
