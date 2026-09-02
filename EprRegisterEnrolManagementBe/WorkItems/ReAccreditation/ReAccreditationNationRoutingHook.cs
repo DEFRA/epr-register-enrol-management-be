@@ -52,7 +52,7 @@ internal sealed class ReAccreditationNationRoutingHook(
             return Task.CompletedTask;
         }
 
-        return RouteAndRecordAsync(workItem, user, cancellationToken);
+        return RouteAndRecordAsync(workItem, cancellationToken);
     }
 
     public Task OnActionAppliedAsync(
@@ -64,7 +64,6 @@ internal sealed class ReAccreditationNationRoutingHook(
 
     private async Task RouteAndRecordAsync(
         WorkItem workItem,
-        ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
         var postcode = ExtractPostcode(workItem);
@@ -95,8 +94,12 @@ internal sealed class ReAccreditationNationRoutingHook(
                     ["derivedFrom"] = "site-address"
                 },
                 CreatedAt = now,
-                CreatedBy = user.FindFirstValue("user:id"),
-                CreatedByName = user.FindFirstValue("user:name"),
+                // System-derived, not user-controlled: the submitter has no
+                // say in which nation a postcode routes to, so this entry is
+                // not attributed to them (mirrors ReAccreditationSeeder's
+                // fixture for this same entry, which has always used null).
+                CreatedBy = null,
+                CreatedByName = null,
                 // epr-rr9s: snapshot the work item's state at routing time
                 // (the post-submission initial state). Previously this entry
                 // recorded no state, so the history UI had nothing historical

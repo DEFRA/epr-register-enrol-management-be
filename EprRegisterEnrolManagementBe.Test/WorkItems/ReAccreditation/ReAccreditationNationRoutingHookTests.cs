@@ -105,8 +105,10 @@ public class ReAccreditationNationRoutingHookTests
         Assert.Equal("routed-to-nation", entry.Action);
         Assert.Equal(expectedNation, entry.Details["nation"]);
         Assert.Equal("site-address", entry.Details["derivedFrom"]);
-        Assert.Equal("user-1", entry.CreatedBy);
-        Assert.Equal("Alice", entry.CreatedByName);
+        // System-derived, not the submitting user's doing (RA-125 follow-up):
+        // the entry must not be attributed to whoever happened to submit.
+        Assert.Null(entry.CreatedBy);
+        Assert.Null(entry.CreatedByName);
         Assert.Equal(s_now, entry.CreatedAt);
         // epr-rr9s: the routed-to-nation entry now snapshots the work item's
         // state at routing time (the post-submission initial state) so the
