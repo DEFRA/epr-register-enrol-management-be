@@ -1,7 +1,6 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
-using Microsoft.Extensions.Configuration;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -19,11 +18,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// heuristic needing a human spot-check: <see cref="IReExAccreditationClient.GetNationAsync"/>
 /// re-fetches the same authoritative source RA-526 itself uses at Seed time
 /// (the registration's own <c>submittedToRegulator</c>, via <see cref="RegulatorNationMapper"/>),
-/// so a corrected value is exactly what a fresh submission would have carried. It is still
-/// gated behind <see cref="EnabledConfigKey"/> (off by default), and applies every correction
-/// it makes directly rather than offering a separate dry-run report: a dry run reviewed before
-/// flipping to apply would need its own deployment cycle, and deployment approval here takes
-/// days — a live-then-review loop is faster and no less safe, since the review mechanism is the
+/// so a corrected value is exactly what a fresh submission would have carried. Unlike that
+/// migration it therefore needs no enable flag either — it runs unconditionally, like every
+/// other backfill in this file family, relying entirely on its own idempotency
+/// (<see cref="WasRoutedByBrokenDerivation"/> plus <see cref="PlanCorrection"/>'s
+/// already-correct check) to make a repeat run a no-op. It applies every correction it makes
+/// directly rather than offering a separate dry-run report: a dry run reviewed before flipping
+/// to apply would need its own deployment cycle, and deployment approval here takes days — a
+/// live-then-review loop is faster and no less safe, since the review mechanism is the
 /// <c>nation-corrected</c> audit entry (below) each correction leaves on the work item itself,
 /// visible on that item's own page in the case management UI, recording exactly what changed
 /// and why, after the fact.
@@ -46,13 +48,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal sealed class ReAccreditationNationCorrectionMigration(
     IReExAccreditationClient reExClient,
-    IConfiguration configuration,
     ILogger<ReAccreditationNationCorrectionMigration> logger,
     TimeProvider? timeProvider = null
 ) : IWorkItemMigration
 {
-    public const string EnabledConfigKey = "Diagnostics:Ra526CorrectNation";
-
     public const string RoutedToNationAction = "routed-to-nation";
     public const string BrokenDerivedFromMarker = "site-address";
 
@@ -66,11 +65,6 @@ internal sealed class ReAccreditationNationCorrectionMigration(
     public async Task ApplyAsync(IWorkItemPersistence persistence, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(persistence);
-
-        if (!configuration.GetValue(EnabledConfigKey, false))
-        {
-            return;
-        }
 
         logger.LogInformation("RA-526 nation correction starting.");
 

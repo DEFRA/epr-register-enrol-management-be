@@ -2,7 +2,6 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -76,20 +75,8 @@ public class ReAccreditationNationCorrectionMigrationTests
             ],
         };
 
-    private static IConfiguration Config(bool? enabled = true)
-    {
-        var values = new Dictionary<string, string?>();
-        if (enabled is not null)
-        {
-            values[ReAccreditationNationCorrectionMigration.EnabledConfigKey] = enabled.Value.ToString();
-        }
-        return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
-    }
-
-    private static ReAccreditationNationCorrectionMigration BuildSut(
-        IReExAccreditationClient reExClient, IConfiguration configuration) =>
+    private static ReAccreditationNationCorrectionMigration BuildSut(IReExAccreditationClient reExClient) =>
         new(reExClient,
-            configuration,
             NullLogger<ReAccreditationNationCorrectionMigration>.Instance,
             new FakeTimeProvider(s_now));
 
@@ -107,30 +94,16 @@ public class ReAccreditationNationCorrectionMigrationTests
     }
 
     [Fact]
-    public async Task ApplyAsync_does_nothing_when_the_feature_is_not_enabled()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var item = BuildBrokenItem();
-        var persistence = PersistenceWith(item);
-        var reExClient = Substitute.For<IReExAccreditationClient>();
-        var sut = BuildSut(reExClient, Config(enabled: false));
-
-        await sut.ApplyAsync(persistence, ct);
-
-        await persistence.DidNotReceive().QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>());
-        await reExClient
-            .DidNotReceive()
-            .GetNationAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
     public async Task ApplyAsync_skips_items_not_routed_by_the_broken_derivation()
     {
+        // No enable flag: this runs on every startup like every other backfill migration in
+        // this codebase, relying entirely on its own idempotency (this item is already past
+        // the broken derivation - "submitted", not "site-address" - so it is never a candidate).
         var ct = TestContext.Current.CancellationToken;
         var item = BuildAlreadyCorrectItem(Nation.Wales);
         var persistence = PersistenceWith(item);
         var reExClient = Substitute.For<IReExAccreditationClient>();
-        var sut = BuildSut(reExClient, Config());
+        var sut = BuildSut(reExClient);
 
         await sut.ApplyAsync(persistence, ct);
 
@@ -152,7 +125,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         };
         var persistence = PersistenceWith(item);
         var reExClient = Substitute.For<IReExAccreditationClient>();
-        var sut = BuildSut(reExClient, Config());
+        var sut = BuildSut(reExClient);
 
         await sut.ApplyAsync(persistence, ct);
 
@@ -175,7 +148,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         reExClient
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
             .Returns(Nation.Wales);
-        var sut = BuildSut(reExClient, Config());
+        var sut = BuildSut(reExClient);
 
         await sut.ApplyAsync(persistence, ct);
 
@@ -197,6 +170,9 @@ public class ReAccreditationNationCorrectionMigrationTests
     [Fact]
     public async Task ApplyAsync_already_correct_does_not_write()
     {
+        // Proves idempotency directly: a second run against an already-corrected item (or one
+        // that happened to already be right) must be a no-op, since there is no enable flag to
+        // stop it running every startup.
         var ct = TestContext.Current.CancellationToken;
         var item = BuildBrokenItem(currentNation: Nation.England);
         var persistence = PersistenceWith(item);
@@ -204,7 +180,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         reExClient
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
             .Returns(Nation.England);
-        var sut = BuildSut(reExClient, Config());
+        var sut = BuildSut(reExClient);
 
         await sut.ApplyAsync(persistence, ct);
 
@@ -218,7 +194,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         var item = BuildBrokenItem(operatorOrganisationId: null);
         var persistence = PersistenceWith(item);
         var reExClient = Substitute.For<IReExAccreditationClient>();
-        var sut = BuildSut(reExClient, Config());
+        var sut = BuildSut(reExClient);
 
         await sut.ApplyAsync(persistence, ct);
 
@@ -238,7 +214,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         reExClient
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
             .Returns((Nation?)null);
-        var sut = BuildSut(reExClient, Config());
+        var sut = BuildSut(reExClient);
 
         await sut.ApplyAsync(persistence, ct);
 
