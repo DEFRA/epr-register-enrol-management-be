@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
@@ -47,4 +48,13 @@ internal sealed class StubReExAccreditationClient : IReExAccreditationClient
             }
         });
     }
+
+    // Stub: no local fixture carries a submittedToRegulator code, so this always
+    // reports England - the same safe default RegulatorNationMapper itself falls
+    // back to when the code is absent.
+    public Task<Nation?> GetNationAsync(
+        string? organisationId,
+        string? registrationId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult<Nation?>(Nation.England);
 }

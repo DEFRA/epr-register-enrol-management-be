@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
@@ -21,5 +22,18 @@ public interface IReExAccreditationClient
         string? organisationId,
         string? registrationId,
         int? year,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// RA-526: the Nation the given registration's own <c>submittedToRegulator</c>
+    /// maps to, via <see cref="RegulatorNationMapper"/> — used by
+    /// <see cref="ReAccreditationNationCorrectionMigration"/> to correct work items
+    /// whose <c>payload.nation</c> was derived by the pre-RA-526 postcode-based
+    /// hook. Returns null if either parameter is missing, the organisation or
+    /// registration cannot be found, or the remote call fails.
+    /// </summary>
+    Task<Nation?> GetNationAsync(
+        string? organisationId,
+        string? registrationId,
         CancellationToken cancellationToken = default);
 }
