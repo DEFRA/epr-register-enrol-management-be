@@ -92,18 +92,25 @@ internal sealed record ReAccreditationPayload
     public string? OperatorEmail { get; init; }
 
     /// <summary>
-    /// Postcode of the regulated site. Used by <c>ReAccreditationNationRoutingHook</c>
-    /// (RA-125) to derive the <see cref="Nation"/> field via
-    /// <see cref="INationResolver"/>. Optional — when absent the nation
-    /// defaults to <see cref="Nation.England"/>.
+    /// Postcode of the regulated site. RA-526: no longer used for nation routing
+    /// (see <see cref="Nation"/>) - <c>ReAccreditationNationRoutingHook</c>'s
+    /// postcode-derivation via <see cref="INationResolver"/> was removed since it
+    /// was dead code for every real submission (the caller sends
+    /// <c>siteAddress</c> as a flat string, not the nested document that
+    /// derivation expected) and unreliable even when it wasn't. Display/reference
+    /// data only now.
     /// </summary>
     public string? SiteAddressPostcode { get; init; }
 
     /// <summary>
-    /// The UK nation to which this application is routed, derived from
-    /// <see cref="SiteAddressPostcode"/> by <c>ReAccreditationNationRoutingHook</c>
-    /// (RA-125). Written by the server at submission time; callers should
-    /// not include it in the submission payload.
+    /// The UK nation to which this application is routed. RA-526: now
+    /// caller-supplied by epr-register-enrol-backend (derived from the
+    /// registration's own regulator), read as-is by
+    /// <c>ReAccreditationNationRoutingHook</c> when present and recognised.
+    /// <c>ReAccreditationNationRoutingHook</c> still writes this field back at
+    /// submission time (defaulting to <see cref="Nation.England"/> when the
+    /// caller's value is absent or unrecognised) and records which happened in
+    /// its <c>routed-to-nation</c> audit entry's <c>derivedFrom</c> detail.
     /// </summary>
     public Nation? Nation { get; init; }
 

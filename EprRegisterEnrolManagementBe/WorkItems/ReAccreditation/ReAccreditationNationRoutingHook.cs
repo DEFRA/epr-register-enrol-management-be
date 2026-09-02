@@ -1,15 +1,28 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging;
-using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-125: post-submission hook that derives the UK nation from the
-/// re-accreditation payloads <c>siteAddressPostcode</c> field, writes the
-/// result back into <c>payload.nation</c>, and records a
-/// <c>routed-to-nation</c> audit entry.
+/// RA-526: post-submission hook that reads the UK nation the caller already
+/// submitted in the re-accreditation payload's <c>nation</c> field, defaults
+/// to England when it's absent or unrecognised, and records a
+/// <c>routed-to-nation</c> audit entry either way.
+///
+/// RA-125 originally derived this from <c>siteAddressPostcode</c> via
+/// <see cref="INationResolver"/> - removed here because it was both
+/// unreliable (postcode prefixes that straddle a nation border) and, for
+/// every real submission, dead code: the caller sends <c>siteAddress</c> as
+/// a flat string, not the nested document this hook's old postcode
+/// extraction expected, so it always silently resolved England regardless
+/// of the real nation. epr-register-enrol-backend now derives Nation
+/// reliably from the registration's own regulator and sends it directly, so
+/// this hook can just trust that value instead of re-deriving it.
+/// <see cref="INationResolver"/>/<see cref="NationResolver"/> are unchanged
+/// and still used by <see cref="ReAccreditationSeeder"/> for local dev
+/// fixture data, unrelated to this real-submission path.
 ///
 /// All of this happens in a single <see cref="IWorkItemPersistence.ReplaceAsync"/>
 /// so the payload update and the audit entry land atomically. Failures are
@@ -23,20 +36,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <c>WorkItemPersistence.ToBson</c>).
 /// </summary>
 internal sealed class ReAccreditationNationRoutingHook(
-    INationResolver nationResolver,
     IWorkItemPersistence persistence,
     ILogger<ReAccreditationNationRoutingHook> logger,
     TimeProvider? timeProvider = null,
-    TimeSpan? retryDelay = null) : IWorkItemPostActionHook
+    TimeSpan? retryDelay = null
+) : IWorkItemPostActionHook
 {
-    /// <summary>BSON key (camelCase) for the site address sub-document.</summary>
-    internal const string SiteAddressKey = "siteAddress";
-
-    /// <summary>BSON key (camelCase) within the site address sub-document under which the postcode is read.</summary>
-    internal const string PostcodeKey = "postcode";
-
-    /// <summary>BSON key (camelCase) under which the derived nation is written.</summary>
+    /// <summary>BSON key (camelCase) under which the caller-submitted / routed nation is read and written.</summary>
     internal const string NationKey = "nation";
+
+    private const string DerivedFromSubmitted = "submitted";
+    private const string DerivedFromDefaultEngland = "default-england";
 
     private const int MaxAttempts = 3;
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -45,7 +55,8 @@ internal sealed class ReAccreditationNationRoutingHook(
     public Task OnSubmittedAsync(
         WorkItem workItem,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
         if (!IsReAccreditation(workItem))
         {
@@ -60,15 +71,16 @@ internal sealed class ReAccreditationNationRoutingHook(
         string actionId,
         string fromStateId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken) => Task.CompletedTask;
+        CancellationToken cancellationToken
+    ) => Task.CompletedTask;
 
     private async Task RouteAndRecordAsync(
         WorkItem workItem,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken
+    )
     {
-        var postcode = ExtractPostcode(workItem);
-        var nation = nationResolver.Resolve(postcode);
+        var (nation, derivedFrom) = ResolveNation(workItem);
         var nationString = nation.ToString();
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
@@ -77,7 +89,9 @@ internal sealed class ReAccreditationNationRoutingHook(
             if (item is null)
             {
                 logger.LogWarning(
-                    "Nation routing skipped: work item {WorkItemId} not found.", workItem.Id);
+                    "Nation routing skipped: work item {WorkItemId} not found.",
+                    workItem.Id
+                );
                 return;
             }
 
@@ -85,31 +99,36 @@ internal sealed class ReAccreditationNationRoutingHook(
             item.Payload[NationKey] = nationString;
 
             var now = _timeProvider.GetUtcNow().UtcDateTime;
-            item.AuditLog.Add(new WorkItemAuditEntry
-            {
-                Action = "routed-to-nation",
-                ActionDisplayName = "Routed to nation",
-                Details = new Dictionary<string, string?>
+            item.AuditLog.Add(
+                new WorkItemAuditEntry
                 {
-                    ["nation"] = nationString,
-                    ["derivedFrom"] = "site-address"
-                },
-                CreatedAt = now,
-                CreatedBy = user.FindFirstValue("user:id"),
-                CreatedByName = user.FindFirstValue("user:name"),
-                // epr-rr9s: snapshot the work item's state at routing time
-                // (the post-submission initial state). Previously this entry
-                // recorded no state, so the history UI had nothing historical
-                // to show for "Routed to nation".
-                StateId = item.StateId
-            });
+                    Action = "routed-to-nation",
+                    ActionDisplayName = "Routed to nation",
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["nation"] = nationString,
+                        ["derivedFrom"] = derivedFrom,
+                    },
+                    CreatedAt = now,
+                    CreatedBy = user.FindFirstValue("user:id"),
+                    CreatedByName = user.FindFirstValue("user:name"),
+                    // epr-rr9s: snapshot the work item's state at routing time
+                    // (the post-submission initial state). Previously this entry
+                    // recorded no state, so the history UI had nothing historical
+                    // to show for "Routed to nation".
+                    StateId = item.StateId,
+                }
+            );
 
             try
             {
                 await persistence.ReplaceAsync(item, cancellationToken);
                 logger.LogInformation(
-                    "Work item {WorkItemId} routed to nation {Nation} from postcode {Postcode}.",
-                    workItem.Id, nationString, postcode ?? "(none)");
+                    "Work item {WorkItemId} routed to nation {Nation} ({DerivedFrom}).",
+                    workItem.Id,
+                    nationString,
+                    derivedFrom
+                );
                 return;
             }
             catch (WorkItemConcurrencyException)
@@ -117,9 +136,11 @@ internal sealed class ReAccreditationNationRoutingHook(
                 if (attempt == MaxAttempts)
                 {
                     logger.LogError(
-                        "Nation routing for work item {WorkItemId} abandoned after {Attempts} attempts; " +
-                        "item left unrouted (no payload.nation, no routed-to-nation audit entry).",
-                        workItem.Id, MaxAttempts);
+                        "Nation routing for work item {WorkItemId} abandoned after {Attempts} attempts; "
+                            + "item left unrouted (no payload.nation, no routed-to-nation audit entry).",
+                        workItem.Id,
+                        MaxAttempts
+                    );
                     return;
                 }
 
@@ -129,7 +150,9 @@ internal sealed class ReAccreditationNationRoutingHook(
                 if (_retryDelay > TimeSpan.Zero)
                 {
                     var jitterMs = Random.Shared.Next(0, (int)_retryDelay.TotalMilliseconds + 1);
-                    var delay = TimeSpan.FromMilliseconds(_retryDelay.TotalMilliseconds * attempt + jitterMs);
+                    var delay = TimeSpan.FromMilliseconds(
+                        _retryDelay.TotalMilliseconds * attempt + jitterMs
+                    );
                     await Task.Delay(delay, cancellationToken);
                 }
             }
@@ -139,26 +162,22 @@ internal sealed class ReAccreditationNationRoutingHook(
     private static bool IsReAccreditation(WorkItem workItem) =>
         string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase);
 
-    private static string? ExtractPostcode(WorkItem workItem)
+    // RA-526: the caller (epr-register-enrol-backend) sends nation as a flat top-level string
+    // on the submission payload - trust it when it's a recognised Nation value, otherwise
+    // default to England (an absent/unrecognised value is treated the same, deliberately not
+    // distinguished any further: neither case has a reliable fallback to derive from any more).
+    private static (Nation Nation, string DerivedFrom) ResolveNation(WorkItem workItem)
     {
-        if (workItem.Payload is null || !workItem.Payload.Contains(SiteAddressKey))
+        if (
+            workItem.Payload is not null
+            && workItem.Payload.TryGetValue(NationKey, out var element)
+            && element.IsString
+            && Enum.TryParse<Nation>(element.AsString, ignoreCase: true, out var submittedNation)
+        )
         {
-            return null;
+            return (submittedNation, DerivedFromSubmitted);
         }
 
-        var siteAddress = workItem.Payload[SiteAddressKey];
-        if (siteAddress.IsBsonNull || !siteAddress.IsBsonDocument)
-        {
-            return null;
-        }
-
-        var doc = siteAddress.AsBsonDocument;
-        if (!doc.Contains(PostcodeKey))
-        {
-            return null;
-        }
-
-        var element = doc[PostcodeKey];
-        return element.IsBsonNull ? null : element.AsString;
+        return (Nation.England, DerivedFromDefaultEngland);
     }
 }
