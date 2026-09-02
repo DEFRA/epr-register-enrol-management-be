@@ -20,10 +20,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// re-fetches the same authoritative source RA-526 itself uses at Seed time
 /// (the registration's own <c>submittedToRegulator</c>, via <see cref="RegulatorNationMapper"/>),
 /// so a corrected value is exactly what a fresh submission would have carried. It is still
-/// gated behind <see cref="EnabledConfigKey"/> (off by default) and <see cref="ApplyConfigKey"/>
-/// (dry run unless explicitly true) because it mutates already-submitted regulatory data with
-/// payment-reference and regulator-assignment consequences — the report this migration's dry
-/// run produces is meant to be reviewed before <see cref="ApplyConfigKey"/> is ever set.
+/// gated behind <see cref="EnabledConfigKey"/> (off by default), and applies every correction
+/// it makes directly rather than offering a separate dry-run report: the team running this has
+/// no access to this service's logs, so a log-only preview would be unreviewable anyway. The
+/// review mechanism is the <c>nation-corrected</c> audit entry (below) each correction leaves
+/// on the work item itself — visible on that item's own page in the case management UI, which
+/// the team can reach — recording exactly what changed and why, after the fact.
 /// </para>
 ///
 /// <para>
@@ -49,7 +51,6 @@ internal sealed class ReAccreditationNationCorrectionMigration(
 ) : IWorkItemMigration
 {
     public const string EnabledConfigKey = "Diagnostics:Ra526CorrectNation";
-    public const string ApplyConfigKey = "Diagnostics:Ra526CorrectNationApply";
 
     public const string RoutedToNationAction = "routed-to-nation";
     public const string BrokenDerivedFromMarker = "site-address";
@@ -70,15 +71,9 @@ internal sealed class ReAccreditationNationCorrectionMigration(
             return;
         }
 
-        var apply = configuration.GetValue(ApplyConfigKey, false);
-        logger.LogInformation(
-            "RA-526 nation correction starting. Mode={Mode}.",
-            apply ? "APPLY" : "DRY RUN (nothing will be written)");
+        logger.LogInformation("RA-526 nation correction starting.");
 
-        var corrected = 0;
-        var alreadyCorrect = 0;
-        var skippedNoIdentifiers = 0;
-        var skippedLookupFailed = 0;
+        var tally = new CorrectionTally();
         var page = 1;
 
         while (true)
@@ -93,91 +88,7 @@ internal sealed class ReAccreditationNationCorrectionMigration(
 
             foreach (var candidate in result.Items)
             {
-                // QueryAsync excludes AuditLog/Notes - fetch the full document before
-                // inspecting the routed-to-nation entry or mutating.
-                var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
-                if (full is null || !WasRoutedByBrokenDerivation(full))
-                {
-                    continue;
-                }
-
-                var plan = await PlanCorrection(full, cancellationToken);
-                if (plan.Outcome == CorrectionOutcome.NoIdentifiers)
-                {
-                    skippedNoIdentifiers++;
-                    logger.LogWarning(
-                        "RA-526 correction skipped work item {WorkItemId}: missing "
-                            + "operatorOrganisationId/operatorRegistrationId, cannot look up ReEx.",
-                        full.Id);
-                    continue;
-                }
-                if (plan.Outcome == CorrectionOutcome.LookupFailed)
-                {
-                    skippedLookupFailed++;
-                    logger.LogWarning(
-                        "RA-526 correction skipped work item {WorkItemId}: ReEx lookup failed "
-                            + "or returned no result; will retry on the next run.",
-                        full.Id);
-                    continue;
-                }
-                if (plan.Outcome == CorrectionOutcome.AlreadyCorrect)
-                {
-                    alreadyCorrect++;
-                    continue;
-                }
-
-                var (from, to) = (plan.From!, plan.To!);
-                corrected++;
-
-                if (!apply)
-                {
-                    logger.LogInformation(
-                        "RA-526 DRY RUN would correct work item {WorkItemId} ref={ApplicationReference}: "
-                            + "{From} -> {To}",
-                        full.Id,
-                        full.Payload.GetValue("applicationReference", "(none)"),
-                        from,
-                        to);
-                    continue;
-                }
-
-                full.Payload["nation"] = to;
-                full.AuditLog.Add(new WorkItemAuditEntry
-                {
-                    Action = AuditAction,
-                    ActionDisplayName = AuditActionDisplayName,
-                    CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
-                    CreatedBy = "migration",
-                    CreatedByName = "Migration: RA-526 nation correction",
-                    Details = new Dictionary<string, string?>
-                    {
-                        ["issue"] = "RA-526",
-                        ["reason"] =
-                            "payload.nation was derived by the pre-RA-526 hook, which always "
-                            + "defaulted to England on real submissions; corrected from the "
-                            + "registration's own ReEx regulator.",
-                        ["from"] = from,
-                        ["to"] = to,
-                    },
-                });
-
-                try
-                {
-                    await persistence.ReplaceAsync(full, cancellationToken);
-                    logger.LogInformation(
-                        "RA-526 corrected work item {WorkItemId}: {From} -> {To}",
-                        full.Id,
-                        from,
-                        to);
-                }
-                catch (WorkItemConcurrencyException ex)
-                {
-                    logger.LogDebug(
-                        ex,
-                        "Concurrency conflict on work item {Id}; skipping - another instance "
-                            + "already migrated it.",
-                        full.Id);
-                }
+                await ProcessCandidateAsync(candidate, persistence, tally, cancellationToken);
             }
 
             if (result.Items.Count < WorkItemQuery.MaxPageSize)
@@ -189,15 +100,114 @@ internal sealed class ReAccreditationNationCorrectionMigration(
         }
 
         logger.LogInformation(
-            "RA-526 nation correction complete. Mode={Mode}. Items {Verb}: {Corrected}. "
-                + "Already correct: {AlreadyCorrect}. Skipped (no identifiers): "
-                + "{SkippedNoIdentifiers}. Skipped (ReEx lookup failed): {SkippedLookupFailed}.",
-            apply ? "APPLY" : "DRY RUN",
-            apply ? "corrected" : "that would be corrected",
-            corrected,
-            alreadyCorrect,
-            skippedNoIdentifiers,
-            skippedLookupFailed);
+            "RA-526 nation correction complete. Corrected: {Corrected}. Already correct: "
+                + "{AlreadyCorrect}. Skipped (no identifiers): {SkippedNoIdentifiers}. Skipped "
+                + "(ReEx lookup failed): {SkippedLookupFailed}.",
+            tally.Corrected,
+            tally.AlreadyCorrect,
+            tally.SkippedNoIdentifiers,
+            tally.SkippedLookupFailed);
+    }
+
+    /// <summary>Running totals for the completion log — mutated in place by <see cref="ProcessCandidateAsync"/>.</summary>
+    private sealed class CorrectionTally
+    {
+        public int Corrected;
+        public int AlreadyCorrect;
+        public int SkippedNoIdentifiers;
+        public int SkippedLookupFailed;
+    }
+
+    // Extracted from ApplyAsync (S3776: cognitive complexity) - handles one page candidate:
+    // the full-document re-read, the routed-to-nation pre-filter, planning the correction, and
+    // tallying the outcome. ApplyCorrectionAsync owns the actual write.
+    private async Task ProcessCandidateAsync(
+        WorkItem candidate,
+        IWorkItemPersistence persistence,
+        CorrectionTally tally,
+        CancellationToken cancellationToken)
+    {
+        // QueryAsync excludes AuditLog/Notes - fetch the full document before
+        // inspecting the routed-to-nation entry or mutating.
+        var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
+        if (full is null || !WasRoutedByBrokenDerivation(full))
+        {
+            return;
+        }
+
+        var plan = await PlanCorrection(full, cancellationToken);
+        switch (plan.Outcome)
+        {
+            case CorrectionOutcome.NoIdentifiers:
+                tally.SkippedNoIdentifiers++;
+                logger.LogWarning(
+                    "RA-526 correction skipped work item {WorkItemId}: missing "
+                        + "operatorOrganisationId/operatorRegistrationId, cannot look up ReEx.",
+                    full.Id);
+                return;
+            case CorrectionOutcome.LookupFailed:
+                tally.SkippedLookupFailed++;
+                logger.LogWarning(
+                    "RA-526 correction skipped work item {WorkItemId}: ReEx lookup failed "
+                        + "or returned no result; will retry on the next run.",
+                    full.Id);
+                return;
+            case CorrectionOutcome.AlreadyCorrect:
+                tally.AlreadyCorrect++;
+                return;
+            case CorrectionOutcome.Corrected:
+                tally.Corrected++;
+                await ApplyCorrectionAsync(full, plan.From!, plan.To!, persistence, cancellationToken);
+                return;
+        }
+    }
+
+    // Extracted from ApplyAsync (S3776: cognitive complexity) - the actual write: stamps the
+    // corrected nation, appends the review-trail audit entry, and persists.
+    private async Task ApplyCorrectionAsync(
+        WorkItem item,
+        string from,
+        string to,
+        IWorkItemPersistence persistence,
+        CancellationToken cancellationToken)
+    {
+        item.Payload["nation"] = to;
+        item.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = AuditAction,
+            ActionDisplayName = AuditActionDisplayName,
+            CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
+            CreatedBy = "migration",
+            CreatedByName = "Migration: RA-526 nation correction",
+            Details = new Dictionary<string, string?>
+            {
+                ["issue"] = "RA-526",
+                ["reason"] =
+                    "payload.nation was derived by the pre-RA-526 hook, which always "
+                    + "defaulted to England on real submissions; corrected from the "
+                    + "registration's own ReEx regulator.",
+                ["from"] = from,
+                ["to"] = to,
+            },
+        });
+
+        try
+        {
+            await persistence.ReplaceAsync(item, cancellationToken);
+            logger.LogInformation(
+                "RA-526 corrected work item {WorkItemId}: {From} -> {To}",
+                item.Id,
+                from,
+                to);
+        }
+        catch (WorkItemConcurrencyException ex)
+        {
+            logger.LogDebug(
+                ex,
+                "Concurrency conflict on work item {Id}; skipping - another instance "
+                    + "already migrated it.",
+                item.Id);
+        }
     }
 
     private static bool WasRoutedByBrokenDerivation(WorkItem item) =>

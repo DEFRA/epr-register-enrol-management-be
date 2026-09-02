@@ -76,16 +76,12 @@ public class ReAccreditationNationCorrectionMigrationTests
             ],
         };
 
-    private static IConfiguration Config(bool? enabled = true, bool? apply = true)
+    private static IConfiguration Config(bool? enabled = true)
     {
         var values = new Dictionary<string, string?>();
         if (enabled is not null)
         {
             values[ReAccreditationNationCorrectionMigration.EnabledConfigKey] = enabled.Value.ToString();
-        }
-        if (apply is not null)
-        {
-            values[ReAccreditationNationCorrectionMigration.ApplyConfigKey] = apply.Value.ToString();
         }
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }
@@ -166,8 +162,12 @@ public class ReAccreditationNationCorrectionMigrationTests
     }
 
     [Fact]
-    public async Task ApplyAsync_dry_run_does_not_write_but_identifies_the_correction()
+    public async Task ApplyAsync_corrects_the_payload_and_records_an_audit_entry()
     {
+        // No separate dry-run mode: the team running this migration has no access to this
+        // service's logs, so a log-only preview would be unreviewable. Every correction is
+        // applied directly and reviewed afterwards via the nation-corrected audit entry it
+        // leaves on the work item itself (visible in the case management UI).
         var ct = TestContext.Current.CancellationToken;
         var item = BuildBrokenItem(currentNation: Nation.England);
         var persistence = PersistenceWith(item);
@@ -175,27 +175,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         reExClient
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
             .Returns(Nation.Wales);
-        var sut = BuildSut(reExClient, Config(apply: false));
-
-        await sut.ApplyAsync(persistence, ct);
-
-        await persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
-        // Payload must be untouched even in memory - a dry run's report must describe
-        // the current state, not a state it already half-created.
-        Assert.Equal("England", item.Payload["nation"].AsString);
-    }
-
-    [Fact]
-    public async Task ApplyAsync_apply_mode_corrects_the_payload_and_records_an_audit_entry()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var item = BuildBrokenItem(currentNation: Nation.England);
-        var persistence = PersistenceWith(item);
-        var reExClient = Substitute.For<IReExAccreditationClient>();
-        reExClient
-            .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
-            .Returns(Nation.Wales);
-        var sut = BuildSut(reExClient, Config(apply: true));
+        var sut = BuildSut(reExClient, Config());
 
         await sut.ApplyAsync(persistence, ct);
 
@@ -224,7 +204,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         reExClient
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
             .Returns(Nation.England);
-        var sut = BuildSut(reExClient, Config(apply: true));
+        var sut = BuildSut(reExClient, Config());
 
         await sut.ApplyAsync(persistence, ct);
 
@@ -259,23 +239,6 @@ public class ReAccreditationNationCorrectionMigrationTests
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
             .Returns((Nation?)null);
         var sut = BuildSut(reExClient, Config());
-
-        await sut.ApplyAsync(persistence, ct);
-
-        await persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task ApplyAsync_defaults_to_dry_run_when_ApplyConfigKey_is_absent()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var item = BuildBrokenItem();
-        var persistence = PersistenceWith(item);
-        var reExClient = Substitute.For<IReExAccreditationClient>();
-        reExClient
-            .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
-            .Returns(Nation.Wales);
-        var sut = BuildSut(reExClient, Config(apply: null));
 
         await sut.ApplyAsync(persistence, ct);
 
