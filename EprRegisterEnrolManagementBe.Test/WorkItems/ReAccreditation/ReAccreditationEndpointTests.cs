@@ -2192,6 +2192,32 @@ public class ReAccreditationEndpointTests
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("updated", persisted!.StateId);
+
+        // Positive control. On its own the 400 above proves nothing: the
+        // generic route answers 400 "Invalid action" for a completely unknown
+        // action id too (both map to UnknownAction), so this test would pass
+        // just as happily against a build that had never heard of the
+        // transition — it would go green on the day someone deleted the
+        // feature. Driving the bespoke route to a real 200 in the same run is
+        // what makes the 400 mean "declared, and deliberately unreachable this
+        // way" rather than "not declared at all".
+        //
+        // Only the duly-made origin can reach 200; the other origin is
+        // legitimately refused by the origin guard, which is covered by
+        // PaymentReceived_refuses_every_origin_other_than_duly_made.
+        if (resumeActionId == "resume-during-duly-made")
+        {
+            var viaBespokeRoute = await client.PostAsync(
+                $"/work-items/re-accreditation/{id}/payment-received",
+                content: null,
+                cancellationToken
+            );
+
+            Assert.Equal(HttpStatusCode.OK, viaBespokeRoute.StatusCode);
+
+            var afterBespokeRoute = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+            Assert.Equal("assessment-in-progress", afterBespokeRoute!.StateId);
+        }
     }
 
     [Fact]
