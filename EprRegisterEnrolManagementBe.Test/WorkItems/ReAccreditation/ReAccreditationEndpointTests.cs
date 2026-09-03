@@ -1617,13 +1617,16 @@ public class ReAccreditationEndpointTests
     }
 
     [Theory]
-    [InlineData("query-during-duly-making", "resume-during-duly-making")]
-    [InlineData("query-during-duly-made", "resume-during-duly-made")]
-    [InlineData("query-during-assessment", "resume-during-assessment")]
-    [InlineData("query-during-decision", "resume-during-decision")]
-    public async Task ResumeFromQuery_moves_the_application_to_updated(
+    // RA-523: resume-during-duly-made lands in assessment-in-progress
+    // (decision-ready); the other three still land on the 'updated' waypoint.
+    [InlineData("query-during-duly-making", "resume-during-duly-making", "updated")]
+    [InlineData("query-during-duly-made", "resume-during-duly-made", "assessment-in-progress")]
+    [InlineData("query-during-assessment", "resume-during-assessment", "updated")]
+    [InlineData("query-during-decision", "resume-during-decision", "updated")]
+    public async Task ResumeFromQuery_moves_the_application_to_its_resume_destination(
         string queryActionId,
-        string expectedResumeActionId
+        string expectedResumeActionId,
+        string expectedStateId
     )
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -1643,10 +1646,9 @@ public class ReAccreditationEndpointTests
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.NotNull(persisted);
-        // RA-337: resume-during-* lands on 'updated', not the originating
-        // state, so the Case Management service shows an "Updated" status until a caseworker moves
-        // it on via continue-review.
-        Assert.Equal("updated", persisted!.StateId);
+        // RA-337/RA-523: three resume-during-* land on 'updated'; the
+        // duly-made origin lands decision-ready in 'assessment-in-progress'.
+        Assert.Equal(expectedStateId, persisted!.StateId);
         Assert.Contains(
             persisted.AuditLog,
             a =>
@@ -2041,6 +2043,52 @@ public class ReAccreditationEndpointTests
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("queried", persisted!.StateId);
+    }
+
+    /// <summary>
+    /// RA-523: the whole point of the ticket. An application queried after it
+    /// was duly made must, on the operator's response, arrive decision-ready in
+    /// 'assessment-in-progress' (not the 'updated' waypoint), be handed back to
+    /// the case worker who raised the query, and keep the SLA clock that was
+    /// anchored at duly making — no forward button, no return to 'duly-made'.
+    /// </summary>
+    [Fact]
+    public async Task ResumeFromQuery_lands_a_duly_made_origin_item_decision_ready_assigned_with_its_clock()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var seeded = BuildQueried(id, TenantClientId, "query-during-duly-made");
+        // The query was raised by DefaultUserId (BuildQueried stamps CreatedBy),
+        // then the item was left unassigned during the query window.
+        seeded.AssignedToId = null;
+        seeded.AssignedToName = null;
+        var slaStartedAt = new DateTime(2025, 11, 3, 0, 0, 0, DateTimeKind.Utc);
+        seeded.SlaClock = new WorkItemSlaClock { StartedAt = slaStartedAt };
+        await factory.SeedAsync(seeded, cancellationToken);
+
+        var response = await ResumeAsOperatorAsync(client, id, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.NotNull(persisted);
+        // Decision-ready, not the 'updated' waypoint, and never back to 'duly-made'.
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        // Re-assigned to the querying case worker (the parent RA-523 fix, which
+        // runs in the resume regardless of landing state).
+        Assert.Equal(DefaultUserId, persisted.AssignedToId);
+        // The SLA clock anchored at duly making is untouched: no restart,
+        // no second sla-clock-started entry.
+        Assert.NotNull(persisted.SlaClock);
+        Assert.Equal(slaStartedAt, persisted.SlaClock!.StartedAt);
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "sla-clock-started");
+        // The forward hop is the resume itself — no continue-review / payment hop.
+        Assert.DoesNotContain(
+            persisted.AuditLog,
+            a => a.Details.GetValueOrDefault("actionId") == "continue-review-during-duly-made"
+        );
     }
 
     // ------------------------------- RA-337 ContinueReview -------------------------------
