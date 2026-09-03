@@ -47,9 +47,15 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// not need to wait for the hook to run, only to look. The postcode-derived
 /// agency code (<see cref="ResolveAgencyCodeFromPostcode"/>) remains the
 /// fallback for the one real gap: a payload with no <c>nation</c> field at
-/// all (a submitter that predates RA-526, or any future caller that omits
-/// it) — mirroring the hook's own default-to-England behaviour rather than
-/// leaving the reference unable to generate at all.
+/// all, or an unrecognised one (a submitter that predates RA-526, or any
+/// future caller that omits it) — mirroring the hook's fall-open-rather-
+/// than-error posture rather than leaving the reference unable to generate
+/// at all. Note this fallback derives from postcode, not a fixed England
+/// default, so a legacy payload's Application Reference and its
+/// <c>ReAccreditationNationRoutingHook</c>-stamped <c>payload.nation</c>
+/// (which DOES default to England on the same gap) can legitimately
+/// disagree — pre-existing, and no worse than before this change, but worth
+/// knowing if a reference and its routed nation are ever compared.
 /// RA-503: the result is no longer truncated to a fixed length — this
 /// value is no longer used as a BACS payment reference, so the previous
 /// 18-character cap (and the disambiguator's character-replacement
@@ -373,11 +379,16 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         {
             // Fail-open by design (see class summary) rather than blocking
             // work-item submission on a data gap the upstream backend
-            // should already prevent — but the gap must stay visible.
+            // should already prevent — but the gap must stay visible. RA-526:
+            // this postcode still feeds the reference's postcode-suffix
+            // segment regardless of nation, and — only when payload.nation is
+            // also absent/unrecognised — its postcode-derived agency code
+            // too; either way it is no longer this reference's payment
+            // reference (RA-503 made that caller-supplied).
             _logger.LogWarning(
                 "Exporter payload for operatorOrganisationId {OperatorOrganisationId} has no "
-                    + "companyRegisterAddressPostcode; falling open to the default England ({DefaultAgencyCode}) "
-                    + "agency code for the payment reference.",
+                    + "companyRegisterAddressPostcode; the applicationReference's postcode-derived "
+                    + "segments will be empty/default ({DefaultAgencyCode}) for any nation gap.",
                 GetString(payload, "operatorOrganisationId"),
                 DefaultAgencyCode
             );

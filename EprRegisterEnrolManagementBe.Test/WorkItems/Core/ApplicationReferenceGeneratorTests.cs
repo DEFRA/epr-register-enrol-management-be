@@ -59,7 +59,8 @@ public sealed class ApplicationReferenceGeneratorTests
         string? siteAddressPostcode = "SW1A 1AA",
         string? material = "Glass",
         string? wasteProcessingType = null,
-        string? companyRegisterAddressPostcode = null
+        string? companyRegisterAddressPostcode = null,
+        string? nation = null
     )
     {
         var doc = new BsonDocument();
@@ -78,6 +79,8 @@ public sealed class ApplicationReferenceGeneratorTests
             doc["wasteProcessingType"] = wasteProcessingType;
         if (companyRegisterAddressPostcode is not null)
             doc["companyRegisterAddressPostcode"] = companyRegisterAddressPostcode;
+        if (nation is not null)
+            doc["nation"] = nation;
         return doc;
     }
 
@@ -496,6 +499,28 @@ public sealed class ApplicationReferenceGeneratorTests
 
         Assert.Equal("SE", reference.Substring(4, 2));
         Assert.Equal("AP26SE500021AAGL", reference);
+    }
+
+    // RA-526: pins the whole reference, not just the agency-code segment, on the nation path -
+    // proving ResolveRegulatorPostcode's exporter->registered-office selection still feeds the
+    // postcode-suffix segment even when payload.nation (not postcode) decides the agency code,
+    // and that the two segments can legitimately come from different sources on the same call.
+    [Fact]
+    public void Generate_full_reference_when_nation_decides_agency_code_but_postcode_still_feeds_the_suffix()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "exporter",
+            siteAddressPostcode: "SW1A 1AA", // England site — must be ignored for an exporter
+            companyRegisterAddressPostcode: "EH1 1AA", // feeds the postcode-suffix segment (1AA)
+            nation: "Wales" // disagrees with the Scotland postcode - nation must win the agency code
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("NR", reference.Substring(4, 2));
+        Assert.Equal("AP26NR500021AAGL", reference);
     }
 
     [Fact]
