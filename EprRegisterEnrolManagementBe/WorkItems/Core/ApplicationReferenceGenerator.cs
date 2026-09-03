@@ -21,18 +21,35 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <c>operatorOrganisationId</c> (ReEx's internal ObjectId — never
 /// otherwise surfaced to an operator or regulator) only when
 /// <c>operatorOrgNumber</c> is absent; see
-/// <see cref="ResolveOrganisationSegment"/>. The agency code and
-/// postcode suffix are both derived from the same postcode, chosen per
-/// RA-314 AC01/AC02: an Exporter's is their registered office location
+/// <see cref="ResolveOrganisationSegment"/>. The postcode suffix is always
+/// derived from the same postcode chosen per RA-314 AC01/AC02: an
+/// Exporter's is their registered office location
 /// (<c>companyRegisterAddressPostcode</c>); a Reprocessor's — and any
 /// payload without a <c>wasteProcessingType</c> — is the site location.
 /// An Exporter payload missing <c>companyRegisterAddressPostcode</c> fails
-/// open to the default England agency code (<c>EA</c>) rather than
-/// erroring, matching the existing fallback for a missing
-/// <c>wasteProcessingType</c>; a warning is logged so the gap stays
-/// observable even though generation still succeeds. The upstream
-/// backend (RA-314) is expected to reject such payloads before they
-/// reach this generator.
+/// open (see <see cref="ResolveRegulatorPostcode"/>) rather than erroring,
+/// matching the existing fallback for a missing <c>wasteProcessingType</c>;
+/// a warning is logged so the gap stays observable even though generation
+/// still succeeds. The upstream backend (RA-314) is expected to reject
+/// such payloads before they reach this generator.
+///
+/// RA-526: the agency code itself prefers <c>payload.nation</c> — the
+/// caller-supplied (or, for legacy payloads, hook-defaulted) authoritative
+/// nation <c>ReAccreditationNationRoutingHook</c> also reads — over deriving
+/// it from postcode. Postcode-prefix matching is a genuinely unreliable
+/// proxy for "which regulator": some prefixes straddle a real regulator
+/// boundary, which is exactly why RA-526 moved <c>payload.nation</c> itself
+/// off postcode derivation. This generator runs synchronously inside
+/// <c>WorkItemService.SubmitAsync</c>, before that hook's own post-action
+/// pass, but the caller (<c>HttpCaseWorkingApiAdapter.BuildPayload</c> /
+/// management-fe's create-work-item form) already sends <c>nation</c> as a
+/// plain field on the very same payload this generator reads — so it does
+/// not need to wait for the hook to run, only to look. The postcode-derived
+/// agency code (<see cref="ResolveAgencyCodeFromPostcode"/>) remains the
+/// fallback for the one real gap: a payload with no <c>nation</c> field at
+/// all (a submitter that predates RA-526, or any future caller that omits
+/// it) — mirroring the hook's own default-to-England behaviour rather than
+/// leaving the reference unable to generate at all.
 /// RA-503: the result is no longer truncated to a fixed length — this
 /// value is no longer used as a BACS payment reference, so the previous
 /// 18-character cap (and the disambiguator's character-replacement
@@ -104,6 +121,24 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 
     private const string NiPrefix = "BT";
 
+    // RA-526: payload.nation carries the enum member name (England/Scotland/Wales/
+    // NorthernIreland - see EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.Nation),
+    // not a postcode area. Maps to the SAME agency-code letters ResolveAgencyCodeFromPostcode
+    // already returns, so the two paths are indistinguishable in the finished reference - a
+    // reader can't tell, and doesn't need to, whether a given reference's agency code came from
+    // the nation field or the postcode fallback. Deliberately a plain string key rather than a
+    // dependency on the ReAccreditation module's Nation enum - see the class summary on why Core
+    // stays dependency-free of that module.
+    private static readonly Dictionary<string, string> s_nationToAgencyCode = new(
+        StringComparer.OrdinalIgnoreCase
+    )
+    {
+        ["England"] = DefaultAgencyCode,
+        ["Scotland"] = "SE",
+        ["Wales"] = "NR",
+        ["NorthernIreland"] = "NI",
+    };
+
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ApplicationReferenceGenerator> _logger;
 
@@ -122,7 +157,7 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 
         var year = ResolveYear(payload);
         var postcode = ResolveRegulatorPostcode(payload);
-        var agency = ResolveAgencyCode(postcode);
+        var agency = ResolveAgencyCode(payload, postcode);
         var orgSegment = ResolveOrganisationSegment(payload);
         var postcodeSuffix = PostcodeSuffix(postcode);
         var materialPrefix = MaterialPrefix(GetString(payload, "material"));
@@ -208,7 +243,25 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         return _timeProvider.GetUtcNow().UtcDateTime.Year % 100;
     }
 
-    private static string ResolveAgencyCode(string? postcode)
+    // RA-526: prefer the caller-supplied/hook-defaulted nation over deriving from postcode - see
+    // the class summary for why. Falls back to the postcode-derived code only when payload.nation
+    // is absent entirely (a submitter that predates RA-526); an unrecognised nation string is
+    // treated as absent for the same reason ReAccreditationNationRoutingHook falls open to
+    // England rather than erroring on one.
+    private static string ResolveAgencyCode(BsonDocument payload, string? postcode)
+    {
+        if (
+            GetString(payload, "nation") is { } nation
+            && s_nationToAgencyCode.TryGetValue(nation, out var agencyFromNation)
+        )
+        {
+            return agencyFromNation;
+        }
+
+        return ResolveAgencyCodeFromPostcode(postcode);
+    }
+
+    private static string ResolveAgencyCodeFromPostcode(string? postcode)
     {
         var area = ExtractAreaCode(postcode);
         if (area is null)
