@@ -12,6 +12,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 internal sealed class ReAccreditationType : IWorkItemType
 {
     private const string ContinueReviewActionLabel = "Continue review";
+    private const string PaymentReceivedActionLabel = "Payment received";
     private const string QueryActionLabel = "Query";
     private const string ResumeActionLabel = "Resume";
     private const string WithdrawActionLabel = "Withdraw";
@@ -137,7 +138,23 @@ internal sealed class ReAccreditationType : IWorkItemType
     // sla-extend transition from 'queried' until
     // ReAccreditationSlaExtendQuerySnapshotMigration patches their frozen
     // snapshot.
-    public string TemplateVersion => "v13";
+    // v14 (RA-523): retargeted resume-during-duly-made from the 'updated'
+    // waypoint (queried -> updated) to assessment (queried ->
+    // assessment-in-progress). An application queried AFTER it was duly made
+    // was returning to the regulator as "Duly made" a second time via
+    // continue-review-during-duly-made; it now arrives decision-ready with no
+    // forward button, because its payment and SLA clock were already settled
+    // at duly making. Only this one resume transition changes: the other
+    // three still land on 'updated' (a submitted-origin item must still be
+    // duly made; assessment/decision-origin items must still be reviewed).
+    // continue-review-during-duly-made is deliberately RETAINED, now dead for
+    // new items but kept as the legacy escape for any item already sitting in
+    // 'updated' with a duly-made origin, and as the declaration
+    // ReAccreditationUpdatedOrigin.ResolveOriginatingStateId still reads for
+    // those. Items snapshotted before v14 keep resume-during-duly-made ->
+    // updated until ReAccreditationResumeDulyMadeAssessmentSnapshotMigration
+    // patches their frozen snapshot.
+    public string TemplateVersion => "v14";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -175,7 +192,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         ),
         new WorkItemTransition(
             "payment-received",
-            "Payment received",
+            PaymentReceivedActionLabel,
             s_dulyMade.Id,
             s_assessmentInProgress.Id
         ),
@@ -296,11 +313,28 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_updated.Id,
             CallerInvocable: false
         ),
+        // RA-523: this ONE resume transition lands the item straight in
+        // assessment-in-progress, not the shared 'updated' waypoint the other
+        // three use. An application queried after it was duly made has
+        // already had its payment recorded and its SLA clock anchored at duly
+        // making, so once the operator responds there is nothing left to do
+        // before assessment: it is decision-ready. Landing it here (which
+        // displays as "Updated", RA-324 AC06, and from which /decision is
+        // reachable) means no forward button and no return trip to
+        // 'duly-made' — the behaviour Tom rejected. The querier is
+        // re-assigned by ReAccreditationResumeService.RestoreQuerierAssignment
+        // after this transition, exactly as for the other three origins.
+        //
+        // The other three resume-during-* still land on 'updated': a
+        // submitted-origin item must still be duly made, and
+        // assessment/decision-origin items must still be reviewed via
+        // continue-review. Only the duly-made origin is decision-ready on
+        // resume, so only this one is retargeted.
         new WorkItemTransition(
             "resume-during-duly-made",
             ResumeActionLabel,
             s_queried.Id,
-            s_updated.Id,
+            s_assessmentInProgress.Id,
             CallerInvocable: false
         ),
         new WorkItemTransition(

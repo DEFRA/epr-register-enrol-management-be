@@ -402,11 +402,17 @@ public class ReAccreditationResumeServiceTests
 
     // ------------------------------- idempotency -------------------------------
 
-    [Fact]
-    public async Task ResumeFromQueryAsync_is_an_idempotent_replay_when_already_resumed()
+    // RA-523: 'updated' is the resume target for three origins;
+    // 'assessment-in-progress' is the resume target for the duly-made origin.
+    // A resume retry landing on either is a replay, not a conflict.
+    [Theory]
+    [InlineData("updated")]
+    [InlineData("assessment-in-progress")]
+    public async Task ResumeFromQueryAsync_is_an_idempotent_replay_when_already_resumed(
+        string stateId)
     {
         var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(queryActionId: null, stateId: "updated");
+        var harness = new Harness(queryActionId: null, stateId: stateId);
 
         var result = await harness.Service.ResumeFromQueryAsync(
             harness.WorkItem.Id, s_request, harness.User, ct);
@@ -424,13 +430,13 @@ public class ReAccreditationResumeServiceTests
     [InlineData("rejected")]
     [InlineData("withdrawn")]
     // RA-337: once resumed, a work item passes through 'submitted' /
-    // 'duly-made' / 'assessment-in-progress' / 'awaiting-decision' via
-    // continue-review-during-*, not resume-during-* directly, so a resume
-    // retry landing on one of those states is a real conflict now, not an
-    // idempotent replay.
+    // 'duly-made' / 'awaiting-decision' via continue-review-during-*, not
+    // resume-during-* directly, so a resume retry landing on one of those
+    // states is a real conflict now, not an idempotent replay. RA-523:
+    // 'assessment-in-progress' is NOT here — it is a valid resume target for
+    // the duly-made origin, so a retry there is a replay (asserted above).
     [InlineData("submitted")]
     [InlineData("duly-made")]
-    [InlineData("assessment-in-progress")]
     [InlineData("awaiting-decision")]
     public async Task ResumeFromQueryAsync_fails_with_invalid_transition_when_not_queried_or_updated(string stateId)
     {
