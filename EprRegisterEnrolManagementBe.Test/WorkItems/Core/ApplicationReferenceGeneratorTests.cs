@@ -29,7 +29,8 @@ public sealed class ApplicationReferenceGeneratorTests
         string? operatorOrganisationId = "50002",
         int? operatorOrgNumber = null,
         string? siteAddressPostcode = "SW1A 1AA",
-        string? material = "Glass"
+        string? material = "Glass",
+        string? nation = null
     )
     {
         var doc = new BsonDocument();
@@ -43,6 +44,8 @@ public sealed class ApplicationReferenceGeneratorTests
             doc["siteAddress"] = new BsonDocument { ["postcode"] = siteAddressPostcode };
         if (material is not null)
             doc["material"] = material;
+        if (nation is not null)
+            doc["nation"] = nation;
         return doc;
     }
 
@@ -56,7 +59,8 @@ public sealed class ApplicationReferenceGeneratorTests
         string? siteAddressPostcode = "SW1A 1AA",
         string? material = "Glass",
         string? wasteProcessingType = null,
-        string? companyRegisterAddressPostcode = null
+        string? companyRegisterAddressPostcode = null,
+        string? nation = null
     )
     {
         var doc = new BsonDocument();
@@ -75,6 +79,8 @@ public sealed class ApplicationReferenceGeneratorTests
             doc["wasteProcessingType"] = wasteProcessingType;
         if (companyRegisterAddressPostcode is not null)
             doc["companyRegisterAddressPostcode"] = companyRegisterAddressPostcode;
+        if (nation is not null)
+            doc["nation"] = nation;
         return doc;
     }
 
@@ -103,6 +109,56 @@ public sealed class ApplicationReferenceGeneratorTests
         var reference = generator.Generate(payload);
 
         Assert.Equal(expectedAgency, reference.Substring(4, 2));
+    }
+
+    // RA-526: payload.nation is the authoritative source once present - it must win even when
+    // it disagrees with what the postcode would have suggested, since postcode-prefix matching
+    // is exactly the unreliable heuristic RA-526 replaced it with. LL14 (Wrexham) is the real
+    // production postcode this bug was diagnosed against.
+    [Theory]
+    [InlineData("England", "SW1A 1AA", "EA")]
+    [InlineData("Scotland", "SW1A 1AA", "SE")] // nation wins even against an England postcode
+    [InlineData("Wales", "SW1A 1AA", "NR")] // nation wins even against an England postcode
+    [InlineData("NorthernIreland", "SW1A 1AA", "NI")] // nation wins even against an England postcode
+    [InlineData("Wales", "LL14 5NT", "NR")] // the real diagnosed case: nation and postcode agree
+    [InlineData("scotland", "SW1A 1AA", "SE")] // case-insensitive, matching ResolveNation's own parse
+    public void Generate_prefers_payload_nation_over_postcode_for_agency_code(
+        string nation, string postcode, string expectedAgency)
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: postcode, nation: nation);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal(expectedAgency, reference.Substring(4, 2));
+    }
+
+    [Theory]
+    [InlineData("Atlantis")] // unrecognised nation string
+    [InlineData("")] // blank
+    public void Generate_falls_back_to_postcode_when_nation_is_unrecognised(string nation)
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: "EH1 1AA", nation: nation);
+
+        var reference = generator.Generate(payload);
+
+        // Falls through to the postcode-derived code (Scotland, EH1) rather than defaulting to
+        // England outright - an unrecognised nation is not the same as an absent one, but neither
+        // can be trusted, so this is the same "derive from what's actually there" behaviour as
+        // no nation field at all.
+        Assert.Equal("SE", reference.Substring(4, 2));
+    }
+
+    [Fact]
+    public void Generate_falls_back_to_postcode_when_nation_is_absent()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: "CF10 1AA", nation: null);
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("NR", reference.Substring(4, 2));
     }
 
     [Fact]
@@ -443,6 +499,28 @@ public sealed class ApplicationReferenceGeneratorTests
 
         Assert.Equal("SE", reference.Substring(4, 2));
         Assert.Equal("AP26SE500021AAGL", reference);
+    }
+
+    // RA-526: pins the whole reference, not just the agency-code segment, on the nation path -
+    // proving ResolveRegulatorPostcode's exporter->registered-office selection still feeds the
+    // postcode-suffix segment even when payload.nation (not postcode) decides the agency code,
+    // and that the two segments can legitimately come from different sources on the same call.
+    [Fact]
+    public void Generate_full_reference_when_nation_decides_agency_code_but_postcode_still_feeds_the_suffix()
+    {
+        var generator = new ApplicationReferenceGenerator();
+        var payload = MakeFlatPayload(
+            accreditationYear: 2026,
+            wasteProcessingType: "exporter",
+            siteAddressPostcode: "SW1A 1AA", // England site — must be ignored for an exporter
+            companyRegisterAddressPostcode: "EH1 1AA", // feeds the postcode-suffix segment (1AA)
+            nation: "Wales" // disagrees with the Scotland postcode - nation must win the agency code
+        );
+
+        var reference = generator.Generate(payload);
+
+        Assert.Equal("NR", reference.Substring(4, 2));
+        Assert.Equal("AP26NR500021AAGL", reference);
     }
 
     [Fact]
