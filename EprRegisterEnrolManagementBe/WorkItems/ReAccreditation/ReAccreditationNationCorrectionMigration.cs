@@ -1,6 +1,8 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
+using Microsoft.AspNetCore.HeaderPropagation;
+using Microsoft.Extensions.Primitives;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -45,9 +47,33 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// would find <c>payload.nation</c> already matching and skip it — see
 /// <see cref="PlanCorrection"/>.
 /// </para>
+///
+/// <para>
+/// Same header-propagation gotcha as <see cref="ReAccreditationStatusPushHook"/> (RA-519
+/// follow-up), and no less real for running at boot instead of from a queued job:
+/// <see cref="IReExAccreditationClient"/>'s <c>HttpClient</c> is wired with
+/// <c>AddHeaderPropagation()</c> (see <c>HttpClientRegistrationExtension.AddHttpClientWithProxy</c>),
+/// and <see cref="HeaderPropagationValues.Headers"/> is backed by an <c>AsyncLocal</c> that only
+/// <c>app.UseHeaderPropagation()</c> populates — for the lifetime of an inbound HTTP request. This
+/// migration runs from <see cref="WorkItemMigrationHostedService.StartAsync"/> at application
+/// startup, never inside a request, so nothing ever sets that AsyncLocal: the first
+/// <see cref="IReExAccreditationClient.GetNationAsync"/> call would otherwise throw
+/// <c>InvalidOperationException</c> ("HeaderPropagationValues.Headers has not been initialized")
+/// out of <see cref="ApplyAsync"/> entirely, aborting the whole run before it touches a single
+/// candidate and getting logged only as a generic "migration failed" by
+/// <see cref="WorkItemMigrationHostedService"/> — not a ReEx-lookup-failure per candidate, and not
+/// idempotency saving the day, since it never gets that far.
+/// </para>
+///
+/// <para>
+/// Unlike the status-push hook there is no inbound request to snapshot headers from — this is a
+/// boot-time job, not a request-triggered one — so the fix is simply to give the AsyncLocal an
+/// (empty) value before the first outbound call, rather than capture-then-restore real ones.
+/// </para>
 /// </summary>
 internal sealed class ReAccreditationNationCorrectionMigration(
     IReExAccreditationClient reExClient,
+    HeaderPropagationValues headerPropagationValues,
     ILogger<ReAccreditationNationCorrectionMigration> logger,
     TimeProvider? timeProvider = null
 ) : IWorkItemMigration
@@ -65,6 +91,17 @@ internal sealed class ReAccreditationNationCorrectionMigration(
     public async Task ApplyAsync(IWorkItemPersistence persistence, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(persistence);
+
+        // Runs at boot, never inside an HTTP request, so nothing else ever
+        // populates this AsyncLocal - without it, the first ReEx call below
+        // throws InvalidOperationException and aborts the whole run before a
+        // single candidate is even looked at. Unconditional, not
+        // null-coalesced: the Headers GETTER itself throws when unset, so
+        // reading it first to check is not an option. No real request
+        // headers exist to propagate in this context, so an empty
+        // dictionary is correct, not a placeholder - see the class doc
+        // comment.
+        headerPropagationValues.Headers = new Dictionary<string, StringValues>();
 
         logger.LogInformation("RA-526 nation correction starting.");
 
