@@ -68,11 +68,12 @@ public class ClientIdAuthenticationOptions : AuthenticationSchemeOptions
     public TimeSpan MaxClockSkew { get; set; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Lifetime of an entry in the in-memory nonce replay cache. Should be
-    /// at least <c>2 * MaxClockSkew</c> so a request that arrived at the
-    /// edge of the freshness window cannot be replayed by re-using a
-    /// nonce that has already aged out of the cache. Defaults to 10
-    /// minutes.
+    /// Lifetime of a consumed nonce in the Mongo-backed replay store
+    /// (<see cref="IClientIdAuthNonceStore"/>), enforced via a TTL index on
+    /// the stored document's expiry. Should be at least
+    /// <c>2 * MaxClockSkew</c> so a request that arrived at the edge of the
+    /// freshness window cannot be replayed by re-using a nonce that has
+    /// already aged out of the store. Defaults to 10 minutes.
     /// </summary>
     public TimeSpan ReplayCacheTtl { get; set; } = TimeSpan.FromMinutes(10);
 

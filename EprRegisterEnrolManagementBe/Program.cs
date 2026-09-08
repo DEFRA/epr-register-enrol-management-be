@@ -43,9 +43,9 @@ static Task RunStartupMigrations(WebApplication app) =>
             // harness because CDP offers no way to run ad-hoc mongosh against a
             // deployed database, and the open question is precisely whether a
             // deployed environment retained affected data.
-            ("epr-2uxy-isnewsite-audit (read-only)",
-                ReAccreditationIsNewSiteAudit.RunAsync),
-        ]);
+            ("epr-2uxy-isnewsite-audit (read-only)", ReAccreditationIsNewSiteAudit.RunAsync),
+        ]
+    );
 
 [ExcludeFromCodeCoverage]
 static WebApplication BuildApp(string[] args)
@@ -138,9 +138,6 @@ static void ConfigureServices(WebApplicationBuilder builder)
     );
 
     services.AddHttpContextAccessor();
-    // In-memory cache backs the HMAC nonce replay defence in
-    // ClientIdAuthenticationHandler. Singleton by default.
-    services.AddMemoryCache();
 
     ConfigureAuth(services, configuration);
 
@@ -265,6 +262,17 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
         );
 
     services.AddAuthorization();
+
+    // RA-525: Mongo-backed replay store, shared across every running
+    // instance — replaces the old per-process IMemoryCache. Registered
+    // behind a Lazy<> (see ClientIdAuthenticationHandler's constructor
+    // comment) so constructing the handler — which happens for every
+    // request, not just signed ones (RA-105) — never depends on Mongo
+    // being reachable.
+    services.AddSingleton<IClientIdAuthNonceStore, ClientIdAuthNonceStore>();
+    services.AddSingleton(sp => new Lazy<IClientIdAuthNonceStore>(() =>
+        sp.GetRequiredService<IClientIdAuthNonceStore>()
+    ));
 }
 
 // RA-345: per-caller secrets, keyed by the clientId each caller is expected
@@ -679,7 +687,8 @@ static void LogNotifyClientRegistration(WebApplication app)
     var sendingEnabled = NotifySendingPolicy.ShouldSendEmails(
         app.Configuration.GetValue<bool?>(NotifySendingPolicy.SendEmailsKey),
         cdpEnvironment,
-        app.Environment.IsDevelopment());
+        app.Environment.IsDevelopment()
+    );
     app.Logger.LogInformation(
         "Notify integration: enabled={NotificationsEnabled} client={NotifyClientType} "
             + "apiKeyConfigured={ApiKeyConfigured} sendingEnabled={NotifySendingEnabled} "

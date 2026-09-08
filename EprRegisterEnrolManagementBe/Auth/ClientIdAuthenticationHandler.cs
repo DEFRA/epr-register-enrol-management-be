@@ -4,7 +4,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -50,7 +49,14 @@ public class ClientIdAuthenticationHandler(
     UrlEncoder encoder,
     IHostEnvironment hostEnvironment,
     TimeProvider timeProvider,
-    IMemoryCache replayCache
+    // Lazy: the concrete store is Mongo-backed (RA-525) and this handler is
+    // constructed for EVERY request (RA-105 - a lone auth scheme becomes
+    // the implicit default, so UseAuthentication() runs it even for
+    // /health and /openapi). Resolving IClientIdAuthNonceStore eagerly here
+    // would make every request - including liveness probes - depend on
+    // Mongo being reachable merely to authenticate, not just requests that
+    // actually reach the replay check below.
+    Lazy<IClientIdAuthNonceStore> nonceStore
 ) : AuthenticationHandler<ClientIdAuthenticationOptions>(options, logger, encoder)
 {
     private const string AbsentValue = "(absent)";
@@ -60,23 +66,19 @@ public class ClientIdAuthenticationHandler(
     // log line even under concurrent first requests.
     private static int s_devDowngradeWarned;
 
-    // Cache-key prefix so nonce entries cannot collide with anything else
-    // a future caller might park in the shared IMemoryCache instance.
-    private const string ReplayCacheKeyPrefix = "client-id:nonce:";
-
-    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var headerName = Options.HeaderName;
 
         if (!Request.Headers.TryGetValue(headerName, out var values))
         {
-            return Task.FromResult(AuthenticateResult.NoResult());
+            return AuthenticateResult.NoResult();
         }
 
         var clientId = values.ToString();
         if (string.IsNullOrWhiteSpace(clientId))
         {
-            return Task.FromResult(AuthenticateResult.Fail($"Empty {headerName} header"));
+            return AuthenticateResult.Fail($"Empty {headerName} header");
         }
 
         // Length caps run BEFORE any further processing (in particular,
@@ -87,77 +89,52 @@ public class ClientIdAuthenticationHandler(
         // would be worse than a 401.
         if (clientId.Length > Options.MaxClientIdLength)
         {
-            return Task.FromResult(
-                AuthenticateResult.Fail($"{headerName} exceeds {Options.MaxClientIdLength} chars")
+            return AuthenticateResult.Fail(
+                $"{headerName} exceeds {Options.MaxClientIdLength} chars"
             );
         }
 
-        string? userId = null;
-        string? userName = null;
-        string? role = null;
-        string? nation = null;
-
-        if (Request.Headers.TryGetValue(Options.UserIdHeaderName, out var userIdValues))
-        {
-            var v = userIdValues.ToString();
-            if (v.Length > Options.MaxUserIdLength)
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.UserIdHeaderName} exceeds {Options.MaxUserIdLength} chars"
-                    )
-                );
-            }
-            if (!string.IsNullOrWhiteSpace(v))
-                userId = v;
-        }
-        if (Request.Headers.TryGetValue(Options.UserNameHeaderName, out var userNameValues))
-        {
-            var v = userNameValues.ToString();
-            if (v.Length > Options.MaxUserNameLength)
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.UserNameHeaderName} exceeds {Options.MaxUserNameLength} chars"
-                    )
-                );
-            }
-            if (!string.IsNullOrWhiteSpace(v))
-                userName = v;
-        }
         // RA-469: role/nation trust headers follow the exact same
-        // optional-header pattern as userId/userName above, and (like
+        // optional-header pattern as userId/userName, and (like
         // userId/userName) are folded into the v3 HMAC canonical payload —
         // see ComputeSignature's doc comment — so a tampered role/nation
         // invalidates the signature the same way a tampered userId would.
-        if (Request.Headers.TryGetValue(Options.RoleHeaderName, out var roleValues))
-        {
-            var v = roleValues.ToString();
-            if (v.Length > Options.MaxUserRoleLength)
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.RoleHeaderName} exceeds {Options.MaxUserRoleLength} chars"
-                    )
-                );
-            }
-            if (!string.IsNullOrWhiteSpace(v))
-                role = v;
-        }
-        if (Request.Headers.TryGetValue(Options.NationHeaderName, out var nationValues))
-        {
-            var v = nationValues.ToString();
-            if (v.Length > Options.MaxUserNationLength)
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.NationHeaderName} exceeds {Options.MaxUserNationLength} chars"
-                    )
-                );
-            }
-            if (!string.IsNullOrWhiteSpace(v))
-                nation = v;
-        }
+        if (
+            TryValidateOptionalHeader(
+                Options.UserIdHeaderName,
+                Options.MaxUserIdLength,
+                out var userId
+            ) is
+            { } userIdFailure
+        )
+            return userIdFailure;
+        if (
+            TryValidateOptionalHeader(
+                Options.UserNameHeaderName,
+                Options.MaxUserNameLength,
+                out var userName
+            ) is
+            { } userNameFailure
+        )
+            return userNameFailure;
+        if (
+            TryValidateOptionalHeader(
+                Options.RoleHeaderName,
+                Options.MaxUserRoleLength,
+                out var role
+            ) is
+            { } roleFailure
+        )
+            return roleFailure;
+        if (
+            TryValidateOptionalHeader(
+                Options.NationHeaderName,
+                Options.MaxUserNationLength,
+                out var nation
+            ) is
+            { } nationFailure
+        )
+            return nationFailure;
 
         // Integrity check: when per-caller secrets are configured the BFF
         // must sign the trust headers with HMAC-SHA256, supply a fresh
@@ -166,164 +143,17 @@ public class ClientIdAuthenticationHandler(
         // replay a previously captured signed request.
         if (Options.ClientSecrets.Count > 0)
         {
-            // --- Timestamp: present, parseable, within +/- MaxClockSkew. ---
-            if (!Request.Headers.TryGetValue(Options.TimestampHeaderName, out var timestampValues))
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header")
-                );
-            }
-
-            var timestampHeader = timestampValues.ToString();
-            if (string.IsNullOrWhiteSpace(timestampHeader))
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header")
-                );
-            }
-
-            if (timestampHeader.Length > Options.MaxTimestampLength)
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.TimestampHeaderName} exceeds {Options.MaxTimestampLength} chars"
-                    )
-                );
-            }
-
-            if (
-                !DateTimeOffset.TryParse(
-                    timestampHeader,
-                    CultureInfo.InvariantCulture,
-                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
-                    out var timestamp
-                )
-            )
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Malformed {Options.TimestampHeaderName} header")
-                );
-            }
-
-            var now = timeProvider.GetUtcNow();
-            if ((now - timestamp).Duration() > Options.MaxClockSkew)
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Stale {Options.TimestampHeaderName} header")
-                );
-            }
-
-            // --- Nonce: present. Replay check happens after signature
-            // verification so a guessable-nonce attacker cannot lock out
-            // legitimate callers by burning their nonces with bad sigs.
-            if (!Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonceValues))
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header")
-                );
-            }
-
-            var nonce = nonceValues.ToString();
-            if (string.IsNullOrWhiteSpace(nonce))
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header")
-                );
-            }
-
-            if (nonce.Length > Options.MaxNonceLength)
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.NonceHeaderName} exceeds {Options.MaxNonceLength} chars"
-                    )
-                );
-            }
-
-            // --- Signature: matches expected HMAC over v3 canonical string. ---
-            if (!Request.Headers.TryGetValue(Options.SignatureHeaderName, out var signatureValues))
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.SignatureHeaderName} header")
-                );
-            }
-
-            var providedSignature = signatureValues.ToString();
-            // Cap BEFORE HMAC compute: oversize signatures are cheap to
-            // detect and computing HMAC over a megabyte of header is itself
-            // a small DoS amplifier.
-            if (providedSignature.Length > Options.MaxSignatureLength)
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.SignatureHeaderName} exceeds {Options.MaxSignatureLength} chars"
-                    )
-                );
-            }
-
-            // --- Client secret lookup: the secret used to verify the
-            // signature is the one registered for the clientId the caller
-            // asserted (RA-345). An unrecognized clientId gets the same
-            // externally-visible failure MESSAGE as a bad signature, so the
-            // response body/WWW-Authenticate header alone can't be used to
-            // probe which client ids are known — but is logged distinctly
-            // so operators can tell the two failure modes apart. This does
-            // NOT close the lookup as a timing side-channel: an unrecognized
-            // clientId returns immediately, while a known one goes on to
-            // compute an HMAC before failing, so response latency alone
-            // could in principle distinguish the two. Accepted as
-            // negligible here because the only client ids that could ever
-            // be confirmed "known" this way are the two documented public
-            // defaults (frontend, epr-register-enrol-backend) — there is
-            // nothing secret left to enumerate.
-            if (!Options.ClientSecrets.TryGetValue(clientId, out var secret))
-            {
-                Logger.LogWarning(
-                    "ClientIdAuthentication: no secret registered for asserted client id {ClientId}",
-                    clientId
-                );
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header")
-                );
-            }
-
-            var signaturePayload = new ClientIdSignaturePayload(
+            var signedRequestFailure = await VerifySignedRequestAsync(
                 clientId,
                 userId,
                 userName,
-                timestampHeader,
-                nonce,
                 role,
                 nation
             );
-
-            if (!VerifySignature(secret, signaturePayload, providedSignature))
+            if (signedRequestFailure is not null)
             {
-                Logger.LogWarning(
-                    "ClientIdAuthentication: signature mismatch for asserted client id {ClientId}",
-                    clientId
-                );
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header")
-                );
+                return signedRequestFailure;
             }
-
-            // --- Replay check: the nonce is single-use within its TTL. ---
-            var cacheKey = ReplayCacheKeyPrefix + nonce;
-            if (replayCache.TryGetValue(cacheKey, out _))
-            {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Replayed {Options.NonceHeaderName} header")
-                );
-            }
-            replayCache.Set(
-                cacheKey,
-                true,
-                new MemoryCacheEntryOptions
-                {
-                    AbsoluteExpirationRelativeToNow = Options.ReplayCacheTtl,
-                }
-            );
         }
         else if (!hostEnvironment.IsDevelopment())
         {
@@ -335,9 +165,7 @@ public class ClientIdAuthenticationHandler(
                 "ClientIdAuthentication misconfigured: no ClientSecrets are set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
                 hostEnvironment.EnvironmentName
             );
-            return Task.FromResult(
-                AuthenticateResult.Fail("Authentication misconfigured: no client secrets set")
-            );
+            return AuthenticateResult.Fail("Authentication misconfigured: no client secrets set");
         }
         else if (Interlocked.CompareExchange(ref s_devDowngradeWarned, 1, 0) == 0)
         {
@@ -350,17 +178,217 @@ public class ClientIdAuthenticationHandler(
             );
         }
 
+        var claims = BuildClaims(clientId, userId, userName, role, nation);
+        var identity = new ClaimsIdentity(claims, Scheme.Name);
+        var principal = new ClaimsPrincipal(identity);
+        var ticket = new AuthenticationTicket(principal, Scheme.Name);
+
+        return AuthenticateResult.Success(ticket);
+    }
+
+    /// <summary>
+    /// Reads one optional trust header (userId/userName/role/nation), guards
+    /// its length, and reports the outcome as either a fail result or the
+    /// resolved value via <paramref name="value"/> — the shared shape behind
+    /// all four optional-header checks in <see cref="HandleAuthenticateAsync"/>.
+    /// Returns <c>null</c> (with <paramref name="value"/> set) on success;
+    /// the header being entirely absent is success with a <c>null</c> value,
+    /// not a failure.
+    /// </summary>
+    private AuthenticateResult? TryValidateOptionalHeader(
+        string headerName,
+        int maxLength,
+        out string? value
+    )
+    {
+        value = null;
+        if (!Request.Headers.TryGetValue(headerName, out var raw))
+        {
+            return null;
+        }
+
+        var v = raw.ToString();
+        if (v.Length > maxLength)
+        {
+            return AuthenticateResult.Fail($"{headerName} exceeds {maxLength} chars");
+        }
+
+        value = string.IsNullOrWhiteSpace(v) ? null : v;
+        return null;
+    }
+
+    /// <summary>
+    /// The full HMAC integrity check reached only when
+    /// <see cref="ClientIdAuthenticationOptions.ClientSecrets"/> is
+    /// non-empty: timestamp freshness, nonce presence, signature
+    /// verification, and the single-use replay check, in that order (see
+    /// the inline comments below for why each ordering matters). Returns
+    /// <c>null</c> on success or the <see cref="AuthenticateResult.Fail"/>
+    /// result to return from <see cref="HandleAuthenticateAsync"/>.
+    /// </summary>
+    private async Task<AuthenticateResult?> VerifySignedRequestAsync(
+        string clientId,
+        string? userId,
+        string? userName,
+        string? role,
+        string? nation
+    )
+    {
+        // --- Timestamp: present, parseable, within +/- MaxClockSkew. ---
+        if (!Request.Headers.TryGetValue(Options.TimestampHeaderName, out var timestampValues))
+        {
+            return AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header");
+        }
+
+        var timestampHeader = timestampValues.ToString();
+        if (string.IsNullOrWhiteSpace(timestampHeader))
+        {
+            return AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header");
+        }
+
+        if (timestampHeader.Length > Options.MaxTimestampLength)
+        {
+            return AuthenticateResult.Fail(
+                $"{Options.TimestampHeaderName} exceeds {Options.MaxTimestampLength} chars"
+            );
+        }
+
+        if (
+            !DateTimeOffset.TryParse(
+                timestampHeader,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal,
+                out var timestamp
+            )
+        )
+        {
+            return AuthenticateResult.Fail($"Malformed {Options.TimestampHeaderName} header");
+        }
+
+        var now = timeProvider.GetUtcNow();
+        if ((now - timestamp).Duration() > Options.MaxClockSkew)
+        {
+            return AuthenticateResult.Fail($"Stale {Options.TimestampHeaderName} header");
+        }
+
+        // --- Nonce: present. Replay check happens after signature
+        // verification so a guessable-nonce attacker cannot lock out
+        // legitimate callers by burning their nonces with bad sigs.
+        if (!Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonceValues))
+        {
+            return AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header");
+        }
+
+        var nonce = nonceValues.ToString();
+        if (string.IsNullOrWhiteSpace(nonce))
+        {
+            return AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header");
+        }
+
+        if (nonce.Length > Options.MaxNonceLength)
+        {
+            return AuthenticateResult.Fail(
+                $"{Options.NonceHeaderName} exceeds {Options.MaxNonceLength} chars"
+            );
+        }
+
+        // --- Signature: matches expected HMAC over v3 canonical string. ---
+        if (!Request.Headers.TryGetValue(Options.SignatureHeaderName, out var signatureValues))
+        {
+            return AuthenticateResult.Fail($"Missing {Options.SignatureHeaderName} header");
+        }
+
+        var providedSignature = signatureValues.ToString();
+        // Cap BEFORE HMAC compute: oversize signatures are cheap to
+        // detect and computing HMAC over a megabyte of header is itself
+        // a small DoS amplifier.
+        if (providedSignature.Length > Options.MaxSignatureLength)
+        {
+            return AuthenticateResult.Fail(
+                $"{Options.SignatureHeaderName} exceeds {Options.MaxSignatureLength} chars"
+            );
+        }
+
+        // --- Client secret lookup: the secret used to verify the
+        // signature is the one registered for the clientId the caller
+        // asserted (RA-345). An unrecognized clientId gets the same
+        // externally-visible failure MESSAGE as a bad signature, so the
+        // response body/WWW-Authenticate header alone can't be used to
+        // probe which client ids are known — but is logged distinctly
+        // so operators can tell the two failure modes apart. This does
+        // NOT close the lookup as a timing side-channel: an unrecognized
+        // clientId returns immediately, while a known one goes on to
+        // compute an HMAC before failing, so response latency alone
+        // could in principle distinguish the two. Accepted as
+        // negligible here because the only client ids that could ever
+        // be confirmed "known" this way are the two documented public
+        // defaults (frontend, epr-register-enrol-backend) — there is
+        // nothing secret left to enumerate.
+        if (!Options.ClientSecrets.TryGetValue(clientId, out var secret))
+        {
+            Logger.LogWarning(
+                "ClientIdAuthentication: no secret registered for asserted client id {ClientId}",
+                clientId
+            );
+            return AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header");
+        }
+
+        var signaturePayload = new ClientIdSignaturePayload(
+            clientId,
+            userId,
+            userName,
+            timestampHeader,
+            nonce,
+            role,
+            nation
+        );
+
+        if (!VerifySignature(secret, signaturePayload, providedSignature))
+        {
+            Logger.LogWarning(
+                "ClientIdAuthentication: signature mismatch for asserted client id {ClientId}",
+                clientId
+            );
+            return AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header");
+        }
+
+        // --- Replay check: the nonce is single-use within its TTL. ---
+        if (
+            !await nonceStore.Value.TryConsumeAsync(
+                nonce,
+                Options.ReplayCacheTtl,
+                Context.RequestAborted
+            )
+        )
+        {
+            return AuthenticateResult.Fail($"Replayed {Options.NonceHeaderName} header");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Builds the claim set for a successfully authenticated request. The
+    /// BFF (frontend) forwards the acting user's identity in optional
+    /// headers. They are not authenticators in their own right — the HMAC
+    /// signature is what establishes trust in the primary client id header
+    /// — but they let backend endpoints produce more useful audit log lines
+    /// without a separate user lookup.
+    /// </summary>
+    private static List<Claim> BuildClaims(
+        string clientId,
+        string? userId,
+        string? userName,
+        string? role,
+        string? nation
+    )
+    {
         var claims = new List<Claim>
         {
             new(ClaimTypes.NameIdentifier, clientId),
             new("client_id", clientId),
         };
 
-        // The BFF (frontend) forwards the acting user's identity in optional
-        // headers. They are not authenticators in their own right — the HMAC
-        // signature above is what establishes trust in the primary client id
-        // header — but they let backend endpoints produce more useful audit
-        // log lines without a separate user lookup.
         if (userId is not null)
             claims.Add(new Claim("user:id", userId));
         if (userName is not null)
@@ -370,11 +398,7 @@ public class ClientIdAuthenticationHandler(
         if (nation is not null)
             claims.Add(new Claim("user:nation", nation));
 
-        var identity = new ClaimsIdentity(claims, Scheme.Name);
-        var principal = new ClaimsPrincipal(identity);
-        var ticket = new AuthenticationTicket(principal, Scheme.Name);
-
-        return Task.FromResult(AuthenticateResult.Success(ticket));
+        return claims;
     }
 
     /// <summary>
