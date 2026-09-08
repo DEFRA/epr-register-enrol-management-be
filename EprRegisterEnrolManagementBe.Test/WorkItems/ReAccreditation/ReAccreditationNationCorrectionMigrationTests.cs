@@ -2,6 +2,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
+using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -75,8 +76,11 @@ public class ReAccreditationNationCorrectionMigrationTests
             ],
         };
 
-    private static ReAccreditationNationCorrectionMigration BuildSut(IReExAccreditationClient reExClient) =>
+    private static ReAccreditationNationCorrectionMigration BuildSut(
+        IReExAccreditationClient reExClient,
+        HeaderPropagationValues? headerPropagationValues = null) =>
         new(reExClient,
+            headerPropagationValues ?? new HeaderPropagationValues(),
             NullLogger<ReAccreditationNationCorrectionMigration>.Instance,
             new FakeTimeProvider(s_now));
 
@@ -219,5 +223,43 @@ public class ReAccreditationNationCorrectionMigrationTests
         await sut.ApplyAsync(persistence, ct);
 
         await persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ApplyAsync_initialises_HeaderPropagationValues_before_calling_ReEx()
+    {
+        // Regression test: this migration runs at application startup (see
+        // WorkItemMigrationHostedService), never inside an HTTP request, so nothing else
+        // ever populates HeaderPropagationValues.Headers - reading it (or rather, the real
+        // HeaderPropagationMessageHandler reading it) throws InvalidOperationException
+        // until something sets it, which is exactly what took the real migration down in
+        // production (mirrors ReAccreditationStatusPushHook's RA-519 follow-up).
+        //
+        // The assertion MUST run from inside the ReEx call, not after awaiting ApplyAsync:
+        // Headers is AsyncLocal-backed, and .NET restores the caller's ExecutionContext once
+        // an awaited async method returns, so a mutation ApplyAsync makes to it is invisible
+        // back here in the test after `await sut.ApplyAsync(...)` completes - by design, not
+        // a bug. It IS visible to anything ApplyAsync itself calls (including this
+        // substitute), which is the only place that actually matters: the real handler reads
+        // Headers from inside that same call.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildBrokenItem();
+        var persistence = PersistenceWith(item);
+        var headerPropagationValues = new HeaderPropagationValues();
+
+        var reExClient = Substitute.For<IReExAccreditationClient>();
+        reExClient
+            .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                Assert.NotNull(headerPropagationValues.Headers);
+                Assert.Empty(headerPropagationValues.Headers);
+                return Task.FromResult<Nation?>(Nation.Wales);
+            });
+        var sut = BuildSut(reExClient, headerPropagationValues);
+
+        await sut.ApplyAsync(persistence, ct);
+
+        await reExClient.Received(1).GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>());
     }
 }
