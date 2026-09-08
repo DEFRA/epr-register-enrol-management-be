@@ -1513,9 +1513,8 @@ public class ReAccreditationEndpointTests
         "why",
         "Select a valid section to query"
     )]
-    // reason missing / whitespace-only
-    [InlineData(new[] { "business-plan" }, null, "Enter a reason for the query")]
-    [InlineData(new[] { "business-plan" }, "   ", "Enter a reason for the query")]
+    // RA-534: a missing / whitespace-only reason is no longer rejected here —
+    // see Query_accepts_a_missing_reason_and_records_it_as_empty below.
     public async Task Query_rejects_an_invalid_body_before_touching_the_work_item(
         string[]? sections,
         string? reason,
@@ -1575,6 +1574,43 @@ public class ReAccreditationEndpointTests
             );
             Assert.Equal(ReAccreditationQueryValidator.ReasonTooLongMessage, problem!.Detail);
         }
+    }
+
+    [Theory]
+    // RA-534: the reason is optional. An omitted or whitespace-only reason
+    // is a valid query; it is normalised to an empty string on both the
+    // audit entry and the stamped CurrentQuery.
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Query_accepts_a_missing_reason_and_records_it_as_empty(string? reason)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "submitted", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query",
+            QueryBody(reason: reason),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+
+        var queryEntry = Assert.Single(
+            persisted.AuditLog,
+            a => a.Action == ReAccreditationQueryService.AuditAction
+        );
+        Assert.Equal("business-plan,prn-tonnage", queryEntry.Details.GetValueOrDefault("sections"));
+        Assert.Equal(string.Empty, queryEntry.Details.GetValueOrDefault("reason"));
+
+        Assert.Equal(string.Empty, persisted.Payload!["currentQuery"]["reason"].AsString);
     }
 
     // ------------------------- RA-311/MBE-1 ResumeFromQuery -------------------------

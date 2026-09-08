@@ -635,22 +635,19 @@ internal sealed class ReAccreditationNotificationHook(
             // record its audit entry is built from, so the emailed reason is
             // by construction the reason recorded against the application.
             //
-            // Falls back to an empty string when no current query is present.
-            // The query endpoint validates the reason as mandatory and
-            // non-whitespace, so that only happens if a queried transition is
-            // applied by some other path (e.g. the generic
-            // /work-items/{id}/actions/{actionId} route, or a legacy item).
-            // An empty value is preferable to both alternatives: omitting the
-            // key would make Notify 400 the send, and throwing would fail a
-            // notification that must never unwind the query.
+            // Falls back to an empty string when no reason is present. RA-534
+            // made the reason optional, so this is now an ordinary case (the
+            // caseworker queried without giving one) rather than a sign the
+            // transition bypassed ReAccreditationQueryService. An empty value
+            // is required regardless: omitting the key would make Notify 400
+            // the send, and throwing would fail a notification that must never
+            // unwind the query.
             var reason = payload.CurrentQuery?.Reason;
             if (string.IsNullOrWhiteSpace(reason))
             {
-                logger.LogWarning(
-                    "Queried notification for work item {WorkItemId} has no current query "
-                        + "reason on its payload; sending the email with an empty "
-                        + "((query_reason)). This indicates the queried transition was "
-                        + "applied outside ReAccreditationQueryService.",
+                logger.LogDebug(
+                    "Queried notification for work item {WorkItemId} has no query reason; "
+                        + "sending the email with an empty ((query_reason)).",
                     workItem.Id
                 );
                 reason = string.Empty;

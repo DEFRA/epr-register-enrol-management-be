@@ -83,16 +83,16 @@ public class ReAccreditationQueryValidatorTests
 
     // ------------------------------- reason -------------------------------
 
+    // RA-534: the reason is optional — a missing, empty or whitespace-only
+    // reason is a valid request.
     [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("\t\n ")]
-    public void Validate_rejects_a_missing_or_whitespace_reason(string? reason)
+    public void Validate_accepts_a_missing_or_whitespace_reason(string? reason)
     {
-        Assert.Equal(
-            ReAccreditationQueryValidator.MissingReasonMessage,
-            ReAccreditationQueryValidator.Validate(Request(reason: reason)));
+        Assert.Null(ReAccreditationQueryValidator.Validate(Request(reason: reason)));
     }
 
     [Fact]

@@ -62,9 +62,12 @@ internal static class ReAccreditationQueryValidator
     // Wording is shared with the case management frontend's own validation so
     // the two spellings of the same rule cannot drift. The frontend validates
     // first; this is the backstop for hand-crafted requests.
+    //
+    // RA-534: the reason is no longer mandatory. An omitted, empty or
+    // whitespace-only reason is a valid request; only the word cap still
+    // applies, and only to a reason that was actually supplied.
     public const string NoSectionsMessage = "Select which areas you want to query";
     public const string UnknownSectionMessage = "Select a valid section to query";
-    public const string MissingReasonMessage = "Enter a reason for the query";
     public const string ReasonTooLongMessage = "Query must be 200 words or fewer";
 
     public static string? Validate(QueryApplicationRequest? request)
@@ -86,12 +89,10 @@ internal static class ReAccreditationQueryValidator
             }
         }
 
-        if (string.IsNullOrWhiteSpace(request!.Reason))
-        {
-            return MissingReasonMessage;
-        }
-
-        if (QueryReasonWordCounter.CountWords(request.Reason) > MaxReasonWords)
+        // RA-534: no missing-reason check — an absent reason is valid. The
+        // word cap still guards a reason that was supplied
+        // (CountWords treats null/whitespace as zero words).
+        if (QueryReasonWordCounter.CountWords(request!.Reason) > MaxReasonWords)
         {
             return ReasonTooLongMessage;
         }

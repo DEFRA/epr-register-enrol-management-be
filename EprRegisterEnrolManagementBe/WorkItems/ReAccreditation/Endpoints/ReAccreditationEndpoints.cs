@@ -759,7 +759,10 @@ internal static class ReAccreditationEndpoints
         var result = await queryService.QueryAsync(
             id,
             request.Sections!,
-            request.Reason!.Trim(),
+            // RA-534: the reason is optional — normalise an omitted or
+            // whitespace-only one to an empty string for the service and its
+            // audit entry.
+            request.Reason?.Trim() ?? string.Empty,
             httpContext.User,
             cancellationToken
         );
