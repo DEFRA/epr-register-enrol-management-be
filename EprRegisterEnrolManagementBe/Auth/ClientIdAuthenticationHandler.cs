@@ -4,7 +4,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using Microsoft.AspNetCore.Authentication;
-using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -50,7 +49,14 @@ public class ClientIdAuthenticationHandler(
     UrlEncoder encoder,
     IHostEnvironment hostEnvironment,
     TimeProvider timeProvider,
-    IMemoryCache replayCache
+    // Lazy: the concrete store is Mongo-backed (RA-525) and this handler is
+    // constructed for EVERY request (RA-105 - a lone auth scheme becomes
+    // the implicit default, so UseAuthentication() runs it even for
+    // /health and /openapi). Resolving IClientIdAuthNonceStore eagerly here
+    // would make every request - including liveness probes - depend on
+    // Mongo being reachable merely to authenticate, not just requests that
+    // actually reach the replay check below.
+    Lazy<IClientIdAuthNonceStore> nonceStore
 ) : AuthenticationHandler<ClientIdAuthenticationOptions>(options, logger, encoder)
 {
     private const string AbsentValue = "(absent)";
@@ -60,23 +66,19 @@ public class ClientIdAuthenticationHandler(
     // log line even under concurrent first requests.
     private static int s_devDowngradeWarned;
 
-    // Cache-key prefix so nonce entries cannot collide with anything else
-    // a future caller might park in the shared IMemoryCache instance.
-    private const string ReplayCacheKeyPrefix = "client-id:nonce:";
-
-    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
+    protected override async Task<AuthenticateResult> HandleAuthenticateAsync()
     {
         var headerName = Options.HeaderName;
 
         if (!Request.Headers.TryGetValue(headerName, out var values))
         {
-            return Task.FromResult(AuthenticateResult.NoResult());
+            return AuthenticateResult.NoResult();
         }
 
         var clientId = values.ToString();
         if (string.IsNullOrWhiteSpace(clientId))
         {
-            return Task.FromResult(AuthenticateResult.Fail($"Empty {headerName} header"));
+            return AuthenticateResult.Fail($"Empty {headerName} header");
         }
 
         // Length caps run BEFORE any further processing (in particular,
@@ -87,8 +89,8 @@ public class ClientIdAuthenticationHandler(
         // would be worse than a 401.
         if (clientId.Length > Options.MaxClientIdLength)
         {
-            return Task.FromResult(
-                AuthenticateResult.Fail($"{headerName} exceeds {Options.MaxClientIdLength} chars")
+            return AuthenticateResult.Fail(
+                $"{headerName} exceeds {Options.MaxClientIdLength} chars"
             );
         }
 
@@ -102,10 +104,8 @@ public class ClientIdAuthenticationHandler(
             var v = userIdValues.ToString();
             if (v.Length > Options.MaxUserIdLength)
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.UserIdHeaderName} exceeds {Options.MaxUserIdLength} chars"
-                    )
+                return AuthenticateResult.Fail(
+                    $"{Options.UserIdHeaderName} exceeds {Options.MaxUserIdLength} chars"
                 );
             }
             if (!string.IsNullOrWhiteSpace(v))
@@ -116,10 +116,8 @@ public class ClientIdAuthenticationHandler(
             var v = userNameValues.ToString();
             if (v.Length > Options.MaxUserNameLength)
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.UserNameHeaderName} exceeds {Options.MaxUserNameLength} chars"
-                    )
+                return AuthenticateResult.Fail(
+                    $"{Options.UserNameHeaderName} exceeds {Options.MaxUserNameLength} chars"
                 );
             }
             if (!string.IsNullOrWhiteSpace(v))
@@ -135,10 +133,8 @@ public class ClientIdAuthenticationHandler(
             var v = roleValues.ToString();
             if (v.Length > Options.MaxUserRoleLength)
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.RoleHeaderName} exceeds {Options.MaxUserRoleLength} chars"
-                    )
+                return AuthenticateResult.Fail(
+                    $"{Options.RoleHeaderName} exceeds {Options.MaxUserRoleLength} chars"
                 );
             }
             if (!string.IsNullOrWhiteSpace(v))
@@ -149,10 +145,8 @@ public class ClientIdAuthenticationHandler(
             var v = nationValues.ToString();
             if (v.Length > Options.MaxUserNationLength)
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.NationHeaderName} exceeds {Options.MaxUserNationLength} chars"
-                    )
+                return AuthenticateResult.Fail(
+                    $"{Options.NationHeaderName} exceeds {Options.MaxUserNationLength} chars"
                 );
             }
             if (!string.IsNullOrWhiteSpace(v))
@@ -169,25 +163,19 @@ public class ClientIdAuthenticationHandler(
             // --- Timestamp: present, parseable, within +/- MaxClockSkew. ---
             if (!Request.Headers.TryGetValue(Options.TimestampHeaderName, out var timestampValues))
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header");
             }
 
             var timestampHeader = timestampValues.ToString();
             if (string.IsNullOrWhiteSpace(timestampHeader))
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Missing {Options.TimestampHeaderName} header");
             }
 
             if (timestampHeader.Length > Options.MaxTimestampLength)
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.TimestampHeaderName} exceeds {Options.MaxTimestampLength} chars"
-                    )
+                return AuthenticateResult.Fail(
+                    $"{Options.TimestampHeaderName} exceeds {Options.MaxTimestampLength} chars"
                 );
             }
 
@@ -200,17 +188,13 @@ public class ClientIdAuthenticationHandler(
                 )
             )
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Malformed {Options.TimestampHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Malformed {Options.TimestampHeaderName} header");
             }
 
             var now = timeProvider.GetUtcNow();
             if ((now - timestamp).Duration() > Options.MaxClockSkew)
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Stale {Options.TimestampHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Stale {Options.TimestampHeaderName} header");
             }
 
             // --- Nonce: present. Replay check happens after signature
@@ -218,34 +202,26 @@ public class ClientIdAuthenticationHandler(
             // legitimate callers by burning their nonces with bad sigs.
             if (!Request.Headers.TryGetValue(Options.NonceHeaderName, out var nonceValues))
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header");
             }
 
             var nonce = nonceValues.ToString();
             if (string.IsNullOrWhiteSpace(nonce))
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Missing {Options.NonceHeaderName} header");
             }
 
             if (nonce.Length > Options.MaxNonceLength)
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.NonceHeaderName} exceeds {Options.MaxNonceLength} chars"
-                    )
+                return AuthenticateResult.Fail(
+                    $"{Options.NonceHeaderName} exceeds {Options.MaxNonceLength} chars"
                 );
             }
 
             // --- Signature: matches expected HMAC over v3 canonical string. ---
             if (!Request.Headers.TryGetValue(Options.SignatureHeaderName, out var signatureValues))
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Missing {Options.SignatureHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Missing {Options.SignatureHeaderName} header");
             }
 
             var providedSignature = signatureValues.ToString();
@@ -254,10 +230,8 @@ public class ClientIdAuthenticationHandler(
             // a small DoS amplifier.
             if (providedSignature.Length > Options.MaxSignatureLength)
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail(
-                        $"{Options.SignatureHeaderName} exceeds {Options.MaxSignatureLength} chars"
-                    )
+                return AuthenticateResult.Fail(
+                    $"{Options.SignatureHeaderName} exceeds {Options.MaxSignatureLength} chars"
                 );
             }
 
@@ -282,9 +256,7 @@ public class ClientIdAuthenticationHandler(
                     "ClientIdAuthentication: no secret registered for asserted client id {ClientId}",
                     clientId
                 );
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header");
             }
 
             var signaturePayload = new ClientIdSignaturePayload(
@@ -303,27 +275,20 @@ public class ClientIdAuthenticationHandler(
                     "ClientIdAuthentication: signature mismatch for asserted client id {ClientId}",
                     clientId
                 );
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Invalid {Options.SignatureHeaderName} header");
             }
 
             // --- Replay check: the nonce is single-use within its TTL. ---
-            var cacheKey = ReplayCacheKeyPrefix + nonce;
-            if (replayCache.TryGetValue(cacheKey, out _))
+            if (
+                !await nonceStore.Value.TryConsumeAsync(
+                    nonce,
+                    Options.ReplayCacheTtl,
+                    Context.RequestAborted
+                )
+            )
             {
-                return Task.FromResult(
-                    AuthenticateResult.Fail($"Replayed {Options.NonceHeaderName} header")
-                );
+                return AuthenticateResult.Fail($"Replayed {Options.NonceHeaderName} header");
             }
-            replayCache.Set(
-                cacheKey,
-                true,
-                new MemoryCacheEntryOptions
-                {
-                    AbsoluteExpirationRelativeToNow = Options.ReplayCacheTtl,
-                }
-            );
         }
         else if (!hostEnvironment.IsDevelopment())
         {
@@ -335,9 +300,7 @@ public class ClientIdAuthenticationHandler(
                 "ClientIdAuthentication misconfigured: no ClientSecrets are set in environment '{Environment}'. Rejecting request — refusing to fall back to header-trust mode outside Development.",
                 hostEnvironment.EnvironmentName
             );
-            return Task.FromResult(
-                AuthenticateResult.Fail("Authentication misconfigured: no client secrets set")
-            );
+            return AuthenticateResult.Fail("Authentication misconfigured: no client secrets set");
         }
         else if (Interlocked.CompareExchange(ref s_devDowngradeWarned, 1, 0) == 0)
         {
@@ -374,7 +337,7 @@ public class ClientIdAuthenticationHandler(
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);
 
-        return Task.FromResult(AuthenticateResult.Success(ticket));
+        return AuthenticateResult.Success(ticket);
     }
 
     /// <summary>
