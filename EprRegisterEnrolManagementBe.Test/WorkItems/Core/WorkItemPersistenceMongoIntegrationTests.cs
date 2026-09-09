@@ -1135,4 +1135,85 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             Assert.Single(fetched.TemplateSnapshot!.States, s => s.Id == "submitted").DisplayName
         );
     }
+
+    // ------------------------- RA-551 payload.nation representation -------------------------
+
+    /// <summary>
+    /// RA-551: real-Mongo round trip proving payload.nation, stored as a string,
+    /// survives a create/get cycle as a string for every Nation value — the
+    /// representation the string-based nation filter below depends on.
+    /// </summary>
+    [Theory]
+    [InlineData("England")]
+    [InlineData("Scotland")]
+    [InlineData("Wales")]
+    [InlineData("NorthernIreland")]
+    public async Task Nation_round_trips_as_a_bson_string_through_real_mongo(string nation)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var now = _time.GetUtcNow().UtcDateTime;
+        var workItem = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            Payload = new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["nation"] = nation,
+            },
+        };
+
+        await _persistence.CreateAsync(workItem, ct);
+
+        var fetched = await _persistence.GetByIdAsync(workItem.Id, ct);
+        Assert.NotNull(fetched);
+        Assert.Equal(BsonType.String, fetched!.Payload["nation"].BsonType);
+        Assert.Equal(nation, fetched.Payload["nation"].AsString);
+    }
+
+    /// <summary>
+    /// RA-551: proves the string-based {"payload.nation": {"$in": [...]}} filter
+    /// (WorkItemPersistence.BuildFilter) actually matches items whose nation is
+    /// stored as a string — the exact query shape that silently returned zero
+    /// results once payload.nation was corrupted to an int by the missing
+    /// BsonRepresentation(String) on ReAccreditationPayload.Nation.
+    /// </summary>
+    [Fact]
+    public async Task QueryAsync_nation_filter_matches_items_with_string_nation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedWithNationAsync("England Co", "England");
+        await SeedWithNationAsync("Scotland Co", "Scotland");
+        await SeedWithNationAsync("Wales Co", "Wales");
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Nations: ["Scotland", "Wales"], Sort: "organisation"),
+            ct
+        );
+
+        Assert.Equal(
+            new[] { "Scotland Co", "Wales Co" },
+            page.Items.Select(i => i.Payload["organisationName"].AsString).ToArray()
+        );
+    }
+
+    private async Task SeedWithNationAsync(string organisationName, string nation)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        var item = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            Payload = new BsonDocument
+            {
+                ["organisationName"] = organisationName,
+                ["nation"] = nation,
+            },
+        };
+        await _persistence.CreateAsync(item, TestContext.Current.CancellationToken);
+    }
 }

@@ -187,6 +187,24 @@ public class ReAccreditationSeederTests
         });
     }
 
+    /// <summary>
+    /// RA-551 regression: payload.nation must be stored as a BSON string, not the
+    /// driver's default ordinal int, or the string-based
+    /// {"payload.nation": {"$in": [...]}} worklist filter never matches it.
+    /// </summary>
+    [Fact]
+    public void Build_every_item_persists_nation_as_a_bson_string()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.All(items, item =>
+        {
+            Assert.True(item.Payload.Contains("nation"),
+                $"Item {item.Id} missing 'nation' key in payload.");
+            Assert.Equal(MongoDB.Bson.BsonType.String, item.Payload["nation"].BsonType);
+        });
+    }
+
     [Fact]
     public void Build_every_item_has_operator_email_in_payload()
     {

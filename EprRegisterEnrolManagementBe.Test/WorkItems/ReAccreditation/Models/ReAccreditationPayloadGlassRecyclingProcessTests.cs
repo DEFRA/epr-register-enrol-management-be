@@ -109,4 +109,31 @@ public class ReAccreditationPayloadGlassRecyclingProcessTests
         Assert.Equal(GlassRecyclingProcess.glass_re_melt, roundTripped.GlassRecyclingProcess);
         Assert.Equal("glass_re_melt", document["glassRecyclingProcess"].AsString);
     }
+
+    /// <summary>
+    /// RA-551 regression: <see cref="ReAccreditationPayload.Nation"/> must round-trip
+    /// through <c>ToBsonDocument()</c> as a string, exactly like
+    /// <see cref="GlassRecyclingProcess"/> above. Before RA-551, Nation was missing
+    /// [BsonRepresentation(BsonType.String)], so ToBsonDocument() wrote it as the
+    /// driver's default ordinal int — silently corrupting payload.nation the first
+    /// time a work item went through a deserialize/ToBsonDocument()/merge cycle in
+    /// ReAccreditationApprovalService or ReAccreditationDulyMakingService, breaking
+    /// the string-based {"payload.nation": {"$in": [...]}} worklist filter.
+    /// </summary>
+    [Theory]
+    [InlineData(Nation.England)]
+    [InlineData(Nation.Scotland)]
+    [InlineData(Nation.Wales)]
+    [InlineData(Nation.NorthernIreland)]
+    public void BsonRoundTrip_PreservesNationAsString(Nation nation)
+    {
+        var payload = new ReAccreditationPayload { Nation = nation };
+
+        var document = payload.ToBsonDocument();
+        var roundTripped = BsonSerializer.Deserialize<ReAccreditationPayload>(document);
+
+        Assert.Equal(nation, roundTripped.Nation);
+        Assert.Equal(BsonType.String, document["nation"].BsonType);
+        Assert.Equal(nation.ToString(), document["nation"].AsString);
+    }
 }

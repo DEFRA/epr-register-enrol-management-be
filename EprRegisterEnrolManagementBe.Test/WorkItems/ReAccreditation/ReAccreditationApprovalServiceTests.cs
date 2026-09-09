@@ -1305,4 +1305,43 @@ public class ReAccreditationApprovalServiceTests
             .NumberAdapter.DidNotReceiveWithAnyArgs()
             .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
     }
+
+    // ──────────────────────────── RA-551 regression ────────────────────────────
+
+    /// <summary>
+    /// RA-551 regression: ApproveAsync deserializes the payload into
+    /// ReAccreditationPayload, mutates it (accreditation id/dates/SLA clock), then
+    /// merges it back via ToBsonDocument() - exactly the cycle that used to silently
+    /// rewrite payload.nation from a string to its BSON ordinal int before Nation got
+    /// [BsonRepresentation(BsonType.String)]. Proves a work item already carrying a
+    /// string nation still carries a string nation after approval.
+    /// </summary>
+    [Theory]
+    [InlineData(Nation.England)]
+    [InlineData(Nation.Scotland)]
+    [InlineData(Nation.Wales)]
+    [InlineData(Nation.NorthernIreland)]
+    public async Task ApproveAsync_does_not_corrupt_a_string_nation_to_an_int(Nation nation)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build("A25ER5000270036WO");
+        var workItem = BuildWorkItem(
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["registrationNumber"] = "EX-001",
+                ["operatorOrganisationId"] = "500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["operatorRegistrationId"] = "reg-500027",
+                ["nation"] = nation.ToString(),
+            }
+        );
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal(BsonType.String, workItem.Payload["nation"].BsonType);
+        Assert.Equal(nation.ToString(), workItem.Payload["nation"].AsString);
+    }
 }
