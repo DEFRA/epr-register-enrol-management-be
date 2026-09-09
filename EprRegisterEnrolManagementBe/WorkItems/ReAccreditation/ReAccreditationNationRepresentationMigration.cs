@@ -79,30 +79,12 @@ internal sealed class ReAccreditationNationRepresentationMigration(
         logger.LogInformation("RA-551 nation representation correction starting.");
 
         var tally = new CorrectionTally();
-        var page = 1;
 
-        while (true)
-        {
-            var result = await persistence.QueryAsync(
-                new WorkItemQuery(
-                    TypeIds: [ReAccreditationType.Id],
-                    Page: page,
-                    PageSize: WorkItemQuery.MaxPageSize,
-                    IncludeArchived: true),
-                cancellationToken);
-
-            foreach (var candidate in result.Items)
-            {
-                await ProcessCandidateAsync(candidate, persistence, tally, cancellationToken);
-            }
-
-            if (result.Items.Count < WorkItemQuery.MaxPageSize)
-            {
-                break;
-            }
-
-            page++;
-        }
+        await WorkItemMigrationPaging.VisitAllAsync(
+            persistence,
+            ReAccreditationType.Id,
+            (candidate, ct) => ProcessCandidateAsync(candidate, persistence, tally, ct),
+            cancellationToken);
 
         logger.LogInformation(
             "RA-551 nation representation correction complete. Corrected: {Corrected}. "
