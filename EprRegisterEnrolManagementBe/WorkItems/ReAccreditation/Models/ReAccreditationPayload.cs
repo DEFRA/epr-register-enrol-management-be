@@ -111,7 +111,18 @@ internal sealed record ReAccreditationPayload
     /// submission time (defaulting to <see cref="Nation.England"/> when the
     /// caller's value is absent or unrecognised) and records which happened in
     /// its <c>routed-to-nation</c> audit entry's <c>derivedFrom</c> detail.
+    ///
+    /// RA-551: BsonRepresentation(String) pins ToBsonDocument() to write the enum's
+    /// member name rather than the driver's default ordinal int — the same reasoning
+    /// as <see cref="GlassRecyclingProcess"/> above. Without it, this record's
+    /// deserialize → with-mutate → ToBsonDocument() → merge cycle in
+    /// ReAccreditationApprovalService/ReAccreditationDulyMakingService silently
+    /// rewrote the field from its originally-stored string (written by
+    /// ReAccreditationNationRoutingHook at submission) to an ordinal int, which
+    /// then never matches the string-based <c>{"payload.nation": {"$in": [...]}}</c>
+    /// filter every nation-scoped worklist query builds.
     /// </summary>
+    [BsonRepresentation(BsonType.String)]
     public Nation? Nation { get; init; }
 
     /// <summary>

@@ -1183,6 +1183,7 @@ internal sealed class BareFactory(
 {
     public readonly IWorkItemPersistence MockPersistence = Substitute.For<IWorkItemPersistence>();
     public readonly FakeTimeProvider FakeTime = new(DateTimeOffset.Parse("2026-04-30T12:00:00Z"));
+    public readonly FakeClientIdAuthNonceStore NonceStore = new();
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -1207,6 +1208,8 @@ internal sealed class BareFactory(
             services.AddSingleton(MockPersistence);
             services.RemoveAll<TimeProvider>();
             services.AddSingleton<TimeProvider>(FakeTime);
+            services.RemoveAll<IClientIdAuthNonceStore>();
+            services.AddSingleton<IClientIdAuthNonceStore>(NonceStore);
 
             if (clientSecrets is not null)
             {
