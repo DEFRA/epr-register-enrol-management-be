@@ -157,6 +157,16 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // as every other backfill migration in this file. It applies directly rather than
         // offering a dry run - see the migration's own doc comment for why.
         services.AddSingleton<IWorkItemMigration, ReAccreditationNationCorrectionMigration>();
+        // RA-551: corrects payload.nation back to a string wherever it was silently
+        // rewritten to its BSON ordinal int (Nation was missing
+        // [BsonRepresentation(BsonType.String)]) - a distinct bug from RA-526 above
+        // (that one fixes a WRONG nation value; this one fixes a wrong BSON
+        // REPRESENTATION of a value that was already correct). No ordering
+        // dependency on the RA-526 migration: they identify candidates by different,
+        // non-overlapping criteria (audit marker vs. stored BSON type) and each
+        // leaves its own distinct audit entry. Runs unconditionally, relying on its
+        // own idempotency, same as every other backfill migration in this file.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationNationRepresentationMigration>();
         // RA-132: module-scoped approval service that owns the bespoke
         // approval workflow (id issuance, SLA clock stop, queued publishing).
         // RA-410: module-scoped service that owns the single-call decision

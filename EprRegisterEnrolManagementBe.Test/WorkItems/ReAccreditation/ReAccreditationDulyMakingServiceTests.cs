@@ -589,6 +589,47 @@ public class ReAccreditationDulyMakingServiceTests
         Assert.Equal("duly-made", workItem.StateId);
     }
 
+    // ------------------------- RA-551 regression -------------------------
+
+    /// <summary>
+    /// RA-551 regression: TryStampPaymentDate deserializes the payload into
+    /// ReAccreditationPayload, mutates it, then merges it back via ToBsonDocument() -
+    /// exactly the cycle that used to silently rewrite payload.nation from a string to
+    /// its BSON ordinal int before Nation got [BsonRepresentation(BsonType.String)].
+    /// Proves a work item already carrying a string nation still carries a string
+    /// nation after duly making completes.
+    /// </summary>
+    [Theory]
+    [InlineData(Nation.England)]
+    [InlineData(Nation.Scotland)]
+    [InlineData(Nation.Wales)]
+    [InlineData(Nation.NorthernIreland)]
+    public async Task Duly_making_does_not_corrupt_a_string_nation_to_an_int(Nation nation)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = BuildWorkItem(
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["applicationReference"] = "RA-123456789",
+                ["chargeAmountPence"] = 327600,
+                ["nation"] = nation.ToString(),
+            }
+        );
+        var harness = BuildHarness(workItem);
+
+        var result = await harness.Service.CompleteDulyMakingAsync(
+            workItem.Id,
+            s_paymentDate,
+            User(),
+            ct
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(BsonType.String, workItem.Payload["nation"].BsonType);
+        Assert.Equal(nation.ToString(), workItem.Payload["nation"].AsString);
+    }
+
     private static void AddResumeAuditEntry(WorkItem workItem, string resumeActionId) =>
         workItem.AuditLog.Add(
             new WorkItemAuditEntry
