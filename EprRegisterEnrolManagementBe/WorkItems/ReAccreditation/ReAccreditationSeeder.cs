@@ -116,12 +116,28 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         "additional-information-reprocessor";
 
     /// <summary>
+    /// RA-557 fixture seed key. A private exporter fixture for the mgmt-tests
+    /// e2e regression spec, which drives it through real query/resubmit
+    /// state transitions — its own key (rather than reusing
+    /// <see cref="GlobalGlassExportsSeedKey"/>) so nothing else shares, and
+    /// no other spec's assertions can be broken by, its state.
+    /// </summary>
+    public const string Ra557OverseasSitesResubmitSeedKey = "ra557-overseas-sites-resubmit";
+
+    /// <summary>
     /// Organisation name of the RA-434-processortype reprocessor fixture.
     /// Unique across the seed set for the same reason as
     /// <see cref="OrsInterimAuthorityOrganisationName"/>.
     /// </summary>
     public const string AdditionalInformationReprocessorOrganisationName =
         "Thames Reprocessing Verification Ltd";
+
+    /// <summary>
+    /// Organisation name of the RA-557 fixture. Unique across the seed set
+    /// for the same reason as <see cref="OrsInterimAuthorityOrganisationName"/>.
+    /// </summary>
+    public const string Ra557OverseasSitesResubmitOrganisationName =
+        "RA-557 Overseas Sites Resubmit Ltd";
 
     public string TypeId => ReAccreditationType.Id;
 
@@ -871,6 +887,50 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "reg-additional-info-reprocessor-001"
         );
         yield return additionalInformationReprocessorItem;
+
+        // RA-557: a genuine Exporter application, `submitted` and PRIVATE to
+        // the RA-557 e2e regression spec — unlike globalGlassExportsItem
+        // above (which mgmt-tests' ra-412 spec also reads), nothing else in
+        // this seed set or any spec is allowed to touch this item's state.
+        // The RA-557 spec drives it through real query/resubmit cycles
+        // (queried -> updated -> duly-made -> queried -> updated) to prove a
+        // resubmitted, reduced overseas-sites list reaches
+        // payload.overseasSites.sites — the ORS row on the Application
+        // summary page only renders at all for an exporter application, and
+        // there is no "Create work item" form field for wasteProcessingType,
+        // so a fixture is the only way to reach that state. Deliberately
+        // carries no overseasSites of its own (the spec's whole point is
+        // proving a resubmission ADDS then REMOVES sites against a real
+        // "before" list), same reasoning as globalGlassExportsItem.
+        var ra557OverseasSitesResubmitItem = Build(
+            seedKey: Ra557OverseasSitesResubmitSeedKey,
+            postcode: "BS1 4ST",
+            submittedDaysAgo: 1,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = Ra557OverseasSitesResubmitOrganisationName,
+                ["registrationNumber"] = "EPR-100557",
+                ["operatorApplicationId"] = "app-ra557-ors-resubmit-001",
+                ["wasteProcessingType"] = "exporter",
+                ["companyRegisterAddressPostcode"] = "BS1 4ST",
+                ["material"] = "plastic",
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "ra557.ors.resubmit@example.com",
+                ["companiesHouseNumber"] = "15975346",
+                ["siteAddressPostcode"] = "BS1 4ST",
+                ["chargeAmountPence"] = 54600,
+            },
+            submittedBy: "stub-portal-client",
+            now: now
+        );
+        SetAccreditationNumberFields(
+            ra557OverseasSitesResubmitItem.Payload,
+            "500014",
+            "reg-ra557-ors-resubmit-001"
+        );
+        yield return ra557OverseasSitesResubmitItem;
     }
 
     /// <summary>

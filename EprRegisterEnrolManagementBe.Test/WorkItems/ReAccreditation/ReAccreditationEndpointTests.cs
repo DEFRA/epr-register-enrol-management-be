@@ -1709,6 +1709,58 @@ public class ReAccreditationEndpointTests
         );
     }
 
+    [Fact]
+    public async Task ResumeFromQuery_updates_the_canonical_overseas_sites_field_when_a_site_is_removed()
+    {
+        // RA-557 regression: a resubmitted "OverseasSites" section (the
+        // operator backend's OperatorSection enum name) previously landed
+        // only in latestSections, so a site removed via query resubmit
+        // never reached payload.overseasSites.sites — the field the case
+        // management summary page actually reads.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildQueried(id, TenantClientId, "query-during-assessment");
+        item.Payload = new BsonDocument
+        {
+            ["overseasSites"] = new BsonDocument
+            {
+                ["sites"] = new BsonArray
+                {
+                    new BsonDocument { ["siteId"] = 1, ["orsId"] = "ORS-2026-0001" },
+                    new BsonDocument { ["siteId"] = 2, ["orsId"] = "ORS-2026-0002" },
+                },
+            },
+        };
+        await factory.SeedAsync(item, cancellationToken);
+
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["overseas-reprocessing-sites"],
+            new Dictionary<string, JsonElement>
+            {
+                ["OverseasSites"] = JsonDocument.Parse(
+                    """{"sites":[{"siteId":1,"orsId":"ORS-2026-0001"}]}""").RootElement,
+            },
+            FileReferences: []
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query",
+            request,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        var sites = persisted!.Payload!["overseasSites"]["sites"].AsBsonArray;
+        var site = Assert.Single(sites);
+        Assert.Equal("ORS-2026-0001", site["orsId"].AsString);
+    }
+
     /// <summary>
     /// RA-523 helper: drive resume-from-query the way production does — the
     /// operator backend (HttpCaseWorkingApiAdapter) calls it as the OPERATOR,

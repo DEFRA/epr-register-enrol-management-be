@@ -115,10 +115,16 @@ internal sealed class ReAccreditationResumeService(
     /// field set: <c>authority-to-issue</c> is deliberately absent — a
     /// separate, unrelated code path already merges it into its canonical
     /// field, so re-merging it here would be redundant. <c>broadly-equivalent-standards</c>
-    /// and <c>overseas-reprocessing-sites</c> are also absent: neither has a
-    /// documented stale-read bug, and ORS data lives nested per-site under
-    /// <c>payload.overseasSites.sites[]</c> rather than as a flat section
-    /// value, so a blind top-level overwrite here would be wrong.
+    /// is also absent: it has no documented stale-read bug.
+    ///
+    /// RA-557: <c>overseas-reprocessing-sites</c> ("OverseasSites") IS
+    /// included — the operator backend sends a full <c>{ sites: [...] }</c>
+    /// replacement value for it (<c>HttpCaseWorkingApiAdapter.BuildOverseasSitesSection</c>),
+    /// which maps directly onto <c>payload.overseasSites.sites[]</c> via the
+    /// same targeted single-field replace used for the other sections; a
+    /// removed site resubmitted via query was previously stamped only into
+    /// <c>latestSections</c> and never reached the field the case
+    /// management summary page reads.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> s_canonicalPayloadFieldBySectionKey =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -126,6 +132,7 @@ internal sealed class ReAccreditationResumeService(
             ["BusinessPlan"] = "businessPlan",
             ["Prns"] = "prns",
             ["SamplingPlan"] = "samplingPlan",
+            ["OverseasSites"] = "overseasSites",
         };
 
     public async Task<WorkItemActionResult> ResumeFromQueryAsync(

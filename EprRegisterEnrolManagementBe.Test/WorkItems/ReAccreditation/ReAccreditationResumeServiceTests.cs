@@ -400,6 +400,38 @@ public class ReAccreditationResumeServiceTests
             ct);
     }
 
+    [Fact]
+    public async Task ResumeFromQueryAsync_merges_a_resubmitted_overseas_sites_section_onto_its_canonical_payload_field()
+    {
+        // RA-557 regression: a resubmitted "OverseasSites" section (the
+        // operator backend's OperatorSection enum name, as sent by
+        // HttpCaseWorkingApiAdapter.BuildOverseasSitesSection) must also be
+        // merged onto payload.overseasSites, not just latestSections — the
+        // case management summary page reads payload.overseasSites.sites,
+        // so a site removed via query resubmit previously stayed stale there.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["overseas-reprocessing-sites"],
+            new Dictionary<string, JsonElement>
+            {
+                ["OverseasSites"] = JsonDocument.Parse(
+                    """{"sites":[{"siteId":1,"orsId":"ORS-2026-0292"}]}""").RootElement,
+            },
+            []);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "overseasSites",
+            Arg.Is<BsonValue>(v => v["sites"][0]["orsId"].AsString == "ORS-2026-0292"),
+            ct);
+    }
+
     // ------------------------------- idempotency -------------------------------
 
     // RA-523: 'updated' is the resume target for three origins;
