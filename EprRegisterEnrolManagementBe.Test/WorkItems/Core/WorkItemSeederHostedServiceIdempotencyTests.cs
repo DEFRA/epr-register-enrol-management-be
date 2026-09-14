@@ -111,8 +111,10 @@ public sealed class WorkItemSeederHostedServiceIdempotencyTests
         var service = new WorkItemSeederHostedService(
             services, config, NullLogger<WorkItemSeederHostedService>.Instance);
 
-        // Should not throw.
-        await service.StartAsync(TestContext.Current.CancellationToken);
+        var exception = await Record.ExceptionAsync(
+            () => service.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Null(exception);
     }
 
     [Fact]

@@ -122,7 +122,7 @@ public class ReAccreditationBusinessPlanOtherCategoryBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
         Assert.Equal("Already backfilled", businessPlan["otherDetail"].AsString);
     }
 
@@ -135,7 +135,7 @@ public class ReAccreditationBusinessPlanOtherCategoryBackfillMigrationTests
         // Must not throw when GetByIdAsync returns null.
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -147,7 +147,7 @@ public class ReAccreditationBusinessPlanOtherCategoryBackfillMigrationTests
 
         await BuildSut().ApplyAsync(persistence, ct);
 
-        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, default);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Fact]
@@ -178,7 +178,8 @@ public class ReAccreditationBusinessPlanOtherCategoryBackfillMigrationTests
             .Returns(Task.FromException(
                 new WorkItemConcurrencyException(fullPayload.Id, expectedVersion: 0)));
 
-        // Must not throw.
-        await BuildSut().ApplyAsync(persistence, ct);
+        var exception = await Record.ExceptionAsync(() => BuildSut().ApplyAsync(persistence, ct));
+
+        Assert.Null(exception);
     }
 }

@@ -1535,7 +1535,10 @@ public class ReAccreditationNotificationHookTests
         );
 
         // Must not throw despite the failed audit append.
-        await sut.OnSubmittedAsync(workItem, s_user, ct);
+        var exception = await Record.ExceptionAsync(
+            () => sut.OnSubmittedAsync(workItem, s_user, ct));
+
+        Assert.Null(exception);
     }
 
     [Fact]
