@@ -139,7 +139,10 @@ public class ReAccreditationQueryPushHookTests
             .Returns(false);
         var workItem = BuildWorkItem();
 
-        await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
+        var exception = await Record.ExceptionAsync(
+            () => hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct));
+
+        Assert.Null(exception);
     }
 
     [Fact]

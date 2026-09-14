@@ -184,22 +184,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 postcode: spec.Postcode,
                 submittedDaysAgo: spec.SubmittedDaysAgo,
                 stateId: spec.StateId,
-                payload: SimpleSeedPayload(
-                    spec.OrganisationName,
-                    spec.RegistrationNumber,
-                    spec.OperatorApplicationId,
-                    spec.OperatorRegistrationId,
-                    spec.OperatorOrganisationId,
-                    spec.Material,
-                    spec.PreviousAccreditationYear,
-                    spec.ComplianceIssuesReported,
-                    spec.OperatorEmail,
-                    spec.CompaniesHouseNumber,
-                    spec.SiteAddress,
-                    spec.SiteAddressPostcode,
-                    spec.ChargeAmountPence,
-                    spec.GlassRecyclingProcess
-                ),
+                payload: SimpleSeedPayload(spec),
                 submittedBy: "stub-portal-client",
                 assignedToId: spec.AssignedToId,
                 assignedToName: spec.AssignedToName,
@@ -1312,55 +1297,46 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
     /// <summary>
     /// Builds the payload for one of <see cref="s_simpleFixtures"/>.
-    /// <paramref name="glassRecyclingProcess"/> is null except for the two
-    /// glass items (RA-307).
+    /// <see cref="SimpleFixtureSpec.GlassRecyclingProcess"/> is null except for
+    /// the two glass items (RA-307).
+    ///
+    /// Takes the whole <paramref name="spec"/> rather than its thirteen-odd
+    /// constituent fields (SonarCloud S107) — <see cref="SimpleFixtureSpec"/>
+    /// already carries every value this method needs, so unpacking it into a
+    /// same-order positional argument list at the one call site only added a
+    /// second place that order mistake could hide.
     /// </summary>
-    private static BsonDocument SimpleSeedPayload(
-        string organisationName,
-        string registrationNumber,
-        string operatorApplicationId,
-        string operatorRegistrationId,
-        string operatorOrganisationId,
-        string material,
-        int previousAccreditationYear,
-        int complianceIssuesReported,
-        string operatorEmail,
-        string companiesHouseNumber,
-        string siteAddress,
-        string siteAddressPostcode,
-        int chargeAmountPence,
-        string? glassRecyclingProcess = null
-    )
+    private static BsonDocument SimpleSeedPayload(SimpleFixtureSpec spec)
     {
         var payload = new BsonDocument
         {
-            ["organisationName"] = organisationName,
-            ["registrationNumber"] = registrationNumber,
+            ["organisationName"] = spec.OrganisationName,
+            ["registrationNumber"] = spec.RegistrationNumber,
             // RA-448 phase 2 review: the backend's own AccreditationApplicationModel
             // id (confirmed against HttpCaseWorkingApiAdapter.BuildPayload) — the
             // adapter's {applicationId} route segment. Seed fixtures need a
             // realistic value too so they can be approved end-to-end.
-            ["operatorApplicationId"] = operatorApplicationId,
-            ["operatorRegistrationId"] = operatorRegistrationId,
+            ["operatorApplicationId"] = spec.OperatorApplicationId,
+            ["operatorRegistrationId"] = spec.OperatorRegistrationId,
             // RA-448 phase 2: real submissions always carry a numeric Org ID
             // (IAccreditationNumberAdapter parses it as int); seed fixtures
             // need a realistic value too so they can be approved end-to-end.
-            ["operatorOrganisationId"] = operatorOrganisationId,
-            ["material"] = material,
+            ["operatorOrganisationId"] = spec.OperatorOrganisationId,
+            ["material"] = spec.Material,
         };
-        if (glassRecyclingProcess is not null)
+        if (spec.GlassRecyclingProcess is not null)
         {
             // RA-307: e2e coverage for the "Glass - Remelt" / "Glass - Other"
             // display suffix (see mgmt-tests glass-recycling-process.e2e.js).
-            payload["glassRecyclingProcess"] = glassRecyclingProcess;
+            payload["glassRecyclingProcess"] = spec.GlassRecyclingProcess;
         }
-        payload["previousAccreditationYear"] = previousAccreditationYear;
-        payload["complianceIssuesReported"] = complianceIssuesReported;
-        payload["operatorEmail"] = operatorEmail;
-        payload["companiesHouseNumber"] = companiesHouseNumber;
-        payload["siteAddress"] = siteAddress;
-        payload["siteAddressPostcode"] = siteAddressPostcode;
-        payload["chargeAmountPence"] = chargeAmountPence;
+        payload["previousAccreditationYear"] = spec.PreviousAccreditationYear;
+        payload["complianceIssuesReported"] = spec.ComplianceIssuesReported;
+        payload["operatorEmail"] = spec.OperatorEmail;
+        payload["companiesHouseNumber"] = spec.CompaniesHouseNumber;
+        payload["siteAddress"] = spec.SiteAddress;
+        payload["siteAddressPostcode"] = spec.SiteAddressPostcode;
+        payload["chargeAmountPence"] = spec.ChargeAmountPence;
         return payload;
     }
 
