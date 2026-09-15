@@ -75,9 +75,9 @@ public sealed record WorkItemNoteResponse(
 
 /// <summary>
 /// Wire shape for a single audit log entry (RA-97). Returned in
-/// chronological (oldest-first) order as part of
+/// reverse-chronological (newest-first) order as part of
 /// <see cref="WorkItemResponse.AuditLog"/> so a UI can render a top-to-
-/// bottom timeline without re-sorting.
+/// bottom timeline, most recent first, without re-sorting (RA-568).
 /// </summary>
 public sealed record WorkItemAuditEntryResponse(
     Guid Id,

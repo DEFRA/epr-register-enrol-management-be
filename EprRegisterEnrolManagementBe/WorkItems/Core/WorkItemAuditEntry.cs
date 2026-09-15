@@ -11,9 +11,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 ///
 /// Author identity is snapshotted from the <see cref="System.Security.Claims.ClaimsPrincipal"/>
 /// at write time so the audit narrative survives later directory changes.
-/// Stored in insertion order on disk; projected in the same chronological
-/// (oldest-first) order on the wire so a UI renders a natural top-to-bottom
-/// timeline.
+/// Stored in insertion order on disk; projected reverse-chronologically
+/// (newest-first, RA-568) on the wire so a UI renders the most recent
+/// activity at the top of the timeline.
 /// </summary>
 public sealed class WorkItemAuditEntry
 {

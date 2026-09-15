@@ -1646,7 +1646,7 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
-    public async Task AuditLog_is_projected_oldest_first_on_the_wire()
+    public async Task AuditLog_is_projected_newest_first_on_the_wire()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory();
@@ -1664,7 +1664,7 @@ public class WorkItemEndpointsTests
                 SubmittedBy = "test-client",
                 AuditLog =
                 {
-                    // Insert out of order on purpose so we know the oldest-first
+                    // Insert out of order on purpose so we know the newest-first
                     // ordering on the wire is enforced by the projection rather
                     // than by storage order.
                     new WorkItemAuditEntry
@@ -1698,15 +1698,15 @@ public class WorkItemEndpointsTests
             body!.AuditLog!,
             first =>
             {
-                Assert.Equal("task-completed", first.Action);
-                Assert.Equal("Task completed", first.ActionDisplayName);
-                Assert.Equal("check-eligibility", first.Details["taskId"]);
-                Assert.Equal(older, first.CreatedAt);
+                Assert.Equal("note-added", first.Action);
+                Assert.Equal(newer, first.CreatedAt);
             },
             second =>
             {
-                Assert.Equal("note-added", second.Action);
-                Assert.Equal(newer, second.CreatedAt);
+                Assert.Equal("task-completed", second.Action);
+                Assert.Equal("Task completed", second.ActionDisplayName);
+                Assert.Equal("check-eligibility", second.Details["taskId"]);
+                Assert.Equal(older, second.CreatedAt);
             }
         );
     }
@@ -1718,8 +1718,8 @@ public class WorkItemEndpointsTests
         // (common under FakeTimeProvider with the clock held still, and
         // possible in production when a single engine call appends two
         // entries back-to-back) the projection must keep their stored
-        // insertion order rather than fall back to undefined behaviour
-        // from a tied OrderBy.
+        // insertion order reversed (newest-first) rather than fall back to
+        // undefined behaviour from a tied OrderBy (RA-568).
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = NewFactory();
         using var client = factory.CreateClient();
@@ -1768,9 +1768,9 @@ public class WorkItemEndpointsTests
         Assert.NotNull(body?.AuditLog);
         Assert.Collection(
             body!.AuditLog!,
-            first => Assert.Equal("1", first.Details["sequence"]),
+            first => Assert.Equal("3", first.Details["sequence"]),
             second => Assert.Equal("2", second.Details["sequence"]),
-            third => Assert.Equal("3", third.Details["sequence"])
+            third => Assert.Equal("1", third.Details["sequence"])
         );
     }
 
