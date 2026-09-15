@@ -374,8 +374,9 @@ the work item document. An entry carries:
 
 ### Wire format
 
-`WorkItemResponse.AuditLog` is sorted **chronologically (oldest-first)** so
-a UI renders a natural top-to-bottom timeline without re-sorting.
+`WorkItemResponse.AuditLog` is sorted **reverse-chronologically (newest-first,
+RA-568)** so a UI renders the most recent activity at the top of the
+timeline without re-sorting.
 
 ### Conventions
 

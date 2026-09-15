@@ -125,10 +125,12 @@ public sealed class WorkItem
     /// <summary>
     /// Append-only system audit log (RA-97). The framework writes one entry
     /// here for every successful state-changing engine call (action
-    /// application, assignment / unassignment, note added). Entries are stored in chronological (insertion) order and
-    /// projected oldest-first on the wire so a UI renders a natural
-    /// top-to-bottom timeline. Framework-owned so every work item type
-    /// inherits the same audit behaviour without writing any audit code.
+    /// application, assignment / unassignment, note added). Entries are
+    /// stored in chronological (insertion) order and projected
+    /// reverse-chronologically (newest-first, RA-568) on the wire so a UI
+    /// renders the most recent activity at the top of the timeline.
+    /// Framework-owned so every work item type inherits the same audit
+    /// behaviour without writing any audit code.
     /// </summary>
     public List<WorkItemAuditEntry> AuditLog { get; init; } = new();
 
