@@ -114,6 +114,17 @@ static void ConfigureServices(WebApplicationBuilder builder)
     services.AddValidation();
     services.AddSingleton(TimeProvider.System);
 
+    // RA-463: HSTS, with preload opted in. Preload requires submission to
+    // hstspreload.org to take effect in browsers, but the response header
+    // must carry includeSubDomains + a >=1 year max-age + preload before
+    // that submission is accepted, so it's set here ahead of the request.
+    services.AddHsts(options =>
+    {
+        options.MaxAge = TimeSpan.FromDays(365);
+        options.IncludeSubDomains = true;
+        options.Preload = true;
+    });
+
     // Generic structured-logging facade: caller-defined property bag,
     // routed through ILogger<T> so source-context is preserved. Open
     // generic so consumers depend on IStructuredLogger<TTheirComponent>.
@@ -717,6 +728,16 @@ static void ConfigureMiddleware(WebApplication app)
     // StatusCodePages turns plain status-only responses (e.g. a 404 from
     // routing) into ProblemDetails too, for a uniform error shape.
     app.UseStatusCodePages();
+
+    // RA-463: HSTS. Skipped in Development so local http:// access isn't
+    // punished by a cached Strict-Transport-Security header, matching the
+    // standard ASP.NET Core template convention. No UseHttpsRedirection
+    // call exists in this pipeline (TLS termination happens upstream in
+    // CDP), so UseHsts is the only piece needed here.
+    if (!app.Environment.IsDevelopment())
+    {
+        app.UseHsts();
+    }
 
     app.UseSerilogRequestLogging();
 
