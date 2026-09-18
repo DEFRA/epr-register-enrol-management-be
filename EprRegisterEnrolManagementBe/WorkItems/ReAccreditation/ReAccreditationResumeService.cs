@@ -114,8 +114,7 @@ internal sealed class ReAccreditationResumeService(
     /// Only covers the sections a resubmit can actually change on this
     /// field set: <c>authority-to-issue</c> is deliberately absent — a
     /// separate, unrelated code path already merges it into its canonical
-    /// field, so re-merging it here would be redundant. <c>broadly-equivalent-standards</c>
-    /// is also absent: it has no documented stale-read bug.
+    /// field, so re-merging it here would be redundant.
     ///
     /// RA-557: <c>overseas-reprocessing-sites</c> ("OverseasSites") IS
     /// included — the operator backend sends a full <c>{ sites: [...] }</c>
@@ -125,6 +124,22 @@ internal sealed class ReAccreditationResumeService(
     /// removed site resubmitted via query was previously stamped only into
     /// <c>latestSections</c> and never reached the field the case
     /// management summary page reads.
+    ///
+    /// RA-570 follow-up: <c>broadly-equivalent-standards</c> ("BesEvidence")
+    /// is deliberately absent from this simple 1:1 map, even though it now
+    /// needs the same treatment. BES evidence files live per-site
+    /// (<c>OverseasSiteModel.BesEvidence.BesEvidenceUploads</c>), so its
+    /// canonical field is also <c>overseasSites</c> — but its wire payload
+    /// is <c>{ sectionStatus, sites: [...] }</c>, not a bare <c>{ sites }</c>
+    /// like the OverseasSites case sends. Merging the whole value here would
+    /// pollute <c>payload.overseasSites</c> with a stray <c>sectionStatus</c>
+    /// field, and - since a query can raise both keys together - whichever
+    /// of the two sections happens to iterate last in
+    /// <see cref="StampLatestSectionsAsync"/>'s loop would win, silently
+    /// dropping the other's exact shape. <see cref="ExtractCanonicalMergeValue"/>
+    /// handles BesEvidence specially so both keys always merge the
+    /// identical <c>{ sites: [...] }</c> shape, making the merge idempotent
+    /// regardless of order.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> s_canonicalPayloadFieldBySectionKey =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -133,7 +148,20 @@ internal sealed class ReAccreditationResumeService(
             ["Prns"] = "prns",
             ["SamplingPlan"] = "samplingPlan",
             ["OverseasSites"] = "overseasSites",
+            ["BesEvidence"] = "overseasSites",
         };
+
+    /// <summary>
+    /// The value actually written to a section's canonical payload field.
+    /// Identical to the section's own wire value for every key except
+    /// <c>BesEvidence</c> — see the doc comment on
+    /// <see cref="s_canonicalPayloadFieldBySectionKey"/> for why that one
+    /// needs its <c>sites</c> sub-field pulled out rather than merged whole.
+    /// </summary>
+    private static BsonValue ExtractCanonicalMergeValue(string sectionKey, BsonValue sectionValue) =>
+        sectionKey == "BesEvidence" && sectionValue is BsonDocument besEvidenceDoc
+            ? new BsonDocument { ["sites"] = besEvidenceDoc.GetValue("sites", new BsonArray()) }
+            : sectionValue;
 
     public async Task<WorkItemActionResult> ResumeFromQueryAsync(
         Guid workItemId,
@@ -423,8 +451,9 @@ internal sealed class ReAccreditationResumeService(
 
                 if (s_canonicalPayloadFieldBySectionKey.TryGetValue(sectionKey, out var canonicalField))
                 {
+                    var canonicalValue = ExtractCanonicalMergeValue(sectionKey, sectionValue);
                     var canonicalMatched = await persistence.SetPayloadFieldAsync(
-                        workItemId, canonicalField, sectionValue.DeepClone(), cancellationToken);
+                        workItemId, canonicalField, canonicalValue.DeepClone(), cancellationToken);
                     if (!canonicalMatched)
                     {
                         return WorkItemActionResult.Failure(
