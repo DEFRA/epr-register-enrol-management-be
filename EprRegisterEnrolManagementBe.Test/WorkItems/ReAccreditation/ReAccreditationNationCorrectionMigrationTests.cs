@@ -1,4 +1,4 @@
-using EprRegisterEnrolManagementBe.WorkItems.Core;
+﻿using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
@@ -164,6 +164,10 @@ public class ReAccreditationNationCorrectionMigrationTests
         Assert.Equal("migration", entry.CreatedBy);
         Assert.Equal("England", entry.Details!["from"]);
         Assert.Equal("Wales", entry.Details!["to"]);
+        Assert.Equal(
+            "Nation automatically corrected to match the registered regulator",
+            entry.Details!["reason"]
+        );
         Assert.Equal(s_now.UtcDateTime, entry.CreatedAt);
 
         // The original (wrong) routed-to-nation entry survives unmodified, for history.

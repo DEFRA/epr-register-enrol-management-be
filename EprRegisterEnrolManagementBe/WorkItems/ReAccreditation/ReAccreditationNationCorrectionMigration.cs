@@ -1,4 +1,4 @@
-using EprRegisterEnrolManagementBe.WorkItems.Core;
+﻿using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using Microsoft.AspNetCore.HeaderPropagation;
@@ -197,9 +197,7 @@ internal sealed class ReAccreditationNationCorrectionMigration(
             {
                 ["issue"] = "RA-526",
                 ["reason"] =
-                    "payload.nation was derived by the pre-RA-526 hook, which always "
-                    + "defaulted to England on real submissions; corrected from the "
-                    + "registration's own ReEx regulator.",
+                    "Nation automatically corrected to match the registered regulator",
                 ["from"] = from,
                 ["to"] = to,
             },
