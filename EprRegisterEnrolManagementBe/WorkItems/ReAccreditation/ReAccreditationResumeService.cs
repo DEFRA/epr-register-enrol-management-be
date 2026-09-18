@@ -158,10 +158,23 @@ internal sealed class ReAccreditationResumeService(
     /// <see cref="s_canonicalPayloadFieldBySectionKey"/> for why that one
     /// needs its <c>sites</c> sub-field pulled out rather than merged whole.
     /// </summary>
-    private static BsonValue ExtractCanonicalMergeValue(string sectionKey, BsonValue sectionValue) =>
-        sectionKey == "BesEvidence" && sectionValue is BsonDocument besEvidenceDoc
-            ? new BsonDocument { ["sites"] = besEvidenceDoc.GetValue("sites", new BsonArray()) }
-            : sectionValue;
+    private static BsonValue ExtractCanonicalMergeValue(string sectionKey, BsonValue sectionValue)
+    {
+        if (sectionKey != "BesEvidence")
+        {
+            return sectionValue;
+        }
+
+        // Always resolve to a well-formed { sites: [...] } document for this key - never fall
+        // back to the raw sectionValue (which carries a stray sectionStatus field, or could be
+        // any other shape a malformed/unexpected operator-backend payload sends), since that
+        // would corrupt payload.overseasSites with a shape the case management summary page
+        // doesn't expect.
+        var sites = sectionValue is BsonDocument besEvidenceDoc
+            ? besEvidenceDoc.GetValue("sites", new BsonArray())
+            : new BsonArray();
+        return new BsonDocument { ["sites"] = sites };
+    }
 
     public async Task<WorkItemActionResult> ResumeFromQueryAsync(
         Guid workItemId,

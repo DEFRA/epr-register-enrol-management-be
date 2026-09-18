@@ -466,6 +466,38 @@ public class ReAccreditationResumeServiceTests
     }
 
     [Fact]
+    public async Task ResumeFromQueryAsync_besEvidence_without_a_sites_property_still_merges_a_well_formed_sites_document()
+    {
+        // Defends ExtractCanonicalMergeValue's default: a BesEvidence value that is a genuine
+        // JSON object (WorkItemPayloadConverter.ToBson already rejects anything that isn't, for
+        // every section) but happens not to carry a "sites" property must still resolve to a
+        // well-formed { sites: [] } document - never omit the field or leak whatever unrelated
+        // properties the value did have (e.g. sectionStatus) into payload.overseasSites.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["broadly-equivalent-standards"],
+            new Dictionary<string, JsonElement>
+            {
+                ["BesEvidence"] = JsonDocument.Parse("""{"sectionStatus":"Completed"}""").RootElement,
+            },
+            []);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "overseasSites",
+            Arg.Is<BsonValue>(v =>
+                v.AsBsonDocument.ElementCount == 1
+                && v["sites"].AsBsonArray.Count == 0),
+            ct);
+    }
+
+    [Fact]
     public async Task ResumeFromQueryAsync_besEvidence_and_overseasSites_together_never_clobber_each_others_sites()
     {
         // Both query keys can be raised together and both map to the same canonical
