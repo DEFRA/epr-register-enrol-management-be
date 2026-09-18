@@ -14,6 +14,7 @@ using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Http;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
 using MongoDB.Driver.Authentication.AWS;
@@ -733,9 +734,22 @@ static void ConfigureMiddleware(WebApplication app)
     // punished by a cached Strict-Transport-Security header, matching the
     // standard ASP.NET Core template convention. No UseHttpsRedirection
     // call exists in this pipeline (TLS termination happens upstream in
-    // CDP), so UseHsts is the only piece needed here.
+    // CDP), so requests reach this container over plain HTTP carrying
+    // X-Forwarded-Proto: https. UseForwardedHeaders must run first to turn
+    // that into an HTTPS scheme, or UseHsts (which only acts on
+    // Request.IsHttps) silently never emits the header. KnownProxies/
+    // KnownIPNetworks are cleared because CDP's ingress is not a fixed,
+    // known address — the container is only reachable through it, so the
+    // immediate hop is trusted implicitly.
     if (!app.Environment.IsDevelopment())
     {
+        var forwardedHeadersOptions = new ForwardedHeadersOptions
+        {
+            ForwardedHeaders = ForwardedHeaders.XForwardedProto,
+        };
+        forwardedHeadersOptions.KnownIPNetworks.Clear();
+        forwardedHeadersOptions.KnownProxies.Clear();
+        app.UseForwardedHeaders(forwardedHeadersOptions);
         app.UseHsts();
     }
 
