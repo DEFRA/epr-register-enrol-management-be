@@ -465,14 +465,17 @@ public class ReAccreditationResumeServiceTests
             ct);
     }
 
-    [Fact]
-    public async Task ResumeFromQueryAsync_besEvidence_without_a_sites_property_still_merges_a_well_formed_sites_document()
+    [Theory]
+    [InlineData("""{"sectionStatus":"Completed"}""")]
+    [InlineData("""{"sectionStatus":"Completed","sites":null}""")]
+    public async Task ResumeFromQueryAsync_besEvidence_without_a_sites_array_never_overwrites_the_overseasSites_canonical_field(
+        string besEvidenceJson)
     {
-        // Defends ExtractCanonicalMergeValue's default: a BesEvidence value that is a genuine
-        // JSON object (WorkItemPayloadConverter.ToBson already rejects anything that isn't, for
-        // every section) but happens not to carry a "sites" property must still resolve to a
-        // well-formed { sites: [] } document - never omit the field or leak whatever unrelated
-        // properties the value did have (e.g. sectionStatus) into payload.overseasSites.
+        // An operator backend that predates the sites projection (not yet deployed, rolled back,
+        // or a resubmit in flight across a deploy) sends BesEvidence with no sites array.
+        // SetPayloadFieldAsync is a whole-field $set, so writing { sites: [] } here would wipe
+        // every overseas site, ORS id and evidence file on the work item. The write must be
+        // skipped; the section is still recorded in latestSections.
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness("query-during-assessment");
         var request = new ResumeFromQueryRequest(
@@ -480,7 +483,7 @@ public class ReAccreditationResumeServiceTests
             ["broadly-equivalent-standards"],
             new Dictionary<string, JsonElement>
             {
-                ["BesEvidence"] = JsonDocument.Parse("""{"sectionStatus":"Completed"}""").RootElement,
+                ["BesEvidence"] = JsonDocument.Parse(besEvidenceJson).RootElement,
             },
             []);
 
@@ -488,13 +491,11 @@ public class ReAccreditationResumeServiceTests
             harness.WorkItem.Id, request, harness.User, ct);
 
         Assert.True(result.IsSuccess);
-        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+        await harness.Persistence.DidNotReceive().SetPayloadFieldAsync(
             harness.WorkItem.Id,
             "overseasSites",
-            Arg.Is<BsonValue>(v =>
-                v.AsBsonDocument.ElementCount == 1
-                && v["sites"].AsBsonArray.Count == 0),
-            ct);
+            Arg.Any<BsonValue>(),
+            Arg.Any<CancellationToken>());
     }
 
     [Fact]

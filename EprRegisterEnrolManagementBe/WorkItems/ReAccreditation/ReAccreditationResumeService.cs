@@ -139,7 +139,9 @@ internal sealed class ReAccreditationResumeService(
     /// dropping the other's exact shape. <see cref="ExtractCanonicalMergeValue"/>
     /// handles BesEvidence specially so both keys always merge the
     /// identical <c>{ sites: [...] }</c> shape, making the merge idempotent
-    /// regardless of order.
+    /// regardless of order. A BesEvidence value with no <c>sites</c> array
+    /// (an operator backend that predates the sites projection) is not merged
+    /// at all, since the write replaces the whole field.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> s_canonicalPayloadFieldBySectionKey =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -158,22 +160,24 @@ internal sealed class ReAccreditationResumeService(
     /// <see cref="s_canonicalPayloadFieldBySectionKey"/> for why that one
     /// needs its <c>sites</c> sub-field pulled out rather than merged whole.
     /// </summary>
-    private static BsonValue ExtractCanonicalMergeValue(string sectionKey, BsonValue sectionValue)
+    private static BsonValue? ExtractCanonicalMergeValue(string sectionKey, BsonValue sectionValue)
     {
         if (sectionKey != "BesEvidence")
         {
             return sectionValue;
         }
 
-        // Always resolve to a well-formed { sites: [...] } document for this key - never fall
-        // back to the raw sectionValue (which carries a stray sectionStatus field, or could be
-        // any other shape a malformed/unexpected operator-backend payload sends), since that
-        // would corrupt payload.overseasSites with a shape the case management summary page
-        // doesn't expect.
-        var sites = sectionValue is BsonDocument besEvidenceDoc
-            ? besEvidenceDoc.GetValue("sites", new BsonArray())
-            : new BsonArray();
-        return new BsonDocument { ["sites"] = sites };
+        // Returns null (=> no canonical write) unless the payload carries a sites array.
+        // SetPayloadFieldAsync is a whole-field $set, so defaulting a missing "sites" to []
+        // would wipe payload.overseasSites - which is exactly what an operator backend that
+        // predates the sites projection (not yet deployed, rolled back, or a resubmit in
+        // flight across a deploy) would trigger. Never fall back to the raw sectionValue
+        // either: it carries a stray sectionStatus and would corrupt the overseasSites shape.
+        return sectionValue is BsonDocument besEvidenceDoc
+            && besEvidenceDoc.TryGetValue("sites", out var sites)
+            && sites is BsonArray
+                ? new BsonDocument { ["sites"] = sites }
+                : null;
     }
 
     public async Task<WorkItemActionResult> ResumeFromQueryAsync(
@@ -465,6 +469,11 @@ internal sealed class ReAccreditationResumeService(
                 if (s_canonicalPayloadFieldBySectionKey.TryGetValue(sectionKey, out var canonicalField))
                 {
                     var canonicalValue = ExtractCanonicalMergeValue(sectionKey, sectionValue);
+                    if (canonicalValue is null)
+                    {
+                        continue;
+                    }
+
                     var canonicalMatched = await persistence.SetPayloadFieldAsync(
                         workItemId, canonicalField, canonicalValue.DeepClone(), cancellationToken);
                     if (!canonicalMatched)
