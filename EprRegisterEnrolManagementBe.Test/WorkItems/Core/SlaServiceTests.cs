@@ -168,7 +168,7 @@ public class SlaServiceTests
 
         var entry = Assert.Single(result.WorkItem!.AuditLog);
         Assert.Equal("sla-extended", entry.Action);
-        Assert.Equal("Determination deadline extended", entry.ActionDisplayName);
+        Assert.Equal("Determination deadline changed", entry.ActionDisplayName);
         Assert.Equal("tl-alice", entry.CreatedBy);
         Assert.Equal(UtcNow, entry.CreatedAt);
         Assert.Equal("Needs more time", entry.Details["reason"]);
@@ -189,6 +189,34 @@ public class SlaServiceTests
         Assert.Equal(
             XmlConvert.ToString(TimeSpan.FromDays(14)),
             entry.Details["additionalDuration"]);
+    }
+
+    /// <summary>
+    /// RA-572 AC02: the Application history must read in change terminology,
+    /// not extend terminology. The display name is user-visible and was
+    /// reworded; the <c>sla-extended</c> action value is a STORED
+    /// discriminator that management-fe switches on in
+    /// <c>detailRowsForAuditEntry</c>, so renaming it would orphan every
+    /// historical audit entry. The pairing is the load-bearing part.
+    /// </summary>
+    [Fact]
+    public async Task ExtendAsync_audit_entry_reads_changed_while_action_discriminator_stays_sla_extended()
+    {
+        var workItem = WorkItemWithClock();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(7), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(result.WorkItem!.AuditLog);
+        Assert.Equal("sla-extended", entry.Action);
+        Assert.Equal("Determination deadline changed", entry.ActionDisplayName);
+        Assert.DoesNotContain(
+            "extend",
+            entry.ActionDisplayName!,
+            StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

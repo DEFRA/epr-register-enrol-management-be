@@ -19,7 +19,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <list type="bullet">
 ///   <item>Submission                                  → <c>SubmissionConfirmation</c></item>
 ///   <item>Action <c>payment-received</c>               → <c>AssessmentInProgress</c></item>
-///   <item>Action <c>sla-extend</c> (RA-447: "Determination deadline extended") → <c>SlaExtended</c></item>
+///   <item>Action <c>sla-extend</c> (RA-447: "Determination deadline changed") → <c>SlaExtended</c></item>
 ///   <item>Action <c>approve</c>                       → <c>Decision</c></item>
 ///   <item>Action <c>query-during-assessment</c> / <c>query-during-decision</c> → <c>Queried</c></item>
 ///   <item>Action <c>withdraw</c> / <c>withdraw-during-*</c> → <c>Withdrawn</c></item>
@@ -92,7 +92,7 @@ internal sealed class ReAccreditationNotificationHook(
         // come out identical to the ones it replaces.
         ["duly-make"] = ("DulyMade", "Application marked duly made"),
         ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
-        ["sla-extend"] = ("SlaExtended", "Determination deadline extended"),
+        ["sla-extend"] = ("SlaExtended", "Determination deadline changed"),
         ["approve"] = ("Decision", "Decision recorded: approved"),
         ["query-during-duly-making"] = (QueriedTemplateKey, ApplicationQueriedDescription),
         ["query-during-duly-made"] = (QueriedTemplateKey, ApplicationQueriedDescription),
