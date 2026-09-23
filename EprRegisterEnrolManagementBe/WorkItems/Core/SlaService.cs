@@ -142,17 +142,39 @@ public sealed class SlaService : ISlaService
         // from "Extend" to "Change", which made the restriction visibly wrong,
         // and RA-601 removes it.
         //
-        // The product owner explicitly chose NO floor, consequences accepted:
-        //  * a deadline earlier than today is valid — the item becomes
-        //    immediately breached and SlaBreachBackgroundService flips
-        //    SlaClock.Breached on its next pass;
-        //  * a deadline earlier than the clock's StartedAt is valid too, which
+        // The product owner explicitly chose NO floor. Consequences, accepted:
+        //
+        //  * A deadline earlier than today is valid. Mind the two senses of
+        //    "breached" here, because in the short term they disagree. The
+        //    COMPUTED state (see ComputeState on WorkItemSlaClock, surfaced as
+        //    slaState on the wire) reports Breached on the very next read,
+        //    since Remaining is already negative. The PERSISTED boolean on the
+        //    clock stays false until the nightly SlaBreachBackgroundService
+        //    sweep flips it, so a backdated item really does read as
+        //    not-breached in Mongo in the meantime. Verified against a live
+        //    stack during RA-601, so do not "simplify" the two into one.
+        //
+        //  * That sweep is one-way. It skips items already flagged, and nothing
+        //    anywhere clears the flag, so once it catches an overdue item both
+        //    the flag and its sla-breached audit entry are permanent even if
+        //    the deadline is later moved back into the future. RA-601 did NOT
+        //    introduce that: an item whose deadline simply lapses has always
+        //    reached the same permanently-breached state. What changes here is
+        //    only that reaching it becomes deliberate and immediate rather than
+        //    a matter of waiting. The irreversibility is pre-existing
+        //    management-be behaviour, is being escalated on its own merits, and
+        //    is deliberately NOT addressed here — it is not a reason to put a
+        //    floor back on this method.
+        //
+        //  * A deadline earlier than the clock's StartedAt is valid too, which
         //    drives TargetDuration negative or zero. Every read path tolerates
-        //    that (see WorkItemSlaClock.DueAt / Remaining, which saturate
-        //    rather than overflow).
+        //    that: see the DueAt and Remaining members of WorkItemSlaClock,
+        //    which saturate rather than overflow.
+        //
         // Only zero is rejected, because re-submitting the current deadline is
-        // a no-op; the frontend rejects it for the same reason. There is no
-        // upper limit either — RA-447/CM6 removed the old MaxExtensionDays cap.
+        // a no-op, and the frontend rejects it for the same reason. There is no
+        // upper limit either, since RA-447/CM6 removed the old MaxExtensionDays
+        // cap.
 
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
