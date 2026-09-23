@@ -607,7 +607,7 @@ internal sealed class ReAccreditationNotificationHook(
                 // non-UTC / non-midnight StartedAt cannot shift the rendered
                 // deadline onto an adjacent calendar day. For the normal UTC
                 // path this is a no-op.
-                var deadline = (slaClock.StartedAt + slaClock.TargetDuration).Date;
+                var deadline = slaClock.DueAt.Date;
                 personalisation["sla_deadline"] = deadline.ToString(
                     "d MMMM yyyy",
                     CultureInfo.GetCultureInfo("en-GB")

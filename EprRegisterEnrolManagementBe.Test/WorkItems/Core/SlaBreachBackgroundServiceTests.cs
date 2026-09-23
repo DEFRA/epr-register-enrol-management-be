@@ -111,6 +111,35 @@ public class SlaBreachBackgroundServiceTests
     }
 
     [Fact]
+    public async Task RunOnceAsync_breaches_an_item_whose_deadline_was_moved_before_the_clock_start()
+    {
+        // RA-601 extreme case: the regulator moved the determination deadline
+        // so far back that TargetDuration went NEGATIVE — the deadline now sits
+        // before the clock ever started. The job must still pick it up on its
+        // next pass, write one sla-breached entry, and not throw.
+        var item = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = "assessment-in-progress",
+            SubmittedBy = "test-client",
+            Payload = new BsonDocument(),
+            SlaClock = new WorkItemSlaClock
+            {
+                StartedAt = s_fixedNow.AddDays(-10).UtcDateTime,
+                TargetDuration = TimeSpan.FromDays(-30)
+            }
+        };
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(item.SlaClock!.Breached);
+        var breachEntry = Assert.Single(item.AuditLog, e => e.Action == "sla-breached");
+        Assert.Equal("-30", breachEntry.Details["targetDays"]);
+        Assert.Equal(s_fixedNow.AddDays(-40).UtcDateTime, item.SlaClock.DueAt);
+    }
+
+    [Fact]
     public async Task RunOnceAsync_skips_items_with_no_sla_clock()
     {
         var item = new WorkItem

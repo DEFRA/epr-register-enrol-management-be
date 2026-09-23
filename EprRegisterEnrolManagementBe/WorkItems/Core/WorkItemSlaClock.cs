@@ -33,9 +33,43 @@ public sealed class WorkItemSlaClock
 
     public bool Breached { get; set; }
 
-    /// <summary>Compute the remaining duration relative to <paramref name="now"/>.</summary>
-    public TimeSpan Remaining(DateTime now) =>
-        StartedAt + TargetDuration - now;
+    /// <summary>
+    /// The absolute determination deadline: <see cref="StartedAt"/> +
+    /// <see cref="TargetDuration"/>.
+    /// <para>
+    /// RA-601 allows the deadline to be moved earlier, so
+    /// <see cref="TargetDuration"/> may legitimately be zero or negative and
+    /// the deadline may fall before <see cref="StartedAt"/>. The addition is
+    /// therefore saturating rather than checked: a stored clock whose arithmetic
+    /// would fall outside the representable <see cref="DateTime"/> range clamps
+    /// to <see cref="DateTime.MinValue"/> / <see cref="DateTime.MaxValue"/>
+    /// instead of throwing, so no single bad document can 500 every read of that
+    /// work item. <c>SlaService.ExtendAsync</c> refuses to write such a value in
+    /// the first place; this is defence in depth for data that predates it.
+    /// </para>
+    /// </summary>
+    public DateTime DueAt
+    {
+        get
+        {
+            var ticks = unchecked(StartedAt.Ticks + TargetDurationTicks);
+            if (((StartedAt.Ticks ^ ticks) & (TargetDurationTicks ^ ticks)) < 0)
+            {
+                // long overflow: the sign of the delta tells us which way.
+                return TargetDurationTicks < 0 ? DateTime.MinValue : DateTime.MaxValue;
+            }
+            if (ticks < DateTime.MinValue.Ticks) return DateTime.MinValue;
+            if (ticks > DateTime.MaxValue.Ticks) return DateTime.MaxValue;
+            return new DateTime(ticks, StartedAt.Kind);
+        }
+    }
+
+    /// <summary>
+    /// Compute the remaining duration relative to <paramref name="now"/>.
+    /// Negative once the deadline has passed — including immediately, when
+    /// RA-601 has moved the deadline into the past.
+    /// </summary>
+    public TimeSpan Remaining(DateTime now) => DueAt - now;
 
     /// <summary>
     /// Derive the SLA state from the current clock and <paramref name="now"/>.

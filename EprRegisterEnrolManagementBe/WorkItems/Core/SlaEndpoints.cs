@@ -150,6 +150,15 @@ public static class SlaEndpoints
         return false;
     }
 
+    /// <summary>
+    /// Parse an ISO-8601 (XSD) duration. RA-601: the lexical space allows a
+    /// leading minus — <c>-P5D</c> — which <see cref="XmlConvert.ToTimeSpan"/>
+    /// accepts, and that is the ONLY spelling of a negative duration this
+    /// endpoint accepts. <c>P-5D</c> is malformed and is rejected as
+    /// unparseable. <see cref="OverflowException"/> is caught alongside
+    /// <see cref="FormatException"/> so a wildly out-of-range duration degrades
+    /// to a 422 rather than an unhandled 500.
+    /// </summary>
     private static bool TryParseDuration(string raw, out TimeSpan value, out string? error)
     {
         try
@@ -158,10 +167,10 @@ public static class SlaEndpoints
             error = null;
             return true;
         }
-        catch (FormatException)
+        catch (Exception ex) when (ex is FormatException or OverflowException)
         {
             value = TimeSpan.Zero;
-            error = $"Could not parse '{raw}' as an ISO-8601 duration (e.g. 'P14D' or 'PT8H').";
+            error = $"Could not parse '{raw}' as an ISO-8601 duration (e.g. 'P14D', '-P14D' or 'PT8H').";
             return false;
         }
     }
