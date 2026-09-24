@@ -432,6 +432,107 @@ public class ReAccreditationResumeServiceTests
             ct);
     }
 
+    [Fact]
+    public async Task ResumeFromQueryAsync_merges_a_besEvidence_only_resubmit_onto_the_overseasSites_canonical_field()
+    {
+        // RA-570 follow-up: a query raised only against "broadly-equivalent-standards" (no ORS)
+        // used to leave the resubmitted evidence files stranded in latestSections, since
+        // BesEvidence had no canonical-field entry at all - the regulator's work-item summary,
+        // which reads payload.overseasSites.sites[].besEvidence.files, never saw them.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["broadly-equivalent-standards"],
+            new Dictionary<string, JsonElement>
+            {
+                ["BesEvidence"] = JsonDocument.Parse(
+                    """{"sectionStatus":"Completed","sites":[{"siteId":1,"besEvidence":{"files":[{"fileId":"f-1"}]}}]}""")
+                    .RootElement,
+            },
+            []);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "overseasSites",
+            Arg.Is<BsonValue>(v =>
+                v["sites"][0]["besEvidence"]["files"][0]["fileId"].AsString == "f-1"
+                && !v.AsBsonDocument.Contains("sectionStatus")),
+            ct);
+    }
+
+    [Theory]
+    [InlineData("""{"sectionStatus":"Completed"}""")]
+    [InlineData("""{"sectionStatus":"Completed","sites":null}""")]
+    public async Task ResumeFromQueryAsync_besEvidence_without_a_sites_array_never_overwrites_the_overseasSites_canonical_field(
+        string besEvidenceJson)
+    {
+        // An operator backend that predates the sites projection (not yet deployed, rolled back,
+        // or a resubmit in flight across a deploy) sends BesEvidence with no sites array.
+        // SetPayloadFieldAsync is a whole-field $set, so writing { sites: [] } here would wipe
+        // every overseas site, ORS id and evidence file on the work item. The write must be
+        // skipped; the section is still recorded in latestSections.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["broadly-equivalent-standards"],
+            new Dictionary<string, JsonElement>
+            {
+                ["BesEvidence"] = JsonDocument.Parse(besEvidenceJson).RootElement,
+            },
+            []);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.Persistence.DidNotReceive().SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "overseasSites",
+            Arg.Any<BsonValue>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_besEvidence_and_overseasSites_together_never_clobber_each_others_sites()
+    {
+        // Both query keys can be raised together and both map to the same canonical
+        // "overseasSites" field - assert the merge is idempotent regardless of which section
+        // happens to be processed last in the loop, i.e. neither write silently drops the other's
+        // sites data or leaks a stray sectionStatus field into payload.overseasSites.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["overseas-reprocessing-sites", "broadly-equivalent-standards"],
+            new Dictionary<string, JsonElement>
+            {
+                ["OverseasSites"] = JsonDocument.Parse(
+                    """{"sites":[{"siteId":1,"orsId":"ORS-1"}]}""").RootElement,
+                ["BesEvidence"] = JsonDocument.Parse(
+                    """{"sectionStatus":"Completed","sites":[{"siteId":1,"orsId":"ORS-1"}]}""")
+                    .RootElement,
+            },
+            []);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, request, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.Persistence.Received(2).SetPayloadFieldAsync(
+            harness.WorkItem.Id,
+            "overseasSites",
+            Arg.Is<BsonValue>(v =>
+                v["sites"][0]["orsId"].AsString == "ORS-1"
+                && !v.AsBsonDocument.Contains("sectionStatus")),
+            ct);
+    }
+
     // ------------------------------- idempotency -------------------------------
 
     // RA-523: 'updated' is the resume target for three origins;

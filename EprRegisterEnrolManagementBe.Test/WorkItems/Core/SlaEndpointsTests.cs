@@ -111,6 +111,49 @@ public class SlaEndpointsTests
     }
 
     [Fact]
+    public async Task ExtendSla_binds_a_negative_iso_duration_written_as_minus_P5D()
+    {
+        // RA-601 wire contract: a negative duration is spelled with the sign
+        // AHEAD of the 'P'. This is the only spelling the endpoint accepts and
+        // the exact string the frontend emits for a deadline moved earlier.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var slaService = Substitute.For<ISlaService>();
+        var engine = Substitute.For<IWorkItemService>();
+        var workItem = AWorkItem();
+        slaService.ExtendAsync(WorkItemId, TimeSpan.FromDays(-5), "reason",
+                Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(SlaActionResult.Success(workItem));
+        engine.Project(workItem).Returns(AProjection(workItem));
+
+        var body = Json(new { additionalDuration = "-P5D", reason = "reason" });
+        var result = await SlaEndpoints.ExtendSla(
+            WorkItemId, body, TeamLeaderContext(), slaService, engine, cancellationToken);
+
+        Assert.IsType<Ok<WorkItemResponse>>(result.Result);
+        await slaService.Received(1).ExtendAsync(
+            WorkItemId, TimeSpan.FromDays(-5), "reason",
+            Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("P-5D")]        // sign inside the duration — malformed
+    [InlineData("-P99999999D")] // out of TimeSpan range — must not 500
+    public async Task ExtendSla_returns_422_for_a_malformed_or_out_of_range_negative_duration(
+        string raw)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var slaService = Substitute.For<ISlaService>();
+        var engine = Substitute.For<IWorkItemService>();
+
+        var body = Json(new { additionalDuration = raw, reason = "reason" });
+        var result = await SlaEndpoints.ExtendSla(
+            WorkItemId, body, TeamLeaderContext(), slaService, engine, cancellationToken);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(StatusCodes.Status422UnprocessableEntity, problem.StatusCode);
+    }
+
+    [Fact]
     public async Task ExtendSla_returns_400_when_additionalDuration_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
@@ -449,6 +492,62 @@ public class SlaEndpointsTests
         Assert.Equal(workItem.Id, body!.Id);
     }
 
+    [Fact]
+    public async Task Extend_route_accepts_a_negative_duration_and_moves_the_deadline_earlier()
+    {
+        // RA-601 end to end over real HTTP + real Mongo: '-P30D' round-trips
+        // through XmlConvert binding, the service, and persistence, and the
+        // projected slaDueDate comes back 30 days earlier.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory();
+        using var client = factory.CreateClient();
+
+        var workItem = AWorkItem(Guid.NewGuid());
+        var dueBefore = workItem.SlaClock!.DueAt;
+        await factory.SeedAsync(workItem, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{workItem.Id}/sla/extend",
+            new { additionalDuration = "-P30D", reason = "Determination brought forward" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
+        Assert.NotNull(body!.SlaDueDate);
+        Assert.Equal(
+            dueBefore.AddDays(-30),
+            body.SlaDueDate!.Value,
+            TimeSpan.FromSeconds(1));
+
+        var persisted = await factory.GetAsync(workItem.Id, cancellationToken);
+        Assert.Equal(TimeSpan.FromDays(54), persisted!.SlaClock!.TargetDuration);
+        var entry = Assert.Single(persisted.AuditLog, e => e.Action == "sla-extended");
+        Assert.Equal("-P30D", entry.Details["additionalDuration"]);
+        Assert.Equal("Determination brought forward", entry.Details["reason"]);
+    }
+
+    [Fact]
+    public async Task Extend_route_returns_422_for_a_zero_duration()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory();
+        using var client = factory.CreateClient();
+
+        var workItem = AWorkItem(Guid.NewGuid());
+        await factory.SeedAsync(workItem, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{workItem.Id}/sla/extend",
+            new { additionalDuration = "P0D", reason = "no change" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+
+        var persisted = await factory.GetAsync(workItem.Id, cancellationToken);
+        Assert.Equal(TimeSpan.FromDays(84), persisted!.SlaClock!.TargetDuration);
+        Assert.DoesNotContain(persisted.AuditLog, e => e.Action == "sla-extended");
+    }
+
     // ── Route wiring (integration) — override ────────────────────────────────
 
     [Fact]
@@ -510,6 +609,9 @@ public class SlaEndpointsTests
 
         public Task SeedAsync(WorkItem item, CancellationToken ct) =>
             Persistence.CreateAsync(item, ct);
+
+        public Task<WorkItem?> GetAsync(Guid id, CancellationToken ct) =>
+            Persistence.GetByIdAsync(id, ct);
 
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
