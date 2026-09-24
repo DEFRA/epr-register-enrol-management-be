@@ -1,3 +1,4 @@
+using System.Text.Json.Serialization;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
@@ -113,6 +114,7 @@ internal sealed record ReAccreditationPayload
     /// <see cref="SiteAddressBsonSerializer"/> flattens to the same single line.
     /// </summary>
     [BsonSerializer(typeof(SiteAddressBsonSerializer))]
+    [JsonConverter(typeof(SiteAddressJsonConverter))]
     public string? SiteAddress { get; init; }
 
     /// <summary>
