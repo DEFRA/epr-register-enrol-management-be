@@ -108,8 +108,11 @@ internal sealed record ReAccreditationPayload
     /// every real application; null only for items predating this field or
     /// created without a UK site address (e.g. exporters — see
     /// AccreditationApplicationModel's own CompanyRegisteredAddress fallback
-    /// on the operator-backend side).
+    /// on the operator-backend side). Form-created work items store a nested
+    /// <c>{ line1, line2, town, postcode }</c> document instead, which
+    /// <see cref="SiteAddressBsonSerializer"/> flattens to the same single line.
     /// </summary>
+    [BsonSerializer(typeof(SiteAddressBsonSerializer))]
     public string? SiteAddress { get; init; }
 
     /// <summary>
