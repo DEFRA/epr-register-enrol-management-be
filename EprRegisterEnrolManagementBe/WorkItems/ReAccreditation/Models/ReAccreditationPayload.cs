@@ -1,4 +1,3 @@
-using System.Text.Json.Serialization;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
@@ -100,22 +99,6 @@ internal sealed record ReAccreditationPayload
     /// log) when missing.
     /// </summary>
     public string? OperatorEmail { get; init; }
-
-    /// <summary>
-    /// Full site address, sent by epr-register-enrol-backend as the flat
-    /// <c>siteAddress</c> submission field (HttpCaseWorkingApiAdapter.BuildPayload).
-    /// RA-581: surfaced as the SubmissionConfirmation template's
-    /// <c>((SiteAddress))</c> placeholder. Present from submission onward for
-    /// every real application; null only for items predating this field or
-    /// created without a UK site address (e.g. exporters — see
-    /// AccreditationApplicationModel's own CompanyRegisteredAddress fallback
-    /// on the operator-backend side). Form-created work items store a nested
-    /// <c>{ line1, line2, town, postcode }</c> document instead, which
-    /// <see cref="SiteAddressBsonSerializer"/> flattens to the same single line.
-    /// </summary>
-    [BsonSerializer(typeof(SiteAddressBsonSerializer))]
-    [JsonConverter(typeof(SiteAddressJsonConverter))]
-    public string? SiteAddress { get; init; }
 
     /// <summary>
     /// Postcode of the regulated site. RA-526: no longer used for nation routing

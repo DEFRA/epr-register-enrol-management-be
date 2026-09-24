@@ -855,10 +855,12 @@ internal sealed class ReAccreditationNotificationHook(
                 // the primary/main application (only overseas sites have
                 // one), so this is blank for every current send. SiteAddress
                 // is the full address epr-register-enrol-backend sends as
-                // `siteAddress` at submission (ReAccreditationPayload.SiteAddress),
-                // separate from the postcode-only SiteAddressPostcode.
+                // `siteAddress` at submission (or the nested form-created shape),
+                // read raw via SiteAddressFormatter — never modelled on the payload
+                // record, whose write-back would clobber it — and separate from the
+                // postcode-only SiteAddressPostcode.
                 ["SiteName"] = string.Empty,
-                ["SiteAddress"] = payload.SiteAddress ?? string.Empty,
+                ["SiteAddress"] = SiteAddressFormatter.Format(workItem.Payload) ?? string.Empty,
                 ["regulatorName"] = _notifyConfig.GetRegulatorName(payload.Nation?.ToString()) ?? string.Empty,
                 ["date"] = FormatOperatorFacingDate(workItem.SubmittedAt),
                 ["reference"] = reference,
