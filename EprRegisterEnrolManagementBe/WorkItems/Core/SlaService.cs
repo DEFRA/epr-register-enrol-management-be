@@ -26,7 +26,7 @@ public interface ISlaService
     /// supplied reason, and fans out to every registered
     /// <see cref="IWorkItemPostActionHook"/> with an <c>sla-extend</c>
     /// action id. RA-581: no notification hook maps this action any more —
-    /// the operator "Determination deadline extended" email was removed —
+    /// the operator "Determination deadline changed" email was removed —
     /// so this fan-out is currently a no-op for every registered hook.
     /// </summary>
     Task<SlaActionResult> ExtendAsync(
