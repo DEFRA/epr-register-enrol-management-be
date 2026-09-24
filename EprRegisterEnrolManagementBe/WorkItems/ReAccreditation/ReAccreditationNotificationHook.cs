@@ -107,6 +107,9 @@ internal sealed class ReAccreditationNotificationHook(
     private const string ApplicationWithdrawnDescription = "Operator application withdrawn";
     private const string QueriedTemplateKey = "Queried";
     private const string ReferenceKey = "reference";
+    private const string OrganisationNameKey = "organisation_name";
+    private const string RegistrationNumberKey = "registration_number";
+    private const string ContactNameKey = "contactName";
     private const string WithdrawnTemplateKey = "Withdrawn";
 
     private readonly NotifyConfig _notifyConfig = notifyOptions.Value;
@@ -655,8 +658,8 @@ internal sealed class ReAccreditationNotificationHook(
 
         var personalisation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["organisation_name"] = payload?.OrganisationName ?? string.Empty,
-            ["registration_number"] = payload?.RegistrationNumber ?? string.Empty,
+            [OrganisationNameKey] = payload?.OrganisationName ?? string.Empty,
+            [RegistrationNumberKey] = payload?.RegistrationNumber ?? string.Empty,
             [ReferenceKey] = reference,
             // RA-581: every regulator-facing template now links back to the
             // case in management-fe. Empty when CASE_MANAGEMENT_BASE_URL is
@@ -845,8 +848,8 @@ internal sealed class ReAccreditationNotificationHook(
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
                 ["year"] = year,
-                ["contactName"] = contactName,
-                ["organisation_name"] = organisationName,
+                [ContactNameKey] = contactName,
+                [OrganisationNameKey] = organisationName,
                 ["material"] = material,
                 // AC05: UK vs non-UK sites — no SiteName capture exists for
                 // the primary/main application (only overseas sites have
@@ -859,7 +862,7 @@ internal sealed class ReAccreditationNotificationHook(
                 ["regulatorName"] = _notifyConfig.GetRegulatorName(payload.Nation?.ToString()) ?? string.Empty,
                 ["date"] = FormatOperatorFacingDate(workItem.SubmittedAt),
                 ["reference"] = reference,
-                ["registration_number"] = registrationNumber,
+                [RegistrationNumberKey] = registrationNumber,
             };
         }
 
@@ -867,15 +870,15 @@ internal sealed class ReAccreditationNotificationHook(
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["contactName"] = contactName,
+                [ContactNameKey] = contactName,
                 ["year"] = year,
-                ["organisation_name"] = organisationName,
+                [OrganisationNameKey] = organisationName,
                 ["material"] = material,
                 // "made on" — the original submission date, not the date duly
                 // making itself completed.
                 ["SubmissionDate"] = FormatOperatorFacingDate(workItem.SubmittedAt),
                 ["reference"] = reference,
-                ["registration_number"] = registrationNumber,
+                [RegistrationNumberKey] = registrationNumber,
                 ["regulatorEmail"] = regulatorEmail,
             };
         }
@@ -884,15 +887,15 @@ internal sealed class ReAccreditationNotificationHook(
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["contactName"] = contactName,
+                [ContactNameKey] = contactName,
                 ["year"] = year,
-                ["organisation_name"] = organisationName,
+                [OrganisationNameKey] = organisationName,
                 // RA-291: the date the CURRENT query was raised, stamped by
                 // ReAccreditationQueryService immediately before the query
                 // transition — see CurrentQuery.RaisedAt.
                 ["Querieddate"] = FormatOperatorFacingDate(payload.CurrentQuery?.RaisedAt),
                 ["reference"] = reference,
-                ["registration_number"] = registrationNumber,
+                [RegistrationNumberKey] = registrationNumber,
                 ["regulatorEmail"] = regulatorEmail,
             };
         }
@@ -901,12 +904,12 @@ internal sealed class ReAccreditationNotificationHook(
         {
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["contactName"] = contactName,
+                [ContactNameKey] = contactName,
                 ["year"] = year,
-                ["organisation_name"] = organisationName,
+                [OrganisationNameKey] = organisationName,
                 ["material"] = material,
                 ["reference"] = reference,
-                ["registration_number"] = registrationNumber,
+                [RegistrationNumberKey] = registrationNumber,
                 ["regulatorEmail"] = regulatorEmail,
             };
         }
@@ -917,9 +920,9 @@ internal sealed class ReAccreditationNotificationHook(
             // deliberately the thinnest of the five templates.
             return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                ["contactName"] = contactName,
+                [ContactNameKey] = contactName,
                 ["reference"] = reference,
-                ["registration_number"] = registrationNumber,
+                [RegistrationNumberKey] = registrationNumber,
                 ["withdrawal_reason"] = LatestWorkItemNoteText(workItem),
             };
         }
@@ -930,8 +933,8 @@ internal sealed class ReAccreditationNotificationHook(
         // personalisation shape is known.
         return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["organisation_name"] = organisationName,
-            ["registration_number"] = registrationNumber,
+            [OrganisationNameKey] = organisationName,
+            [RegistrationNumberKey] = registrationNumber,
             ["reference"] = reference,
         };
     }

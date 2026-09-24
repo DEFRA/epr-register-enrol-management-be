@@ -60,23 +60,28 @@ public class SiteAddressBsonSerializerTests
         Assert.Equal("12 Industrial Way, Bristol", payload.SiteAddress);
     }
 
-    [Theory]
-    [MemberData(nameof(NoAddressCases))]
-    public void Absent_blank_or_unusable_values_read_as_null(BsonValue? siteAddress)
-    {
-        var payload = Deserialise(siteAddress);
+    [Fact]
+    public void Absent_key_reads_as_null() => AssertNull(Deserialise(null));
 
+    [Fact]
+    public void Bson_null_reads_as_null() => AssertNull(Deserialise(BsonNull.Value));
+
+    [Fact]
+    public void Blank_string_reads_as_null() => AssertNull(Deserialise("   "));
+
+    [Fact]
+    public void Empty_document_reads_as_null() => AssertNull(Deserialise(new BsonDocument()));
+
+    [Fact]
+    public void Document_with_only_a_postcode_reads_as_null() =>
+        AssertNull(Deserialise(new BsonDocument { ["postcode"] = "BS1 4DJ" }));
+
+    [Fact]
+    public void Unusable_value_type_reads_as_null() => AssertNull(Deserialise(new BsonInt32(42)));
+
+    private static void AssertNull(ReAccreditationPayload payload)
+    {
         Assert.Null(payload.SiteAddress);
         Assert.Equal("Acme Ltd", payload.OrganisationName);
     }
-
-    public static TheoryData<BsonValue?> NoAddressCases() => new()
-    {
-        null,
-        BsonNull.Value,
-        "   ",
-        new BsonDocument(),
-        new BsonDocument { ["postcode"] = "BS1 4DJ" },
-        new BsonInt32(42),
-    };
 }
