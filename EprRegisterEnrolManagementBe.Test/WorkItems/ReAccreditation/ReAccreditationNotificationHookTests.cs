@@ -346,7 +346,7 @@ public class ReAccreditationNotificationHookTests
             .AppendAsync(
                 workItem.Id,
                 "notification-sent",
-                "Determination deadline extended email sent",
+                "Determination deadline changed email sent",
                 Arg.Any<Dictionary<string, string?>>(),
                 s_user,
                 ct
