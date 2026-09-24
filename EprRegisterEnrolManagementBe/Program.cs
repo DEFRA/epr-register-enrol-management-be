@@ -206,6 +206,17 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
                 options.BaseUrl =
                     configuration.GetValue<string>("OPERATOR_SERVICE_BASE_URL") ?? string.Empty
         );
+    // RA-581: case management (management-fe) base URL, surfaced as the
+    // work_item_link Notify placeholder in every regulator-facing email.
+    // Read from the flat CASE_MANAGEMENT_BASE_URL environment variable,
+    // matching OPERATOR_SERVICE_BASE_URL's convention.
+    services
+        .AddOptions<CaseManagementConfig>()
+        .Configure<IConfiguration>(
+            (options, configuration) =>
+                options.BaseUrl =
+                    configuration.GetValue<string>("CASE_MANAGEMENT_BASE_URL") ?? string.Empty
+        );
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>(builder.Configuration);
     services.AddHostedService<SlaBreachBackgroundService>();

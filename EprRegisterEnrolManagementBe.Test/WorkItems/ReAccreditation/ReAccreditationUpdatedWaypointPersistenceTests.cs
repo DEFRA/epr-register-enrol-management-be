@@ -8,6 +8,7 @@ using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using NSubstitute;
 
@@ -363,7 +364,8 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
             auditAppender,
             Substitute.For<IRegulatorMailboxResolver>(),
             _persistence,
-            NullLogger<ReAccreditationNotificationHook>.Instance
+            NullLogger<ReAccreditationNotificationHook>.Instance,
+            Options.Create(new NotifyConfig())
         );
 
         var queue = new RecordingBackgroundTaskQueue();

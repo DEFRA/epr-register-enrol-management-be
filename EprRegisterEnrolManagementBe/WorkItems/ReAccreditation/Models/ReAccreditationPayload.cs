@@ -25,6 +25,15 @@ internal sealed record ReAccreditationPayload
     public string? RegistrationNumber { get; init; }
 
     /// <summary>
+    /// RA-480: the submitter's contact details, captured on the case
+    /// management "additional information" tab. RA-581 surfaces
+    /// <c>SubmitterContactDetails.FullName</c> as the <c>contact_name</c>
+    /// Notify placeholder. Null for every work item that predates RA-480 or
+    /// was seeded without it — see <see cref="Models.SubmitterContactDetails"/>.
+    /// </summary>
+    public SubmitterContactDetails? SubmitterContactDetails { get; init; }
+
+    /// <summary>
     /// Human-facing application reference (RA-219, format RA-#########),
     /// stamped onto the payload by the core WorkItemService at submission.
     /// Surfaced as the ((reference)) GOV.UK Notify placeholder in lifecycle
@@ -90,6 +99,18 @@ internal sealed record ReAccreditationPayload
     /// log) when missing.
     /// </summary>
     public string? OperatorEmail { get; init; }
+
+    /// <summary>
+    /// Full site address, sent by epr-register-enrol-backend as the flat
+    /// <c>siteAddress</c> submission field (HttpCaseWorkingApiAdapter.BuildPayload).
+    /// RA-581: surfaced as the SubmissionConfirmation template's
+    /// <c>((SiteAddress))</c> placeholder. Present from submission onward for
+    /// every real application; null only for items predating this field or
+    /// created without a UK site address (e.g. exporters — see
+    /// AccreditationApplicationModel's own CompanyRegisteredAddress fallback
+    /// on the operator-backend side).
+    /// </summary>
+    public string? SiteAddress { get; init; }
 
     /// <summary>
     /// Postcode of the regulated site. RA-526: no longer used for nation routing

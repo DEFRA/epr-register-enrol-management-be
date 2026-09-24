@@ -286,10 +286,13 @@ public class ReAccreditationApprovalServiceTests
                 ["operatorRegistrationId"] = "reg-500027",
                 ["nation"] = "England",
                 // Unmodelled keys that the model would otherwise discard.
+                // RA-581: siteDetails (not siteAddress — that's now a modelled
+                // flat-string property, ReAccreditationPayload.SiteAddress; a
+                // nested document there would fail to deserialise).
                 ["applicationReference"] = "RA-000000123",
                 ["source"] = "external-portal",
                 ["siteAddressLine1"] = "1 Recycling Way",
-                ["siteAddress"] = new BsonDocument
+                ["siteDetails"] = new BsonDocument
                 {
                     ["line1"] = "1 Recycling Way",
                     ["postcode"] = "AB1 2CD",
@@ -306,7 +309,7 @@ public class ReAccreditationApprovalServiceTests
         Assert.Equal("RA-000000123", workItem.Payload["applicationReference"].AsString);
         Assert.Equal("external-portal", workItem.Payload["source"].AsString);
         Assert.Equal("1 Recycling Way", workItem.Payload["siteAddressLine1"].AsString);
-        var nested = workItem.Payload["siteAddress"].AsBsonDocument;
+        var nested = workItem.Payload["siteDetails"].AsBsonDocument;
         Assert.Equal("1 Recycling Way", nested["line1"].AsString);
         Assert.Equal("AB1 2CD", nested["postcode"].AsString);
 

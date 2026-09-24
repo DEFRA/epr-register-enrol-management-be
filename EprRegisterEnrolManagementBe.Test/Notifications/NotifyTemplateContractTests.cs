@@ -46,15 +46,18 @@ public class NotifyTemplateContractTests
     /// RA-211: reject is deliberately absent — it no longer sends any
     /// notification (see ReAccreditationNotificationHookTests.
     /// OnActionAppliedAsync_reject_does_not_call_notify_client).
+    /// RA-581: payment-received and sla-extend are also absent — these two
+    /// emails were removed and no longer send any notification (see
+    /// ReAccreditationNotificationHookTests.
+    /// OnActionAppliedAsync_payment_received_does_not_call_notify_client /
+    /// OnActionAppliedAsync_sla_extend_does_not_call_notify_client).
     /// </summary>
     public static TheoryData<string?, string, bool> LifecycleEvents() =>
         new()
         {
             { null, "SubmissionConfirmation", false },
             { "duly-make", "DulyMade", true },
-            { "payment-received", "AssessmentInProgress", false },
             { "query-during-assessment", "Queried", false },
-            { "sla-extend", "SlaExtended", true },
             { "approve", "Decision", false },
         };
 
@@ -70,38 +73,58 @@ public class NotifyTemplateContractTests
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
         Dictionary<string, string>? captured = null;
+        // RA-581: SubmissionConfirmation's OnSubmittedAsync also fires the
+        // regulator-facing OperatorApplicationSubmission send now that the
+        // resolver below returns a real mailbox (needed for regulatorEmail on
+        // the other rows). Capture only the call whose OWN templateKey
+        // matches the row under test, rather than "whichever call happened
+        // last", so the regulator send can't clobber `captured`.
         notifyClient
             .SendEmailAsync(
                 Arg.Any<string>(),
                 Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
             )
-            .Returns(NotifySendResult.Success("msg"));
+            .Returns(callInfo =>
+            {
+                if (
+                    string.Equals(
+                        callInfo.ArgAt<string>(0),
+                        templateKey,
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+                {
+                    captured = callInfo.ArgAt<Dictionary<string, string>>(2);
+                }
+                return NotifySendResult.Success("msg");
+            });
 
         var workItem = BuildRepresentativeWorkItem(needsSlaClock);
-        // Resolver returns null so the RA-240 RegulatorSubmission send that
-        // OnSubmittedAsync now also fires is skipped — this test asserts the
-        // operator-facing lifecycle personalisation only, so leaving the
-        // regulator send off keeps `captured` pinned to the template under test.
+        // RA-581: the resolver now drives BOTH the RA-240 regulator-facing
+        // send (which this test wants skipped, so `captured` stays pinned to
+        // the operator-facing template under test) AND the regulatorEmail
+        // value read into operator-facing personalisation — those need to
+        // stay in sync, so a null return here would make regulatorEmail
+        // empty and fail the "required placeholders are non-empty" check
+        // below for England, the nation BuildRepresentativeWorkItem stamps.
         var regulatorMailboxResolver = Substitute.For<IRegulatorMailboxResolver>();
-        regulatorMailboxResolver.Resolve(Arg.Any<Nation?>()).Returns((string?)null);
+        regulatorMailboxResolver.Resolve(Nation.England).Returns("packagingnotifications@environment-agency.gov.uk");
         var persistence = Substitute.For<IWorkItemPersistence>();
-        // RA-291: a configured operator-service URL, because this contract
-        // asserts required placeholders are non-empty — i.e. it describes a
-        // correctly-configured environment. The unset/blank degradation to an
-        // empty operator_service_link is covered by
-        // ReAccreditationNotificationHookTests.
+        // This contract asserts required placeholders are non-empty — i.e. it
+        // describes a correctly-configured environment.
         var sut = new ReAccreditationNotificationHook(
             notifyClient,
             auditAppender,
             regulatorMailboxResolver,
             persistence,
             NullLogger<ReAccreditationNotificationHook>.Instance,
-            Options.Create(new OperatorServiceConfig
+            Options.Create(new NotifyConfig
             {
-                BaseUrl = "https://operator.example.gov.uk"
+                RegulatorNames = { ["England"] = "Environment Agency (EA)" }
             })
         );
 
@@ -157,14 +180,26 @@ public class NotifyTemplateContractTests
             ["organisationName"] = "Acme Recycling Ltd",
             ["registrationNumber"] = "EX-2024-001",
             ["operatorEmail"] = "operator@example.com",
-            // RA-291: the Queried template requires a non-empty query_reason,
+            // RA-581: regulatorName/regulatorEmail both need a resolvable
+            // nation; England is matched by the RegulatorNames entry and the
+            // mailbox resolver the SUT is built with below.
+            ["nation"] = "England",
+            // RA-581: material/accreditationYear/siteAddress/submitterContactDetails
+            // are needed by one or more of the five operator-facing templates'
+            // required sets (material, year, SiteAddress, contactName).
+            ["material"] = "plastic",
+            ["accreditationYear"] = 2027,
+            ["siteAddress"] = "1 Example Way, Anytown, EX4 1PL",
+            ["submitterContactDetails"] = new BsonDocument { ["fullName"] = "Priya Patel" },
+            // RA-291: the Queried template requires a non-empty Querieddate,
             // read from the current query the query service stamps on the
-            // payload. Supply one so the queried contract rows exercise the
-            // non-empty path, mirroring the Decision/decision_notes note above.
+            // payload (RaisedAt). Supply one so the queried contract row
+            // exercises the non-empty path.
             ["currentQuery"] = new BsonDocument
             {
                 ["reason"] = "Please confirm the tonnage figures.",
                 ["sections"] = new BsonArray { "prn-tonnage" },
+                ["raisedAt"] = new DateTime(2025, 11, 3, 0, 0, 0, DateTimeKind.Utc),
             },
         };
 
@@ -173,19 +208,9 @@ public class NotifyTemplateContractTests
             TypeId = ReAccreditationType.Id,
             StateId = "submitted",
             Payload = payload,
-            // RA-203: the Decision template requires a non-empty decision_notes
-            // placeholder, sourced from the latest work-item-level note. Supply
-            // one here so the approve/reject contract rows exercise the
-            // non-empty path and the "required placeholder may not be empty"
-            // assertion holds for the Decision template.
-            Notes =
-            [
-                new WorkItemNote
-                {
-                    Text = "Decision rationale recorded by the assessor.",
-                    CreatedAt = new DateTime(2025, 10, 9, 9, 30, 0, DateTimeKind.Utc),
-                },
-            ],
+            // RA-581: SubmissionConfirmation's date and DulyMade's
+            // SubmissionDate both require a non-empty formatted value.
+            SubmittedAt = new DateTime(2025, 10, 1, 9, 0, 0, DateTimeKind.Utc),
             SlaClock = needsSlaClock
                 ? new WorkItemSlaClock
                 {
