@@ -11,12 +11,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// universal across modules. RA-323: any authenticated caseworker may
 /// extend or override — there is no team-leader gate any more. RA-447/CM6:
 /// extend has no upper limit any more (SlaConfig.MaxExtensionDays removed).
+/// RA-601: extend has no lower bound either — a negative
+/// <c>additionalDuration</c> moves the determination deadline EARLIER. Only
+/// zero is rejected, as a no-op.
 /// </summary>
 public interface ISlaService
 {
     /// <summary>
     /// Add <paramref name="additionalDuration"/> to the work item's
-    /// <see cref="SlaClock.TargetDuration"/>. Writes an <c>sla-extended</c>
+    /// <see cref="SlaClock.TargetDuration"/>. RA-601: the duration may be
+    /// negative (ISO-8601 <c>-P14D</c>) to move the deadline earlier; zero is
+    /// rejected. Writes an <c>sla-extended</c>
     /// audit entry carrying before/after SlaClock snapshots and the
     /// supplied reason, and fans out to every registered
     /// <see cref="IWorkItemPostActionHook"/> with an <c>sla-extend</c>
@@ -120,17 +125,56 @@ public sealed class SlaService : ISlaService
         if (RequireActorIdentity(user) is { } identityFailure) return identityFailure;
         if (RequireReason(reason) is { } reasonFailure) return reasonFailure;
 
-        if (additionalDuration <= TimeSpan.Zero)
+        if (additionalDuration == TimeSpan.Zero)
         {
             return SlaActionResult.Failure(
                 SlaActionFailureCode.InvalidRequest,
-                "'additionalDuration' must be a positive ISO-8601 duration (e.g. 'P14D').");
+                "'additionalDuration' must be a non-zero ISO-8601 duration — " +
+                "'P14D' to move the determination deadline later, '-P14D' to move it earlier.");
         }
 
-        // RA-447/CM6: no upper limit on an extension — the requirement is that
-        // it must be an extension, not a reduction, which the guard above
-        // already enforces. The old MaxExtensionDays cap (SlaConfig) has been
-        // removed entirely rather than left unused.
+        // RA-601: a NEGATIVE additionalDuration is valid — it moves the
+        // determination deadline earlier. The old "must be positive" guard was
+        // never a requirement. RA-447/CM6 only asked for an absolute date
+        // picker with no upper limit on an extension; the extension-only rule
+        // was an artefact of the day-count field RA-447 replaced, which simply
+        // could not express a backwards move. RA-572 then renamed the action
+        // from "Extend" to "Change", which made the restriction visibly wrong,
+        // and RA-601 removes it.
+        //
+        // The product owner explicitly chose NO floor. Consequences, accepted:
+        //
+        //  * A deadline earlier than today is valid. Mind the two senses of
+        //    "breached" here, because in the short term they disagree. The
+        //    COMPUTED state (see ComputeState on WorkItemSlaClock, surfaced as
+        //    slaState on the wire) reports Breached on the very next read,
+        //    since Remaining is already negative. The PERSISTED boolean on the
+        //    clock stays false until the nightly SlaBreachBackgroundService
+        //    sweep flips it, so a backdated item really does read as
+        //    not-breached in Mongo in the meantime. Verified against a live
+        //    stack during RA-601, so do not "simplify" the two into one.
+        //
+        //  * That sweep is one-way. It skips items already flagged, and nothing
+        //    anywhere clears the flag, so once it catches an overdue item both
+        //    the flag and its sla-breached audit entry are permanent even if
+        //    the deadline is later moved back into the future. RA-601 did NOT
+        //    introduce that: an item whose deadline simply lapses has always
+        //    reached the same permanently-breached state. What changes here is
+        //    only that reaching it becomes deliberate and immediate rather than
+        //    a matter of waiting. The irreversibility is pre-existing
+        //    management-be behaviour, is being escalated on its own merits, and
+        //    is deliberately NOT addressed here — it is not a reason to put a
+        //    floor back on this method.
+        //
+        //  * A deadline earlier than the clock's StartedAt is valid too, which
+        //    drives TargetDuration negative or zero. Every read path tolerates
+        //    that: see the DueAt and Remaining members of WorkItemSlaClock,
+        //    which saturate rather than overflow.
+        //
+        // Only zero is rejected, because re-submitting the current deadline is
+        // a no-op, and the frontend rejects it for the same reason. There is no
+        // upper limit either, since RA-447/CM6 removed the old MaxExtensionDays
+        // cap.
 
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
@@ -146,8 +190,24 @@ public sealed class SlaService : ISlaService
                 $"Work item '{workItemId}' has no SLA clock started — extend / override is unavailable.");
         }
 
+        // RA-601: this is NOT the floor the product owner declined — it is the
+        // edge of what a .NET DateTime/TimeSpan can represent at all. Without
+        // it a caller could send '-P4000000D' and either overflow the TimeSpan
+        // addition below (unhandled exception => 500) or persist a clock whose
+        // deadline sits outside DateTime's range, which every subsequent read
+        // of that work item would have to cope with. A date that cannot exist
+        // is not "an earlier real date", so rejecting it takes nothing away
+        // from the RA-601 decision.
+        if (!TryShiftTarget(workItem.SlaClock, additionalDuration, out var newTargetDuration))
+        {
+            return SlaActionResult.Failure(
+                SlaActionFailureCode.InvalidRequest,
+                "'additionalDuration' would move the determination deadline outside " +
+                "the range of representable dates.");
+        }
+
         var before = Snapshot(workItem.SlaClock);
-        workItem.SlaClock.TargetDuration += additionalDuration;
+        workItem.SlaClock.TargetDuration = newTargetDuration;
         var after = Snapshot(workItem.SlaClock);
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         workItem.LastModifiedAt = now;
@@ -277,6 +337,40 @@ public sealed class SlaService : ISlaService
             workItem.Id, workItem.TypeId, workItem.SlaClock.TargetDuration, workItem.SlaClock.StartedAt, DescribeUser(user));
 
         return SlaActionResult.Success(workItem);
+    }
+
+    /// <summary>
+    /// RA-601: compute <c>clock.TargetDuration + additionalDuration</c> without
+    /// ever throwing, and report whether the result still yields a deadline
+    /// (<c>StartedAt + TargetDuration</c>) inside the representable DateTime
+    /// range. Returns <c>false</c> instead of throwing on TimeSpan overflow.
+    /// </summary>
+    private static bool TryShiftTarget(
+        WorkItemSlaClock clock, TimeSpan additionalDuration, out TimeSpan newTargetDuration)
+    {
+        newTargetDuration = TimeSpan.Zero;
+
+        // TimeSpan operator+ throws on overflow; the tick arithmetic below
+        // cannot, so do the range check on ticks first.
+        var currentTicks = clock.TargetDuration.Ticks;
+        var deltaTicks = additionalDuration.Ticks;
+        var sum = unchecked(currentTicks + deltaTicks);
+        if (((currentTicks ^ sum) & (deltaTicks ^ sum)) < 0)
+        {
+            return false; // long overflow => TimeSpan overflow.
+        }
+
+        var startedAtTicks = clock.StartedAt.Ticks;
+        var deadlineTicks = unchecked(startedAtTicks + sum);
+        if (((startedAtTicks ^ deadlineTicks) & (sum ^ deadlineTicks)) < 0 ||
+            deadlineTicks < DateTime.MinValue.Ticks ||
+            deadlineTicks > DateTime.MaxValue.Ticks)
+        {
+            return false;
+        }
+
+        newTargetDuration = TimeSpan.FromTicks(sum);
+        return true;
     }
 
     private static Dictionary<string, string?> Snapshot(WorkItemSlaClock clock) => new()

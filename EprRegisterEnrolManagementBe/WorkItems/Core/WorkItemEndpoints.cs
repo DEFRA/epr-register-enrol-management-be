@@ -706,7 +706,7 @@ public static class WorkItemEndpoints
     /// immediately.
     /// </summary>
     internal static DateTime? ComputeSlaDueDate(WorkItemSlaClock? clock) =>
-        clock is null ? null : clock.StartedAt + clock.TargetDuration;
+        clock?.DueAt;
 
     /// <summary>
     /// Slim per-item projection used by the list endpoint (epr-4pf).

@@ -252,13 +252,137 @@ public class SlaServiceTests
         Assert.Contains("reason", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Theory]
-    [InlineData(0)]
-    [InlineData(-1)]
-    public async Task ExtendAsync_returns_invalid_request_for_non_positive_duration(int days)
+    [Fact]
+    public async Task ExtendAsync_returns_invalid_request_for_zero_duration()
     {
+        // RA-601: zero remains rejected — re-submitting the current deadline
+        // is a no-op. The frontend rejects "same date" for the same reason.
         var result = await BuildService().ExtendAsync(
-            Guid.NewGuid(), TimeSpan.FromDays(days), "reason",
+            Guid.NewGuid(), TimeSpan.Zero, "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
+        Assert.Contains("non-zero", result.Message!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── RA-601: moving the determination deadline EARLIER ────────────────────
+
+    [Fact]
+    public async Task ExtendAsync_accepts_a_negative_duration_and_moves_the_deadline_earlier()
+    {
+        var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromDays(84));
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(-14), "Regulator brought the determination forward",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(TimeSpan.FromDays(70), result.WorkItem!.SlaClock!.TargetDuration);
+        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExtendAsync_writes_the_audit_entry_for_a_reduction_with_a_negative_iso_duration()
+    {
+        var startedAt = UtcNow.AddDays(-10);
+        var workItem = WorkItemWithClock(
+            targetDuration: TimeSpan.FromDays(84), startedAt: startedAt);
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(-14), "Brought forward",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        var entry = Assert.Single(result.WorkItem!.AuditLog);
+        // Action id and audit action value are unchanged by RA-601.
+        Assert.Equal("sla-extended", entry.Action);
+        Assert.Equal("Brought forward", entry.Details["reason"]);
+        Assert.Equal("-P14D", entry.Details["additionalDuration"]);
+        Assert.Equal(XmlConvert.ToString(TimeSpan.FromDays(84)), entry.Details["beforeTargetDuration"]);
+        Assert.Equal(XmlConvert.ToString(TimeSpan.FromDays(70)), entry.Details["afterTargetDuration"]);
+        Assert.Equal("tl-1", entry.CreatedBy);
+    }
+
+    [Fact]
+    public async Task ExtendAsync_accepts_a_deadline_earlier_than_today()
+    {
+        // The clock started 10 days ago with an 84-day target. Pulling 80 days
+        // off puts the deadline 6 days in the PAST: valid, and the item is
+        // immediately breach-eligible.
+        var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromDays(84));
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(-80), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var clock = result.WorkItem!.SlaClock!;
+        Assert.True(clock.DueAt < UtcNow);
+        Assert.True(clock.Remaining(UtcNow) < TimeSpan.Zero);
+        Assert.Equal(WorkItemSlaState.Breached, clock.ComputeState(UtcNow));
+    }
+
+    [Theory]
+    [InlineData(-84)]  // TargetDuration lands exactly on zero
+    [InlineData(-200)] // TargetDuration goes negative — deadline before StartedAt
+    public async Task ExtendAsync_accepts_a_deadline_at_or_before_the_clock_start(int days)
+    {
+        var startedAt = UtcNow.AddDays(-10);
+        var workItem = WorkItemWithClock(
+            targetDuration: TimeSpan.FromDays(84), startedAt: startedAt);
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(days), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var clock = result.WorkItem!.SlaClock!;
+        Assert.Equal(TimeSpan.FromDays(84 + days), clock.TargetDuration);
+        // Nothing throws: the deadline simply sits at or before the start.
+        Assert.Equal(startedAt + TimeSpan.FromDays(84 + days), clock.DueAt);
+        Assert.Equal(WorkItemSlaState.Breached, clock.ComputeState(UtcNow));
+    }
+
+    [Theory]
+    [InlineData(-4_000_000)] // deadline underflows DateTime.MinValue
+    [InlineData(4_000_000)]  // deadline overflows DateTime.MaxValue
+    public async Task ExtendAsync_rejects_a_deadline_outside_the_representable_date_range(int days)
+    {
+        // Not the "floor" RA-601 declined — this is the edge of what a
+        // DateTime can hold. Nothing throws; the caller gets a 422-mapped
+        // InvalidRequest and the work item is left untouched.
+        var workItem = WorkItemWithClock();
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(days), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
+        Assert.Contains("representable", result.Message!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(TimeSpan.FromDays(84), workItem.SlaClock!.TargetDuration);
+        Assert.Empty(workItem.AuditLog);
+        await _persistence.DidNotReceive().ReplaceAsync(
+            Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExtendAsync_rejects_a_duration_that_would_overflow_the_timespan_itself()
+    {
+        var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromTicks(long.MaxValue - 10));
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromTicks(1_000), "reason",
             TeamLeader(), TestContext.Current.CancellationToken);
 
         Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
