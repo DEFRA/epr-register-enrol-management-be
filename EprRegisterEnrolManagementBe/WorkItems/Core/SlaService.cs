@@ -216,7 +216,7 @@ public sealed class SlaService : ISlaService
         AppendAuditEntry(
             workItem,
             action: "sla-extended",
-            actionDisplayName: "Determination deadline extended",
+            actionDisplayName: "Determination deadline changed",
             user,
             now,
             reason,
