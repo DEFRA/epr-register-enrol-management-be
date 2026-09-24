@@ -27,14 +27,14 @@ public class ReAccreditationNotificationHookTests
     private static WorkItem BuildWorkItem(
         string stateId = "submitted",
         string? operatorEmail = "op@example.com",
-        WorkItemSlaClock? slaClock = null,
         IEnumerable<WorkItemNote>? notes = null,
         bool nullNotes = false,
         Nation? nation = null,
         bool includeNation = false,
         string? assignedToName = null,
         string? assignedBy = null,
-        string? applicationReference = ApplicationReference
+        string? applicationReference = ApplicationReference,
+        DateTime? submittedAt = null
     )
     {
         var payload = new BsonDocument
@@ -64,10 +64,10 @@ public class ReAccreditationNotificationHookTests
             TypeId = ReAccreditationType.Id,
             StateId = stateId,
             Payload = payload,
-            SlaClock = slaClock,
             Notes = nullNotes ? null! : (notes?.ToList() ?? new List<WorkItemNote>()),
             AssignedToName = assignedToName,
             AssignedBy = assignedBy,
+            SubmittedAt = submittedAt ?? default,
             TemplateSnapshot = WorkItemTemplateSnapshot.Capture(new ReAccreditationType()),
             TemplateVersion = "v3",
         };
@@ -92,7 +92,8 @@ public class ReAccreditationNotificationHookTests
         IWorkItemAuditAppender auditAppender,
         IRegulatorMailboxResolver? regulatorMailboxResolver = null,
         WorkItem? persistedWorkItem = null,
-        string? operatorServiceBaseUrl = null
+        NotifyConfig? notifyConfig = null,
+        string? caseManagementBaseUrl = null
     )
     {
         // Default resolver returns null so the RA-240 regulator send that
@@ -110,12 +111,12 @@ public class ReAccreditationNotificationHookTests
             .GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
             .Returns(persistedWorkItem);
 
-        // RA-291: null models an environment with no operator-service options
+        // RA-581: null models an environment with no case-management options
         // registered at all — distinct from a set-but-empty BaseUrl, and both
-        // must degrade to an empty operator_service_link rather than throwing.
-        var operatorServiceOptions = operatorServiceBaseUrl is null
+        // must degrade to an empty work_item_link rather than throwing.
+        var caseManagementOptions = caseManagementBaseUrl is null
             ? null
-            : Options.Create(new OperatorServiceConfig { BaseUrl = operatorServiceBaseUrl });
+            : Options.Create(new CaseManagementConfig { BaseUrl = caseManagementBaseUrl });
 
         return new(
             notifyClient,
@@ -123,7 +124,8 @@ public class ReAccreditationNotificationHookTests
             resolver,
             persistence,
             NullLogger<ReAccreditationNotificationHook>.Instance,
-            operatorServiceOptions
+            Options.Create(notifyConfig ?? new NotifyConfig()),
+            caseManagementOptions
         );
     }
 
@@ -203,6 +205,146 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
+    public async Task OnSubmittedAsync_populates_SubmissionConfirmation_fields_from_payload()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                "SubmissionConfirmation",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(
+            submittedAt: new DateTime(2025, 10, 9, 9, 0, 0, DateTimeKind.Utc)
+        );
+        workItem.Payload!["material"] = "plastic";
+        workItem.Payload["accreditationYear"] = 2027;
+        workItem.Payload["siteAddress"] = "1 Example Way, Anytown, EX4 1PL";
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("2027", captured!["year"]);
+        Assert.Equal("plastic", captured["material"]);
+        // AC05: no SiteName capture exists for the primary application.
+        Assert.Equal(string.Empty, captured["SiteName"]);
+        Assert.Equal("1 Example Way, Anytown, EX4 1PL", captured["SiteAddress"]);
+        Assert.Equal("9 October 2025", captured["date"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_populates_DulyMade_SubmissionDate_and_regulatorEmail()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                "DulyMade",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(
+            nation: Nation.England,
+            submittedAt: new DateTime(2025, 9, 1, 0, 0, 0, DateTimeKind.Utc)
+        );
+        var resolver = ResolverReturning("packagingnotifications@environment-agency.gov.uk");
+        var sut = BuildSut(notifyClient, auditAppender, resolver);
+
+        await sut.OnActionAppliedAsync(workItem, "duly-make", fromStateId: "submitted", s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal("1 September 2025", captured!["SubmissionDate"]);
+        Assert.Equal("packagingnotifications@environment-agency.gov.uk", captured["regulatorEmail"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_populates_Queried_date_from_current_query_raised_at()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                "Queried",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-queried"));
+
+        var workItem = BuildWorkItem(stateId: "queried");
+        workItem.Payload!["currentQuery"] = new BsonDocument
+        {
+            ["reason"] = "Please confirm the tonnage figures.",
+            ["raisedAt"] = new DateTime(2025, 11, 3, 0, 0, 0, DateTimeKind.Utc),
+        };
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-duly-making",
+            fromStateId: "submitted",
+            s_user,
+            ct
+        );
+
+        Assert.NotNull(captured);
+        Assert.Equal("3 November 2025", captured!["Querieddate"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_sets_empty_Querieddate_when_current_query_absent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                "Queried",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg-queried"));
+
+        // No currentQuery stamped at all — legacy item or a queried
+        // transition applied outside ReAccreditationQueryService.
+        var workItem = BuildWorkItem(stateId: "queried");
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-duly-making",
+            fromStateId: "submitted",
+            s_user,
+            ct
+        );
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.ContainsKey("Querieddate"));
+        Assert.Equal(string.Empty, captured["Querieddate"]);
+    }
+
+    [Fact]
     public async Task OnSubmittedAsync_records_skipped_audit_entry_when_operator_email_missing()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -275,8 +417,6 @@ public class ReAccreditationNotificationHookTests
     // ─────────────────────────── OnActionAppliedAsync ───────────────────────
 
     [Theory]
-    [InlineData("payment-received", "AssessmentInProgress")]
-    [InlineData("sla-extend", "SlaExtended")]
     [InlineData("query-during-duly-making", "Queried")]
     [InlineData("query-during-duly-made", "Queried")]
     [InlineData("query-during-assessment", "Queried")]
@@ -315,42 +455,32 @@ public class ReAccreditationNotificationHookTests
             );
     }
 
-    /// <summary>
-    /// RA-447/CM5: the "SLA" → "Determination Deadline" rewording extends to
-    /// the audit strings this hook composes as "{description} email sent" —
-    /// not just <see cref="SlaService"/>'s own "sla-extended" audit entry.
-    /// </summary>
-    [Fact]
-    public async Task OnActionAppliedAsync_records_determination_deadline_extended_wording_for_sla_extend()
+    // RA-581: payment-received and sla-extend were removed from
+    // s_actionTemplates — these two emails are no longer required. Mirrors
+    // OnActionAppliedAsync_reject_does_not_call_notify_client: the action's
+    // own audit entry (and, for sla-extend, SlaService's own "sla-extended"
+    // entry) is unaffected; this hook simply produces no Notify call or
+    // notification audit entry for either action.
+    [Theory]
+    [InlineData("payment-received")]
+    [InlineData("sla-extend")]
+    public async Task OnActionAppliedAsync_removed_templates_do_not_call_notify_client(string actionId)
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg-id"));
 
         var workItem = BuildWorkItem();
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(workItem, "sla-extend", fromStateId: "assessment-in-progress", s_user, ct);
+        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId: "assessment-in-progress", s_user, ct);
 
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
         await auditAppender
-            .Received(1)
-            .AppendAsync(
-                workItem.Id,
-                "notification-sent",
-                "Determination deadline changed email sent",
-                Arg.Any<Dictionary<string, string?>>(),
-                s_user,
-                ct
-            );
+            .DidNotReceiveWithAnyArgs()
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     // ─────── RA-211: region resolved from payload.Nation ───────
@@ -377,8 +507,8 @@ public class ReAccreditationNotificationHookTests
 
         await sut.OnActionAppliedAsync(
             workItem,
-            "payment-received",
-            fromStateId: "duly-made",
+            "duly-make",
+            fromStateId: "submitted",
             s_user,
             ct
         );
@@ -386,7 +516,7 @@ public class ReAccreditationNotificationHookTests
         await notifyClient
             .Received(1)
             .SendEmailAsync(
-                "AssessmentInProgress",
+                "DulyMade",
                 "op@example.com",
                 Arg.Any<Dictionary<string, string>>(),
                 ApplicationReference,
@@ -416,8 +546,8 @@ public class ReAccreditationNotificationHookTests
 
         await sut.OnActionAppliedAsync(
             workItem,
-            "payment-received",
-            fromStateId: "duly-made",
+            "duly-make",
+            fromStateId: "submitted",
             s_user,
             ct
         );
@@ -428,7 +558,7 @@ public class ReAccreditationNotificationHookTests
         await notifyClient
             .Received(1)
             .SendEmailAsync(
-                "AssessmentInProgress",
+                "DulyMade",
                 "op@example.com",
                 Arg.Any<Dictionary<string, string>>(),
                 ApplicationReference,
@@ -437,254 +567,6 @@ public class ReAccreditationNotificationHookTests
     }
 
     // ─── RA-291 (AC06): operator-service link in the Queried email ───
-
-    [Theory]
-    // Configured: the link is passed through verbatim (trimmed).
-    [InlineData("https://operator.example.gov.uk", "https://operator.example.gov.uk")]
-    [InlineData("  https://operator.example.gov.uk  ", "https://operator.example.gov.uk")]
-    // Unset / blank / section absent entirely: the key is still supplied with
-    // an empty value. Notify 400s a send whose template references a
-    // placeholder the caller omitted, so a config gap must not break querying.
-    [InlineData("", "")]
-    [InlineData("   ", "")]
-    [InlineData(null, "")]
-    public async Task OnActionAppliedAsync_always_supplies_operator_service_link_for_queried(
-        string? configuredBaseUrl,
-        string expectedLink
-    )
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg-queried"));
-
-        var workItem = BuildWorkItem(stateId: "queried");
-        var sut = BuildSut(notifyClient, auditAppender, operatorServiceBaseUrl: configuredBaseUrl);
-
-        await sut.OnActionAppliedAsync(
-            workItem,
-            "query-during-duly-making",
-            fromStateId: "submitted",
-            s_user,
-            ct
-        );
-
-        await notifyClient
-            .Received(1)
-            .SendEmailAsync(
-                "Queried",
-                "op@example.com",
-                Arg.Is<Dictionary<string, string>>(p =>
-                    p.ContainsKey("operator_service_link")
-                    && p["operator_service_link"] == expectedLink
-                ),
-                ApplicationReference,
-                cancellationToken: ct
-            );
-    }
-
-    // ─── RA-291: the query reason reaches the operator's email ───
-
-    [Fact]
-    public async Task OnActionAppliedAsync_sends_the_current_query_reason_for_queried()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg-queried"));
-
-        var workItem = BuildWorkItem(stateId: "queried");
-        workItem.Payload!["currentQuery"] = new BsonDocument
-        {
-            ["reason"] = "The tonnage figures do not reconcile.",
-            ["sections"] = new BsonArray { "prn-tonnage", "business-plan" },
-        };
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(
-            workItem,
-            "query-during-duly-making",
-            fromStateId: "submitted",
-            s_user,
-            ct
-        );
-
-        await notifyClient
-            .Received(1)
-            .SendEmailAsync(
-                "Queried",
-                "op@example.com",
-                Arg.Is<Dictionary<string, string>>(p =>
-                    p["query_reason"] == "The tonnage figures do not reconcile."
-                    // Sections are recorded on the work item and the audit log,
-                    // but deliberately not sent as personalisation: every key
-                    // must exist in the live template or Notify 400s the send.
-                    && !p.ContainsKey("query_sections")
-                ),
-                ApplicationReference,
-                cancellationToken: ct
-            );
-    }
-
-    [Theory]
-    // No current query at all (a queried transition applied outside
-    // ReAccreditationQueryService, or a legacy item) ...
-    [InlineData(null)]
-    // ... or one with a blank reason. Both degrade to an empty value: omitting
-    // the key would make Notify 400 the send, and throwing would fail a
-    // notification that must never unwind the query.
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task OnActionAppliedAsync_sends_an_empty_query_reason_when_none_is_recorded(
-        string? recordedReason
-    )
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg-queried"));
-
-        var workItem = BuildWorkItem(stateId: "queried");
-        if (recordedReason is not null)
-        {
-            workItem.Payload!["currentQuery"] = new BsonDocument
-            {
-                ["reason"] = recordedReason,
-            };
-        }
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(
-            workItem,
-            "query-during-duly-making",
-            fromStateId: "submitted",
-            s_user,
-            ct
-        );
-
-        // The send still happens — the query itself is already committed.
-        await notifyClient
-            .Received(1)
-            .SendEmailAsync(
-                "Queried",
-                "op@example.com",
-                Arg.Is<Dictionary<string, string>>(p =>
-                    p.ContainsKey("query_reason") && p["query_reason"] == ""
-                ),
-                ApplicationReference,
-                cancellationToken: ct
-            );
-    }
-
-    [Fact]
-    public async Task OnActionAppliedAsync_does_not_add_query_reason_to_other_templates()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg-1"));
-
-        var workItem = BuildWorkItem(stateId: "withdrawn");
-        workItem.Payload!["currentQuery"] = new BsonDocument
-        {
-            ["reason"] = "An earlier query, since answered.",
-        };
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(
-            workItem,
-            "withdraw",
-            fromStateId: "submitted",
-            s_user,
-            ct
-        );
-
-        // A stale current query must not leak into unrelated templates —
-        // Notify rejects surplus keys.
-        await notifyClient
-            .Received(1)
-            .SendEmailAsync(
-                "Withdrawn",
-                "op@example.com",
-                Arg.Is<Dictionary<string, string>>(p => !p.ContainsKey("query_reason")),
-                ApplicationReference,
-                cancellationToken: ct
-            );
-    }
-
-    [Fact]
-    public async Task OnActionAppliedAsync_does_not_add_operator_service_link_to_other_templates()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string>>(),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg-1"));
-
-        var workItem = BuildWorkItem(stateId: "assessment-in-progress");
-        var sut = BuildSut(
-            notifyClient, auditAppender, operatorServiceBaseUrl: "https://operator.example.gov.uk");
-
-        await sut.OnActionAppliedAsync(
-            workItem,
-            "payment-received",
-            fromStateId: "duly-made",
-            s_user,
-            ct
-        );
-
-        // Notify rejects surplus personalisation keys as well as missing
-        // ones, so the link must not leak onto templates that do not
-        // reference it.
-        await notifyClient
-            .Received(1)
-            .SendEmailAsync(
-                "AssessmentInProgress",
-                "op@example.com",
-                Arg.Is<Dictionary<string, string>>(p => !p.ContainsKey("operator_service_link")),
-                ApplicationReference,
-                cancellationToken: ct
-            );
-    }
 
     // ─────── RA-211: queried transition sends the Queried template ───────
 
@@ -792,35 +674,34 @@ public class ReAccreditationNotificationHookTests
             );
     }
 
-    [Theory]
-    [InlineData("approve", "approved")]
-    // RA-211: reject deliberately no longer sends any notification — see
-    // OnActionAppliedAsync_reject_does_not_call_notify_client below.
-    public async Task OnActionAppliedAsync_sends_Decision_template_with_correct_decision_value(
-        string actionId,
-        string toStateId
-    )
+    [Fact]
+    public async Task OnActionAppliedAsync_sends_Decision_template_on_approve()
     {
+        // RA-581: the Decision template was simplified to a generic "a
+        // decision has been made, check the service" message — it no longer
+        // distinguishes approved/refused in its personalisation at all (see
+        // NotifyTemplateContract.RequiredPlaceholders["Decision"]).
+        // RA-211: reject deliberately sends no notification at all — see
+        // OnActionAppliedAsync_reject_does_not_call_notify_client below.
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? capturedPersonalisation = null;
         notifyClient
             .SendEmailAsync(
                 Arg.Any<string>(),
                 Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => capturedPersonalisation = d),
+                Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
                 cancellationToken: Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
-        var workItem = BuildWorkItem(stateId: toStateId);
+        var workItem = BuildWorkItem(stateId: "approved");
         var sut = BuildSut(notifyClient, auditAppender);
 
         await sut.OnActionAppliedAsync(
             workItem,
-            actionId,
+            "approve",
             fromStateId: "awaiting-decision",
             s_user,
             ct
@@ -835,14 +716,6 @@ public class ReAccreditationNotificationHookTests
                 ApplicationReference,
                 cancellationToken: ct
             );
-
-        Assert.NotNull(capturedPersonalisation);
-        var expectedDecision = actionId == "approve" ? "Approved" : "Rejected";
-        Assert.Equal(expectedDecision, capturedPersonalisation!["decision"]);
-        // RA-203: decision_notes must always be present for the Decision
-        // template. With no work-item-level notes on this item it is empty.
-        Assert.True(capturedPersonalisation.ContainsKey("decision_notes"));
-        Assert.Equal(string.Empty, capturedPersonalisation["decision_notes"]);
     }
 
     [Theory]
@@ -919,10 +792,10 @@ public class ReAccreditationNotificationHookTests
             .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
-    // ─────── RA-132: Decision personalisation extras ───────
+    // ─────── RA-581 (AC03/AC06): contact_name / regulator_name ───────
 
     [Fact]
-    public async Task OnActionAppliedAsync_includes_accreditation_id_and_start_date_in_Decision_personalisation()
+    public async Task OnSubmittedAsync_uses_submitter_full_name_as_contact_name()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -938,60 +811,29 @@ public class ReAccreditationNotificationHookTests
             )
             .Returns(NotifySendResult.Success("msg"));
 
-        var workItem = BuildWorkItem(stateId: "approved");
-        workItem.Payload["accreditationId"] = "RA-12345678";
-        workItem.Payload["accreditationStartDate"] = new DateTime(
-            2025,
-            2,
-            3,
-            0,
-            0,
-            0,
-            DateTimeKind.Utc
-        );
-
+        var workItem = BuildWorkItem();
+        workItem.Payload!["submitterContactDetails"] = new BsonDocument
+        {
+            ["fullName"] = "Barton Deckow",
+        };
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(workItem, "approve", "assessment-in-progress", s_user, ct);
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         Assert.NotNull(captured);
-        Assert.Equal("RA-12345678", captured!["accreditation_id"]);
-        Assert.Equal("2025-02-03", captured["accreditation_start_date"]);
+        Assert.Equal("Barton Deckow", captured!["contactName"]);
     }
 
-    [Fact]
-    public async Task OnActionAppliedAsync_omits_accreditation_keys_when_payload_lacks_them()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg"));
-
-        var workItem = BuildWorkItem(stateId: "approved");
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
-
-        Assert.NotNull(captured);
-        Assert.DoesNotContain("accreditation_id", captured!.Keys);
-        Assert.DoesNotContain("accreditation_start_date", captured.Keys);
-    }
-
-    // ─────── RA-203: Decision personalisation (decision_notes) ───────
-
+    // AC06: the organisation name becomes the contact_name placeholder when
+    // the submitter's contact name is blank — covers both "field present but
+    // blank" and "no submitterContactDetails at all" (pre-RA-480 items).
     [Theory]
-    [InlineData("approve")]
-    public async Task OnActionAppliedAsync_uses_latest_work_item_level_note_as_decision_notes(
-        string actionId
+    [InlineData(false, "")]
+    [InlineData(false, "   ")]
+    [InlineData(true, null)]
+    public async Task OnSubmittedAsync_falls_back_to_organisation_name_for_contact_name_when_blank(
+        bool omitSubmitterContactDetails,
+        string? blankFullName
     )
     {
         var ct = TestContext.Current.CancellationToken;
@@ -1008,97 +850,24 @@ public class ReAccreditationNotificationHookTests
             )
             .Returns(NotifySendResult.Success("msg"));
 
-        // Out-of-order CreatedAt so the OrderByDescending branch is exercised:
-        // the latest work-item-level note is the expected source.
-        var workItem = BuildWorkItem(
-            stateId: "approved",
-            notes:
-            [
-                Note("Older rationale", new DateTime(2025, 10, 1, 0, 0, 0, DateTimeKind.Utc)),
-                Note("Latest rationale", new DateTime(2025, 10, 9, 0, 0, 0, DateTimeKind.Utc)),
-                Note("Middle rationale", new DateTime(2025, 10, 5, 0, 0, 0, DateTimeKind.Utc)),
-            ]
-        );
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(workItem, actionId, "awaiting-decision", s_user, ct);
-
-        Assert.NotNull(captured);
-        Assert.Equal("Latest rationale", captured!["decision_notes"]);
-    }
-
-    [Fact]
-    public async Task OnActionAppliedAsync_sets_empty_decision_notes_when_notes_collection_is_null()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg"));
-
-        var workItem = BuildWorkItem(stateId: "approved", nullNotes: true);
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnActionAppliedAsync(workItem, "approve", "awaiting-decision", s_user, ct);
-
-        Assert.NotNull(captured);
-        Assert.True(captured!.ContainsKey("decision_notes"));
-        Assert.Equal(string.Empty, captured["decision_notes"]);
-    }
-
-    // ─────── RA-201: SlaExtended personalisation (sla_deadline) ───────
-
-    [Fact]
-    public async Task OnActionAppliedAsync_includes_sla_deadline_in_SlaExtended_personalisation()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg"));
-
-        // Clock started 2025-10-09 UTC + 84 days (12 weeks) => 2026-01-01.
-        var slaClock = new WorkItemSlaClock
+        var workItem = BuildWorkItem();
+        if (!omitSubmitterContactDetails)
         {
-            StartedAt = new DateTime(2025, 10, 9, 9, 30, 0, DateTimeKind.Utc),
-            TargetDuration = TimeSpan.FromDays(84),
-        };
-        var workItem = BuildWorkItem(slaClock: slaClock);
+            workItem.Payload!["submitterContactDetails"] = new BsonDocument
+            {
+                ["fullName"] = blankFullName,
+            };
+        }
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(
-            workItem,
-            "sla-extend",
-            "assessment-in-progress",
-            s_user,
-            ct
-        );
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         Assert.NotNull(captured);
-        Assert.Equal("1 January 2026", captured!["sla_deadline"]);
-        Assert.Equal("Acme Ltd", captured["organisation_name"]);
-        Assert.Equal("EX-001", captured["registration_number"]);
-        Assert.Equal(ApplicationReference, captured["reference"]);
+        Assert.Equal("Acme Ltd", captured!["contactName"]);
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_omits_sla_deadline_when_clock_absent()
+    public async Task OnSubmittedAsync_resolves_regulator_name_from_nation()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1110,23 +879,51 @@ public class ReAccreditationNotificationHookTests
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
             )
             .Returns(NotifySendResult.Success("msg"));
 
-        var workItem = BuildWorkItem(slaClock: null);
-        var sut = BuildSut(notifyClient, auditAppender);
+        var workItem = BuildWorkItem(nation: Nation.Wales);
+        var notifyConfig = new NotifyConfig();
+        notifyConfig.RegulatorNames["Wales"] = "Natural Resources Wales (NRW)";
+        var sut = BuildSut(notifyClient, auditAppender, notifyConfig: notifyConfig);
 
-        await sut.OnActionAppliedAsync(
-            workItem,
-            "sla-extend",
-            "assessment-in-progress",
-            s_user,
-            ct
-        );
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
 
         Assert.NotNull(captured);
-        Assert.DoesNotContain("sla_deadline", captured!.Keys);
+        Assert.Equal("Natural Resources Wales (NRW)", captured!["regulatorName"]);
+    }
+
+    [Fact]
+    public async Task OnSubmittedAsync_sets_empty_regulator_name_when_nation_unconfigured()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg"));
+
+        // No nation on the payload, and an empty RegulatorNames map — both
+        // degrade to an empty string rather than throwing or leaving the key
+        // absent (Notify 400s on a missing key, not an empty one).
+        var workItem = BuildWorkItem();
+        var sut = BuildSut(notifyClient, auditAppender);
+
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.ContainsKey("regulatorName"));
+        Assert.Equal(string.Empty, captured["regulatorName"]);
     }
 
     // ─────── RA-204: Withdrawn notification ───────
@@ -1136,6 +933,11 @@ public class ReAccreditationNotificationHookTests
     [InlineData("withdraw-during-duly-made")]
     [InlineData("withdraw-during-assessment")]
     [InlineData("withdraw-during-decision")]
+    [InlineData("withdraw-during-query")]
+    // RA-252 (v10): withdrawal from 'updated' — added to the state machine
+    // but missing here (and so silently sending no email at all) until
+    // found via local testing (RA-581).
+    [InlineData("withdraw-during-updated")]
     public async Task OnActionAppliedAsync_sends_Withdrawn_template_and_records_sent_audit_entry(
         string actionId
     )
@@ -1246,7 +1048,7 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_uses_latest_work_item_level_note_as_withdrawal_notes()
+    public async Task OnActionAppliedAsync_uses_latest_work_item_level_note_as_withdrawal_reason()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1278,15 +1080,18 @@ public class ReAccreditationNotificationHookTests
         await sut.OnActionAppliedAsync(workItem, "withdraw", "submitted", s_user, ct);
 
         Assert.NotNull(captured);
-        Assert.Equal("Latest reason", captured!["withdrawal_notes"]);
-        // Base keys remain present for the Withdrawn template.
-        Assert.Equal("Acme Ltd", captured["organisation_name"]);
+        Assert.Equal("Latest reason", captured!["withdrawal_reason"]);
+        // RA-581: Withdrawn is the thinnest of the five operator templates —
+        // no organisation_name, year, or material — but its other three
+        // required keys are present.
+        Assert.Equal("Acme Ltd", captured["contactName"]);
         Assert.Equal("EX-001", captured["registration_number"]);
         Assert.Equal(ApplicationReference, captured["reference"]);
+        Assert.DoesNotContain("organisation_name", captured.Keys);
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_sets_empty_withdrawal_notes_when_no_notes()
+    public async Task OnActionAppliedAsync_sets_empty_withdrawal_reason_when_no_notes()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1308,12 +1113,12 @@ public class ReAccreditationNotificationHookTests
         await sut.OnActionAppliedAsync(workItem, "withdraw", "submitted", s_user, ct);
 
         Assert.NotNull(captured);
-        Assert.True(captured!.ContainsKey("withdrawal_notes"));
-        Assert.Equal(string.Empty, captured["withdrawal_notes"]);
+        Assert.True(captured!.ContainsKey("withdrawal_reason"));
+        Assert.Equal(string.Empty, captured["withdrawal_reason"]);
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_sets_empty_withdrawal_notes_when_notes_collection_is_null()
+    public async Task OnActionAppliedAsync_sets_empty_withdrawal_reason_when_notes_collection_is_null()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1337,15 +1142,162 @@ public class ReAccreditationNotificationHookTests
         await sut.OnActionAppliedAsync(workItem, "withdraw", "submitted", s_user, ct);
 
         Assert.NotNull(captured);
-        Assert.True(captured!.ContainsKey("withdrawal_notes"));
-        Assert.Equal(string.Empty, captured["withdrawal_notes"]);
+        Assert.True(captured!.ContainsKey("withdrawal_reason"));
+        Assert.Equal(string.Empty, captured["withdrawal_reason"]);
     }
 
-
-    // ─────── RA-240: RegulatorSubmission notification ───────
+    // ─────── RA-581 (AC02): per-template trigger toggle ───────
 
     [Fact]
-    public async Task OnSubmittedAsync_sends_RegulatorSubmission_to_resolved_mailbox_and_records_sent_audit_entry()
+    public async Task OnSubmittedAsync_skips_operator_email_when_trigger_disabled()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+
+        var workItem = BuildWorkItem();
+        var notifyConfig = new NotifyConfig();
+        notifyConfig.TriggersEnabled["SubmissionConfirmation"] = false;
+        var sut = BuildSut(notifyClient, auditAppender, notifyConfig: notifyConfig);
+
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        await notifyClient
+            .DidNotReceive()
+            .SendEmailAsync(
+                "SubmissionConfirmation",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: ct
+            );
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-skipped",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "SubmissionConfirmation"
+                    && d["reason"] == "trigger-disabled"
+                ),
+                s_user,
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_skips_regulator_email_when_trigger_disabled()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("op-withdrawn-msg"));
+
+        var workItem = BuildWorkItem(
+            stateId: "withdrawn",
+            includeNation: true,
+            nation: Nation.England
+        );
+        var notifyConfig = new NotifyConfig();
+        notifyConfig.TriggersEnabled["ApplicationWithdrawn"] = false;
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem,
+            notifyConfig: notifyConfig
+        );
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+
+        // Operator email is unaffected — only the ApplicationWithdrawn trigger
+        // was switched off.
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Withdrawn",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                Arg.Any<string?>(),
+                ct
+            );
+        await notifyClient
+            .DidNotReceive()
+            .SendEmailAsync(
+                "ApplicationWithdrawn",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                ct
+            );
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-skipped",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "ApplicationWithdrawn"
+                    && d["reason"] == "trigger-disabled"
+                ),
+                s_user,
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_sends_when_trigger_map_has_no_entry_for_the_template()
+    {
+        // RA-581: an absent key means enabled — the map is opt-out, not an
+        // opt-in allow-list — so a template with no configured entry still
+        // sends.
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                cancellationToken: Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(stateId: "withdrawn");
+        var notifyConfig = new NotifyConfig();
+        notifyConfig.TriggersEnabled["SomeOtherTemplate"] = false;
+        var sut = BuildSut(notifyClient, auditAppender, notifyConfig: notifyConfig);
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Withdrawn",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                cancellationToken: ct
+            );
+    }
+
+    // ─────── RA-240: OperatorApplicationSubmission notification ───────
+
+    [Fact]
+    public async Task OnSubmittedAsync_sends_OperatorApplicationSubmission_to_resolved_mailbox_and_records_sent_audit_entry()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1353,7 +1305,7 @@ public class ReAccreditationNotificationHookTests
         Dictionary<string, string>? regulatorPersonalisation = null;
         notifyClient
             .SendEmailAsync(
-                "RegulatorSubmission",
+                "OperatorApplicationSubmission",
                 Arg.Any<string>(),
                 Arg.Do<Dictionary<string, string>>(d => regulatorPersonalisation = d),
                 Arg.Any<string>(),
@@ -1382,9 +1334,9 @@ public class ReAccreditationNotificationHookTests
 
         await sut.OnSubmittedAsync(workItem, s_user, ct);
 
-        // Both operator confirmation and regulator submission were sent. The
-        // operator-facing send carries the RA-248 human-facing application
-        // reference; the regulator-facing send is keyed on the work-item id.
+        // Both operator confirmation and regulator submission were sent, both
+        // carrying the RA-248 human-facing application reference (RA-581:
+        // every regulator-facing template now surfaces ((reference)) too).
         await notifyClient
             .Received(1)
             .SendEmailAsync(
@@ -1398,10 +1350,10 @@ public class ReAccreditationNotificationHookTests
         await notifyClient
             .Received(1)
             .SendEmailAsync(
-                "RegulatorSubmission",
+                "OperatorApplicationSubmission",
                 "regulator@england.example.gov.uk",
                 Arg.Any<Dictionary<string, string>>(),
-                workItem.Id.ToString(),
+                ApplicationReference,
                 Arg.Any<string?>(),
                 ct
             );
@@ -1409,7 +1361,7 @@ public class ReAccreditationNotificationHookTests
         Assert.NotNull(regulatorPersonalisation);
         Assert.Equal("Acme Ltd", regulatorPersonalisation!["organisation_name"]);
         Assert.Equal("EX-001", regulatorPersonalisation["registration_number"]);
-        Assert.Equal(workItem.Id.ToString(), regulatorPersonalisation["reference"]);
+        Assert.Equal(ApplicationReference, regulatorPersonalisation["reference"]);
 
         await auditAppender
             .Received(1)
@@ -1418,7 +1370,7 @@ public class ReAccreditationNotificationHookTests
                 "notification-sent",
                 Arg.Any<string>(),
                 Arg.Is<Dictionary<string, string?>>(d =>
-                    d["templateKey"] == "RegulatorSubmission"
+                    d["templateKey"] == "OperatorApplicationSubmission"
                     && d["recipient"] == "regulator@england.example.gov.uk"
                     && d["nation"] == "England"
                     && d["providerMessageId"] == "reg-msg-1"
@@ -1429,7 +1381,7 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
-    public async Task OnSubmittedAsync_skips_RegulatorSubmission_when_nation_mailbox_unconfigured()
+    public async Task OnSubmittedAsync_skips_OperatorApplicationSubmission_when_nation_mailbox_unconfigured()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1470,7 +1422,7 @@ public class ReAccreditationNotificationHookTests
         await notifyClient
             .DidNotReceive()
             .SendEmailAsync(
-                "RegulatorSubmission",
+                "OperatorApplicationSubmission",
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
@@ -1485,7 +1437,214 @@ public class ReAccreditationNotificationHookTests
                 "notification-skipped",
                 Arg.Any<string>(),
                 Arg.Is<Dictionary<string, string?>>(d =>
-                    d["templateKey"] == "RegulatorSubmission"
+                    d["templateKey"] == "OperatorApplicationSubmission"
+                    && d["reason"] == "missing-regulator-mailbox"
+                    && d["nation"] == "Scotland"
+                ),
+                s_user,
+                ct
+            );
+    }
+
+    // ─────── RA-581: ApplicationWithdrawn regulator notification ───────
+
+    [Fact]
+    public async Task OnActionAppliedAsync_sends_ApplicationWithdrawn_to_resolved_mailbox_with_human_facing_reference()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? regulatorPersonalisation = null;
+        notifyClient
+            .SendEmailAsync(
+                "ApplicationWithdrawn",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => regulatorPersonalisation = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("reg-withdrawn-msg"));
+        notifyClient
+            .SendEmailAsync(
+                "Withdrawn",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("op-withdrawn-msg"));
+
+        var workItem = BuildWorkItem(
+            stateId: "withdrawn",
+            includeNation: true,
+            nation: Nation.England
+        );
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+
+        // Operator send keeps the existing behaviour (Withdrawn template).
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Withdrawn",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                Arg.Any<string?>(),
+                ct
+            );
+
+        // Regulator send: ApplicationWithdrawn's Notify-tracking reference AND
+        // its ((reference)) placeholder both carry the human-facing
+        // RA-######### reference, not the internal work-item Guid (RA-581:
+        // every regulator-facing template now does this).
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "ApplicationWithdrawn",
+                "regulator@england.example.gov.uk",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                Arg.Any<string?>(),
+                ct
+            );
+
+        Assert.NotNull(regulatorPersonalisation);
+        Assert.Equal("Acme Ltd", regulatorPersonalisation!["organisation_name"]);
+        Assert.Equal("EX-001", regulatorPersonalisation["registration_number"]);
+        Assert.Equal(ApplicationReference, regulatorPersonalisation["reference"]);
+
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-sent",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "ApplicationWithdrawn"
+                    && d["recipient"] == "regulator@england.example.gov.uk"
+                    && d["reference"] == ApplicationReference
+                    && d["providerMessageId"] == "reg-withdrawn-msg"
+                ),
+                s_user,
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_falls_back_to_work_item_id_for_ApplicationWithdrawn_reference_when_application_reference_missing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(
+            stateId: "withdrawn",
+            includeNation: true,
+            nation: Nation.England,
+            applicationReference: null
+        );
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "ApplicationWithdrawn",
+                "regulator@england.example.gov.uk",
+                Arg.Any<Dictionary<string, string>>(),
+                workItem.Id.ToString(),
+                Arg.Any<string?>(),
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_skips_ApplicationWithdrawn_when_nation_mailbox_unconfigured()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("op-msg"));
+
+        // Scotland is an unconfigured placeholder → resolver returns null.
+        var workItem = BuildWorkItem(
+            stateId: "withdrawn",
+            includeNation: true,
+            nation: Nation.Scotland
+        );
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning(null),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+
+        // Operator confirmation still sent; regulator withdrawal skipped.
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "Withdrawn",
+                "op@example.com",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                Arg.Any<string?>(),
+                ct
+            );
+        await notifyClient
+            .DidNotReceive()
+            .SendEmailAsync(
+                "ApplicationWithdrawn",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                ct
+            );
+
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-skipped",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "ApplicationWithdrawn"
                     && d["reason"] == "missing-regulator-mailbox"
                     && d["nation"] == "Scotland"
                 ),
@@ -1542,7 +1701,7 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
-    public async Task OnSubmittedAsync_skips_RegulatorSubmission_when_nation_absent()
+    public async Task OnSubmittedAsync_skips_OperatorApplicationSubmission_when_nation_absent()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1572,7 +1731,7 @@ public class ReAccreditationNotificationHookTests
         await notifyClient
             .DidNotReceive()
             .SendEmailAsync(
-                "RegulatorSubmission",
+                "OperatorApplicationSubmission",
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
@@ -1586,7 +1745,7 @@ public class ReAccreditationNotificationHookTests
                 "notification-skipped",
                 Arg.Any<string>(),
                 Arg.Is<Dictionary<string, string?>>(d =>
-                    d["templateKey"] == "RegulatorSubmission"
+                    d["templateKey"] == "OperatorApplicationSubmission"
                     && d["reason"] == "missing-regulator-mailbox"
                     && d["nation"] == null
                 ),
@@ -1596,7 +1755,7 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
-    public async Task OnSubmittedAsync_records_failed_audit_entry_when_RegulatorSubmission_send_fails()
+    public async Task OnSubmittedAsync_records_failed_audit_entry_when_OperatorApplicationSubmission_send_fails()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -1614,7 +1773,7 @@ public class ReAccreditationNotificationHookTests
         // Post-retry failure surfaces from GovukNotifyClient as a Failure result.
         notifyClient
             .SendEmailAsync(
-                "RegulatorSubmission",
+                "OperatorApplicationSubmission",
                 Arg.Any<string>(),
                 Arg.Any<Dictionary<string, string>>(),
                 Arg.Any<string>(),
@@ -1640,7 +1799,7 @@ public class ReAccreditationNotificationHookTests
                 "notification-failed",
                 Arg.Any<string>(),
                 Arg.Is<Dictionary<string, string?>>(d =>
-                    d["templateKey"] == "RegulatorSubmission"
+                    d["templateKey"] == "OperatorApplicationSubmission"
                     && d["errorMessage"] == "503 Service Unavailable"
                 ),
                 s_user,
@@ -1710,7 +1869,7 @@ public class ReAccreditationNotificationHookTests
                 "OfficerAssignment",
                 "regulator@england.example.gov.uk",
                 Arg.Any<Dictionary<string, string>>(),
-                workItem.Id.ToString(),
+                ApplicationReference,
                 Arg.Any<string?>(),
                 ct
             );
@@ -1718,8 +1877,11 @@ public class ReAccreditationNotificationHookTests
         Assert.NotNull(captured);
         Assert.Equal("Acme Ltd", captured!["organisation_name"]);
         Assert.Equal("EX-001", captured["registration_number"]);
-        Assert.Equal(workItem.Id.ToString(), captured["reference"]);
-        Assert.Equal(expectedEvent, captured["assignment_event"]);
+        Assert.Equal(ApplicationReference, captured["reference"]);
+        // RA-581: assignment_event is no longer sent — the live template
+        // dropped it — but the description built from it (asserted via
+        // actionDisplayName below) still distinguishes the three cases.
+        Assert.DoesNotContain("assignment_event", captured.Keys);
         Assert.Equal(expectedOfficerName, captured["officer_name"]);
         // s_user's user:name claim — the acting principal, present on every
         // change including unassign (where AssignedBy has already been cleared).
@@ -1730,7 +1892,7 @@ public class ReAccreditationNotificationHookTests
             .AppendAsync(
                 workItem.Id,
                 "notification-sent",
-                Arg.Any<string>(),
+                Arg.Is<string>(desc => desc.Contains(expectedEvent)),
                 Arg.Is<Dictionary<string, string?>>(d =>
                     d["templateKey"] == "OfficerAssignment"
                     && d["providerMessageId"] == "assign-msg"
@@ -1991,6 +2153,251 @@ public class ReAccreditationNotificationHookTests
                 s_user,
                 ct
             );
+    }
+
+    // ─────── RA-581: QueryResponse notification (operator responds) ───────
+
+    [Theory]
+    [InlineData("resume-during-duly-making")]
+    [InlineData("resume-during-duly-made")]
+    [InlineData("resume-during-assessment")]
+    [InlineData("resume-during-decision")]
+    public async Task OnActionAppliedAsync_sends_QueryResponse_to_regulator_only(string actionId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                "QueryResponse",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("query-response-msg"));
+
+        var workItem = BuildWorkItem(
+            stateId: "assessment-in-progress",
+            includeNation: true,
+            nation: Nation.England
+        );
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId: "queried", s_user, ct);
+
+        // Regulator-only: no operator-facing template maps to a
+        // resume-during-* action.
+        await notifyClient
+            .Received(1)
+            .SendEmailAsync(
+                "QueryResponse",
+                "regulator@england.example.gov.uk",
+                Arg.Any<Dictionary<string, string>>(),
+                ApplicationReference,
+                Arg.Any<string?>(),
+                ct
+            );
+        await notifyClient
+            .DidNotReceive()
+            .SendEmailAsync(
+                Arg.Is<string>(key => key != "QueryResponse"),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                ct
+            );
+
+        Assert.NotNull(captured);
+        Assert.Equal("Acme Ltd", captured!["organisation_name"]);
+        Assert.Equal("EX-001", captured["registration_number"]);
+        Assert.Equal(ApplicationReference, captured["reference"]);
+
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-sent",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "QueryResponse"
+                    && d["providerMessageId"] == "query-response-msg"
+                ),
+                s_user,
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_skips_QueryResponse_when_nation_mailbox_unconfigured()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+
+        // Scotland is an unconfigured placeholder → resolver returns null.
+        var workItem = BuildWorkItem(includeNation: true, nation: Nation.Scotland);
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning(null),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "resume-during-assessment",
+            fromStateId: "queried",
+            s_user,
+            ct
+        );
+
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, default!, ct);
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-skipped",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "QueryResponse"
+                    && d["reason"] == "missing-regulator-mailbox"
+                ),
+                s_user,
+                ct
+            );
+    }
+
+    // ─────── RA-581: work_item_link (regulator-facing templates) ───────
+
+    [Fact]
+    public async Task SendRegulatorEmailAsync_builds_work_item_link_from_case_management_base_url()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(includeNation: true, nation: Nation.England);
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem,
+            // Trailing slash deliberately included: BuildWorkItemLink trims
+            // it so the link never ends up with a double slash.
+            caseManagementBaseUrl: "https://management.example.gov.uk/"
+        );
+
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.Equal(
+            $"https://management.example.gov.uk/work-items/{workItem.Id}",
+            captured!["work_item_link"]
+        );
+    }
+
+    [Fact]
+    public async Task SendRegulatorEmailAsync_sets_empty_work_item_link_when_case_management_base_url_unconfigured()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? captured = null;
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => captured = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("msg"));
+
+        var workItem = BuildWorkItem(includeNation: true, nation: Nation.England);
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnSubmittedAsync(workItem, s_user, ct);
+
+        Assert.NotNull(captured);
+        Assert.True(captured!.ContainsKey("work_item_link"));
+        Assert.Equal(string.Empty, captured["work_item_link"]);
+    }
+
+    // ─────── RA-581: Withdrawal_reason on the regulator-facing send ───────
+
+    [Fact]
+    public async Task OnActionAppliedAsync_includes_Withdrawal_reason_on_regulator_ApplicationWithdrawn_send()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        Dictionary<string, string>? regulatorPersonalisation = null;
+        notifyClient
+            .SendEmailAsync(
+                "ApplicationWithdrawn",
+                Arg.Any<string>(),
+                Arg.Do<Dictionary<string, string>>(d => regulatorPersonalisation = d),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("reg-msg"));
+        notifyClient
+            .SendEmailAsync(
+                "Withdrawn",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(NotifySendResult.Success("op-msg"));
+
+        var workItem = BuildWorkItem(
+            stateId: "withdrawn",
+            includeNation: true,
+            nation: Nation.England,
+            notes: [Note("Site closed permanently.", new DateTime(2025, 11, 1, 0, 0, 0, DateTimeKind.Utc))]
+        );
+        var sut = BuildSut(
+            notifyClient,
+            auditAppender,
+            ResolverReturning("regulator@england.example.gov.uk"),
+            persistedWorkItem: workItem
+        );
+
+        await sut.OnActionAppliedAsync(workItem, "withdraw", fromStateId: "submitted", s_user, ct);
+
+        Assert.NotNull(regulatorPersonalisation);
+        Assert.Equal("Site closed permanently.", regulatorPersonalisation!["Withdrawal_reason"]);
     }
 
     // ─────── RA-248: application reference drives the ((reference)) placeholder ───────

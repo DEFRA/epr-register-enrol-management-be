@@ -18,8 +18,6 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// Mapping:
 /// <list type="bullet">
 ///   <item>Submission                                  → <c>SubmissionConfirmation</c></item>
-///   <item>Action <c>payment-received</c>               → <c>AssessmentInProgress</c></item>
-///   <item>Action <c>sla-extend</c> (RA-447: "Determination deadline changed") → <c>SlaExtended</c></item>
 ///   <item>Action <c>approve</c>                       → <c>Decision</c></item>
 ///   <item>Action <c>query-during-assessment</c> / <c>query-during-decision</c> → <c>Queried</c></item>
 ///   <item>Action <c>withdraw</c> / <c>withdraw-during-*</c> → <c>Withdrawn</c></item>
@@ -35,13 +33,21 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// The reject transition itself and its own audit entry are unaffected;
 /// this hook simply never fires a Notify call for it.
 ///
+/// RA-581: <c>payment-received</c> (<c>AssessmentInProgress</c>) and
+/// <c>sla-extend</c> (<c>SlaExtended</c>) were removed from the mapping —
+/// these two emails are no longer required. Both actions' own audit entries
+/// (and, for <c>sla-extend</c>, <see cref="WorkItems.Core.SlaService"/>'s
+/// <c>sla-extended</c> entry) are unaffected; this hook simply never fires a
+/// Notify call for either.
+///
 /// Failures are recorded as a <c>notification-failed</c> audit entry
 /// on the work item and never re-thrown so a Notify outage cannot
 /// unwind the originating mutation.
 ///
-/// RA-240: submission additionally sends a <c>RegulatorSubmission</c> email
-/// to the regional regulator shared mailbox (resolved from the work item's
-/// nation via <see cref="IRegulatorMailboxResolver"/>) alongside the
+/// RA-240: submission additionally sends an <c>OperatorApplicationSubmission</c>
+/// email (RA-581: renamed from <c>RegulatorSubmission</c> in Notify, same
+/// GUID) to the regional regulator shared mailbox (resolved from the work
+/// item's nation via <see cref="IRegulatorMailboxResolver"/>) alongside the
 /// operator's <c>SubmissionConfirmation</c>.
 ///
 /// RA-237: assignment / re-assignment / unassignment sends an
@@ -50,10 +56,42 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// envelope operation, so <see cref="WorkItemService"/> fans it out through
 /// the post-action hooks explicitly.
 ///
+/// RA-581: <c>withdraw</c> / <c>withdraw-during-*</c> additionally send an
+/// <c>ApplicationWithdrawn</c> email to the regional regulator shared mailbox
+/// alongside the operator's <c>Withdrawn</c> email.
+///
+/// RA-581: <c>resume-during-*</c> (the operator responding to a query, via
+/// <c>ReAccreditationResumeService</c>) sends a <c>QueryResponse</c> email to
+/// the regulator shared mailbox — regulator-only, there is no operator-facing
+/// template for this event.
+///
+/// RA-581: every regulator-facing template's body now surfaces
+/// <c>((reference))</c> and <c>((work_item_link))</c>, so all four
+/// (<c>OperatorApplicationSubmission</c>, <c>OfficerAssignment</c>,
+/// <c>ApplicationWithdrawn</c>, <c>QueryResponse</c>) use the human-facing
+/// <c>RA-#########</c> reference (see <see cref="SendRegulatorEmailAsync"/>'s
+/// <c>useHumanFacingReference</c>) and a deep link built from
+/// <see cref="CaseManagementConfig"/>.
+///
 /// When the regulator mailbox is unresolved (Scotland / Wales / NI
 /// placeholders until RA-244) the send is skipped and recorded as a
 /// <c>notification-skipped</c> audit entry with reason
 /// <c>missing-regulator-mailbox</c>; the originating mutation still succeeds.
+///
+/// RA-581 (AC02): every send additionally checks
+/// <see cref="NotifyConfig.IsTriggerEnabled"/> before anything else — a
+/// template switched off via <c>Notify:TriggersEnabled</c> is skipped and
+/// recorded with reason <c>trigger-disabled</c>, independent of the global
+/// <see cref="NotifyConfig.Enabled"/> kill switch.
+///
+/// RA-581 (AC01/AC03/AC05/AC06): operator-facing personalisation is built
+/// per-template in <see cref="BuildPersonalisation"/> rather than from a
+/// shared base set — the five current templates do NOT all reference the
+/// same placeholders (Withdrawn has no <c>organisation_name</c> at all), and
+/// Notify 400s on a surplus key just as readily as a missing one. Every
+/// template that has one supplies <c>contactName</c> (AC03: the submitter's
+/// name from the case management "additional information" tab, AC06:
+/// falling back to the organisation name when blank).
 /// </summary>
 internal sealed class ReAccreditationNotificationHook(
     INotifyClient notifyClient,
@@ -61,23 +99,44 @@ internal sealed class ReAccreditationNotificationHook(
     IRegulatorMailboxResolver regulatorMailboxResolver,
     IWorkItemPersistence persistence,
     ILogger<ReAccreditationNotificationHook> logger,
-    IOptions<OperatorServiceConfig>? operatorServiceOptions = null
+    IOptions<NotifyConfig> notifyOptions,
+    IOptions<CaseManagementConfig>? caseManagementOptions = null
 ) : IWorkItemPostActionHook
 {
     private const string ApplicationQueriedDescription = "Application queried";
-    private const string ApplicationWithdrawnDescription = "Application withdrawn";
+    private const string ApplicationWithdrawnDescription = "Operator application withdrawn";
     private const string QueriedTemplateKey = "Queried";
     private const string ReferenceKey = "reference";
+    private const string OrganisationNameKey = "organisation_name";
+    private const string RegistrationNumberKey = "registration_number";
+    private const string ContactNameKey = "contactName";
     private const string WithdrawnTemplateKey = "Withdrawn";
 
+    private readonly NotifyConfig _notifyConfig = notifyOptions.Value;
+
     /// <summary>
-    /// RA-291 (AC06): base URL of the public operator service, included in
-    /// the Queried email. Optional so an unconfigured environment degrades to
-    /// an empty link rather than failing the query; see
-    /// <see cref="OperatorServiceConfig"/>.
+    /// RA-581: base URL of the case management (management-fe) service,
+    /// used to build the <c>work_item_link</c> placeholder every
+    /// regulator-facing template now carries. Optional so an unconfigured
+    /// environment degrades to an empty link rather than failing the send;
+    /// see <see cref="CaseManagementConfig"/>.
     /// </summary>
-    private readonly string _operatorServiceLink =
-        operatorServiceOptions?.Value.BaseUrl?.Trim() ?? string.Empty;
+    private readonly string _caseManagementBaseUrl =
+        caseManagementOptions?.Value.BaseUrl?.Trim().TrimEnd('/') ?? string.Empty;
+
+    // RA-581: the operator responds to a query on one of these four
+    // resume-during-* actions (ReAccreditationResumeService), the inverse of
+    // the query-during-* actions below. Routed straight to the regulator's
+    // QueryResponse email — there is no operator-facing template for this
+    // event, unlike every other row in s_actionTemplates.
+    private static readonly HashSet<string> s_queryResponseActions =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            "resume-during-duly-making",
+            "resume-during-duly-made",
+            "resume-during-assessment",
+            "resume-during-decision",
+        };
 
     private static readonly Dictionary<
         string,
@@ -91,8 +150,6 @@ internal sealed class ReAccreditationNotificationHook(
         // audit descriptions ("Application marked duly made email sent/failed")
         // come out identical to the ones it replaces.
         ["duly-make"] = ("DulyMade", "Application marked duly made"),
-        ["payment-received"] = ("AssessmentInProgress", "Assessment started"),
-        ["sla-extend"] = ("SlaExtended", "Determination deadline changed"),
         ["approve"] = ("Decision", "Decision recorded: approved"),
         ["query-during-duly-making"] = (QueriedTemplateKey, ApplicationQueriedDescription),
         ["query-during-duly-made"] = (QueriedTemplateKey, ApplicationQueriedDescription),
@@ -103,7 +160,24 @@ internal sealed class ReAccreditationNotificationHook(
         ["withdraw-during-assessment"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
         ["withdraw-during-decision"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
         ["withdraw-during-query"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
+        // RA-252 (v10): withdrawal from the 'updated' state (i.e. after an
+        // operator has responded to a query) — was added to the state
+        // machine but never added here, so this transition silently sent
+        // no email at all, operator or regulator, until found via local
+        // testing (RA-581).
+        ["withdraw-during-updated"] = (WithdrawnTemplateKey, ApplicationWithdrawnDescription),
     };
+
+    /// <summary>
+    /// RA-581: <c>{CaseManagementBaseUrl}/work-items/{id}</c>, the deep link
+    /// every regulator-facing template's <c>work_item_link</c> placeholder
+    /// carries. Empty when the base URL is unconfigured, matching every other
+    /// optional-link placeholder in this hook.
+    /// </summary>
+    private string BuildWorkItemLink(Guid workItemId) =>
+        string.IsNullOrEmpty(_caseManagementBaseUrl)
+            ? string.Empty
+            : $"{_caseManagementBaseUrl}/work-items/{workItemId}";
 
     public async Task OnSubmittedAsync(
         WorkItem workItem,
@@ -120,7 +194,7 @@ internal sealed class ReAccreditationNotificationHook(
         await SendAndRecordAsync(
             workItem,
             templateKey: "SubmissionConfirmation",
-            description: "Submission confirmation",
+            description: "Operator submission confirmation",
             actionId: null,
             user,
             cancellationToken
@@ -129,17 +203,23 @@ internal sealed class ReAccreditationNotificationHook(
         // RA-240: regulator-facing submission notification to the regional
         // shared mailbox. Skipped + audited when the nation's mailbox is
         // unconfigured; the submission still succeeds.
+        // RA-581: template renamed from RegulatorSubmission to
+        // OperatorApplicationSubmission in Notify (same GUID, same content
+        // shape) — Notify resolves templates by GUID, not name, so this is
+        // purely a config-key rename to keep our naming legible against the
+        // Notify portal, not a functional change.
         await SendRegulatorEmailAsync(
             workItem,
-            templateKey: "RegulatorSubmission",
+            templateKey: "OperatorApplicationSubmission",
             description: "Regulator submission",
             extraPersonalisation: null,
             user,
-            cancellationToken
+            cancellationToken,
+            useHumanFacingReference: true
         );
     }
 
-    public Task OnActionAppliedAsync(
+    public async Task OnActionAppliedAsync(
         WorkItem workItem,
         string actionId,
         string fromStateId,
@@ -149,15 +229,31 @@ internal sealed class ReAccreditationNotificationHook(
     {
         if (!IsReAccreditation(workItem))
         {
-            return Task.CompletedTask;
+            return;
+        }
+
+        // RA-581: operator responded to a query — regulator-only, no
+        // operator-facing template for this event (see s_queryResponseActions).
+        if (s_queryResponseActions.Contains(actionId))
+        {
+            await SendRegulatorEmailAsync(
+                workItem,
+                templateKey: "QueryResponse",
+                description: "Query response",
+                extraPersonalisation: null,
+                user,
+                cancellationToken,
+                useHumanFacingReference: true
+            );
+            return;
         }
 
         if (!s_actionTemplates.TryGetValue(actionId, out var mapping))
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        return SendAndRecordAsync(
+        await SendAndRecordAsync(
             workItem,
             mapping.TemplateKey,
             mapping.Description,
@@ -165,6 +261,28 @@ internal sealed class ReAccreditationNotificationHook(
             user,
             cancellationToken
         );
+
+        // RA-581: withdrawal additionally notifies the regulator's regional
+        // shared mailbox, mirroring OnSubmittedAsync's dual operator +
+        // regulator send. Covers every withdraw-during-* action, since they
+        // all map to WithdrawnTemplateKey above. Withdrawal_reason mirrors
+        // the operator-facing Withdrawn template's own value — same latest
+        // case note, same key name.
+        if (string.Equals(mapping.TemplateKey, WithdrawnTemplateKey, StringComparison.OrdinalIgnoreCase))
+        {
+            await SendRegulatorEmailAsync(
+                workItem,
+                templateKey: "ApplicationWithdrawn",
+                description: "Regulator withdrawal notification",
+                extraPersonalisation: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["Withdrawal_reason"] = LatestWorkItemNoteText(workItem),
+                },
+                user,
+                cancellationToken,
+                useHumanFacingReference: true
+            );
+        }
     }
 
     public Task OnAssignmentChangedAsync(
@@ -200,9 +318,13 @@ internal sealed class ReAccreditationNotificationHook(
         var changedBy =
             user.FindFirstValue("user:name") ?? user.FindFirstValue("user:id") ?? string.Empty;
 
+        // RA-581: assignment_event is no longer part of the personalisation
+        // dict — the live template dropped it (the body no longer
+        // distinguishes assigned/reassigned/unassigned), and Notify 400s on a
+        // surplus key just as readily as a missing one. assignmentEvent
+        // itself stays: it still drives the audit log's description.
         var extra = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["assignment_event"] = assignmentEvent,
             ["officer_name"] =
                 change == WorkItemAssignmentChange.Unassigned
                     ? string.Empty
@@ -216,12 +338,59 @@ internal sealed class ReAccreditationNotificationHook(
             description: $"Officer assignment ({assignmentEvent})",
             extraPersonalisation: extra,
             user,
-            cancellationToken
+            cancellationToken,
+            useHumanFacingReference: true
         );
     }
 
     private static bool IsReAccreditation(WorkItem workItem) =>
         string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// RA-581 (AC02): records a <c>notification-skipped</c> entry with reason
+    /// <c>trigger-disabled</c> when <see cref="NotifyConfig.TriggersEnabled"/>
+    /// has switched <paramref name="templateKey"/> off. Shared by both send
+    /// paths so the audit shape (and the "could not persist" warning) matches
+    /// every other skip reason exactly.
+    /// </summary>
+    private async Task AppendTriggerDisabledSkipAsync(
+        WorkItem workItem,
+        string templateKey,
+        string description,
+        string reference,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
+    {
+        logger.LogInformation(
+            "Skipping {Description} notification for work item {WorkItemId} ({TemplateKey}): "
+                + "trigger disabled via Notify:TriggersEnabled configuration.",
+            description,
+            workItem.Id,
+            templateKey
+        );
+        var appended = await auditAppender.AppendAsync(
+            workItem.Id,
+            action: "notification-skipped",
+            actionDisplayName: $"{description} email skipped",
+            details: new Dictionary<string, string?>
+            {
+                ["templateKey"] = templateKey,
+                [ReferenceKey] = reference,
+                ["reason"] = "trigger-disabled",
+            },
+            user,
+            cancellationToken
+        );
+        if (!appended)
+        {
+            logger.LogWarning(
+                "notification-skipped audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                workItem.Id,
+                templateKey
+            );
+        }
+    }
 
     private async Task SendAndRecordAsync(
         WorkItem workItem,
@@ -241,6 +410,19 @@ internal sealed class ReAccreditationNotificationHook(
         var reference = string.IsNullOrWhiteSpace(payload?.ApplicationReference)
             ? workItem.Id.ToString()
             : payload.ApplicationReference;
+
+        if (!_notifyConfig.IsTriggerEnabled(templateKey))
+        {
+            await AppendTriggerDisabledSkipAsync(
+                workItem,
+                templateKey,
+                description,
+                reference,
+                user,
+                cancellationToken
+            );
+            return;
+        }
 
         if (string.IsNullOrWhiteSpace(recipient))
         {
@@ -380,8 +562,17 @@ internal sealed class ReAccreditationNotificationHook(
     /// succeeds on skip / failure — this method never throws.
     ///
     /// <paramref name="extraPersonalisation"/> carries template-specific keys
-    /// (e.g. the OfficerAssignment event / officer_name / changed_by) merged on
-    /// top of the base organisation_name / registration_number / reference.
+    /// (e.g. OfficerAssignment's officer_name / changed_by, or
+    /// ApplicationWithdrawn's Withdrawal_reason) merged on top of the base
+    /// organisation_name / registration_number / reference / work_item_link.
+    ///
+    /// <paramref name="useHumanFacingReference"/> (RA-581): every current
+    /// regulator-facing template body now surfaces ((reference)) to the
+    /// reader, so every call site passes <c>true</c> — the human-facing
+    /// RA-######### value (RA-248), same as the operator-facing templates,
+    /// falling back to the internal work-item Guid only when the payload
+    /// lacks one. <c>false</c> remains the default for any future
+    /// regulator-facing template whose body does not surface a reference.
     /// </summary>
     private async Task SendRegulatorEmailAsync(
         WorkItem workItem,
@@ -389,11 +580,10 @@ internal sealed class ReAccreditationNotificationHook(
         string description,
         Dictionary<string, string>? extraPersonalisation,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool useHumanFacingReference = false
     )
     {
-        var reference = workItem.Id.ToString();
-
         // Determine the nation the same way the rest of the module does:
         // ReAccreditationNationRoutingHook stamps payload.nation at submission
         // and ReAccreditationPayload deserialises it here.
@@ -409,6 +599,23 @@ internal sealed class ReAccreditationNotificationHook(
         // item was concurrently deleted).
         var persisted = await persistence.GetByIdAsync(workItem.Id, cancellationToken);
         var payload = DeserialisePayload(persisted ?? workItem);
+
+        var reference = useHumanFacingReference && !string.IsNullOrWhiteSpace(payload?.ApplicationReference)
+            ? payload.ApplicationReference
+            : workItem.Id.ToString();
+
+        if (!_notifyConfig.IsTriggerEnabled(templateKey))
+        {
+            await AppendTriggerDisabledSkipAsync(
+                workItem,
+                templateKey,
+                description,
+                reference,
+                user,
+                cancellationToken
+            );
+            return;
+        }
 
         var nation = payload?.Nation;
         var recipient = regulatorMailboxResolver.Resolve(nation);
@@ -451,9 +658,14 @@ internal sealed class ReAccreditationNotificationHook(
 
         var personalisation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
-            ["organisation_name"] = payload?.OrganisationName ?? string.Empty,
-            ["registration_number"] = payload?.RegistrationNumber ?? string.Empty,
+            [OrganisationNameKey] = payload?.OrganisationName ?? string.Empty,
+            [RegistrationNumberKey] = payload?.RegistrationNumber ?? string.Empty,
             [ReferenceKey] = reference,
+            // RA-581: every regulator-facing template now links back to the
+            // case in management-fe. Empty when CASE_MANAGEMENT_BASE_URL is
+            // unconfigured, same degrade-gracefully treatment as every other
+            // optional link this hook builds.
+            ["work_item_link"] = BuildWorkItemLink(workItem.Id),
         };
         if (extraPersonalisation is not null)
         {
@@ -567,14 +779,47 @@ internal sealed class ReAccreditationNotificationHook(
     /// <summary>
     /// Text of the most recent note on the work item, or an empty string when
     /// there is none. Notify 400s on a referenced placeholder that is missing
-    /// but accepts an empty value, so the lifecycle templates that surface
-    /// the latest case note (Withdrawn → <c>withdrawal_notes</c>, Decision →
-    /// <c>decision_notes</c>) always pass a present, possibly-empty value.
+    /// but accepts an empty value, so the Withdrawn template's
+    /// <c>withdrawal_reason</c> placeholder always gets a present,
+    /// possibly-empty value.
     /// </summary>
     private static string LatestWorkItemNoteText(WorkItem workItem) =>
         workItem.Notes?.OrderByDescending(note => note.CreatedAt).FirstOrDefault()?.Text
         ?? string.Empty;
 
+    /// <summary>
+    /// RA-581 (AC03/AC06): the operator's contact name, from
+    /// <c>payload.submitterContactDetails.fullName</c> (the case management
+    /// "additional information" tab, RA-480), falling back to the
+    /// organisation name when blank or the payload predates RA-480.
+    /// </summary>
+    private static string ResolveContactName(ReAccreditationPayload payload) =>
+        string.IsNullOrWhiteSpace(payload.SubmitterContactDetails?.FullName)
+            ? payload.OrganisationName ?? string.Empty
+            : payload.SubmitterContactDetails.FullName;
+
+    /// <summary>
+    /// RA-581: operator-facing date formatting shared by every template that
+    /// surfaces a date (SubmissionConfirmation's <c>date</c>, DulyMade's
+    /// <c>SubmissionDate</c>, Queried's <c>Querieddate</c>) — GOV.UK-style
+    /// "1 January 2026". Empty for a missing date rather than throwing:
+    /// Notify accepts an empty value for a referenced placeholder, just not
+    /// an absent key.
+    /// </summary>
+    private static string FormatOperatorFacingDate(DateTime? date) =>
+        date is { } value
+            ? value.Date.ToString("d MMMM yyyy", CultureInfo.GetCultureInfo("en-GB"))
+            : string.Empty;
+
+    /// <summary>
+    /// RA-581: every operator-facing template's personalisation, built
+    /// per-template rather than from a shared base set — Notify 400s on a
+    /// surplus key just as readily as a missing one, and the five current
+    /// templates do NOT all reference the same placeholders (e.g. Withdrawn
+    /// has no <c>organisation_name</c> at all). See NotifyTemplateContract
+    /// for the declarative version of this same set, asserted against in
+    /// NotifyTemplateContractTests / NotifyLiveTemplateContractTests.
+    /// </summary>
     private Dictionary<string, string> BuildPersonalisation(
         ReAccreditationPayload payload,
         WorkItem workItem,
@@ -583,116 +828,116 @@ internal sealed class ReAccreditationNotificationHook(
         string? actionId = null
     )
     {
-        var personalisation = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["organisation_name"] = payload.OrganisationName ?? string.Empty,
-            ["registration_number"] = payload.RegistrationNumber ?? string.Empty,
-            ["reference"] = reference,
-        };
+        var contactName = ResolveContactName(payload);
+        var organisationName = payload.OrganisationName ?? string.Empty;
+        var registrationNumber = payload.RegistrationNumber ?? string.Empty;
+        // RA-581: the accreditation year the application is FOR (not the
+        // post-approval AccreditationYear stamping) — epr-register-enrol-backend
+        // sends this as `accreditationYear` in the submission payload itself
+        // (HttpCaseWorkingApiAdapter.BuildPayload), so it is already present
+        // from submission onward, not only after approval.
+        var year = payload.AccreditationYear?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
+        var material = payload.Material ?? string.Empty;
+        // RA-581: the regulator's shared mailbox address shown to the
+        // operator as a contact point — the SAME resolver used to pick the
+        // regulator-facing recipient, just read here rather than sent to.
+        var regulatorEmail = regulatorMailboxResolver.Resolve(payload.Nation) ?? string.Empty;
 
-        if (string.Equals(templateKey, "SlaExtended", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(templateKey, "SubmissionConfirmation", StringComparison.OrdinalIgnoreCase))
         {
-            // RA-201: the SlaExtended Notify template body requires a
-            // ((sla_deadline)) placeholder. Without it Notify rejects the
-            // send with a 400 "Missing personalisation: sla_deadline" and
-            // the extend-SLA email never reaches the operator. The deadline
-            // is the SLA window end = clock start + target duration,
-            // rendered as operator-facing GOV.UK-style copy (e.g.
-            // "1 January 2026"). Guard for a missing clock so a malformed
-            // item never NREs the hook (after a successful extend the clock
-            // is always present).
-            if (workItem.SlaClock is { } slaClock)
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                // Take the .Date (drop the time-of-day) before formatting so a
-                // non-UTC / non-midnight StartedAt cannot shift the rendered
-                // deadline onto an adjacent calendar day. For the normal UTC
-                // path this is a no-op.
-                var deadline = slaClock.DueAt.Date;
-                personalisation["sla_deadline"] = deadline.ToString(
-                    "d MMMM yyyy",
-                    CultureInfo.GetCultureInfo("en-GB")
-                );
-            }
+                ["year"] = year,
+                [ContactNameKey] = contactName,
+                [OrganisationNameKey] = organisationName,
+                ["material"] = material,
+                // AC05: UK vs non-UK sites — no SiteName capture exists for
+                // the primary/main application (only overseas sites have
+                // one), so this is blank for every current send. SiteAddress
+                // is the full address epr-register-enrol-backend sends as
+                // `siteAddress` at submission (or the nested form-created shape),
+                // read raw via SiteAddressFormatter — never modelled on the payload
+                // record, whose write-back would clobber it — and separate from the
+                // postcode-only SiteAddressPostcode.
+                ["SiteName"] = string.Empty,
+                ["SiteAddress"] = SiteAddressFormatter.Format(workItem.Payload) ?? string.Empty,
+                ["regulatorName"] = _notifyConfig.GetRegulatorName(payload.Nation?.ToString()) ?? string.Empty,
+                ["date"] = FormatOperatorFacingDate(workItem.SubmittedAt),
+                ["reference"] = reference,
+                [RegistrationNumberKey] = registrationNumber,
+            };
+        }
+
+        if (string.Equals(templateKey, "DulyMade", StringComparison.OrdinalIgnoreCase))
+        {
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [ContactNameKey] = contactName,
+                ["year"] = year,
+                [OrganisationNameKey] = organisationName,
+                ["material"] = material,
+                // "made on" — the original submission date, not the date duly
+                // making itself completed.
+                ["SubmissionDate"] = FormatOperatorFacingDate(workItem.SubmittedAt),
+                ["reference"] = reference,
+                [RegistrationNumberKey] = registrationNumber,
+                ["regulatorEmail"] = regulatorEmail,
+            };
         }
 
         if (string.Equals(templateKey, QueriedTemplateKey, StringComparison.OrdinalIgnoreCase))
         {
-            // RA-291 (AC06): the Queried template body references an
-            // ((operator_service_link)) placeholder so the operator can get
-            // back to their application. The key is ALWAYS supplied — Notify
-            // 400s a send whose template references a placeholder the caller
-            // omitted, so an unset OPERATOR_SERVICE_BASE_URL degrades to
-            // an empty string rather than breaking the query flow. Deliberately
-            // a single service-level link: RA-291 scopes per-section deep
-            // links out.
-            personalisation["operator_service_link"] = _operatorServiceLink;
-
-            // RA-291: the query page tells the regulator the reason "will be
-            // included in the email to the operator", so the Queried template
-            // body references ((query_reason)). The value is read from the
-            // CurrentQuery that ReAccreditationQueryService stamps onto the
-            // payload immediately before applying the transition — the same
-            // record its audit entry is built from, so the emailed reason is
-            // by construction the reason recorded against the application.
-            //
-            // Falls back to an empty string when no reason is present. RA-534
-            // made the reason optional, so this is now an ordinary case (the
-            // caseworker queried without giving one) rather than a sign the
-            // transition bypassed ReAccreditationQueryService. An empty value
-            // is required regardless: omitting the key would make Notify 400
-            // the send, and throwing would fail a notification that must never
-            // unwind the query.
-            var reason = payload.CurrentQuery?.Reason;
-            if (string.IsNullOrWhiteSpace(reason))
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                logger.LogDebug(
-                    "Queried notification for work item {WorkItemId} has no query reason; "
-                        + "sending the email with an empty ((query_reason)).",
-                    workItem.Id
-                );
-                reason = string.Empty;
-            }
-            personalisation["query_reason"] = reason;
-        }
-
-        if (string.Equals(templateKey, WithdrawnTemplateKey, StringComparison.OrdinalIgnoreCase))
-        {
-            // RA-204: the Withdrawn template body references a
-            // ((withdrawal_notes)) placeholder carrying the reason the
-            // application was withdrawn (the latest case note captured on the FE
-            // withdraw interstitial). See LatestWorkItemNoteText for why the key
-            // is always present with an empty-string fallback.
-            personalisation["withdrawal_notes"] = LatestWorkItemNoteText(workItem);
+                [ContactNameKey] = contactName,
+                ["year"] = year,
+                [OrganisationNameKey] = organisationName,
+                // RA-291: the date the CURRENT query was raised, stamped by
+                // ReAccreditationQueryService immediately before the query
+                // transition — see CurrentQuery.RaisedAt.
+                ["Querieddate"] = FormatOperatorFacingDate(payload.CurrentQuery?.RaisedAt),
+                ["reference"] = reference,
+                [RegistrationNumberKey] = registrationNumber,
+                ["regulatorEmail"] = regulatorEmail,
+            };
         }
 
         if (string.Equals(templateKey, "Decision", StringComparison.OrdinalIgnoreCase))
         {
-            // RA-211: reject no longer maps to a template (see
-            // s_actionTemplates), so this branch is only ever reached via
-            // "approve" now — no need to branch on actionId here.
-            personalisation["decision"] = "Approved";
-
-            // RA-203: the Decision template body references a ((decision_notes))
-            // placeholder carrying the latest case note captured on the FE
-            // approval interstitial. See LatestWorkItemNoteText for why the key
-            // is always present with an empty-string fallback.
-            personalisation["decision_notes"] = LatestWorkItemNoteText(workItem);
-
-            // RA-132: include the accreditation id and start date when an
-            // approval has stamped them on the payload, so the Decision
-            // template can reference them in its body. Keys are only added
-            // when present so the Notify template's "if available" branches
-            // see the field as missing rather than empty.
-            if (!string.IsNullOrEmpty(payload.AccreditationId))
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
             {
-                personalisation["accreditation_id"] = payload.AccreditationId;
-            }
-            if (payload.AccreditationStartDate is { } startDate)
-            {
-                personalisation["accreditation_start_date"] = startDate.ToString("yyyy-MM-dd");
-            }
+                [ContactNameKey] = contactName,
+                ["year"] = year,
+                [OrganisationNameKey] = organisationName,
+                ["material"] = material,
+                ["reference"] = reference,
+                [RegistrationNumberKey] = registrationNumber,
+                ["regulatorEmail"] = regulatorEmail,
+            };
         }
 
-        return personalisation;
+        if (string.Equals(templateKey, WithdrawnTemplateKey, StringComparison.OrdinalIgnoreCase))
+        {
+            // RA-204 / RA-581: no organisation_name, year, or material —
+            // deliberately the thinnest of the five templates.
+            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [ContactNameKey] = contactName,
+                ["reference"] = reference,
+                [RegistrationNumberKey] = registrationNumber,
+                ["withdrawal_reason"] = LatestWorkItemNoteText(workItem),
+            };
+        }
+
+        // Unreachable for any template s_actionTemplates/OnSubmittedAsync
+        // currently maps to; a base envelope rather than throwing keeps a
+        // future new template from crashing the hook before its exact
+        // personalisation shape is known.
+        return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            [OrganisationNameKey] = organisationName,
+            [RegistrationNumberKey] = registrationNumber,
+            ["reference"] = reference,
+        };
     }
 }

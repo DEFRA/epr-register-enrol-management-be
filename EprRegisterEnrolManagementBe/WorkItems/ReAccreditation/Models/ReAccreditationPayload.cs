@@ -25,6 +25,15 @@ internal sealed record ReAccreditationPayload
     public string? RegistrationNumber { get; init; }
 
     /// <summary>
+    /// RA-480: the submitter's contact details, captured on the case
+    /// management "additional information" tab. RA-581 surfaces
+    /// <c>SubmitterContactDetails.FullName</c> as the <c>contact_name</c>
+    /// Notify placeholder. Null for every work item that predates RA-480 or
+    /// was seeded without it — see <see cref="Models.SubmitterContactDetails"/>.
+    /// </summary>
+    public SubmitterContactDetails? SubmitterContactDetails { get; init; }
+
+    /// <summary>
     /// Human-facing application reference (RA-219, format RA-#########),
     /// stamped onto the payload by the core WorkItemService at submission.
     /// Surfaced as the ((reference)) GOV.UK Notify placeholder in lifecycle

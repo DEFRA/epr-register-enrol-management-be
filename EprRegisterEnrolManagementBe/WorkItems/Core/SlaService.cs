@@ -25,8 +25,9 @@ public interface ISlaService
     /// audit entry carrying before/after SlaClock snapshots and the
     /// supplied reason, and fans out to every registered
     /// <see cref="IWorkItemPostActionHook"/> with an <c>sla-extend</c>
-    /// action id so per-module notification hooks (e.g. the operator
-    /// "Determination deadline changed" email) fire automatically.
+    /// action id. RA-581: no notification hook maps this action any more —
+    /// the operator "Determination deadline changed" email was removed —
+    /// so this fan-out is currently a no-op for every registered hook.
     /// </summary>
     Task<SlaActionResult> ExtendAsync(
         Guid workItemId,
@@ -92,9 +93,9 @@ public sealed class SlaService : ISlaService
 {
     /// <summary>
     /// Action id used when fanning out post-action hooks after a
-    /// successful extend. The existing per-module notification hooks
-    /// (e.g. <c>ReAccreditationNotificationHook</c>) map this id to the
-    /// <c>SlaExtended</c> Notify template.
+    /// successful extend. RA-581: <c>ReAccreditationNotificationHook</c>
+    /// no longer maps this id to a Notify template — the extend-SLA email
+    /// was removed.
     /// </summary>
     public const string ExtendActionId = "sla-extend";
 

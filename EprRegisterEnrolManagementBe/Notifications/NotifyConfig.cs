@@ -101,6 +101,35 @@ public sealed class NotifyConfig
     public Dictionary<string, string> RegulatorMailboxes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// RA-581: map of UK nation name (e.g. <c>England</c>) to the regional
+    /// regulator's friendly display name (e.g. <c>Environment Agency (EA)</c>),
+    /// surfaced as the <c>regulator_name</c> Notify placeholder in
+    /// operator-facing lifecycle emails so the operator sees who they
+    /// submitted to, distinct from <see cref="RegulatorMailboxes"/> (the
+    /// address a regulator-facing email is sent TO). An empty/missing entry
+    /// resolves to <c>null</c> — see <see cref="GetRegulatorName"/>.
+    /// </summary>
+    public Dictionary<string, string> RegulatorNames { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Resolve the regulator's friendly display name for
+    /// <paramref name="nation"/>. Never throws: a missing, unrecognised, or
+    /// unconfigured nation returns <c>null</c> rather than a made-up value.
+    /// </summary>
+    public string? GetRegulatorName(string? nation)
+    {
+        if (
+            !string.IsNullOrWhiteSpace(nation)
+            && RegulatorNames.TryGetValue(nation, out var name)
+            && !string.IsNullOrWhiteSpace(name)
+        )
+        {
+            return name;
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Per-attempt timeout (seconds) applied around each call into the
     /// GovukNotify SDK. Defaults to 15s — short enough that a hanging
     /// Notify endpoint surfaces as a logged failure inside the BFF's
@@ -108,4 +137,29 @@ public sealed class NotifyConfig
     /// Set to 0 to disable the timeout.
     /// </summary>
     public int RequestTimeoutSeconds { get; set; } = 15;
+
+    /// <summary>
+    /// Per-template on/off switch, keyed the same way as <see cref="Templates"/>
+    /// (e.g. <c>SubmissionConfirmation</c>). Distinct from <see cref="Enabled"/>,
+    /// which is the single global kill switch for every outbound email — this
+    /// lets one specific lifecycle event's email be turned off without
+    /// affecting any other template.
+    ///
+    /// A key absent from this map is treated as enabled (see
+    /// <see cref="IsTriggerEnabled"/>): the map is an opt-out list, not an
+    /// opt-in allow-list, so a template nobody has configured an entry for
+    /// (including a brand-new one added after a deploy) still sends rather
+    /// than silently going dark.
+    /// </summary>
+    public Dictionary<string, bool> TriggersEnabled { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Whether the lifecycle email for <paramref name="templateKey"/> should
+    /// be sent. <c>true</c> when the key is absent from
+    /// <see cref="TriggersEnabled"/> (see that property's remarks) or
+    /// explicitly <c>true</c>; <c>false</c> only when explicitly switched off.
+    /// </summary>
+    public bool IsTriggerEnabled(string templateKey) =>
+        !TriggersEnabled.TryGetValue(templateKey, out var enabled) || enabled;
 }
