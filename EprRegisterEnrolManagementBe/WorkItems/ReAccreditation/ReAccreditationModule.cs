@@ -99,6 +99,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IWorkItemMigration,
             ReAccreditationSubmitterContactDetailsBackfillMigration
         >();
+        // RA-603: copies each overseas site's singular interimSite into the
+        // new interimSites list, so a work item submitted before RA-603
+        // renders the same as one submitted after and the regulator's view
+        // does not have to understand both shapes indefinitely. Leaves the
+        // singular field in place as the mirror. Idempotent, and never
+        // rebuilds a list that is already populated. No ordering dependency
+        // on any other migration.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationInterimSitesBackfillMigration>();
         // RA-311/MBE-1: adds the resume-during-* transitions to every
         // existing work item's frozen template snapshot (v6 → v7).
         services.AddSingleton<IWorkItemMigration, ReAccreditationResumeSnapshotMigration>();
