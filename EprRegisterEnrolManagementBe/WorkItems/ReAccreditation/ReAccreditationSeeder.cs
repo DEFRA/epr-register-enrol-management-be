@@ -593,7 +593,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["interimSite"] = new BsonDocument
                             {
                                 ["siteId"] = 11,
-                                ["siteNumber"] = "INT-001",
+                                ["siteNumber"] = "001",
                                 ["isNewSite"] = true,
                                 ["country"] = "Belgium",
                                 ["siteName"] = "Antwerp Interim Holding Site",
@@ -650,7 +650,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["interimSite"] = new BsonDocument
                             {
                                 ["siteId"] = 21,
-                                ["siteNumber"] = "INT-002",
+                                ["siteNumber"] = "002",
                                 ["isNewSite"] = false,
                                 ["country"] = "Germany",
                                 ["siteName"] = "Bremen Interim Storage",
@@ -983,6 +983,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             // Mirrors the first ACTIVE interim site, never simply the first.
                             ["interimSite"] = MultipleInterimSite(
                                 21,
+                                "001",
                                 "Bilbao Interim Holding",
                                 "Spain",
                                 "9 Muelle de Zorroza",
@@ -994,6 +995,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             {
                                 MultipleInterimSite(
                                     21,
+                                    "001",
                                     "Bilbao Interim Holding",
                                     "Spain",
                                     "9 Muelle de Zorroza",
@@ -1003,6 +1005,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                 ),
                                 MultipleInterimSite(
                                     22,
+                                    "002",
                                     "Marseille Interim Depot",
                                     "France",
                                     "12 Quai du Lazaret",
@@ -1012,6 +1015,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                 ),
                                 MultipleInterimSite(
                                     23,
+                                    "003",
                                     "Genoa Interim Store",
                                     "Italy",
                                     "3 Via al Porto Antico",
@@ -1043,6 +1047,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// </summary>
     private static BsonDocument MultipleInterimSite(
         int siteId,
+        string siteNumber,
         string siteName,
         string country,
         string addressLine1,
@@ -1055,7 +1060,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         var interimSite = new BsonDocument
         {
             ["siteId"] = siteId,
-            ["siteNumber"] = $"SN-{siteId:D4}",
+            // RA-603: passed in rather than derived from siteId. An interim site's number is its
+            // own registration-scoped 001-999 set; the id is shared with the ORS list. Deriving
+            // one from the other is the coupling the backend change removed.
+            ["siteNumber"] = siteNumber,
             ["isNewSite"] = isNewSite,
             ["country"] = country,
             ["siteName"] = siteName,
