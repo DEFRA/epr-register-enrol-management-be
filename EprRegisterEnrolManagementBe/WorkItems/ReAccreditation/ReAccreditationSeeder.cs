@@ -125,6 +125,21 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     public const string Ra557OverseasSitesResubmitSeedKey = "ra557-overseas-sites-resubmit";
 
     /// <summary>
+    /// RA-603: one overseas reprocessing site carrying SEVERAL interim sites, one of them
+    /// withdrawn.
+    ///
+    /// A new key rather than adding interim sites to
+    /// <see cref="OrsInterimAuthoritySeedKey"/>, for the reason that key's own comment gives:
+    /// <see cref="WorkItemSeed.DeterministicId"/> hashes only typeId + seedKey and the seeder
+    /// inserts through <c>CreateIfAbsentAsync</c>, so enriching an existing fixture's payload is
+    /// invisible on every environment that has already seeded - dev, and any e2e stack with a
+    /// persistent volume. CI seeds from scratch every time and would never show the difference.
+    /// </summary>
+    public const string MultipleInterimSitesSeedKey = "multiple-interim-sites";
+
+    public const string MultipleInterimSitesOrganisationName = "Iberian Fibre Exports";
+
+    /// <summary>
     /// Organisation name of the RA-434-processortype reprocessor fixture.
     /// Unique across the seed set for the same reason as
     /// <see cref="OrsInterimAuthorityOrganisationName"/>.
@@ -916,6 +931,149 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "reg-ra557-ors-resubmit-001"
         );
         yield return ra557OverseasSitesResubmitItem;
+
+        // RA-603 AC10b: one ORS with three interim sites, so the regulator's nested fold-downs
+        // have something to fold. The third is withdrawn, which is what proves the view filters
+        // on removedAt rather than just rendering whatever the list holds - a fixture with only
+        // active sites would pass equally well against a view that ignored the flag entirely.
+        //
+        // Written in the RA-603 shape (interimSites), with the singular interimSite mirroring the
+        // first ACTIVE entry, exactly as the backend now maintains it.
+        var multipleInterimSitesItem = Build(
+            seedKey: MultipleInterimSitesSeedKey,
+            postcode: "CF10 1EP",
+            submittedDaysAgo: 2,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = MultipleInterimSitesOrganisationName,
+                ["registrationNumber"] = "EPR-100603",
+                ["operatorApplicationId"] = "app-multiple-interim-sites-001",
+                ["wasteProcessingType"] = "exporter",
+                ["companyRegisterAddressPostcode"] = "CF10 1EP",
+                ["material"] = "fibre",
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "multiple.interim.sites@example.com",
+                ["companiesHouseNumber"] = "16003603",
+                ["siteAddressPostcode"] = "CF10 1EP",
+                ["chargeAmountPence"] = 54600,
+                ["overseasSites"] = new BsonDocument
+                {
+                    ["sites"] = new BsonArray
+                    {
+                        new BsonDocument
+                        {
+                            ["siteId"] = 1,
+                            ["orsId"] = "ORS-2026-0603",
+                            ["siteName"] = "Valencia Fibre Reprocessing",
+                            ["siteAddress"] = "4 Carrer del Port, Valencia",
+                            ["addressLine1"] = "4 Carrer del Port",
+                            ["townOrCity"] = "Valencia",
+                            ["country"] = "Spain",
+                            ["contactName"] = "Elena Ruiz",
+                            ["contactEmail"] = "elena.ruiz@example.com",
+                            ["contactPhone"] = "+34 96 123 4567",
+                            ["operationCodes"] = new BsonArray { "R3" },
+                            ["isEu"] = true,
+                            ["isOecd"] = true,
+                            ["selected"] = true,
+                            ["isNewSite"] = false,
+                            ["registeredNowAccredited"] = false,
+                            // Mirrors the first ACTIVE interim site, never simply the first.
+                            ["interimSite"] = MultipleInterimSite(
+                                21,
+                                "Bilbao Interim Holding",
+                                "Spain",
+                                "9 Muelle de Zorroza",
+                                "Bilbao",
+                                new BsonArray { "R12" },
+                                isNewSite: false
+                            ),
+                            ["interimSites"] = new BsonArray
+                            {
+                                MultipleInterimSite(
+                                    21,
+                                    "Bilbao Interim Holding",
+                                    "Spain",
+                                    "9 Muelle de Zorroza",
+                                    "Bilbao",
+                                    new BsonArray { "R12" },
+                                    isNewSite: false
+                                ),
+                                MultipleInterimSite(
+                                    22,
+                                    "Marseille Interim Depot",
+                                    "France",
+                                    "12 Quai du Lazaret",
+                                    "Marseille",
+                                    new BsonArray { "R12", "R13" },
+                                    isNewSite: true
+                                ),
+                                MultipleInterimSite(
+                                    23,
+                                    "Genoa Interim Store",
+                                    "Italy",
+                                    "3 Via al Porto Antico",
+                                    "Genoa",
+                                    new BsonArray { "R13" },
+                                    isNewSite: false,
+                                    removedAt: "2026-08-14T09:30:00.000Z"
+                                ),
+                            },
+                        },
+                    },
+                },
+            },
+            submittedBy: "stub-portal-client",
+            now: now
+        );
+        SetAccreditationNumberFields(
+            multipleInterimSitesItem.Payload,
+            "500015",
+            "reg-multiple-interim-sites-001"
+        );
+        yield return multipleInterimSitesItem;
+    }
+
+    /// <summary>
+    /// RA-603: one interim site in the shape the backend writes. <c>createdAt</c> is always
+    /// present on a site created after RA-603; <c>removedAt</c> is set only on a withdrawn one and
+    /// is what every display filters on.
+    /// </summary>
+    private static BsonDocument MultipleInterimSite(
+        int siteId,
+        string siteName,
+        string country,
+        string addressLine1,
+        string townOrCity,
+        BsonArray operationCodes,
+        bool isNewSite,
+        string? removedAt = null
+    )
+    {
+        var interimSite = new BsonDocument
+        {
+            ["siteId"] = siteId,
+            ["siteNumber"] = $"SN-{siteId:D4}",
+            ["isNewSite"] = isNewSite,
+            ["country"] = country,
+            ["siteName"] = siteName,
+            ["addressLine1"] = addressLine1,
+            ["townOrCity"] = townOrCity,
+            ["contactName"] = "Site Contact",
+            ["contactEmail"] = "site.contact@example.com",
+            ["contactPhone"] = "+34 96 765 4321",
+            ["operationCodes"] = operationCodes,
+            ["createdAt"] = "2026-06-01T10:00:00.000Z",
+        };
+
+        if (removedAt is not null)
+        {
+            interimSite["removedAt"] = removedAt;
+        }
+
+        return interimSite;
     }
 
     /// <summary>

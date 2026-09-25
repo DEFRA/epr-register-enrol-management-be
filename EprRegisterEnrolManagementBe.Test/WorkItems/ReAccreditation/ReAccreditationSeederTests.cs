@@ -1017,5 +1017,110 @@ public class ReAccreditationSeederTests
             "Removed Overseas Site",
             sites.Single(s => s["country"].AsString == "Germany")["siteName"].AsString);
     }
-}
 
+    // -- RA-603 AC10b: the multiple-interim-sites fixture ---------------------
+
+    private static WorkItem BuildMultipleInterimSitesFixture()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        return items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.MultipleInterimSitesOrganisationName);
+    }
+
+    private static BsonArray InterimSitesOfFirstOrs(WorkItem item) =>
+        item.Payload["overseasSites"]["sites"][0]["interimSites"].AsBsonArray;
+
+    [Fact]
+    public void Build_ra603_fixture_has_its_own_seed_key_so_it_lands_in_already_seeded_databases()
+    {
+        // Same reasoning as the RA-292 fixture above: seeding inserts by a
+        // deterministic id hashed from typeId + seedKey and never updates, so
+        // adding interim sites to an existing fixture would be invisible in
+        // every environment that has already seeded.
+        var expectedId = WorkItemSeed.DeterministicId(
+            ReAccreditationType.Id, ReAccreditationSeeder.MultipleInterimSitesSeedKey);
+
+        Assert.Equal(expectedId, BuildMultipleInterimSitesFixture().Id);
+        Assert.NotEqual(
+            WorkItemSeed.DeterministicId(
+                ReAccreditationType.Id, ReAccreditationSeeder.OrsInterimAuthoritySeedKey),
+            expectedId);
+    }
+
+    [Fact]
+    public void Build_ra603_fixture_organisation_name_is_unique_across_the_seed_set()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var matches = items.Count(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.MultipleInterimSitesOrganisationName);
+
+        Assert.Equal(1, matches);
+    }
+
+    [Fact]
+    public void Build_ra603_fixture_carries_several_interim_sites_on_one_overseas_site()
+    {
+        Assert.Equal(3, InterimSitesOfFirstOrs(BuildMultipleInterimSitesFixture()).Count);
+    }
+
+    // The point of the fixture. A set of only-active interim sites would pass just as well
+    // against a view that ignored removedAt entirely, so one of them is withdrawn.
+    [Fact]
+    public void Build_ra603_fixture_includes_one_withdrawn_interim_site()
+    {
+        var interimSites = InterimSitesOfFirstOrs(BuildMultipleInterimSitesFixture());
+
+        Assert.Equal(
+            1,
+            interimSites.Count(i => i.AsBsonDocument.Contains("removedAt")));
+        Assert.Equal(
+            2,
+            interimSites.Count(i => !i.AsBsonDocument.Contains("removedAt")));
+    }
+
+    [Fact]
+    public void Build_ra603_fixture_carries_both_new_and_established_interim_sites()
+    {
+        // AC01's reasoning applied to interim sites: both polarities on the same item, or the
+        // fixture cannot tell a correct "new" badge from one that flags everything.
+        var interimSites = InterimSitesOfFirstOrs(BuildMultipleInterimSitesFixture());
+
+        Assert.Contains(interimSites, i => i["isNewSite"].AsBoolean);
+        Assert.Contains(interimSites, i => !i["isNewSite"].AsBoolean);
+    }
+
+    [Fact]
+    public void Build_ra603_fixture_gives_each_interim_site_its_own_r_codes()
+    {
+        var interimSites = InterimSitesOfFirstOrs(BuildMultipleInterimSitesFixture());
+
+        Assert.All(interimSites, i =>
+            Assert.NotEmpty(i["operationCodes"].AsBsonArray));
+        Assert.True(
+            interimSites.Select(i => i["operationCodes"].AsBsonArray.Count).Distinct().Count() > 1,
+            "the fixture should not give every interim site the same number of R codes");
+    }
+
+    // The mirror is the first site the operator has NOT withdrawn, which is what the backend
+    // maintains. A fixture whose mirror pointed at a withdrawn site would be misrepresenting
+    // the shape the regulator's view actually receives.
+    [Fact]
+    public void Build_ra603_fixture_mirrors_the_first_active_interim_site()
+    {
+        var site = BuildMultipleInterimSitesFixture()
+            .Payload["overseasSites"]["sites"][0].AsBsonDocument;
+
+        var mirror = site["interimSite"].AsBsonDocument;
+        var firstActive = site["interimSites"].AsBsonArray
+            .First(i => !i.AsBsonDocument.Contains("removedAt"))
+            .AsBsonDocument;
+
+        Assert.Equal(firstActive["siteId"].AsInt32, mirror["siteId"].AsInt32);
+        Assert.False(mirror.Contains("removedAt"));
+    }
+}
