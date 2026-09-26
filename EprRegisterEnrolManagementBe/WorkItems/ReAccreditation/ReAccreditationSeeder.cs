@@ -985,9 +985,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                 21,
                                 "001",
                                 "Bilbao Interim Holding",
-                                "Spain",
-                                "9 Muelle de Zorroza",
-                                "Bilbao",
+                                new InterimSiteLocation("Spain", "9 Muelle de Zorroza", "Bilbao"),
                                 new BsonArray { "R12" },
                                 isNewSite: false
                             ),
@@ -997,9 +995,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                     21,
                                     "001",
                                     "Bilbao Interim Holding",
-                                    "Spain",
-                                    "9 Muelle de Zorroza",
-                                    "Bilbao",
+                                    new InterimSiteLocation("Spain", "9 Muelle de Zorroza", "Bilbao"),
                                     new BsonArray { "R12" },
                                     isNewSite: false
                                 ),
@@ -1007,9 +1003,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                     22,
                                     "002",
                                     "Marseille Interim Depot",
-                                    "France",
-                                    "12 Quai du Lazaret",
-                                    "Marseille",
+                                    new InterimSiteLocation("France", "12 Quai du Lazaret", "Marseille"),
                                     new BsonArray { "R12", "R13" },
                                     isNewSite: true
                                 ),
@@ -1017,9 +1011,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                                     23,
                                     "003",
                                     "Genoa Interim Store",
-                                    "Italy",
-                                    "3 Via al Porto Antico",
-                                    "Genoa",
+                                    new InterimSiteLocation("Italy", "3 Via al Porto Antico", "Genoa"),
                                     new BsonArray { "R13" },
                                     isNewSite: false,
                                     removedAt: "2026-08-14T09:30:00.000Z"
@@ -1045,18 +1037,28 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// present on a site created after RA-603; <c>removedAt</c> is set only on a withdrawn one and
     /// is what every display filters on.
     /// </summary>
+    /// <summary>
+    /// The three address fields, grouped. They travel together at every call site, and grouping
+    /// them keeps this helper inside the 7-parameter limit (S107) while removing a real hazard:
+    /// three adjacent strings in a positional argument list can be swapped silently.
+    /// </summary>
+    private sealed record InterimSiteLocation(
+        string Country,
+        string AddressLine1,
+        string TownOrCity
+    );
+
     private static BsonDocument MultipleInterimSite(
         int siteId,
         string siteNumber,
         string siteName,
-        string country,
-        string addressLine1,
-        string townOrCity,
+        InterimSiteLocation location,
         BsonArray operationCodes,
         bool isNewSite,
         string? removedAt = null
     )
     {
+        var (country, addressLine1, townOrCity) = location;
         var interimSite = new BsonDocument
         {
             ["siteId"] = siteId,
