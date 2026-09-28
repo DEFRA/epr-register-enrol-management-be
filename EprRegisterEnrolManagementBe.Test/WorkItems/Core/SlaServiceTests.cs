@@ -21,11 +21,11 @@ public class SlaServiceTests
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private SlaService BuildService() =>
+    private SlaService BuildService(TimeProvider? timeProvider = null) =>
         new(
             _persistence,
             NullLogger<SlaService>.Instance,
-            _time,
+            timeProvider ?? _time,
             [_hook]);
 
     private static ClaimsPrincipal TeamLeader(string userId = "tl-1") =>
@@ -93,7 +93,11 @@ public class SlaServiceTests
         // both explicitly.
         var service = new SlaService(_persistence, NullLogger<SlaService>.Instance);
 
-        var workItem = WorkItemWithClock();
+        // This service reads the REAL clock, so the SLA clock has to start at
+        // real wall-clock time too — otherwise the RA-611 floor (no deadline
+        // before today) would reject the extend against the fixed UtcNow the
+        // other tests use.
+        var workItem = WorkItemWithClock(startedAt: DateTime.UtcNow);
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
             .Returns(workItem);
 
@@ -293,11 +297,14 @@ public class SlaServiceTests
         Assert.Contains("non-zero", result.Message!, StringComparison.OrdinalIgnoreCase);
     }
 
-    // ── RA-601: moving the determination deadline EARLIER ────────────────────
+    // ── RA-601/RA-611: moving the determination deadline EARLIER ─────────────
 
     [Fact]
     public async Task ExtendAsync_accepts_a_negative_duration_and_moves_the_deadline_earlier()
     {
+        // RA-611 keeps this: the clock started 10 days ago with an 84-day
+        // target, so pulling 14 days off still leaves the deadline 60 days in
+        // the future. Backwards moves onto a future date remain legal.
         var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromDays(84));
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
             .Returns(workItem);
@@ -335,11 +342,11 @@ public class SlaServiceTests
     }
 
     [Fact]
-    public async Task ExtendAsync_accepts_a_deadline_earlier_than_today()
+    public async Task ExtendAsync_rejects_a_deadline_earlier_than_today()
     {
-        // The clock started 10 days ago with an 84-day target. Pulling 80 days
-        // off puts the deadline 6 days in the PAST: valid, and the item is
-        // immediately breach-eligible.
+        // RA-611 reverses RA-601: the clock started 10 days ago with an 84-day
+        // target, so pulling 80 days off would put the deadline 6 days in the
+        // PAST. That is now refused, and the work item is left untouched.
         var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromDays(84));
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
             .Returns(workItem);
@@ -348,18 +355,118 @@ public class SlaServiceTests
             workItem.Id, TimeSpan.FromDays(-80), "reason",
             TeamLeader(), TestContext.Current.CancellationToken);
 
+        Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
+        Assert.Equal(
+            "The new determination deadline cannot be earlier than today.",
+            result.Message);
+        Assert.Equal(TimeSpan.FromDays(84), workItem.SlaClock!.TargetDuration);
+        Assert.Empty(workItem.AuditLog);
+        await _persistence.DidNotReceive().ReplaceAsync(
+            Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        await _hook.DidNotReceive().OnActionAppliedAsync(
+            Arg.Any<WorkItem>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExtendAsync_accepts_a_deadline_landing_on_today()
+    {
+        // The floor is "today", not "now": the clock started 10 days ago at
+        // 12:00 UTC with an 84-day target, so -74 days lands the deadline on
+        // today at 12:00 — the same instant as now — and that is accepted.
+        var workItem = WorkItemWithClock(targetDuration: TimeSpan.FromDays(84));
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(-74), "Determination due today",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
         Assert.True(result.IsSuccess);
-        var clock = result.WorkItem!.SlaClock!;
-        Assert.True(clock.DueAt < UtcNow);
-        Assert.True(clock.Remaining(UtcNow) < TimeSpan.Zero);
-        Assert.Equal(WorkItemSlaState.Breached, clock.ComputeState(UtcNow));
+        Assert.Equal(TimeSpan.FromDays(10), result.WorkItem!.SlaClock!.TargetDuration);
+        Assert.Equal(UtcNow, result.WorkItem.SlaClock.DueAt);
+        await _persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExtendAsync_accepts_a_deadline_earlier_in_today_because_the_date_is_compared_not_the_instant()
+    {
+        // Deadline lands at 23:30 UTC yesterday, which is 00:30 TODAY in
+        // Europe/London (BST, UTC+1). Comparing instants — or UTC dates —
+        // would reject this; comparing UK dates accepts it.
+        var startedAt = new DateTime(2026, 5, 8, 23, 30, 0, DateTimeKind.Utc);
+        var workItem = WorkItemWithClock(
+            targetDuration: TimeSpan.FromDays(84), startedAt: startedAt);
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService().ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(-74), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        var dueAt = result.WorkItem!.SlaClock!.DueAt;
+        Assert.Equal(new DateTime(2026, 5, 18, 23, 30, 0, DateTimeKind.Utc), dueAt);
+        Assert.True(dueAt < UtcNow, "the accepted deadline is an instant in the past");
+    }
+
+    [Fact]
+    public async Task ExtendAsync_rejects_a_deadline_on_yesterdays_uk_date_even_when_the_utc_date_is_today()
+    {
+        // The mirror case. "Now" is 23:30 UTC on 19 May, i.e. 00:30 on 20 May
+        // in London, so the UK today is the 20th. A deadline at 22:00 UTC on
+        // the 19th is 23:00 on the 19th in London — yesterday — so it is
+        // refused, even though its UTC date matches the UTC date of "now".
+        var lateEvening = new DateTime(2026, 5, 19, 23, 30, 0, DateTimeKind.Utc);
+        var startedAt = new DateTime(2026, 5, 9, 22, 0, 0, DateTimeKind.Utc);
+        var workItem = WorkItemWithClock(
+            targetDuration: TimeSpan.FromDays(84), startedAt: startedAt);
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService(new FakeTimeProvider(lateEvening)).ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(-74), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
+        Assert.Equal(
+            "The new determination deadline cannot be earlier than today.",
+            result.Message);
+        await _persistence.DidNotReceive().ReplaceAsync(
+            Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ExtendAsync_accepts_a_deadline_on_todays_uk_date_outside_british_summer_time()
+    {
+        // Winter: London == UTC, so the boundary logic must still admit a
+        // deadline landing on today's date. Clock started 09 Jan, 10-day
+        // target after the change => due 19 Jan, the GMT "today".
+        var januaryNow = new DateTime(2027, 1, 19, 9, 0, 0, DateTimeKind.Utc);
+        var startedAt = new DateTime(2027, 1, 9, 9, 0, 0, DateTimeKind.Utc);
+        var workItem = WorkItemWithClock(
+            targetDuration: TimeSpan.FromDays(84), startedAt: startedAt);
+        _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
+            .Returns(workItem);
+
+        var result = await BuildService(new FakeTimeProvider(januaryNow)).ExtendAsync(
+            workItem.Id, TimeSpan.FromDays(-74), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(januaryNow, result.WorkItem!.SlaClock!.DueAt);
     }
 
     [Theory]
-    [InlineData(-84)]  // TargetDuration lands exactly on zero
-    [InlineData(-200)] // TargetDuration goes negative — deadline before StartedAt
-    public async Task ExtendAsync_accepts_a_deadline_at_or_before_the_clock_start(int days)
+    [InlineData(-84)]  // TargetDuration would land exactly on zero
+    [InlineData(-200)] // TargetDuration would go negative — deadline before StartedAt
+    public async Task ExtendAsync_rejects_a_deadline_at_or_before_a_clock_start_in_the_past(int days)
     {
+        // Pre-RA-611 these were accepted (RA-601 allowed a zero or negative
+        // TargetDuration). The clock started 10 days ago, so a deadline at or
+        // before the start is necessarily before today and is now refused —
+        // which is why ExtendAsync can no longer write a non-positive
+        // TargetDuration for a clock that started in the past.
         var startedAt = UtcNow.AddDays(-10);
         var workItem = WorkItemWithClock(
             targetDuration: TimeSpan.FromDays(84), startedAt: startedAt);
@@ -370,12 +477,14 @@ public class SlaServiceTests
             workItem.Id, TimeSpan.FromDays(days), "reason",
             TeamLeader(), TestContext.Current.CancellationToken);
 
-        Assert.True(result.IsSuccess);
-        var clock = result.WorkItem!.SlaClock!;
-        Assert.Equal(TimeSpan.FromDays(84 + days), clock.TargetDuration);
-        // Nothing throws: the deadline simply sits at or before the start.
-        Assert.Equal(startedAt + TimeSpan.FromDays(84 + days), clock.DueAt);
-        Assert.Equal(WorkItemSlaState.Breached, clock.ComputeState(UtcNow));
+        Assert.Equal(SlaActionFailureCode.InvalidRequest, result.FailureCode);
+        Assert.Equal(
+            "The new determination deadline cannot be earlier than today.",
+            result.Message);
+        Assert.Equal(TimeSpan.FromDays(84), workItem.SlaClock!.TargetDuration);
+        Assert.Empty(workItem.AuditLog);
+        await _persistence.DidNotReceive().ReplaceAsync(
+            Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
     }
 
     [Theory]
@@ -383,9 +492,10 @@ public class SlaServiceTests
     [InlineData(4_000_000)]  // deadline overflows DateTime.MaxValue
     public async Task ExtendAsync_rejects_a_deadline_outside_the_representable_date_range(int days)
     {
-        // Not the "floor" RA-601 declined — this is the edge of what a
-        // DateTime can hold. Nothing throws; the caller gets a 422-mapped
-        // InvalidRequest and the work item is left untouched.
+        // Not the RA-611 floor — this is the edge of what a DateTime can hold,
+        // and it is checked first so an unrepresentable date is reported as
+        // such. Nothing throws; the caller gets a 422-mapped InvalidRequest and
+        // the work item is left untouched.
         var workItem = WorkItemWithClock();
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
             .Returns(workItem);

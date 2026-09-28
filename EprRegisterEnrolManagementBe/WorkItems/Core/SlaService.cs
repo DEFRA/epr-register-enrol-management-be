@@ -11,9 +11,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// universal across modules. RA-323: any authenticated caseworker may
 /// extend or override — there is no team-leader gate any more. RA-447/CM6:
 /// extend has no upper limit any more (SlaConfig.MaxExtensionDays removed).
-/// RA-601: extend has no lower bound either — a negative
-/// <c>additionalDuration</c> moves the determination deadline EARLIER. Only
-/// zero is rejected, as a no-op.
+/// RA-601: a negative <c>additionalDuration</c> may move the determination
+/// deadline EARLIER; RA-611 then put a floor under that — the resulting
+/// deadline may not fall before today's Europe/London date. Zero is still
+/// rejected, as a no-op.
 /// </summary>
 public interface ISlaService
 {
@@ -21,7 +22,10 @@ public interface ISlaService
     /// Add <paramref name="additionalDuration"/> to the work item's
     /// <see cref="SlaClock.TargetDuration"/>. RA-601: the duration may be
     /// negative (ISO-8601 <c>-P14D</c>) to move the deadline earlier; zero is
-    /// rejected. Writes an <c>sla-extended</c>
+    /// rejected. RA-611: a duration that would land the deadline before
+    /// today (Europe/London) is rejected with
+    /// <see cref="SlaActionFailureCode.InvalidRequest"/> — 422 on the wire.
+    /// Writes an <c>sla-extended</c>
     /// audit entry carrying before/after SlaClock snapshots and the
     /// supplied reason, and fans out to every registered
     /// <see cref="IWorkItemPostActionHook"/> with an <c>sla-extend</c>
@@ -99,6 +103,19 @@ public sealed class SlaService : ISlaService
     /// </summary>
     public const string ExtendActionId = "sla-extend";
 
+    /// <summary>
+    /// RA-611: the regulator's calendar. "Earlier than today" is decided on UK
+    /// local dates, not UTC — during BST a UTC comparison is an hour out either
+    /// side of midnight, which is exactly where an off-by-one-day rejection
+    /// would bite. Falls back to UTC only on a host with no time-zone database
+    /// at all (globalization-invariant mode), where every lookup fails and UTC
+    /// is the closest approximation of London available.
+    /// </summary>
+    private static readonly TimeZoneInfo s_ukTimeZone =
+        TimeZoneInfo.TryFindSystemTimeZoneById("Europe/London", out var ukZone)
+            ? ukZone
+            : TimeZoneInfo.Utc;
+
     private readonly IWorkItemPersistence _persistence;
     private readonly ILogger<SlaService> _logger;
     private readonly TimeProvider _timeProvider;
@@ -134,48 +151,42 @@ public sealed class SlaService : ISlaService
                 "'P14D' to move the determination deadline later, '-P14D' to move it earlier.");
         }
 
-        // RA-601: a NEGATIVE additionalDuration is valid — it moves the
-        // determination deadline earlier. The old "must be positive" guard was
-        // never a requirement. RA-447/CM6 only asked for an absolute date
-        // picker with no upper limit on an extension; the extension-only rule
-        // was an artefact of the day-count field RA-447 replaced, which simply
-        // could not express a backwards move. RA-572 then renamed the action
-        // from "Extend" to "Change", which made the restriction visibly wrong,
-        // and RA-601 removes it.
+        // RA-611: the determination deadline MAY be moved backwards, but it may
+        // not land before today.
         //
-        // The product owner explicitly chose NO floor. Consequences, accepted:
+        // History, because this rule has flipped twice. The original "must be
+        // positive" guard was an artefact of the day-count field RA-447/CM6
+        // replaced, which could not express a backwards move at all. RA-572
+        // renamed the action from "Extend" to "Change", making the restriction
+        // visibly wrong, and RA-601 removed it — deliberately with NO floor
+        // whatsoever, so a deadline could be backdated to any representable
+        // date. RA-611 REVERSES that no-floor decision: caseworkers were
+        // backdating live applications by weeks (observed: a deadline moved to
+        // 14 days ago), which drops the item straight into a breached state
+        // nobody asked for, and the nightly SlaBreachBackgroundService sweep
+        // that flags it is one-way — nothing anywhere clears the flag or its
+        // sla-breached audit entry, even if the deadline is later moved back
+        // into the future.
         //
-        //  * A deadline earlier than today is valid. Mind the two senses of
-        //    "breached" here, because in the short term they disagree. The
-        //    COMPUTED state (see ComputeState on WorkItemSlaClock, surfaced as
-        //    slaState on the wire) reports Breached on the very next read,
-        //    since Remaining is already negative. The PERSISTED boolean on the
-        //    clock stays false until the nightly SlaBreachBackgroundService
-        //    sweep flips it, so a backdated item really does read as
-        //    not-breached in Mongo in the meantime. Verified against a live
-        //    stack during RA-601, so do not "simplify" the two into one.
+        // What survives from RA-601 is the half that was right: moving a
+        // deadline backwards is legitimate, so a backwards move onto a
+        // still-future date stays supported.
         //
-        //  * That sweep is one-way. It skips items already flagged, and nothing
-        //    anywhere clears the flag, so once it catches an overdue item both
-        //    the flag and its sla-breached audit entry are permanent even if
-        //    the deadline is later moved back into the future. RA-601 did NOT
-        //    introduce that: an item whose deadline simply lapses has always
-        //    reached the same permanently-breached state. What changes here is
-        //    only that reaching it becomes deliberate and immediate rather than
-        //    a matter of waiting. The irreversibility is pre-existing
-        //    management-be behaviour, is being escalated on its own merits, and
-        //    is deliberately NOT addressed here — it is not a reason to put a
-        //    floor back on this method.
+        // The floor is "today", not "now" — a deadline landing on today's date
+        // is accepted — and it is compared as a Europe/London CALENDAR DATE
+        // rather than as a UTC instant, because the regulator and the UI both
+        // work in UK dates and a UTC comparison is an hour wrong either side of
+        // midnight during BST. The check itself needs the loaded work item (the
+        // deadline is relative to the clock), so it sits below rather than up
+        // here with the cheap guards.
         //
-        //  * A deadline earlier than the clock's StartedAt is valid too, which
-        //    drives TargetDuration negative or zero. Every read path tolerates
-        //    that: see the DueAt and Remaining members of WorkItemSlaClock,
-        //    which saturate rather than overflow.
+        // Zero is still rejected above: re-submitting the current deadline is a
+        // no-op, and the frontend rejects it for the same reason. There is still
+        // no upper limit, since RA-447/CM6 removed MaxExtensionDays.
         //
-        // Only zero is rejected, because re-submitting the current deadline is
-        // a no-op, and the frontend rejects it for the same reason. There is no
-        // upper limit either, since RA-447/CM6 removed the old MaxExtensionDays
-        // cap.
+        // The wire spelling of a backwards move is unchanged: a negative
+        // ISO-8601 duration carries its sign AHEAD of the 'P' (-P14D). See
+        // SlaEndpoints.TryParseDuration.
 
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
@@ -191,14 +202,16 @@ public sealed class SlaService : ISlaService
                 $"Work item '{workItemId}' has no SLA clock started — extend / override is unavailable.");
         }
 
-        // RA-601: this is NOT the floor the product owner declined — it is the
-        // edge of what a .NET DateTime/TimeSpan can represent at all. Without
+        // RA-601: this is NOT the RA-611 business floor below — it is the edge
+        // of what a .NET DateTime/TimeSpan can represent at all. Without
         // it a caller could send '-P4000000D' and either overflow the TimeSpan
         // addition below (unhandled exception => 500) or persist a clock whose
         // deadline sits outside DateTime's range, which every subsequent read
         // of that work item would have to cope with. A date that cannot exist
-        // is not "an earlier real date", so rejecting it takes nothing away
-        // from the RA-601 decision.
+        // is not "an earlier real date", so this guard is about representability
+        // only, and it deliberately runs BEFORE the RA-611 floor so an
+        // unrepresentable request is reported as such rather than as a
+        // past deadline.
         if (!TryShiftTarget(workItem.SlaClock, additionalDuration, out var newTargetDuration))
         {
             return SlaActionResult.Failure(
@@ -207,18 +220,30 @@ public sealed class SlaService : ISlaService
                 "the range of representable dates.");
         }
 
+        // RA-611: floor the RESULTING deadline at today's UK date. TryShiftTarget
+        // has already proven StartedAt + newTargetDuration is representable, so
+        // this addition — which is exactly SlaClock.DueAt + additionalDuration —
+        // cannot throw.
+        var newDueAt = workItem.SlaClock.StartedAt + newTargetDuration;
+        var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
+        if (UkDateOf(newDueAt) < UkDateOf(utcNow))
+        {
+            return SlaActionResult.Failure(
+                SlaActionFailureCode.InvalidRequest,
+                "The new determination deadline cannot be earlier than today.");
+        }
+
         var before = Snapshot(workItem.SlaClock);
         workItem.SlaClock.TargetDuration = newTargetDuration;
         var after = Snapshot(workItem.SlaClock);
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-        workItem.LastModifiedAt = now;
+        workItem.LastModifiedAt = utcNow;
 
         AppendAuditEntry(
             workItem,
             action: "sla-extended",
             actionDisplayName: "Determination deadline changed",
             user,
-            now,
+            utcNow,
             reason,
             before,
             after,
@@ -341,7 +366,7 @@ public sealed class SlaService : ISlaService
     }
 
     /// <summary>
-    /// RA-601: compute <c>clock.TargetDuration + additionalDuration</c> without
+    /// RA-601/RA-611: compute <c>clock.TargetDuration + additionalDuration</c> without
     /// ever throwing, and report whether the result still yields a deadline
     /// (<c>StartedAt + TargetDuration</c>) inside the representable DateTime
     /// range. Returns <c>false</c> instead of throwing on TimeSpan overflow.
@@ -373,6 +398,17 @@ public sealed class SlaService : ISlaService
         newTargetDuration = TimeSpan.FromTicks(sum);
         return true;
     }
+
+    /// <summary>
+    /// RA-611: the Europe/London calendar date of a UTC instant. The instant is
+    /// re-stamped as UTC first because SLA clocks deserialised from Mongo can
+    /// carry an Unspecified (or, historically, Local) kind, and
+    /// <see cref="TimeZoneInfo.ConvertTimeFromUtc"/> rejects a Local input.
+    /// </summary>
+    private static DateOnly UkDateOf(DateTime utc) =>
+        DateOnly.FromDateTime(
+            TimeZoneInfo.ConvertTimeFromUtc(
+                DateTime.SpecifyKind(utc, DateTimeKind.Utc), s_ukTimeZone));
 
     private static Dictionary<string, string?> Snapshot(WorkItemSlaClock clock) => new()
     {

@@ -527,6 +527,37 @@ public class SlaEndpointsTests
     }
 
     [Fact]
+    public async Task Extend_route_returns_422_when_the_new_deadline_would_be_in_the_past()
+    {
+        // RA-611 end to end over real HTTP + real Mongo. The seeded clock
+        // started 10 days ago with an 84-day target, so '-P80D' would land the
+        // deadline 6 days in the past. The caseworker gets a 422 with the
+        // rule named in the problem detail, and nothing is written.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = NewFactory();
+        using var client = factory.CreateClient();
+
+        var workItem = AWorkItem(Guid.NewGuid());
+        await factory.SeedAsync(workItem, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{workItem.Id}/sla/extend",
+            new { additionalDuration = "-P80D", reason = "Determination brought forward" },
+            cancellationToken);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("Invalid SLA request", problem!.Title);
+        Assert.Equal(
+            "The new determination deadline cannot be earlier than today.",
+            problem.Detail);
+
+        var persisted = await factory.GetAsync(workItem.Id, cancellationToken);
+        Assert.Equal(TimeSpan.FromDays(84), persisted!.SlaClock!.TargetDuration);
+        Assert.DoesNotContain(persisted.AuditLog, e => e.Action == "sla-extended");
+    }
+
+    [Fact]
     public async Task Extend_route_returns_422_for_a_zero_duration()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

@@ -37,9 +37,13 @@ public sealed class WorkItemSlaClock
     /// The absolute determination deadline: <see cref="StartedAt"/> +
     /// <see cref="TargetDuration"/>.
     /// <para>
-    /// RA-601 allows the deadline to be moved earlier, so
-    /// <see cref="TargetDuration"/> may legitimately be zero or negative and
-    /// the deadline may fall before <see cref="StartedAt"/>. The addition is
+    /// RA-601 allowed the deadline to be moved earlier without limit, so
+    /// <see cref="TargetDuration"/> may be zero or negative on stored data and
+    /// the deadline may fall before <see cref="StartedAt"/>. RA-611 put a floor
+    /// on <c>SlaService.ExtendAsync</c> (no deadline before today), so new
+    /// writes cannot produce that shape for a clock that started in the past —
+    /// but documents written before RA-611 can, so every read path still has to
+    /// tolerate it. The addition is
     /// therefore saturating rather than checked: a stored clock whose arithmetic
     /// would fall outside the representable <see cref="DateTime"/> range clamps
     /// to <see cref="DateTime.MinValue"/> / <see cref="DateTime.MaxValue"/>
@@ -66,8 +70,9 @@ public sealed class WorkItemSlaClock
 
     /// <summary>
     /// Compute the remaining duration relative to <paramref name="now"/>.
-    /// Negative once the deadline has passed — including immediately, when
-    /// RA-601 has moved the deadline into the past.
+    /// Negative once the deadline has passed. RA-611 stops an extend from
+    /// backdating a deadline, but an item whose deadline simply lapses still
+    /// lands here.
     /// </summary>
     public TimeSpan Remaining(DateTime now) => DueAt - now;
 
