@@ -298,8 +298,18 @@ public class ReAccreditationSeederTests
         Assert.All(past, item =>
         {
             Assert.NotNull(item.SlaClock);
-            Assert.Equal(item.SubmittedAt.AddDays(1), item.SlaClock!.StartedAt);
-            Assert.False(item.SlaClock.Breached);
+            // RA-611: the pre-year-start fixture pins its clock to an absolute
+            // instant instead of deriving it, because its whole purpose is to
+            // sit on the far side of a fixed date (1 January of its
+            // accreditation year) that a drifting value would eventually cross.
+            // Its own tests assert that instant; the derived-start rule still
+            // holds for every other fixture.
+            if (item.Payload["organisationName"].AsString !=
+                ReAccreditationSeeder.Ra611PreYearStartOrganisationName)
+            {
+                Assert.Equal(item.SubmittedAt.AddDays(1), item.SlaClock!.StartedAt);
+            }
+            Assert.False(item.SlaClock!.Breached);
         });
     }
 
@@ -1017,5 +1027,80 @@ public class ReAccreditationSeederTests
             "Removed Overseas Site",
             sites.Single(s => s["country"].AsString == "Germany")["siteName"].AsString);
     }
-}
 
+    /// <summary>
+    /// RA-611: the fixture that makes the determination-deadline floor's
+    /// 1-JANUARY bound reachable. The floor is the later of the duly-made date
+    /// (the SLA clock's start) and 1 January of payload.accreditationYear;
+    /// nothing else in the seed set — and nothing creatable through the case
+    /// management UI, which collects no accreditationYear — has a clock starting
+    /// before 1 January of its own accreditation year, so without this fixture
+    /// the second bound cannot be exercised end to end at all.
+    /// </summary>
+    private static WorkItem BuildRa611PreYearStartFixture()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+        return items.Single(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.Ra611PreYearStartOrganisationName);
+    }
+
+    [Fact]
+    public void Build_ra611_fixture_clock_starts_before_1_january_of_its_accreditation_year()
+    {
+        // The whole point of the fixture. If these two ever cross, the
+        // duly-made bound silently becomes the binding one and the e2e spec
+        // starts asserting a message the service no longer emits.
+        var item = BuildRa611PreYearStartFixture();
+
+        var accreditationYear = item.Payload["accreditationYear"].AsInt32;
+        Assert.Equal(2026, accreditationYear);
+        Assert.NotNull(item.SlaClock);
+        Assert.True(
+            item.SlaClock!.StartedAt < new DateTime(accreditationYear, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            "1 January of the accreditation year must be the LATER bound.");
+        Assert.Equal(
+            new DateTime(2025, 11, 14, 0, 0, 0, DateTimeKind.Utc),
+            item.SlaClock.StartedAt);
+    }
+
+    [Fact]
+    public void Build_ra611_fixture_clock_starts_at_midnight_utc()
+    {
+        // The floor is compared on Europe/London dates and the 422 names the
+        // date it resolved to. A clock carrying a time-of-day in the 23:00-24:00
+        // UTC hour lands on the next day in London during BST, which would make
+        // the e2e assertion flaky for one hour in 24 for half the year.
+        var item = BuildRa611PreYearStartFixture();
+
+        Assert.Equal(TimeSpan.Zero, item.SlaClock!.StartedAt.TimeOfDay);
+        Assert.Equal(DateTimeKind.Utc, item.SlaClock.StartedAt.Kind);
+    }
+
+    [Fact]
+    public void Build_ra611_fixture_is_past_submitted_so_it_has_a_clock_at_all()
+    {
+        // A `submitted` item deliberately carries no SLA clock (see Build), so
+        // it has no deadline to change and could not exercise the floor.
+        var item = BuildRa611PreYearStartFixture();
+
+        Assert.Equal("assessment-in-progress", item.StateId);
+    }
+
+    [Fact]
+    public void Build_ra611_fixture_organisation_name_is_unique_across_the_seed_set()
+    {
+        // mgmt-tests reaches this item by searching the work-items list on the
+        // organisation name, not by its deterministic id. A duplicate would make
+        // that search ambiguous and the spec flaky.
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        var matches = items.Count(i =>
+            i.Payload.Contains("organisationName") &&
+            i.Payload["organisationName"].AsString ==
+                ReAccreditationSeeder.Ra611PreYearStartOrganisationName);
+
+        Assert.Equal(1, matches);
+    }
+}

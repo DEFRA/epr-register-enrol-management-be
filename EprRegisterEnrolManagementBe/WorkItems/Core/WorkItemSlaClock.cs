@@ -37,9 +37,23 @@ public sealed class WorkItemSlaClock
     /// The absolute determination deadline: <see cref="StartedAt"/> +
     /// <see cref="TargetDuration"/>.
     /// <para>
-    /// RA-601 allows the deadline to be moved earlier, so
-    /// <see cref="TargetDuration"/> may legitimately be zero or negative and
-    /// the deadline may fall before <see cref="StartedAt"/>. The addition is
+    /// RA-601 allowed the deadline to be moved earlier without limit, so
+    /// <see cref="TargetDuration"/> may be zero or deeply negative on stored
+    /// data and the deadline may fall days or years before
+    /// <see cref="StartedAt"/>. RA-611 put a floor on
+    /// <c>SlaService.ExtendAsync</c> — the deadline may not fall, as a UK
+    /// calendar date, before the later of <see cref="StartedAt"/>'s own date and
+    /// 1 January of the accreditation year — so an extend can no longer write a
+    /// deadline on an earlier DATE than the clock start. It can still write a
+    /// non-positive <see cref="TargetDuration"/>, because the floor compares
+    /// dates rather than instants: a deadline landing on the start date itself
+    /// but at an earlier time of day yields zero or a small negative (up to an
+    /// hour under BST for a midnight-UTC start, more for a clock whose start was
+    /// moved to mid-afternoon by <c>OverrideAsync</c>). <c>OverrideAsync</c>
+    /// itself requires a positive target but can move <see cref="StartedAt"/>
+    /// forward past an existing deadline. Documents written before RA-611 can
+    /// hold anything at all, so every read path still has to tolerate it. The
+    /// addition is
     /// therefore saturating rather than checked: a stored clock whose arithmetic
     /// would fall outside the representable <see cref="DateTime"/> range clamps
     /// to <see cref="DateTime.MinValue"/> / <see cref="DateTime.MaxValue"/>
@@ -66,8 +80,9 @@ public sealed class WorkItemSlaClock
 
     /// <summary>
     /// Compute the remaining duration relative to <paramref name="now"/>.
-    /// Negative once the deadline has passed — including immediately, when
-    /// RA-601 has moved the deadline into the past.
+    /// Negative once the deadline has passed — whether because the deadline
+    /// simply lapsed or because RA-611 allowed a caseworker to backdate it
+    /// deliberately (as far back as the duly-made date).
     /// </summary>
     public TimeSpan Remaining(DateTime now) => DueAt - now;
 

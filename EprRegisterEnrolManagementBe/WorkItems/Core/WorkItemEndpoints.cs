@@ -653,6 +653,10 @@ public static class WorkItemEndpoints
             slaRemaining,
             slaState,
             ComputeSlaDueDate(w.SlaClock),
+            // RA-611: the duly-made anchor the deadline floor is measured from.
+            // Read straight off the live clock, like the due date, so an
+            // ISlaService override that moves the start is reflected at once.
+            w.SlaClock?.StartedAt,
             w.Payload.TryGetValue("applicationReference", out var reference) && reference.IsString
                 ? reference.AsString
                 : null,
