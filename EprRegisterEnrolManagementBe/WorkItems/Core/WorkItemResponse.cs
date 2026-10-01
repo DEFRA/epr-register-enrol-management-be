@@ -39,6 +39,28 @@ public sealed record WorkItemResponse(
     // date. Always reflects the current clock, so an SLA extend/override moves
     // it. Additive + nullable, so the DTO stays backward-compatible.
     DateTime? SlaDueDate = null,
+    // RA-611: the SLA clock's start (slaClock.StartedAt) — the duly-made
+    // anchor. The duly-making transition stamps it as midnight UTC of the
+    // operator's payment date, i.e. the first date on which the regulator held
+    // everything needed to determine the application, and there is no separate
+    // dulyMadeAt field.
+    //
+    // Exposed because SlaService.ExtendAsync floors a changed determination
+    // deadline at the LATER of this date and 1 January of the accreditation
+    // year, and the case management frontend has to validate the caseworker's
+    // date entry client-side to show an inline GOV.UK error rather than bounce
+    // them off a 422. It already had slaDueDate but no way to see where the
+    // floor sits, so without this it would have to guess the rule.
+    //
+    // Null under exactly the same condition as SlaDueDate / SlaState /
+    // SlaRemaining — no SLA clock started — so a client can treat "no deadline
+    // to change" and "no floor" as one case. Deliberately NOT added to
+    // WorkItemListItemResponse: the list view renders "Due on" only and offers
+    // no deadline-change form, so the floor is never needed per row, and the
+    // slim list shape exists precisely to stay small (epr-4pf).
+    //
+    // Additive + nullable, so the DTO stays backward-compatible.
+    DateTime? SlaStartedAt = null,
     // RA-318: surfaced as a top-level field (mirroring payload.applicationReference)
     // so callers don't need to parse the payload JSON to obtain it.
     string? ApplicationReference = null,

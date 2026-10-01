@@ -219,6 +219,67 @@ public class WorkItemSlaDueDateTests
             single.GetProperty("slaDueDate").ValueKind);
     }
 
+    /// <summary>
+    /// RA-611: the clock's START is exposed too, because SlaService.ExtendAsync
+    /// floors a changed determination deadline at the later of that date and
+    /// 1 January of the accreditation year, and the case management frontend
+    /// mirrors that rule to show an inline error instead of bouncing the
+    /// caseworker off a 422. Pin the serialised name and format for the same
+    /// reason as slaDueDate above — the BFF reads it by key.
+    /// </summary>
+    [Fact]
+    public void Started_at_serialises_as_slaStartedAt_on_the_single_item_shape()
+    {
+        var clock = new WorkItemSlaClock
+        {
+            StartedAt = s_startedAt,
+            TargetDuration = TimeSpan.FromDays(84)
+        };
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var single = JsonSerializer.SerializeToElement(
+            WorkItemEndpoints.ToResponse(Project(ItemWith(clock))), options);
+
+        Assert.Equal(
+            "2026-01-01T09:00:00Z",
+            single.GetProperty("slaStartedAt").GetString());
+    }
+
+    [Fact]
+    public void Started_at_is_absent_from_the_list_item_shape()
+    {
+        // Deliberately NOT on the list shape: the list view renders "Due on"
+        // only and offers no deadline-change form, so it never needs the floor,
+        // and the slim per-row shape exists to stay small (epr-4pf). Asserted
+        // rather than left implicit so adding it becomes a conscious decision.
+        var clock = new WorkItemSlaClock
+        {
+            StartedAt = s_startedAt,
+            TargetDuration = TimeSpan.FromDays(84)
+        };
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var listItem = JsonSerializer.SerializeToElement(
+            WorkItemEndpoints.ToListItemResponse(Project(ItemWith(clock))), options);
+
+        Assert.False(listItem.TryGetProperty("slaStartedAt", out _));
+    }
+
+    [Fact]
+    public void Started_at_serialises_as_json_null_when_no_clock_started()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
+        var single = JsonSerializer.SerializeToElement(
+            WorkItemEndpoints.ToResponse(Project(ItemWith(null))), options);
+
+        // Null under exactly the same condition as slaDueDate, so a client can
+        // treat "no deadline to change" and "no floor" as one case.
+        Assert.Equal(
+            JsonValueKind.Null,
+            single.GetProperty("slaStartedAt").ValueKind);
+    }
+
     private static ClaimsPrincipal Caseworker() =>
         new(new ClaimsIdentity(
         [
