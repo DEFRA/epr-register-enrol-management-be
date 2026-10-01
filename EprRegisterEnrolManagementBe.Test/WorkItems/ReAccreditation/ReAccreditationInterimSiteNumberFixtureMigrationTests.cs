@@ -139,6 +139,11 @@ public class ReAccreditationInterimSiteNumberFixtureMigrationTests
                 Task.FromException(new WorkItemConcurrencyException(fixture.Id, expectedVersion: 0))
             );
 
-        await BuildSut().ApplyAsync(persistence, ct);
+        var apply = () => BuildSut().ApplyAsync(persistence, ct);
+
+        // The conflict means another instance got there first; it must not fail the boot.
+        var thrown = await Record.ExceptionAsync(apply);
+        Assert.Null(thrown);
+        await persistence.Received(1).ReplaceAsync(fixture, Arg.Any<CancellationToken>());
     }
 }

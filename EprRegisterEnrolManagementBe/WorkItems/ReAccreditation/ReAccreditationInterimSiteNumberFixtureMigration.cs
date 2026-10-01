@@ -76,9 +76,10 @@ internal sealed class ReAccreditationInterimSiteNumberFixtureMigration(
             await persistence.ReplaceAsync(item, cancellationToken);
             logger.LogInformation("Migration '{Name}' complete: fixture renumbered.", Name);
         }
-        catch (WorkItemConcurrencyException)
+        catch (WorkItemConcurrencyException ex)
         {
             logger.LogDebug(
+                ex,
                 "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
                 item.Id
             );
