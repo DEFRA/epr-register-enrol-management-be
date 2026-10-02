@@ -99,6 +99,22 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IWorkItemMigration,
             ReAccreditationSubmitterContactDetailsBackfillMigration
         >();
+        // RA-603: copies each overseas site's singular interimSite into the
+        // new interimSites list, so a work item submitted before RA-603
+        // renders the same as one submitted after and the regulator's view
+        // does not have to understand both shapes indefinitely. Leaves the
+        // singular field in place as the mirror. Idempotent, and never
+        // rebuilds a list that is already populated. No ordering dependency
+        // on any other migration.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationInterimSitesBackfillMigration>();
+        // RA-603: renumbers the ors-interim-authority seed fixture's interim
+        // sites INT-00N -> 00N on environments seeded before the seeder
+        // changed. Scoped to that one fixture id and rewrites the mirror and
+        // the list alike, so no ordering dependency on the backfill above.
+        services.AddSingleton<
+            IWorkItemMigration,
+            ReAccreditationInterimSiteNumberFixtureMigration
+        >();
         // RA-311/MBE-1: adds the resume-during-* transitions to every
         // existing work item's frozen template snapshot (v6 → v7).
         services.AddSingleton<IWorkItemMigration, ReAccreditationResumeSnapshotMigration>();
