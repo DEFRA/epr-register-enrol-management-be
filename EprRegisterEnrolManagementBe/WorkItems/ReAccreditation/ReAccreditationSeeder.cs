@@ -1124,11 +1124,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     }
 
     /// <summary>
-    /// RA-603: one interim site in the shape the backend writes. <c>createdAt</c> is always
-    /// present on a site created after RA-603; <c>removedAt</c> is set only on a withdrawn one and
-    /// is what every display filters on.
-    /// </summary>
-    /// <summary>
     /// The three address fields, grouped. They travel together at every call site, and grouping
     /// them keeps this helper inside the 7-parameter limit (S107) while removing a real hazard:
     /// three adjacent strings in a positional argument list can be swapped silently.
@@ -1139,6 +1134,11 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         string TownOrCity
     );
 
+    /// <summary>
+    /// RA-603: one interim site in the shape the backend writes. <c>createdAt</c> is always
+    /// present on a site created after RA-603; <c>removedAt</c> is set only on a withdrawn one and
+    /// is what every display filters on.
+    /// </summary>
     private static BsonDocument MultipleInterimSite(
         int siteId,
         string siteNumber,
