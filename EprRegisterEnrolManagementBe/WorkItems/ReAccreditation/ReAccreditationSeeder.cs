@@ -746,6 +746,31 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         );
         yield return orsInterimAuthorityItem;
 
+        // RA-604: a separate seed key makes the duplicate-name ORS fixture
+        // available on restart even when the original fixture is already stored.
+        var duplicateOrsNamesPayload = orsInterimAuthorityItem.Payload.DeepClone().AsBsonDocument;
+        duplicateOrsNamesPayload["organisationName"] = "Duplicate ORS Names Verification Ltd";
+        duplicateOrsNamesPayload["registrationNumber"] = "EPR-100604";
+        duplicateOrsNamesPayload["operatorApplicationId"] = "app-duplicate-ors-names-001";
+        duplicateOrsNamesPayload["operatorEmail"] = "duplicate.ors.names@example.com";
+        var duplicateOrsSites = duplicateOrsNamesPayload["overseasSites"]["sites"].AsBsonArray;
+        duplicateOrsSites[0]["siteName"] = "Shared Reprocessing Site";
+        duplicateOrsSites[1]["siteName"] = "Shared Reprocessing Site";
+        SetAccreditationNumberFields(
+            duplicateOrsNamesPayload,
+            "500016",
+            "reg-duplicate-ors-names-001"
+        );
+        yield return Build(
+            seedKey: "duplicate-ors-names",
+            postcode: "EC2A 2BB",
+            submittedDaysAgo: 6,
+            stateId: "submitted",
+            payload: duplicateOrsNamesPayload,
+            submittedBy: "stub-portal-client",
+            now: now
+        );
+
         // RA-412: a genuine Exporter organisation — org 50006 "Global Glass
         // Exports" in the ticket's own example. Unlike
         // full-payload-verification/ors-interim-authority above (which only
