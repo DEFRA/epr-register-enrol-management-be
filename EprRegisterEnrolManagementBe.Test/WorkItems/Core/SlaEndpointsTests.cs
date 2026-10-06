@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using EprRegisterEnrolManagementBe.Auth;
 
@@ -70,8 +71,18 @@ public class SlaEndpointsTests
     private static JsonElement Json(object value) =>
         JsonDocument.Parse(JsonSerializer.Serialize(value)).RootElement;
 
-    private SlaEndpointsTestFactory NewFactory(string? userId = "tl-user") =>
-        new(_fixture, userId);
+    /// <summary>
+    /// RA-611: <paramref name="timeProvider"/> pins the app's clock. The
+    /// determination-deadline floor's second bound is 1 January of the CURRENT
+    /// calendar year, so any test asserting the year it names — or asserting that
+    /// a deadline is in the past — would otherwise change meaning as the real
+    /// calendar advances, and the one naming a year would start failing outright
+    /// on 1 January. Tests that do not care leave it null and run on the real
+    /// clock, as the rest of the integration subset always has.
+    /// </summary>
+    private SlaEndpointsTestFactory NewFactory(
+        string? userId = "tl-user", TimeProvider? timeProvider = null) =>
+        new(_fixture, userId, timeProvider);
 
     // ── ExtendSla — handler unit tests ────────────────────────────────────────
 
@@ -563,17 +574,21 @@ public class SlaEndpointsTests
     [Fact]
     public async Task Extend_route_returns_422_naming_1_january_when_that_is_the_later_bound()
     {
-        // The other RA-611 message over the wire. The clock starts 14-Nov-2025
-        // but payload.accreditationYear is 2026, so 1 January 2026 is the later
-        // bound; '-P40D' lands on 28-Dec-2025, above the duly-made date but
-        // below 1 January, so the year bound is the one reported.
+        // The other RA-611 message over the wire. The app clock is pinned to
+        // May 2026, so the second bound is 1 January 2026; the work item's clock
+        // starts 14-Nov-2025, and '-P40D' lands the deadline on 28-Dec-2025 —
+        // above the duly-made date but below 1 January, so the year bound is the
+        // one reported. The payload is left alone: the floor reads the calendar,
+        // not accreditationYear, and seeding one here would hide a regression
+        // that brought the payload read back.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory();
+        await using var factory = NewFactory(
+            timeProvider: new FakeTimeProvider(
+                new DateTimeOffset(2026, 5, 19, 12, 0, 0, TimeSpan.Zero)));
         using var client = factory.CreateClient();
 
         var workItem = AWorkItem(Guid.NewGuid());
         workItem.SlaClock!.StartedAt = new DateTime(2025, 11, 14, 0, 0, 0, DateTimeKind.Utc);
-        workItem.Payload["accreditationYear"] = 2026;
         await factory.SeedAsync(workItem, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
@@ -593,16 +608,18 @@ public class SlaEndpointsTests
     public async Task Extend_route_accepts_a_deadline_in_the_past_above_the_floor()
     {
         // The case the mid-branch spec change made legal, proven end to end
-        // because it is the one most easily lost: the deadline moves to
-        // 28-Dec-2025 — years before the test host's "today" — and is accepted
-        // and persisted, because the work item has no accreditationYear and its
-        // clock start (14-Nov-2025) is the only floor.
+        // because it is the one most easily lost. With "now" pinned to
+        // 19-May-2026 the floor is the later of 03-Mar-2026 (the clock start) and
+        // 1 January 2026, so '-P40D' moves the deadline to 16-Apr-2026: a month
+        // in the PAST, and above both bounds. It is accepted and persisted.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = NewFactory();
+        await using var factory = NewFactory(
+            timeProvider: new FakeTimeProvider(
+                new DateTimeOffset(2026, 5, 19, 12, 0, 0, TimeSpan.Zero)));
         using var client = factory.CreateClient();
 
         var workItem = AWorkItem(Guid.NewGuid());
-        workItem.SlaClock!.StartedAt = new DateTime(2025, 11, 14, 0, 0, 0, DateTimeKind.Utc);
+        workItem.SlaClock!.StartedAt = new DateTime(2026, 3, 3, 0, 0, 0, DateTimeKind.Utc);
         await factory.SeedAsync(workItem, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
@@ -613,12 +630,15 @@ public class SlaEndpointsTests
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<WorkItemResponse>(cancellationToken);
         Assert.Equal(
-            new DateTime(2025, 12, 28, 0, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 4, 16, 0, 0, 0, DateTimeKind.Utc),
             body!.SlaDueDate);
+        Assert.True(
+            body.SlaDueDate < new DateTime(2026, 5, 19, 12, 0, 0, DateTimeKind.Utc),
+            "the accepted deadline is in the past relative to the pinned clock");
         // RA-611: the anchor the floor was measured from comes back alongside it
         // so the frontend can apply the same rule before submitting.
         Assert.Equal(
-            new DateTime(2025, 11, 14, 0, 0, 0, DateTimeKind.Utc),
+            new DateTime(2026, 3, 3, 0, 0, 0, DateTimeKind.Utc),
             body.SlaStartedAt);
 
         var persisted = await factory.GetAsync(workItem.Id, cancellationToken);
@@ -693,15 +713,18 @@ public class SlaEndpointsTests
         private readonly MongoIntegrationFixture _fixture;
         private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("sla-ep");
         private readonly string? _userId;
+        private readonly TimeProvider? _timeProvider;
 
         private EprRegisterEnrolManagementBe.Utils.Mongo.IMongoDbClientFactory? _clientFactory;
 
         public SlaEndpointsTestFactory(
             MongoIntegrationFixture fixture,
-            string? userId)
+            string? userId,
+            TimeProvider? timeProvider = null)
         {
             _fixture = fixture;
             _userId = userId;
+            _timeProvider = timeProvider;
         }
 
         public IWorkItemPersistence Persistence =>
@@ -727,6 +750,11 @@ public class SlaEndpointsTests
                         _clientFactory,
                         sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>()));
                 services.AddSingleton<IWorkItemType>(new TestWorkItemType(TypeId, "Test type"));
+                if (_timeProvider is not null)
+                {
+                    services.RemoveAll<TimeProvider>();
+                    services.AddSingleton(_timeProvider);
+                }
             });
         }
 

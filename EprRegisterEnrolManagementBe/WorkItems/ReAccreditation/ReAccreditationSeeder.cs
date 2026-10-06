@@ -156,9 +156,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
     /// <summary>
     /// RA-611: the one fixture on which the determination-deadline floor's
-    /// 1-January bound actually binds. See the fixture itself for why nothing
-    /// else in the seed set — or anything reachable through the case management
-    /// UI — can exercise it.
+    /// 1-January bound actually binds, rather than its duly-made bound. See the
+    /// fixture itself for why nothing else in the seed set — or anything
+    /// reachable through the case management UI — can exercise it.
     /// </summary>
     public const string Ra611PreYearStartSeedKey = "ra611-pre-year-start";
 
@@ -1051,41 +1051,43 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // 1-JANUARY bound binds, rather than its duly-made bound.
         //
         // SlaService.ExtendAsync floors a changed deadline at the LATER of the
-        // duly-made date (the SLA clock's start) and 1 January of
-        // payload.accreditationYear. Nothing else can reach the second bound:
+        // duly-made date (the SLA clock's start) and 1 January of the CURRENT
+        // CALENDAR year. Nothing else in a seeded environment reaches the second
+        // bound: every other fixture is submittedDaysAgo <= 7, and a work item
+        // created through the case management UI starts its clock today, so their
+        // duly-made date is always inside the current year and the duly-made
+        // bound always wins. Without this fixture no seeded or hand-made item
+        // can show a caseworker the 1-January message at all.
         //
-        //   * Work items created through the case management UI carry no
-        //     accreditationYear at all — the create form does not collect one,
-        //     and ExtendAsync deliberately does NOT default it to the current
-        //     year (see SlaService.ResolveAccreditationYearStart) — so for them
-        //     the 1-January bound does not exist.
-        //   * Every other seeded fixture carries accreditationYear 2026 but is
-        //     submittedDaysAgo <= 7, so its clock starts this week and the
-        //     duly-made bound always wins.
+        // Its clock therefore starts on 14-Nov-2025, which is before 1 January
+        // of every year from 2026 onwards. A deadline between that start and
+        // 1 January is refused by the 1-January bound alone, naming it in the
+        // 422 — the case an e2e spec cannot otherwise construct.
         //
-        // Its clock therefore starts on 14-Nov-2025, about six weeks BEFORE
-        // 1 January 2026. A deadline between the two is refused by the
-        // 1-January bound alone, naming 1 January in the 422 — the case an e2e
-        // spec cannot otherwise construct.
+        // That permanence is the point of pinning the clock start to an ABSOLUTE
+        // instant rather than deriving it from `now` like every other fixture.
+        // A start derived from "today" sits on the far side of 1 January only
+        // for part of the year and then silently flips the binding bound back to
+        // duly-made, making the e2e spec assert the wrong message for months at
+        // a time; a fixed 2025 date can never drift back over a 1 January that
+        // only ever moves later. It also has to be MIDNIGHT UTC: the floor is
+        // compared on Europe/London dates, so Build's derived
+        // submittedAt.AddDays(1) — which carries the seeding run's time-of-day —
+        // would name a different date in the 422 than its UTC date suggests
+        // whenever that time fell in the 23:00-24:00 UTC hour during BST, making
+        // the spec flaky for one hour in 24 for half the year. The zone edge
+        // itself is pinned by unit tests, not by a fixture.
         //
-        // The clock start is pinned to an ABSOLUTE instant rather than derived
-        // from `now` like every other fixture's, for two reasons. It has to stay
-        // on the far side of a fixed date (1 January 2026, from the pinned
-        // accreditationYear below), which a value drifting with "today" would
-        // eventually cross, silently turning the duly-made bound back into the
-        // binding one and making the e2e spec assert the wrong message. And it
-        // has to be MIDNIGHT UTC: the floor is compared on Europe/London dates,
-        // so Build's derived submittedAt.AddDays(1) — which carries the seeding
-        // run's time-of-day — would name a different date in the 422 than its
-        // UTC date suggests whenever that time fell in the 23:00-24:00 UTC hour
-        // during BST, making the spec flaky for one hour in 24 for half the
-        // year. The zone edge itself is pinned by unit tests, not by a fixture.
+        // The payload's accreditationYear is NOT load-bearing here. The floor's
+        // first cut read 1 January of payload.accreditationYear and QA found that
+        // unsatisfiable — accreditationYear is the year the issued accreditation
+        // takes effect, which runs ahead of the determination window — so the
+        // bound now reads the calendar and never touches the payload. This
+        // fixture carries a year only because every fixture does.
         //
-        // Both dates are 2026-specific: once the live accreditation year moves
-        // on, re-point this fixture's year AND its clock rather than adding
-        // another fixture. submittedDaysAgo stays relative, so submittedAt
-        // drifts past the clock start eventually — cosmetic, and the year
-        // re-pointing is due long before it matters.
+        // submittedDaysAgo stays relative, so submittedAt eventually drifts past
+        // the pinned clock start. Cosmetic: nothing asserts their ordering, and
+        // the clock start is what the floor and its message use.
         //
         // State is assessment-in-progress: the deadline-change action has to be
         // offered, and a `submitted` item has no clock at all.
@@ -1100,8 +1102,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["registrationNumber"] = "EPR-100611",
                 ["operatorApplicationId"] = "app-ra611-pre-year-start-001",
                 ["material"] = "plastic",
-                // The point of the fixture: a year whose 1 January falls AFTER
-                // the clock start.
+                // Ordinary payload realism, matching every other fixture — the
+                // deadline floor does not read this field (see above).
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,

@@ -222,7 +222,7 @@ public class WorkItemSlaDueDateTests
     /// <summary>
     /// RA-611: the clock's START is exposed too, because SlaService.ExtendAsync
     /// floors a changed determination deadline at the later of that date and
-    /// 1 January of the accreditation year, and the case management frontend
+    /// 1 January of the current calendar year, and the case management frontend
     /// mirrors that rule to show an inline error instead of bouncing the
     /// caseworker off a 422. Pin the serialised name and format for the same
     /// reason as slaDueDate above — the BFF reads it by key.

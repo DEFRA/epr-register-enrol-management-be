@@ -300,10 +300,10 @@ public class ReAccreditationSeederTests
             Assert.NotNull(item.SlaClock);
             // RA-611: the pre-year-start fixture pins its clock to an absolute
             // instant instead of deriving it, because its whole purpose is to
-            // sit on the far side of a fixed date (1 January of its
-            // accreditation year) that a drifting value would eventually cross.
-            // Its own tests assert that instant; the derived-start rule still
-            // holds for every other fixture.
+            // sit on the far side of 1 January of the current year, which a
+            // value drifting with "today" would spend most of the year on the
+            // wrong side of. Its own tests assert that instant; the derived-start
+            // rule still holds for every other fixture.
             if (item.Payload["organisationName"].AsString !=
                 ReAccreditationSeeder.Ra611PreYearStartOrganisationName)
             {
@@ -1137,11 +1137,11 @@ public class ReAccreditationSeederTests
     /// <summary>
     /// RA-611: the fixture that makes the determination-deadline floor's
     /// 1-JANUARY bound reachable. The floor is the later of the duly-made date
-    /// (the SLA clock's start) and 1 January of payload.accreditationYear;
+    /// (the SLA clock's start) and 1 January of the CURRENT CALENDAR year;
     /// nothing else in the seed set — and nothing creatable through the case
-    /// management UI, which collects no accreditationYear — has a clock starting
-    /// before 1 January of its own accreditation year, so without this fixture
-    /// the second bound cannot be exercised end to end at all.
+    /// management UI, whose clock starts today — has a clock starting before
+    /// 1 January of the current year, so without this fixture the second bound
+    /// cannot be exercised end to end at all.
     /// </summary>
     private static WorkItem BuildRa611PreYearStartFixture()
     {
@@ -1153,22 +1153,30 @@ public class ReAccreditationSeederTests
     }
 
     [Fact]
-    public void Build_ra611_fixture_clock_starts_before_1_january_of_its_accreditation_year()
+    public void Build_ra611_fixture_clock_starts_before_1_january_of_the_current_year()
     {
-        // The whole point of the fixture. If these two ever cross, the
-        // duly-made bound silently becomes the binding one and the e2e spec
-        // starts asserting a message the service no longer emits.
+        // The whole point of the fixture. If these two ever cross, the duly-made
+        // bound silently becomes the binding one and the e2e spec starts
+        // asserting a message the service no longer emits.
+        //
+        // Checked against the seeding clock's year AND against the real one: the
+        // start is a fixed 2025 instant and 1 January only ever moves later, so
+        // the fixture binds for every year from 2026 on without re-pointing —
+        // which is precisely what an absolute start buys over a derived one, and
+        // what this assertion protects.
         var item = BuildRa611PreYearStartFixture();
 
-        var accreditationYear = item.Payload["accreditationYear"].AsInt32;
-        Assert.Equal(2026, accreditationYear);
         Assert.NotNull(item.SlaClock);
-        Assert.True(
-            item.SlaClock!.StartedAt < new DateTime(accreditationYear, 1, 1, 0, 0, 0, DateTimeKind.Utc),
-            "1 January of the accreditation year must be the LATER bound.");
         Assert.Equal(
             new DateTime(2025, 11, 14, 0, 0, 0, DateTimeKind.Utc),
-            item.SlaClock.StartedAt);
+            item.SlaClock!.StartedAt);
+        var seedingYear = BuildTime().GetUtcNow().Year;
+        Assert.True(
+            item.SlaClock.StartedAt < new DateTime(seedingYear, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            "1 January of the current year must be the LATER bound.");
+        Assert.True(
+            item.SlaClock.StartedAt < new DateTime(DateTime.UtcNow.Year, 1, 1, 0, 0, 0, DateTimeKind.Utc),
+            "the fixture must still bind in the real current year.");
     }
 
     [Fact]

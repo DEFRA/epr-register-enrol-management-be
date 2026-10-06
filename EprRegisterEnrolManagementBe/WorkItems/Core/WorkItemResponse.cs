@@ -46,7 +46,7 @@ public sealed record WorkItemResponse(
     // dulyMadeAt field.
     //
     // Exposed because SlaService.ExtendAsync floors a changed determination
-    // deadline at the LATER of this date and 1 January of the accreditation
+    // deadline at the LATER of this date and 1 January of the current calendar
     // year, and the case management frontend has to validate the caseworker's
     // date entry client-side to show an inline GOV.UK error rather than bounce
     // them off a 422. It already had slaDueDate but no way to see where the
