@@ -125,6 +125,21 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     public const string Ra557OverseasSitesResubmitSeedKey = "ra557-overseas-sites-resubmit";
 
     /// <summary>
+    /// RA-603: one overseas reprocessing site carrying SEVERAL interim sites, one of them
+    /// withdrawn.
+    ///
+    /// A new key rather than adding interim sites to
+    /// <see cref="OrsInterimAuthoritySeedKey"/>, for the reason that key's own comment gives:
+    /// <see cref="WorkItemSeed.DeterministicId"/> hashes only typeId + seedKey and the seeder
+    /// inserts through <c>CreateIfAbsentAsync</c>, so enriching an existing fixture's payload is
+    /// invisible on every environment that has already seeded - dev, and any e2e stack with a
+    /// persistent volume. CI seeds from scratch every time and would never show the difference.
+    /// </summary>
+    public const string MultipleInterimSitesSeedKey = "multiple-interim-sites";
+
+    public const string MultipleInterimSitesOrganisationName = "Iberian Fibre Exports";
+
+    /// <summary>
     /// Organisation name of the RA-434-processortype reprocessor fixture.
     /// Unique across the seed set for the same reason as
     /// <see cref="OrsInterimAuthorityOrganisationName"/>.
@@ -141,9 +156,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
     /// <summary>
     /// RA-611: the one fixture on which the determination-deadline floor's
-    /// 1-January bound actually binds. See the fixture itself for why nothing
-    /// else in the seed set — or anything reachable through the case management
-    /// UI — can exercise it.
+    /// 1-January bound actually binds, rather than its duly-made bound. See the
+    /// fixture itself for why nothing else in the seed set — or anything
+    /// reachable through the case management UI — can exercise it.
     /// </summary>
     public const string Ra611PreYearStartSeedKey = "ra611-pre-year-start";
 
@@ -594,7 +609,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["interimSite"] = new BsonDocument
                             {
                                 ["siteId"] = 11,
-                                ["siteNumber"] = "INT-001",
+                                ["siteNumber"] = "001",
                                 ["isNewSite"] = true,
                                 ["country"] = "Belgium",
                                 ["siteName"] = "Antwerp Interim Holding Site",
@@ -651,7 +666,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                             ["interimSite"] = new BsonDocument
                             {
                                 ["siteId"] = 21,
-                                ["siteNumber"] = "INT-002",
+                                ["siteNumber"] = "002",
                                 ["isNewSite"] = false,
                                 ["country"] = "Germany",
                                 ["siteName"] = "Bremen Interim Storage",
@@ -958,45 +973,146 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         );
         yield return ra557OverseasSitesResubmitItem;
 
+        // RA-603 AC10b: one ORS with three interim sites, so the regulator's nested fold-downs
+        // have something to fold. The third is withdrawn, which is what proves the view filters
+        // on removedAt rather than just rendering whatever the list holds - a fixture with only
+        // active sites would pass equally well against a view that ignored the flag entirely.
+        //
+        // Written in the RA-603 shape (interimSites), with the singular interimSite mirroring the
+        // first ACTIVE entry, exactly as the backend now maintains it.
+        var multipleInterimSitesItem = Build(
+            seedKey: MultipleInterimSitesSeedKey,
+            postcode: "CF10 1EP",
+            submittedDaysAgo: 2,
+            stateId: "submitted",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = MultipleInterimSitesOrganisationName,
+                ["registrationNumber"] = "EPR-100603",
+                ["operatorApplicationId"] = "app-multiple-interim-sites-001",
+                ["wasteProcessingType"] = "exporter",
+                ["companyRegisterAddressPostcode"] = "CF10 1EP",
+                ["material"] = "fibre",
+                ["previousAccreditationYear"] = 2025,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = "multiple.interim.sites@example.com",
+                ["companiesHouseNumber"] = "16003603",
+                ["siteAddressPostcode"] = "CF10 1EP",
+                ["chargeAmountPence"] = 54600,
+                ["overseasSites"] = new BsonDocument
+                {
+                    ["sites"] = new BsonArray
+                    {
+                        new BsonDocument
+                        {
+                            ["siteId"] = 1,
+                            ["orsId"] = "ORS-2026-0603",
+                            ["siteName"] = "Valencia Fibre Reprocessing",
+                            ["siteAddress"] = "4 Carrer del Port, Valencia",
+                            ["addressLine1"] = "4 Carrer del Port",
+                            ["townOrCity"] = "Valencia",
+                            ["country"] = "Spain",
+                            ["contactName"] = "Elena Ruiz",
+                            ["contactEmail"] = "elena.ruiz@example.com",
+                            ["contactPhone"] = "+34 96 123 4567",
+                            ["operationCodes"] = new BsonArray { "R3" },
+                            ["isEu"] = true,
+                            ["isOecd"] = true,
+                            ["selected"] = true,
+                            ["isNewSite"] = false,
+                            ["registeredNowAccredited"] = false,
+                            // Mirrors the first ACTIVE interim site, never simply the first.
+                            ["interimSite"] = MultipleInterimSite(
+                                21,
+                                "001",
+                                "Bilbao Interim Holding",
+                                new InterimSiteLocation("Spain", "9 Muelle de Zorroza", "Bilbao"),
+                                new BsonArray { "R12" },
+                                isNewSite: false
+                            ),
+                            ["interimSites"] = new BsonArray
+                            {
+                                MultipleInterimSite(
+                                    21,
+                                    "001",
+                                    "Bilbao Interim Holding",
+                                    new InterimSiteLocation("Spain", "9 Muelle de Zorroza", "Bilbao"),
+                                    new BsonArray { "R12" },
+                                    isNewSite: false
+                                ),
+                                MultipleInterimSite(
+                                    22,
+                                    "002",
+                                    "Marseille Interim Depot",
+                                    new InterimSiteLocation("France", "12 Quai du Lazaret", "Marseille"),
+                                    new BsonArray { "R12", "R13" },
+                                    isNewSite: true
+                                ),
+                                MultipleInterimSite(
+                                    23,
+                                    "003",
+                                    "Genoa Interim Store",
+                                    new InterimSiteLocation("Italy", "3 Via al Porto Antico", "Genoa"),
+                                    new BsonArray { "R13" },
+                                    isNewSite: false,
+                                    removedAt: "2026-08-14T09:30:00.000Z"
+                                ),
+                            },
+                        },
+                    },
+                },
+            },
+            submittedBy: "stub-portal-client",
+            now: now
+        );
+        SetAccreditationNumberFields(
+            multipleInterimSitesItem.Payload,
+            "500016",
+            "reg-multiple-interim-sites-001"
+        );
+        yield return multipleInterimSitesItem;
+
         // RA-611: the only fixture on which the determination-deadline floor's
         // 1-JANUARY bound binds, rather than its duly-made bound.
         //
         // SlaService.ExtendAsync floors a changed deadline at the LATER of the
-        // duly-made date (the SLA clock's start) and 1 January of
-        // payload.accreditationYear. Nothing else can reach the second bound:
+        // duly-made date (the SLA clock's start) and 1 January of the CURRENT
+        // CALENDAR year. Nothing else in a seeded environment reaches the second
+        // bound: every other fixture is submittedDaysAgo <= 7, and a work item
+        // created through the case management UI starts its clock today, so their
+        // duly-made date is always inside the current year and the duly-made
+        // bound always wins. Without this fixture no seeded or hand-made item
+        // can show a caseworker the 1-January message at all.
         //
-        //   * Work items created through the case management UI carry no
-        //     accreditationYear at all — the create form does not collect one,
-        //     and ExtendAsync deliberately does NOT default it to the current
-        //     year (see SlaService.ResolveAccreditationYearStart) — so for them
-        //     the 1-January bound does not exist.
-        //   * Every other seeded fixture carries accreditationYear 2026 but is
-        //     submittedDaysAgo <= 7, so its clock starts this week and the
-        //     duly-made bound always wins.
+        // Its clock therefore starts on 14-Nov-2025, which is before 1 January
+        // of every year from 2026 onwards. A deadline between that start and
+        // 1 January is refused by the 1-January bound alone, naming it in the
+        // 422 — the case an e2e spec cannot otherwise construct.
         //
-        // Its clock therefore starts on 14-Nov-2025, about six weeks BEFORE
-        // 1 January 2026. A deadline between the two is refused by the
-        // 1-January bound alone, naming 1 January in the 422 — the case an e2e
-        // spec cannot otherwise construct.
+        // That permanence is the point of pinning the clock start to an ABSOLUTE
+        // instant rather than deriving it from `now` like every other fixture.
+        // A start derived from "today" sits on the far side of 1 January only
+        // for part of the year and then silently flips the binding bound back to
+        // duly-made, making the e2e spec assert the wrong message for months at
+        // a time; a fixed 2025 date can never drift back over a 1 January that
+        // only ever moves later. It also has to be MIDNIGHT UTC: the floor is
+        // compared on Europe/London dates, so Build's derived
+        // submittedAt.AddDays(1) — which carries the seeding run's time-of-day —
+        // would name a different date in the 422 than its UTC date suggests
+        // whenever that time fell in the 23:00-24:00 UTC hour during BST, making
+        // the spec flaky for one hour in 24 for half the year. The zone edge
+        // itself is pinned by unit tests, not by a fixture.
         //
-        // The clock start is pinned to an ABSOLUTE instant rather than derived
-        // from `now` like every other fixture's, for two reasons. It has to stay
-        // on the far side of a fixed date (1 January 2026, from the pinned
-        // accreditationYear below), which a value drifting with "today" would
-        // eventually cross, silently turning the duly-made bound back into the
-        // binding one and making the e2e spec assert the wrong message. And it
-        // has to be MIDNIGHT UTC: the floor is compared on Europe/London dates,
-        // so Build's derived submittedAt.AddDays(1) — which carries the seeding
-        // run's time-of-day — would name a different date in the 422 than its
-        // UTC date suggests whenever that time fell in the 23:00-24:00 UTC hour
-        // during BST, making the spec flaky for one hour in 24 for half the
-        // year. The zone edge itself is pinned by unit tests, not by a fixture.
+        // The payload's accreditationYear is NOT load-bearing here. The floor's
+        // first cut read 1 January of payload.accreditationYear and QA found that
+        // unsatisfiable — accreditationYear is the year the issued accreditation
+        // takes effect, which runs ahead of the determination window — so the
+        // bound now reads the calendar and never touches the payload. This
+        // fixture carries a year only because every fixture does.
         //
-        // Both dates are 2026-specific: once the live accreditation year moves
-        // on, re-point this fixture's year AND its clock rather than adding
-        // another fixture. submittedDaysAgo stays relative, so submittedAt
-        // drifts past the clock start eventually — cosmetic, and the year
-        // re-pointing is due long before it matters.
+        // submittedDaysAgo stays relative, so submittedAt eventually drifts past
+        // the pinned clock start. Cosmetic: nothing asserts their ordering, and
+        // the clock start is what the floor and its message use.
         //
         // State is assessment-in-progress: the deadline-change action has to be
         // offered, and a `submitted` item has no clock at all.
@@ -1011,8 +1127,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["registrationNumber"] = "EPR-100611",
                 ["operatorApplicationId"] = "app-ra611-pre-year-start-001",
                 ["material"] = "plastic",
-                // The point of the fixture: a year whose 1 January falls AFTER
-                // the clock start.
+                // Ordinary payload realism, matching every other fixture — the
+                // deadline floor does not read this field (see above).
                 ["accreditationYear"] = 2026,
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
@@ -1032,6 +1148,60 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             "reg-ra611-pre-year-start-001"
         );
         yield return ra611PreYearStartItem;
+    }
+
+    /// <summary>
+    /// The three address fields, grouped. They travel together at every call site, and grouping
+    /// them keeps this helper inside the 7-parameter limit (S107) while removing a real hazard:
+    /// three adjacent strings in a positional argument list can be swapped silently.
+    /// </summary>
+    private sealed record InterimSiteLocation(
+        string Country,
+        string AddressLine1,
+        string TownOrCity
+    );
+
+    /// <summary>
+    /// RA-603: one interim site in the shape the backend writes. <c>createdAt</c> is always
+    /// present on a site created after RA-603; <c>removedAt</c> is set only on a withdrawn one and
+    /// is what every display filters on.
+    /// </summary>
+    private static BsonDocument MultipleInterimSite(
+        int siteId,
+        string siteNumber,
+        string siteName,
+        InterimSiteLocation location,
+        BsonArray operationCodes,
+        bool isNewSite,
+        string? removedAt = null
+    )
+    {
+        var (country, addressLine1, townOrCity) = location;
+        var interimSite = new BsonDocument
+        {
+            ["siteId"] = siteId,
+            // RA-603: passed in rather than derived from siteId. An interim site's number is its
+            // own registration-scoped 001-999 set; the id is shared with the ORS list. Deriving
+            // one from the other is the coupling the backend change removed.
+            ["siteNumber"] = siteNumber,
+            ["isNewSite"] = isNewSite,
+            ["country"] = country,
+            ["siteName"] = siteName,
+            ["addressLine1"] = addressLine1,
+            ["townOrCity"] = townOrCity,
+            ["contactName"] = "Site Contact",
+            ["contactEmail"] = "site.contact@example.com",
+            ["contactPhone"] = "+34 96 765 4321",
+            ["operationCodes"] = operationCodes,
+            ["createdAt"] = "2026-06-01T10:00:00.000Z",
+        };
+
+        if (removedAt is not null)
+        {
+            interimSite["removedAt"] = removedAt;
+        }
+
+        return interimSite;
     }
 
     /// <summary>

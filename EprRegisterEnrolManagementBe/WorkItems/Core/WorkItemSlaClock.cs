@@ -43,7 +43,7 @@ public sealed class WorkItemSlaClock
     /// <see cref="StartedAt"/>. RA-611 put a floor on
     /// <c>SlaService.ExtendAsync</c> — the deadline may not fall, as a UK
     /// calendar date, before the later of <see cref="StartedAt"/>'s own date and
-    /// 1 January of the accreditation year — so an extend can no longer write a
+    /// 1 January of the current calendar year — so an extend can no longer write a
     /// deadline on an earlier DATE than the clock start. It can still write a
     /// non-positive <see cref="TargetDuration"/>, because the floor compares
     /// dates rather than instants: a deadline landing on the start date itself

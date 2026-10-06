@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Security.Claims;
 using System.Xml;
-using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
@@ -15,7 +14,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// RA-601: a negative <c>additionalDuration</c> may move the determination
 /// deadline EARLIER; RA-611 then put a floor under that — the resulting
 /// deadline may not fall before the LATER of the duly-made date (the SLA
-/// clock's start) and 1 January of the payload's accreditation year. Zero is
+/// clock's start) and 1 January of the CURRENT calendar year. Zero is
 /// still rejected, as a no-op.
 /// </summary>
 public interface ISlaService
@@ -26,7 +25,7 @@ public interface ISlaService
     /// negative (ISO-8601 <c>-P14D</c>) to move the deadline earlier; zero is
     /// rejected. RA-611: a duration that would land the deadline (as a
     /// Europe/London calendar date) before the later of the duly-made date and
-    /// 1 January of the accreditation year is rejected with
+    /// 1 January of the current calendar year is rejected with
     /// <see cref="SlaActionFailureCode.InvalidRequest"/> — 422 on the wire.
     /// Writes an <c>sla-extended</c>
     /// audit entry carrying before/after SlaClock snapshots and the
@@ -162,9 +161,10 @@ public sealed class SlaService : ISlaService
         //       StartedAt = midnight UTC of the payment date, so it IS the date
         //       on which the regulator first held everything needed to
         //       determine the application; there is no separate dulyMadeAt.
-        //   (b) 1 January of the payload's accreditationYear.
+        //   (b) 1 January of the CURRENT calendar year, from the injected
+        //       TimeProvider as a UK date.
         //
-        // History, because this rule has now flipped three times. The original
+        // History, because this rule has now flipped four times. The original
         // "must be positive" guard was an artefact of the day-count field
         // RA-447/CM6 replaced, which could not express a backwards move at all.
         // RA-572 renamed the action from "Extend" to "Change", making the
@@ -178,21 +178,31 @@ public sealed class SlaService : ISlaService
         //
         // The spec then changed MID-BRANCH (Anthony Moody, 29-Sep-2026): a
         // determination can legitimately be BACKDATED, as far back as the
-        // duly-made date, but never before 1 January of the accreditation year.
-        // So the today-floor is REPLACED, not supplemented — keeping it would
-        // make this rule unreachable, because for any live case the duly-made
-        // date is already in the past. Backdating into a breached state is
-        // therefore legal again where the regulator intends it; what is refused
-        // is a deadline earlier than the regulator could possibly have
-        // determined the application.
+        // duly-made date, but never before 1 January of the current year. So the
+        // today-floor is REPLACED, not supplemented — keeping it would make this
+        // rule unreachable, because for any live case the duly-made date is
+        // already in the past. Backdating into a breached state is therefore
+        // legal again where the regulator intends it; what is refused is a
+        // deadline earlier than the regulator could possibly have determined the
+        // application.
+        //
+        // The first cut of that second bound read 1 January of
+        // payload.accreditationYear, and QA (Giri Nattu, 05-Oct-2026) found it
+        // unsatisfiable: accreditationYear is the year the ISSUED accreditation
+        // takes effect — stamped at approval from Accreditation:CurrentYear and
+        // turned into AccreditationStartDate = 1 Jan of that year — so it runs
+        // AHEAD of the determination window. A live case in October 2026 carries
+        // 2027, which put the floor at 1 January 2027 and refused every date in
+        // 2026, including the deadline the application already had. Anthony's
+        // wording was "1st Jan of current year" throughout; it is the CALENDAR
+        // year, and it was never the accreditation year.
         //
         // Both bounds are compared as Europe/London CALENDAR DATES rather than
         // UTC instants, because the regulator and the UI both work in UK dates
         // and a UTC comparison is an hour wrong either side of midnight during
         // BST. Landing exactly ON the floor is accepted. The check needs the
-        // loaded work item (the deadline is relative to the clock, and the year
-        // comes off the payload), so it sits below rather than up here with the
-        // cheap guards.
+        // loaded work item (the deadline is relative to its clock), so it sits
+        // below rather than up here with the cheap guards.
         //
         // Zero is still rejected above: re-submitting the current deadline is a
         // no-op, and the frontend rejects it for the same reason. There is still
@@ -241,15 +251,30 @@ public sealed class SlaService : ISlaService
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
 
         var dulyMadeDate = UkDateOf(workItem.SlaClock.StartedAt);
-        var accreditationYearStart = ResolveAccreditationYearStart(workItem.Payload);
+        // 1 January of the CURRENT CALENDAR year, taken from the injected
+        // TimeProvider and converted to a UK date the same way as the anchor
+        // above, so both bounds are read off one calendar.
+        //
+        // Do NOT reach for the Accreditation:CurrentYear setting here, however
+        // well its name reads. That key holds the accreditation year currently
+        // OPEN for applications (2027 while this is being written), which is the
+        // year an ISSUED accreditation takes effect, not the year we are in. It
+        // is the field this bound was first built on, and QA found it refused
+        // every date in the determination window; see the block above. Nothing in
+        // this floor may consult WorkItem.Payload either, for the same reason.
+        //
+        // The floor is therefore time-dependent again: on New Year's Day it
+        // steps forward a year, intentionally — that is what "no further back
+        // than 1st Jan of current year" means.
+        var currentYearStart = new DateOnly(UkDateOf(utcNow).Year, 1, 1);
         // Whichever bound is LATER is the one that actually constrains the
         // caseworker, and the one the error message must name — telling them
         // "not before 1 January" when the real floor is a March duly-made date
-        // would send them round the loop a second time. A tie (the accreditation
-        // year started on the very day the application was duly made) names
-        // 1 January, which is the same date either way.
-        var yearStartBinds = accreditationYearStart is { } yearStart && yearStart >= dulyMadeDate;
-        var floor = yearStartBinds ? accreditationYearStart!.Value : dulyMadeDate;
+        // would send them round the loop a second time. A tie (the application
+        // was duly made on 1 January) names 1 January, which is the same date
+        // either way.
+        var yearStartBinds = currentYearStart >= dulyMadeDate;
+        var floor = yearStartBinds ? currentYearStart : dulyMadeDate;
 
         if (UkDateOf(newDueAt) < floor)
         {
@@ -426,38 +451,6 @@ public sealed class SlaService : ISlaService
 
         newTargetDuration = TimeSpan.FromTicks(sum);
         return true;
-    }
-
-    /// <summary>
-    /// RA-611: 1 January of the work item's accreditation year, or <c>null</c>
-    /// when the payload does not carry a usable <c>accreditationYear</c>.
-    /// <para>
-    /// Read generically off the payload <see cref="BsonDocument"/> — the same
-    /// idiom <c>ApplicationReferenceGenerator.ResolveYear</c> uses — because
-    /// accreditation years are a re-accreditation concept and Core must not take
-    /// a dependency on a module payload type.
-    /// </para>
-    /// <para>
-    /// Deliberately does NOT fall back to the current year the way
-    /// <c>ApplicationReferenceGenerator</c> does. There, a wrong-but-plausible
-    /// year only makes a reference cosmetically odd; here it would silently
-    /// impose a floor nobody told the caseworker about, and could refuse a
-    /// legitimate backdate on a work item whose year we simply failed to read.
-    /// Absent or non-numeric therefore means "no 1-January bound", leaving the
-    /// duly-made bound to do the work on its own. A year outside
-    /// <see cref="DateOnly"/>'s range is treated the same way rather than
-    /// throwing.
-    /// </para>
-    /// </summary>
-    private static DateOnly? ResolveAccreditationYearStart(BsonDocument payload)
-    {
-        if (!payload.TryGetValue("accreditationYear", out var value) || !value.IsNumeric)
-        {
-            return null;
-        }
-
-        var year = value.ToInt32();
-        return year is >= 1 and <= 9999 ? new DateOnly(year, 1, 1) : null;
     }
 
     /// <summary>
