@@ -32,6 +32,36 @@ public class ReAccreditationSeederTests
         new(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
 
     [Fact]
+    public void Build_application_reference_is_stable_and_matches_submission_audit()
+    {
+        var time = BuildTime();
+        var seeder = BuildSeeder();
+        var id = new Guid("cc1a0c7f-0b02-5241-93d4-777d37ce10e9");
+        var first = seeder.Build(new ReAccreditationType(), time).Single(i => i.Id == id);
+        time.Advance(TimeSpan.FromDays(1));
+        var second = seeder.Build(new ReAccreditationType(), time).Single(i => i.Id == id);
+
+        // Pin the SHA-256-derived reference independently of the generator.
+        // The database identity stays on the existing UUID v5 contract.
+        Assert.Equal("RA-636082265", first.Payload["applicationReference"].AsString);
+        Assert.Equal(first.Payload["applicationReference"], second.Payload["applicationReference"]);
+        var submission = Assert.Single(first.AuditLog, e => e.Action == "work-item-submitted");
+        Assert.Equal(first.Payload["applicationReference"].AsString, submission.Details["applicationReference"]);
+    }
+
+    [Fact]
+    public void Build_application_references_keep_their_format_and_are_unique_across_fixtures()
+    {
+        var references = BuildSeeder().Build(new ReAccreditationType(), BuildTime())
+            .Select(i => i.Payload["applicationReference"].AsString)
+            .ToList();
+
+        Assert.NotEmpty(references);
+        Assert.All(references, reference => Assert.Matches(@"^RA-[1-9][0-9]{8}$", reference));
+        Assert.Equal(references.Count, references.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
     public void Build_attributes_assignment_to_seeder_sentinel_not_to_assignee()
     {
         // epr-ce4 regression guard: setting AssignedBy = AssignedToId

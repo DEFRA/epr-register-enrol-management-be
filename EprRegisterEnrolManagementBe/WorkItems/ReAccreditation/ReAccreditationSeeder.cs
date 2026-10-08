@@ -1665,7 +1665,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     private static string GenerateDeterministicReference(string seedKey)
     {
         var input = System.Text.Encoding.UTF8.GetBytes(seedKey);
-        var hash = System.Security.Cryptography.SHA1.HashData(input);
+        // References are fixture labels, not credentials. SHA-256 changes new
+        // labels only: CreateIfAbsentAsync leaves stored payloads and audit
+        // entries untouched. Keep WorkItemSeed's UUID v5 identity unchanged.
+        var hash = System.Security.Cryptography.SHA256.HashData(input);
 
         // Simple stable uint from first 4 bytes
         uint val =

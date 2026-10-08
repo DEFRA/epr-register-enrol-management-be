@@ -6,6 +6,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
@@ -140,6 +141,41 @@ public sealed class WorkItemSeederHostedServiceIdempotencyTests
             new WorkItemQuery { Page = 1, PageSize = 100 },
             TestContext.Current.CancellationToken);
         Assert.Equal(initialCount, afterSecond.TotalCount);
+    }
+
+    [Fact]
+    public async Task Reseeding_preserves_a_stored_sha1_reference_and_its_audit_history()
+    {
+        var time = new FakeTimeProvider(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
+        var seeds = new ReAccreditationSeeder(new NationResolver())
+            .Build(new ReAccreditationType(), time).ToList();
+        // Pin the original persisted UUID as well as the old reference so
+        // changing either hashing algorithm cannot silently re-key this item.
+        var id = new Guid("cc1a0c7f-0b02-5241-93d4-777d37ce10e9");
+        var legacy = seeds.Single(i => i.Id == id);
+        const string legacyReference = "RA-706111075";
+        Assert.NotEqual(legacyReference, legacy.Payload["applicationReference"].AsString);
+        legacy.Payload["applicationReference"] = legacyReference;
+        var submission = Assert.Single(legacy.AuditLog, e => e.Action == "work-item-submitted");
+        submission.Details["applicationReference"] = legacyReference;
+        await _persistence.CreateAsync(legacy, TestContext.Current.CancellationToken);
+        var before = await _persistence.GetByIdAsync(id, TestContext.Current.CancellationToken);
+        Assert.NotNull(before);
+
+        await BuildHostedService().StartAsync(TestContext.Current.CancellationToken);
+        await BuildHostedService().StartAsync(TestContext.Current.CancellationToken);
+
+        var after = await _persistence.GetByIdAsync(id, TestContext.Current.CancellationToken);
+        Assert.NotNull(after);
+        Assert.Equal(before.ToBsonDocument(), after.ToBsonDocument());
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery { Page = 1, PageSize = 100 },
+            TestContext.Current.CancellationToken);
+        Assert.Equal(seeds.Count, page.TotalCount);
+        var newSeed = seeds.First(i => i.Id != id);
+        var inserted = await _persistence.GetByIdAsync(newSeed.Id, TestContext.Current.CancellationToken);
+        Assert.NotNull(inserted);
+        Assert.Equal(newSeed.Payload["applicationReference"], inserted.Payload["applicationReference"]);
     }
 
     [Fact]
