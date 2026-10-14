@@ -171,6 +171,13 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         var reference =
             $"{Prefix}{year:D2}{agency}{orgSegment}{postcodeSuffix}{materialPrefix}".ToUpperInvariant();
 
+        // Separate changes can reuse the same accreditation and proposal indefinitely.
+        // Their stable request identity avoids exhausting the bounded collision retries.
+        // Existing application references and already persisted cases retain their format.
+        if (payload.TryGetValue("operatorRequestId", out var requestValue) && requestValue.IsString
+            && Guid.TryParse(requestValue.AsString, out var requestId) && requestId != Guid.Empty)
+            reference += "-" + requestId.ToString("N").ToUpperInvariant();
+
         // Collision on a prior attempt: append a disambiguator unique to this attempt, keeping
         // the reference recognisably derived from the same payload, so the retry loop actually
         // converges instead of regenerating the same value forever. RA-503: no longer truncated

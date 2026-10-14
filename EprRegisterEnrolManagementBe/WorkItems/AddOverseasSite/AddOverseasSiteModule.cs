@@ -1,12 +1,16 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using Microsoft.AspNetCore.Mvc;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 
 public sealed class AddOverseasSiteModule : IWorkItemModule
 {
     public IWorkItemType Type { get; } = new AddOverseasSiteType();
-    public void RegisterServices(IServiceCollection services, IConfiguration configuration) =>
+    public void RegisterServices(IServiceCollection services, IConfiguration configuration)
+    {
         services.AddScoped<AddOverseasSiteDecisionService>();
+        services.AddScoped<AddOverseasSiteWithdrawalService>();
+    }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints)
     {
@@ -21,6 +25,14 @@ public sealed class AddOverseasSiteModule : IWorkItemModule
         group.MapPost("/approve", async (Guid id, HttpContext context,
             AddOverseasSiteDecisionService service, IWorkItemService engine, CancellationToken ct) =>
             ToResponse(await service.Approve(id, context.User, ct), engine));
+        endpoints.MapPost("/work-items/add-overseas-site/{id:guid}/withdraw", async (
+            Guid id, AddOverseasSiteWithdrawal withdrawal, HttpContext context,
+            AddOverseasSiteWithdrawalService service, IWorkItemService engine, CancellationToken ct) =>
+            ToResponse(await service.Withdraw(id, withdrawal, context.User, ct), engine))
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(WorkItemEndpoints.MaxAssignBodyBytes))
+            .RequireAuthorization(policy => policy.RequireAuthenticatedUser()
+                .RequireClaim("client_id", "epr-register-enrol-backend"));
     }
 
     private static IResult ToResponse(WorkItemActionResult result, IWorkItemService engine)

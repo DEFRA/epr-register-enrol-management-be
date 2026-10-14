@@ -23,7 +23,7 @@ public class AddOverseasSiteSubmissionTests(MongoIntegrationFixture fixture)
         });
 
     private static async Task<HttpResponseMessage> Send(HttpClient client, HttpMethod method, string path, object? body = null,
-        string? role = null)
+        string? role = null, string userId = "50006")
     {
         var timestamp = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ");
         var nonce = Convert.ToBase64String(RandomNumberGenerator.GetBytes(16));
@@ -31,13 +31,109 @@ public class AddOverseasSiteSubmissionTests(MongoIntegrationFixture fixture)
         if (body is not null) request.Content = JsonContent.Create(body);
         var clientId = role is null ? "epr-register-enrol-backend" : "frontend";
         request.Headers.Add("x-cdp-client-id", clientId);
-        request.Headers.Add("x-cdp-user-id", "50006");
+        request.Headers.Add("x-cdp-user-id", userId);
         if (role is not null) request.Headers.Add("x-cdp-user-role", role);
         request.Headers.Add("x-cdp-auth-timestamp", timestamp);
         request.Headers.Add("x-cdp-auth-nonce", nonce);
         request.Headers.Add("x-cdp-auth-signature", ClientIdAuthenticationHandler.ComputeSignature(
-            Secret, new ClientIdSignaturePayload(clientId, "50006", null, timestamp, nonce, role)));
+            Secret, new ClientIdSignaturePayload(clientId, userId, null, timestamp, nonce, role)));
         return await client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task RepeatedChangesAgainstTheSameTarget_DoNotExhaustCaseReferences()
+    {
+        using var factory = Factory();
+        using var client = factory.CreateClient();
+        var references = new HashSet<string>();
+        var cases = new HashSet<string>();
+        for (var attempt = 0; attempt < 6; attempt++)
+        {
+            var body = new
+            {
+                typeId = "add-overseas-site", payload = new
+                {
+                    operatorRequestId = Guid.NewGuid().ToString(), schemaVersion = 1, proposedSiteId = Guid.NewGuid().ToString(),
+                    target = new { organisationId = "50006", registrationId = "registration", accreditationId = "granted", materialType = "Glass", year = 2026 },
+                    operatorOrganisationId = "50006", material = "Glass", accreditationYear = 2026,
+                    proposal = new { siteName = "Spike Glass Recycling", siteAddress = "25 Example Road, Hamburg", country = "Germany" },
+                    baselineSites = Array.Empty<object>(),
+                },
+            };
+            using var response = await Send(client, HttpMethod.Post, "/work-items", body);
+            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+            var receipt = await response.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+            Assert.True(references.Add(receipt.GetProperty("applicationReference").GetString()!));
+            Assert.True(cases.Add(receipt.GetProperty("id").GetString()!));
+            using var replay = await Send(client, HttpMethod.Post, "/work-items", body);
+            Assert.Equal(HttpStatusCode.Created, replay.StatusCode);
+            var replayReceipt = await replay.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+            Assert.Equal(receipt.GetProperty("applicationReference").GetString(), replayReceipt.GetProperty("applicationReference").GetString());
+            Assert.Equal(receipt.GetProperty("id").GetString(), replayReceipt.GetProperty("id").GetString());
+        }
+        foreach (var id in cases)
+            Assert.Contains((await Read(client, "/work-items/" + id)).GetProperty("applicationReference").GetString()!, references);
+    }
+
+    [Fact]
+    public async Task Withdrawal_ClosesOnlyTheCorrelatedSubmittedCaseAndReplaysWithoutAnotherAudit()
+    {
+        using var factory = Factory();
+        using var client = factory.CreateClient();
+        var requestId = Guid.NewGuid().ToString();
+        var siteId = Guid.NewGuid().ToString();
+        var target = new { organisationId = "50006", registrationId = "registration", accreditationId = "granted", materialType = "Glass", year = 2026 };
+        var submissionBody = new
+        {
+            typeId = "add-overseas-site", payload = new
+            {
+                operatorRequestId = requestId, schemaVersion = 1, proposedSiteId = siteId, target,
+                proposal = new { siteName = "Spike Glass Recycling", siteAddress = "25 Example Road, Hamburg", country = "Germany" },
+                baselineSites = Array.Empty<object>(),
+            },
+        };
+        using var submission = await Send(client, HttpMethod.Post, "/work-items", submissionBody);
+        Assert.Equal(HttpStatusCode.Created, submission.StatusCode);
+        var receipt = await submission.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
+        var id = receipt.GetProperty("id").GetString();
+        var path = $"/work-items/add-overseas-site/{id}/withdraw";
+        var body = new { requestId, proposedSiteId = siteId, target };
+        foreach (var role in new[] { "standard", "support-readonly" })
+            Assert.Equal(HttpStatusCode.Forbidden, (await Send(client, HttpMethod.Post, path, body, role)).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, path, body, userId: "50002")).StatusCode);
+        foreach (var field in new[] { "requestId", "proposedSiteId", "target" })
+        {
+            var forged = JsonSerializer.SerializeToNode(body)!;
+            if (field == "target") forged[field]!["accreditationId"] = "unrelated";
+            else forged[field] = Guid.NewGuid().ToString();
+            Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, path, forged)).StatusCode);
+        }
+        Assert.Equal("submitted", (await Read(client, "/work-items/" + id)).GetProperty("stateId").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, path, body)).StatusCode);
+        var closed = await Read(client, "/work-items/" + id);
+        Assert.Equal("withdrawn", closed.GetProperty("stateId").GetString());
+        Assert.Equal("v1", closed.GetProperty("templateVersion").GetString());
+        Assert.Contains(closed.GetProperty("auditLog").EnumerateArray(), entry =>
+            entry.GetProperty("details").TryGetProperty("actionId", out var action) && action.GetString() == "withdraw");
+        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, path, body)).StatusCode);
+        Assert.Equal(closed.GetProperty("auditLog").GetArrayLength(),
+            (await Read(client, "/work-items/" + id)).GetProperty("auditLog").GetArrayLength());
+
+        var nextBody = JsonSerializer.SerializeToNode(submissionBody)!;
+        nextBody["payload"]!["operatorRequestId"] = Guid.NewGuid().ToString();
+        nextBody["payload"]!["proposedSiteId"] = Guid.NewGuid().ToString();
+        using var next = await Send(client, HttpMethod.Post, "/work-items", nextBody);
+        var nextId = (await next.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString();
+        Assert.NotEqual(id, nextId);
+        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, path, body)).StatusCode);
+        Assert.Equal("submitted", (await Read(client, "/work-items/" + nextId)).GetProperty("stateId").GetString());
+        var nextWithdrawal = new { requestId = nextBody["payload"]!["operatorRequestId"]!.GetValue<string>(),
+            proposedSiteId = nextBody["payload"]!["proposedSiteId"]!.GetValue<string>(), target };
+        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post,
+            $"/work-items/add-overseas-site/{nextId}/start-assessment", role: "standard")).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post,
+            $"/work-items/add-overseas-site/{nextId}/withdraw", nextWithdrawal)).StatusCode);
+        Assert.Equal("assessment-in-progress", (await Read(client, "/work-items/" + nextId)).GetProperty("stateId").GetString());
     }
 
     [Theory]
@@ -84,6 +180,8 @@ public class AddOverseasSiteSubmissionTests(MongoIntegrationFixture fixture)
         Assert.Equal(HttpStatusCode.ServiceUnavailable, (await Send(client, HttpMethod.Post, module + "/" + operation, role: "standard")).StatusCode);
         var failed = await Read(client, "/work-items/" + id);
         Assert.Equal(terminalState, failed.GetProperty("stateId").GetString());
+        Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, module + "/withdraw",
+            new { requestId, proposedSiteId = proposalId, target = failed.GetProperty("payload").GetProperty("target") })).StatusCode);
         Assert.False(failed.GetProperty("payload").TryGetProperty("outcomeDeliveryConfirmed", out var delivered) && delivered.GetBoolean());
         Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, module + "/start-assessment", role: "standard")).StatusCode);
         Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, module + "/" + conflictingOperation, role: "standard")).StatusCode);
