@@ -6,6 +6,10 @@ using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -38,6 +42,79 @@ public class AddOverseasSiteSubmissionTests(MongoIntegrationFixture fixture)
         request.Headers.Add("x-cdp-auth-signature", ClientIdAuthenticationHandler.ComputeSignature(
             Secret, new ClientIdSignaturePayload(clientId, userId, null, timestamp, nonce, role)));
         return await client.SendAsync(request, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Submission_RetainsFrozenV1ActionsAfterV2IsRegisteredWhileNewCasesUseV2()
+    {
+        using var parent = Factory();
+        using var v1Client = parent.CreateClient();
+        var body = new
+        {
+            typeId = "add-overseas-site",
+            payload = new
+            {
+                operatorRequestId = Guid.NewGuid().ToString(),
+                schemaVersion = 1,
+                proposedSiteId = Guid.NewGuid().ToString(),
+                target = new { organisationId = "50006", registrationId = "registration", accreditationId = "granted", materialType = "Glass", year = 2026 },
+                proposal = new { siteName = "Spike Glass Recycling", siteAddress = "25 Example Road, Hamburg", country = "Germany" },
+                baselineSites = Array.Empty<object>(),
+            },
+        };
+        using var submitted = await Send(v1Client, HttpMethod.Post, "/work-items", body);
+        Assert.Equal(HttpStatusCode.Created, submitted.StatusCode);
+        var oldId = (await submitted.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString();
+        var original = await Read(v1Client, "/work-items/" + oldId);
+        Assert.Equal("v1", original.GetProperty("templateVersion").GetString());
+
+        var types = parent.Services.GetRequiredService<IWorkItemRegistry>().Types
+            .Select(type => type.TypeId == "add-overseas-site" ? new V2AddOverseasSiteType() : type);
+        using var upgraded = parent.WithWebHostBuilder(builder => builder.ConfigureServices(services =>
+        {
+            services.RemoveAll<IWorkItemRegistry>();
+            services.AddSingleton<IWorkItemRegistry>(new WorkItemRegistry(types));
+        }));
+        using var v2Client = upgraded.CreateClient();
+        var retained = await Read(v2Client, "/work-items/" + oldId);
+        Assert.Equal(original.GetRawText(), retained.GetRawText());
+        using var replay = await Send(v2Client, HttpMethod.Post, "/work-items", body);
+        Assert.Equal(HttpStatusCode.Created, replay.StatusCode);
+        Assert.Equal(oldId, (await replay.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString());
+
+        var nextBody = JsonSerializer.SerializeToNode(body)!;
+        nextBody["payload"]!["operatorRequestId"] = Guid.NewGuid().ToString();
+        nextBody["payload"]!["proposedSiteId"] = Guid.NewGuid().ToString();
+        using var nextSubmission = await Send(v2Client, HttpMethod.Post, "/work-items", nextBody);
+        Assert.Equal(HttpStatusCode.Created, nextSubmission.StatusCode);
+        var newId = (await nextSubmission.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken)).GetProperty("id").GetString();
+        Assert.NotEqual(oldId, newId);
+        Assert.Equal("v2", (await Read(v2Client, "/work-items/" + newId)).GetProperty("templateVersion").GetString());
+        Assert.Equal(HttpStatusCode.Conflict, (await Send(v2Client, HttpMethod.Post,
+            $"/work-items/add-overseas-site/{newId}/start-assessment", role: "standard")).StatusCode);
+        Assert.Equal("submitted", (await Read(v2Client, "/work-items/" + newId)).GetProperty("stateId").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await Send(v2Client, HttpMethod.Post,
+            $"/work-items/add-overseas-site/{oldId}/start-assessment", role: "standard")).StatusCode);
+        var assessed = await Read(v2Client, "/work-items/" + oldId);
+        Assert.Equal("v1", assessed.GetProperty("templateVersion").GetString());
+        Assert.Equal("assessment-in-progress", assessed.GetProperty("stateId").GetString());
+        Assert.Contains(assessed.GetProperty("auditLog").EnumerateArray(), entry =>
+            entry.GetProperty("details").TryGetProperty("actionId", out var action) && action.GetString() == "start-assessment");
+    }
+
+    // Only the test host upgrades its declaration; production keeps the single v1 workflow.
+    private sealed class V2AddOverseasSiteType : IWorkItemType, IWorkItemSubmissionValidator
+    {
+        private readonly AddOverseasSiteType _v1 = new();
+        public string TypeId => _v1.TypeId;
+        public string DisplayName => _v1.DisplayName;
+        public string TemplateVersion => "v2";
+        public WorkItemState InitialState => _v1.InitialState;
+        public IReadOnlyCollection<WorkItemState> States => _v1.States;
+        public IReadOnlyCollection<WorkItemTransition> Transitions => _v1.Transitions
+            .Where(transition => transition.ActionId != "start-assessment").ToArray();
+        public string? ValidateSubmission(BsonDocument payload) => _v1.ValidateSubmission(payload);
+        public string? ValidateReplay(BsonDocument payload, BsonDocument storedPayload) => _v1.ValidateReplay(payload, storedPayload);
     }
 
     [Fact]
