@@ -18,15 +18,22 @@ public sealed class AddOverseasSiteDecisionService(IWorkItemPersistence persiste
         return await engine.ApplyActionAsync(id, "start-assessment", user, ct);
     }
 
-    public async Task<WorkItemActionResult> Refuse(Guid id, ClaimsPrincipal user, CancellationToken ct)
+    public Task<WorkItemActionResult> Refuse(Guid id, ClaimsPrincipal user, CancellationToken ct) =>
+        Decide(id, "reject", "rejected", user, ct);
+
+    public Task<WorkItemActionResult> Approve(Guid id, ClaimsPrincipal user, CancellationToken ct) =>
+        Decide(id, "approve", "approved", user, ct);
+
+    private async Task<WorkItemActionResult> Decide(Guid id, string actionId, string outcome,
+        ClaimsPrincipal user, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(user.FindFirstValue("user:id")))
             return WorkItemActionResult.Failure(WorkItemActionFailureCode.MissingActorIdentity, "An acting caseworker is required.");
         var item = await persistence.GetByIdAsync(id, ct);
         if (item is null || item.TypeId != "add-overseas-site") return NotFound();
-        if (item.StateId != "rejected")
+        if (item.StateId != outcome)
         {
-            var decision = await engine.ApplyActionAsync(id, "reject", user, ct);
+            var decision = await engine.ApplyActionAsync(id, actionId, user, ct);
             if (!decision.IsSuccess) return decision;
             item = decision.WorkItem!;
         }
@@ -60,9 +67,9 @@ public sealed class AddOverseasSiteDecisionService(IWorkItemPersistence persiste
         }
         catch (Exception ex) when (ex is HttpRequestException or OperationCanceledException)
         {
-            logger.LogWarning(ex, "Add ORS outcome delivery unconfirmed for case {CaseId}; retry the recorded refusal", id);
+            logger.LogWarning(ex, "Add ORS outcome delivery unconfirmed for case {CaseId}; retry the recorded {Outcome}", id, outcome);
             return WorkItemActionResult.Failure(WorkItemActionFailureCode.UpstreamNotificationFailed,
-                "Refusal recorded. Operator delivery is unconfirmed; retry this refusal.");
+                "Decision recorded. Operator delivery is unconfirmed; retry this decision.");
         }
     }
 

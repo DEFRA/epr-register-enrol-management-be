@@ -40,8 +40,11 @@ public class AddOverseasSiteSubmissionTests(MongoIntegrationFixture fixture)
         return await client.SendAsync(request, TestContext.Current.CancellationToken);
     }
 
-    [Fact]
-    public async Task Refusal_UsesStoredWorkflowAndRetriesTheSameRecordedDecisionAfterFailedDelivery()
+    [Theory]
+    [InlineData("refuse", "rejected", "approve")]
+    [InlineData("approve", "approved", "refuse")]
+    public async Task Decision_UsesStoredWorkflowAndRetriesTheSameRecordedDecisionAfterFailedDelivery(
+        string operation, string terminalState, string conflictingOperation)
     {
         using var parent = Factory();
         var callback = new OutcomeHandler();
@@ -64,7 +67,9 @@ public class AddOverseasSiteSubmissionTests(MongoIntegrationFixture fixture)
         var receipt = await submission.Content.ReadFromJsonAsync<JsonElement>(TestContext.Current.CancellationToken);
         var id = receipt.GetProperty("id").GetString();
         var module = $"/work-items/add-overseas-site/{id}";
-        Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, module + "/refuse", role: "standard")).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, module + "/" + operation, role: "standard")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(client, HttpMethod.Post, module + "/" + operation, role: "support-readonly")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await Send(client, HttpMethod.Post, module + "/" + operation)).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(client, HttpMethod.Post, module + "/start-assessment", role: "support-readonly")).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await Send(client, HttpMethod.Post, module + "/start-assessment")).StatusCode);
         var started = await Send(client, HttpMethod.Post, module + "/start-assessment", role: "standard");
@@ -76,13 +81,14 @@ public class AddOverseasSiteSubmissionTests(MongoIntegrationFixture fixture)
             entry.GetProperty("details").TryGetProperty("actionId", out var action) && action.GetString() == "start-assessment");
         foreach (var action in new[] { "approve", "reject", "withdraw" })
             Assert.NotEqual(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, $"/work-items/{id}/actions/{action}", role: "standard")).StatusCode);
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await Send(client, HttpMethod.Post, module + "/refuse", role: "standard")).StatusCode);
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, (await Send(client, HttpMethod.Post, module + "/" + operation, role: "standard")).StatusCode);
         var failed = await Read(client, "/work-items/" + id);
-        Assert.Equal("rejected", failed.GetProperty("stateId").GetString());
+        Assert.Equal(terminalState, failed.GetProperty("stateId").GetString());
         Assert.False(failed.GetProperty("payload").TryGetProperty("outcomeDeliveryConfirmed", out var delivered) && delivered.GetBoolean());
         Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, module + "/start-assessment", role: "standard")).StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, (await Send(client, HttpMethod.Post, module + "/" + conflictingOperation, role: "standard")).StatusCode);
         callback.Accept = true;
-        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, module + "/refuse", role: "standard")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, module + "/" + operation, role: "standard")).StatusCode);
         var confirmed = await Read(client, "/work-items/" + id);
         Assert.True(confirmed.GetProperty("payload").GetProperty("outcomeDeliveryConfirmed").GetBoolean());
         Assert.Equal(failed.GetProperty("auditLog").GetArrayLength(), confirmed.GetProperty("auditLog").GetArrayLength());
@@ -91,8 +97,8 @@ public class AddOverseasSiteSubmissionTests(MongoIntegrationFixture fixture)
         Assert.Equal(requestId, outcome.RootElement.GetProperty("requestId").GetString());
         Assert.Equal(id, outcome.RootElement.GetProperty("caseId").GetString());
         Assert.Equal(proposalId, outcome.RootElement.GetProperty("proposedSiteId").GetString());
-        Assert.Equal("rejected", outcome.RootElement.GetProperty("outcome").GetString());
-        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, module + "/refuse", role: "standard")).StatusCode);
+        Assert.Equal(terminalState, outcome.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal(HttpStatusCode.OK, (await Send(client, HttpMethod.Post, module + "/" + operation, role: "standard")).StatusCode);
         Assert.Equal(2, callback.Bodies.Count);
     }
 

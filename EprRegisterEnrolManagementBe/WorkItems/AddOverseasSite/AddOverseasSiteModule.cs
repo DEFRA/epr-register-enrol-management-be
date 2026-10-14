@@ -18,6 +18,9 @@ public sealed class AddOverseasSiteModule : IWorkItemModule
         group.MapPost("/refuse", async (Guid id, HttpContext context,
             AddOverseasSiteDecisionService service, IWorkItemService engine, CancellationToken ct) =>
             ToResponse(await service.Refuse(id, context.User, ct), engine));
+        group.MapPost("/approve", async (Guid id, HttpContext context,
+            AddOverseasSiteDecisionService service, IWorkItemService engine, CancellationToken ct) =>
+            ToResponse(await service.Approve(id, context.User, ct), engine));
     }
 
     private static IResult ToResponse(WorkItemActionResult result, IWorkItemService engine)
