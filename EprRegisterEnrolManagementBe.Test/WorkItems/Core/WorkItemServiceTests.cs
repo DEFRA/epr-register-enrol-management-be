@@ -2312,6 +2312,9 @@ public class WorkItemServiceTests : IAsyncDisposable
             CancellationToken cancellationToken = default
         ) => inner.GetByIdAsync(id, cancellationToken);
 
+        public Task<WorkItem?> FindByOperatorRequestIdAsync(string typeId, string requestId,
+            CancellationToken cancellationToken = default) => inner.FindByOperatorRequestIdAsync(typeId, requestId, cancellationToken);
+
         public Task<WorkItem?> FindByOperatorApplicationIdAsync(
             string typeId,
             string operatorApplicationId,

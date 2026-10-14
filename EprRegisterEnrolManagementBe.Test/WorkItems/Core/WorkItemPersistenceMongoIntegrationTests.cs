@@ -143,7 +143,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_nine_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_ten_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -160,7 +160,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(9, keyDocs.Count);
+        Assert.Equal(10, keyDocs.Count);
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorRequestId\" : 1"));
         Assert.Contains(
             keyDocs,
             k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1")

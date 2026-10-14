@@ -205,12 +205,21 @@ public sealed class WorkItemService : IWorkItemService
         // payload.operatorApplicationId index (see WorkItemPersistence)
         // is the backstop for a true concurrent race between two
         // simultaneous requests, handled in the catch clause below.
+        var operatorRequestId = payload.GetValue("operatorRequestId", BsonNull.Value);
+        var requestIdentity = operatorRequestId.IsString && !string.IsNullOrWhiteSpace(operatorRequestId.AsString)
+            ? operatorRequestId.AsString : null;
         var operatorApplicationId =
             payload.TryGetValue("operatorApplicationId", out var operatorApplicationIdValue)
             && operatorApplicationIdValue.IsString
             && !string.IsNullOrWhiteSpace(operatorApplicationIdValue.AsString)
                 ? operatorApplicationIdValue.AsString
                 : null;
+
+        if (requestIdentity is not null)
+        {
+            var existingRequest = await _persistence.FindByOperatorRequestIdAsync(type.TypeId, requestIdentity, cancellationToken);
+            if (existingRequest is not null) return ReplaySubmission(type, payload, existingRequest);
+        }
 
         if (operatorApplicationId is not null)
         {
@@ -365,6 +374,14 @@ public sealed class WorkItemService : IWorkItemService
                 // collision, so propagate rather than loop forever.
                 throw;
             }
+            catch (MongoWriteException ex) when (requestIdentity is not null
+                && ex.WriteError?.Category == ServerErrorCategory.DuplicateKey
+                && ex.WriteError.Message.Contains("operatorRequestId", StringComparison.OrdinalIgnoreCase))
+            {
+                var winner = await _persistence.FindByOperatorRequestIdAsync(type.TypeId, requestIdentity, cancellationToken);
+                if (winner is not null) return ReplaySubmission(type, payload, winner);
+                throw;
+            }
             // Only retry on a duplicate-key error that is actually the
             // applicationReference unique index. Keying on the DuplicateKey
             // category alone would silently swallow (and misreport as a
@@ -442,6 +459,14 @@ public sealed class WorkItemService : IWorkItemService
     /// in future. Defensive against a null message.
     /// </summary>
     private const string ApplicationReferenceField = "applicationReference";
+
+    private static WorkItemActionResult ReplaySubmission(IWorkItemType type, BsonDocument payload, WorkItem stored)
+    {
+        if (type is IWorkItemSubmissionValidator validator
+            && validator.ValidateReplay(payload, stored.Payload) is { } error)
+            return WorkItemActionResult.Failure(WorkItemActionFailureCode.InvalidSubmission, error);
+        return WorkItemActionResult.IdempotentReplay(stored);
+    }
 
     private static bool IsApplicationReferenceDuplicate(MongoWriteException ex) =>
         ex.WriteError?.Message?.Contains(

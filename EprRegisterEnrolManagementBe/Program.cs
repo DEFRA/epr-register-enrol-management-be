@@ -219,6 +219,7 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
         );
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>(builder.Configuration);
+    services.AddWorkItemModule<EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite.AddOverseasSiteModule>(builder.Configuration);
     services.AddHostedService<SlaBreachBackgroundService>();
     services.AddHostedService<ArchiveBackgroundService>();
 

@@ -195,6 +195,10 @@ public static class WorkItemEndpoints
             return BadRequest("Invalid work item payload", ex.Message);
         }
 
+        if (type is IWorkItemSubmissionValidator validator
+            && validator.ValidateSubmission(payloadDocument) is { } validationError)
+            return BadRequest("Invalid work item payload", validationError);
+
         var submittedBy =
             httpContext.User.FindFirstValue("client_id")
             ?? httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);

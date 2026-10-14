@@ -29,6 +29,7 @@ public enum WorkItemActionFailureCode
     /// over the size limit).
     /// </summary>
     InvalidNote,
+    InvalidSubmission,
 
     /// <summary>
     /// The work item was modified by another caller between load and save

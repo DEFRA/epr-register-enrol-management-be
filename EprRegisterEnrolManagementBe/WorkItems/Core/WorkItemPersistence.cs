@@ -106,6 +106,9 @@ public interface IWorkItemPersistence
     /// work item created by the first attempt rather than creating a
     /// duplicate.
     /// </summary>
+    Task<WorkItem?> FindByOperatorRequestIdAsync(string typeId, string requestId,
+        CancellationToken cancellationToken = default);
+
     Task<WorkItem?> FindByOperatorApplicationIdAsync(
         string typeId,
         string operatorApplicationId,
@@ -191,6 +194,11 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     }
 
     [ExcludeFromCodeCoverage]
+    public Task<WorkItem?> FindByOperatorRequestIdAsync(string typeId, string requestId,
+        CancellationToken cancellationToken = default) =>
+        Collection.Find(Builders<WorkItem>.Filter.Eq(w => w.TypeId, typeId)
+            & Builders<WorkItem>.Filter.Eq("payload.operatorRequestId", requestId)).FirstOrDefaultAsync(cancellationToken)!;
+
     public async Task<WorkItem?> FindByOperatorApplicationIdAsync(
         string typeId,
         string operatorApplicationId,
@@ -658,6 +666,10 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
         // "Is a string" excludes explicit nulls and absent fields alike while
         // keeping uniqueness over real ids, so the backstop against two
         // concurrent approvals stamping the same id survives.
+        var operatorRequestId = new CreateIndexModel<WorkItem>(
+            builder.Ascending("payload.operatorRequestId"),
+            new CreateIndexOptions<WorkItem> { Unique = true,
+                PartialFilterExpression = Builders<WorkItem>.Filter.Type("payload.operatorRequestId", BsonType.String) });
         var accreditationId = new CreateIndexModel<WorkItem>(
             builder.Ascending("payload.accreditationId"),
             new CreateIndexOptions<WorkItem>
@@ -679,6 +691,7 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
             orgNameText,
             applicationReference,
             operatorApplicationId,
+            operatorRequestId,
             accreditationId,
         ];
     }
