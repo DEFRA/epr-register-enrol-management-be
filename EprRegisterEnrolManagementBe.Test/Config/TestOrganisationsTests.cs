@@ -62,7 +62,11 @@ public class TestOrganisationsTests
     [InlineData(null)]
     public void EnsureNotEnabledInProd_allows_enabled_outside_prod(string? cdpEnvironment)
     {
-        TestOrganisations.EnsureNotEnabledInProd(ConfigWith("true"), cdpEnvironment);
+        Assert.Null(
+            Record.Exception(() =>
+                TestOrganisations.EnsureNotEnabledInProd(ConfigWith("true"), cdpEnvironment)
+            )
+        );
     }
 
     [Theory]
@@ -70,6 +74,10 @@ public class TestOrganisationsTests
     [InlineData("false")]
     public void EnsureNotEnabledInProd_allows_prod_when_disabled(string? enabled)
     {
-        TestOrganisations.EnsureNotEnabledInProd(ConfigWith(enabled), "prod");
+        Assert.Null(
+            Record.Exception(() =>
+                TestOrganisations.EnsureNotEnabledInProd(ConfigWith(enabled), "prod")
+            )
+        );
     }
 }

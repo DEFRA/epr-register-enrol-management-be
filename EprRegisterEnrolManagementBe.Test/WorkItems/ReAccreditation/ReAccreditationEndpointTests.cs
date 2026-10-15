@@ -3708,7 +3708,7 @@ public class ReAccreditationEndpointTests
                 default!,
                 default!,
                 default,
-                default
+                cancellationToken
             );
     }
 
