@@ -262,14 +262,14 @@ public class ReAccreditationNotificationHookTests
             nation: Nation.England,
             submittedAt: new DateTime(2025, 9, 1, 0, 0, 0, DateTimeKind.Utc)
         );
-        var resolver = ResolverReturning("packagingnotifications@environment-agency.gov.uk");
+        var resolver = ResolverReturning("england@example.test");
         var sut = BuildSut(notifyClient, auditAppender, resolver);
 
         await sut.OnActionAppliedAsync(workItem, "duly-make", fromStateId: "submitted", s_user, ct);
 
         Assert.NotNull(captured);
         Assert.Equal("1 September 2025", captured!["SubmissionDate"]);
-        Assert.Equal("packagingnotifications@environment-agency.gov.uk", captured["regulatorEmail"]);
+        Assert.Equal("england@example.test", captured["regulatorEmail"]);
     }
 
     [Fact]
