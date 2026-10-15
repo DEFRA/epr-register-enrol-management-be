@@ -1,5 +1,8 @@
 using EprRegisterEnrolManagementBe.Notifications;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 
 namespace EprRegisterEnrolManagementBe.Test.Notifications;
 
@@ -111,6 +114,32 @@ public class NotifyConfigTests
         // silently reverting to blank.
         Assert.True(notifyConfig.Templates.ContainsKey("Queried"));
         Assert.False(string.IsNullOrWhiteSpace(notifyConfig.Templates["Queried"]));
+    }
+
+    // Real regulator inboxes are set per environment in cdp-app-config (prod's
+    // only in prod config). A non-blank default here would be the fallback
+    // for any deployed environment that leaves a nation unset, so the shipped
+    // file must resolve no mailbox for any nation.
+    [Fact]
+    public void Shipped_appsettings_json_resolves_no_regulator_mailbox_for_any_nation()
+    {
+        var config = new ConfigurationBuilder()
+            .AddJsonFile(LocateAppSettings(), optional: false)
+            .Build();
+
+        var notifyConfig = new NotifyConfig();
+        config.GetSection("Notify").Bind(notifyConfig);
+        var resolver = new RegulatorMailboxResolver(Options.Create(notifyConfig));
+
+        foreach (var nation in Enum.GetValues<Nation>())
+        {
+            // Key stays declared so the shape is discoverable in the file.
+            Assert.True(
+                notifyConfig.RegulatorMailboxes.ContainsKey(nation.ToString()),
+                $"Notify:RegulatorMailboxes:{nation} is not declared in appsettings.json"
+            );
+            Assert.Null(resolver.Resolve(nation));
+        }
     }
 
     private static string LocateAppSettings()

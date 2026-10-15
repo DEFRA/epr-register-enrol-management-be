@@ -73,8 +73,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <c>useHumanFacingReference</c>) and a deep link built from
 /// <see cref="CaseManagementConfig"/>.
 ///
-/// When the regulator mailbox is unresolved (Scotland / Wales / NI
-/// placeholders until RA-244) the send is skipped and recorded as a
+/// When the regulator mailbox is unresolved (the nation's
+/// <c>Notify:RegulatorMailboxes</c> entry is missing or blank) the send is
+/// skipped and recorded as a
 /// <c>notification-skipped</c> audit entry with reason
 /// <c>missing-regulator-mailbox</c>; the originating mutation still succeeds.
 ///
@@ -558,7 +559,7 @@ internal sealed class ReAccreditationNotificationHook(
     /// <see cref="IRegulatorMailboxResolver"/> rather than the operator email,
     /// and skips with reason <c>missing-regulator-mailbox</c> (rather than
     /// <c>missing-operator-email</c>) when the nation's mailbox is unconfigured
-    /// (Scotland / Wales / NI until RA-244). The originating mutation still
+    /// (missing or blank in <c>Notify:RegulatorMailboxes</c>). The originating mutation still
     /// succeeds on skip / failure — this method never throws.
     ///
     /// <paramref name="extraPersonalisation"/> carries template-specific keys

@@ -262,7 +262,7 @@ public class ReAccreditationApprovalServiceTests
                 "approve",
                 "awaiting-decision",
                 Arg.Any<ClaimsPrincipal>(),
-                ct
+                CancellationToken.None
             );
     }
 

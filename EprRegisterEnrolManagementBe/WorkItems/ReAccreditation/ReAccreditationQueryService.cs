@@ -178,7 +178,9 @@ internal sealed class ReAccreditationQueryService(
                 ["reason"] = reason,
             },
             user,
-            cancellationToken);
+            // The transition is committed: a client that has stopped waiting
+            // must not stop the audit record of why it happened being written.
+            CancellationToken.None);
 
         if (!appended)
         {

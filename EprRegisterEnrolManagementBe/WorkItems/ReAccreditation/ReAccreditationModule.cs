@@ -31,6 +31,21 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // establishes. The clock is started once, by
         // ReAccreditationDulyMakingService, and payment-received no longer
         // touches it.
+        // The operator-backend pushes run before the email hook, which waits on
+        // GOV.UK Notify (up to a 15s timeout per attempt, retried). Hooks run in
+        // registration order inside the caller's request, so an email that is
+        // slow or failing must not hold up the push that keeps the operator's
+        // record of the application in step with this one.
+        //
+        // RA-311/MBE-1: pushes the query note + sections to the operator
+        // backend whenever a query is raised.
+        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
+        // RA-368: pushes every other state transition to the operator backend.
+        // RA-316: no longer needs the extra self-registration it once had —
+        // ReAccreditationDulyMakingService reaches it through the ordinary
+        // IWorkItemPostActionHook fan-out like every other caller, rather than
+        // injecting the concrete type to call it directly.
+        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationStatusPushHook>();
         // RA-422: outbound Case Management service email + every notification-* audit entry flow
         // through this one hook, so gating its registration on the central
         // Notify:Enabled flag is the single chokepoint for both concerns. When
@@ -41,15 +56,6 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         {
             services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNotificationHook>();
         }
-        // RA-311/MBE-1: pushes the query note + sections to the operator
-        // backend whenever a query is raised.
-        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
-        // RA-368: pushes every other state transition to the operator backend.
-        // RA-316: no longer needs the extra self-registration it once had —
-        // ReAccreditationDulyMakingService reaches it through the ordinary
-        // IWorkItemPostActionHook fan-out like every other caller, rather than
-        // injecting the concrete type to call it directly.
-        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationStatusPushHook>();
         // RA-410: while an item sits in the 'updated' waypoint, report the
         // state the query was raised from — the state it will return to —
         // rather than the waypoint itself. The frontend needs it to decide

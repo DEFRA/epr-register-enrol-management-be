@@ -85,6 +85,15 @@ the [Notify dashboard](https://www.notifications.service.gov.uk/), enable
 `Notify__Enabled=true` **and** `NOTIFY_SENDEMAILS=true`, and make sure the
 recipient address is registered on the Notify team.
 
+Regulator-facing emails go to the nation's `Notify:RegulatorMailboxes` entry.
+`appsettings.json` ships all four nations blank, so with `Notify__Enabled=true`
+locally they are skipped with a `missing-regulator-mailbox` audit entry. To
+exercise them, set
+`Notify__RegulatorMailboxes__<Nation>` (e.g. `Notify__RegulatorMailboxes__England`)
+to a Notify-team-registered address. Each deployed environment sets its own
+addresses in cdp-app-config; the real regulator inboxes are in prod's config
+only (see [docs/cdp-deployment.md](./docs/cdp-deployment.md#required-environment-variables)).
+
 If you do not have MongoDB installed locally, start just the database from
 the Compose stack:
 
