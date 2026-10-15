@@ -2997,15 +2997,12 @@ public class ReAccreditationEndpointTests
         Assert.Equal("wrong-work-item-type", problem.GetProperty("errorCode").GetString());
     }
 
-    [Fact]
-    public async Task Decision_returns_internal_server_error_when_the_operator_journey_push_fails()
+    private static IOperatorBackendPushAdapter DecisionPushAdapterReturning(
+        params OperatorBackendPushResult[] results
+    )
     {
-        // epr-p86e / RA-410: the decision push is a hard pre-commit gate. When
-        // it cannot be delivered the decision is abandoned before anything is
-        // persisted, and the caller gets a generic 500 with no state change.
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var failingPushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
-        failingPushAdapter
+        var adapter = Substitute.For<IOperatorBackendPushAdapter>();
+        adapter
             .PushDecisionStatusChangedAsync(
                 Arg.Any<Guid>(),
                 Arg.Any<Guid>(),
@@ -3017,13 +3014,34 @@ public class ReAccreditationEndpointTests
                 Arg.Any<DateTime>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(
-                Task.FromResult(OperatorBackendPushResult.Failure("operator journey unreachable"))
-            );
+            .Returns(results[0], results[1..]);
+        return adapter;
+    }
 
+    /// <summary>
+    /// epr-p86e / RA-410: the decision push to the operator journey is a hard
+    /// pre-commit gate. When it cannot be delivered the decision is abandoned
+    /// before anything is persisted: a generic 500 (management-fe shows its
+    /// "Could not log a decision" flash), the item still in
+    /// <c>assessment-in-progress</c> — not decided, not stranded in the
+    /// internal <c>awaiting-decision</c> waypoint — no accreditation id, and
+    /// only the support-facing <c>status-push-failed</c> audit entry. Replaces
+    /// the deleted mgmt-tests ra-410-decision-operator-failure.e2e.js, which
+    /// needed a stub operator journey armed to fail and so could not run against CDP test.
+    /// </summary>
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Decision_returns_internal_server_error_when_the_operator_journey_push_fails(
+        string outcome
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(
             _fixture,
-            pushAdapter: failingPushAdapter
+            pushAdapter: DecisionPushAdapterReturning(
+                OperatorBackendPushResult.Failure("operator journey unreachable")
+            )
         );
         using var client = factory.CreateClient();
 
@@ -3032,14 +3050,62 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PostAsJsonAsync(
             $"/work-items/re-accreditation/{id}/decision",
-            new { outcome = "approved" },
+            new { outcome },
             cancellationToken
         );
 
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.False(persisted.Payload.Contains("accreditationId"));
         Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "action-applied");
+        var pushFailed = Assert.Single(persisted.AuditLog);
+        Assert.Equal("status-push-failed", pushFailed.Action);
+    }
+
+    /// <summary>
+    /// RA-410: the failed attempt leaves nothing half-committed. Once the
+    /// operator journey answers again, the SAME item — still decidable from
+    /// <c>assessment-in-progress</c> — takes the identical decision call to
+    /// its terminal state.
+    /// </summary>
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Decision_succeeds_on_retry_once_the_operator_journey_push_recovers(
+        string outcome
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            pushAdapter: DecisionPushAdapterReturning(
+                OperatorBackendPushResult.Failure("operator journey unreachable"),
+                OperatorBackendPushResult.Success()
+            )
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var failed = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome },
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+
+        var retried = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(outcome, persisted!.StateId);
+        Assert.Equal(outcome == "approved", persisted.Payload.Contains("accreditationId"));
     }
 
     [Fact]
@@ -3606,8 +3672,10 @@ public class ReAccreditationEndpointTests
                 Arg.Any<CancellationToken>()
             )
             .Returns(AccreditationNumberResult.Failure("backend unreachable"));
+        var pushAdapter = DecisionPushAdapterReturning(OperatorBackendPushResult.Success());
         await using var factory = new ReAccreditationFactory(
             _fixture,
+            pushAdapter: pushAdapter,
             numberAdapter: failingNumberAdapter
         );
         using var client = factory.CreateClient();
@@ -3621,9 +3689,27 @@ public class ReAccreditationEndpointTests
             cancellationToken
         );
 
+        // AccreditationNumberUnavailable: nothing changes — the item stays in
+        // assessment with no audit entry, and the operator journey is never
+        // told about a decision that did not happen.
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.NotEqual("approved", persisted!.StateId);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.False(persisted.Payload.Contains("accreditationId"));
+        Assert.Empty(persisted.AuditLog);
+        await pushAdapter
+            .DidNotReceiveWithAnyArgs()
+            .PushDecisionStatusChangedAsync(
+                default,
+                default,
+                default!,
+                default!,
+                default!,
+                default!,
+                default!,
+                default,
+                default
+            );
     }
 
     // --------------------------- RA-410: single-call decision ---------------------------

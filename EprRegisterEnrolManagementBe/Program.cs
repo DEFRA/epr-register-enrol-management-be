@@ -85,6 +85,10 @@ static void ConfigureServices(WebApplicationBuilder builder)
     // Trust material must be loaded before anything creates outbound connections.
     services.LoadCustomTrustStoreFromEnvironment();
 
+    // RA-000: refuse to start with end-to-end test organisations (and the
+    // mgmt-tests caller they unlock) enabled in CDP prod.
+    TestOrganisations.EnsureNotEnabledInProd(configuration, CdpEnvironment.Read());
+
     // HttpClient.DefaultProxy MUST also be set before any bare HttpClient
     // is constructed. The GovukNotify SDK does `new HttpClient()` and
     // therefore depends on DefaultProxy — in CDP the runtime's
@@ -318,6 +322,21 @@ static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration con
         clientIdDefault: "epr-register-enrol-backend",
         secretKey: "AUTH_SHARED_SECRET:BACKEND"
     );
+    // RA-000: the mgmt-tests journey suite creates its own work items on CDP
+    // test. Its caller exists only where test organisations are enabled, which
+    // startup refuses in prod (TestOrganisations.EnsureNotEnabledInProd), so a
+    // stray AUTH_SHARED_SECRET__MGMT_TESTS can never open a door in prod.
+    if (TestOrganisations.IsEnabled(config))
+    {
+        AddCallerSecret(
+            map,
+            config,
+            callerName: "MgmtTests",
+            clientIdKey: "Auth:MgmtTestsClientId",
+            clientIdDefault: "epr-register-enrol-mgmt-tests",
+            secretKey: "AUTH_SHARED_SECRET:MGMT_TESTS"
+        );
+    }
     return map;
 }
 
@@ -451,6 +470,10 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
 /// <see cref="IReExAccreditationClient"/> and routed through the corporate proxy.
 /// The Base URL is read from the <c>ReExApi:BaseUrl</c> config section (same
 /// section name as the operator backend for consistency).
+/// RA-000: with <c>TestOrganisations__Enabled</c> on as well, the real client
+/// is wrapped in <see cref="TestOrganisationReExAccreditationClient"/>, which
+/// answers <c>e2e-</c> organisations from the stub — real ReEx has never heard
+/// of them — and sends everything else to real ReEx.
 /// </summary>
 [ExcludeFromCodeCoverage]
 static void ConfigureReEx(IServiceCollection services, IConfiguration configuration)
@@ -473,8 +496,24 @@ static void ConfigureReEx(IServiceCollection services, IConfiguration configurat
     });
     services.AddTransient<ReExBasicAuthHandler>();
     services
-        .AddHttpClientWithProxy<IReExAccreditationClient, HttpReExAccreditationClient>()
+        .AddHttpClientWithProxy<HttpReExAccreditationClient, HttpReExAccreditationClient>()
         .AddHttpMessageHandler<ReExBasicAuthHandler>();
+
+    if (!TestOrganisations.IsEnabled(configuration))
+    {
+        services.AddTransient<IReExAccreditationClient>(sp =>
+            sp.GetRequiredService<HttpReExAccreditationClient>()
+        );
+        return;
+    }
+
+    // Transient, like the typed HttpClient it wraps, so the composite never
+    // pins one HttpClient (and its handler) for the life of the process.
+    services.AddSingleton<StubReExAccreditationClient>();
+    services.AddTransient<IReExAccreditationClient>(sp => new TestOrganisationReExAccreditationClient(
+        sp.GetRequiredService<HttpReExAccreditationClient>(),
+        sp.GetRequiredService<StubReExAccreditationClient>()
+    ));
 }
 
 /// <summary>
@@ -563,7 +602,7 @@ static void ConfigureNotifications(
 
     var shouldSend = NotifySendingPolicy.ShouldSendEmails(
         configuration.GetValue<bool?>(NotifySendingPolicy.SendEmailsKey),
-        NotifySendingPolicy.ReadCdpEnvironment(),
+        CdpEnvironment.Read(),
         hostEnvironment.IsDevelopment()
     );
 
@@ -694,7 +733,7 @@ static void LogNotifyClientRegistration(WebApplication app)
     var apiKeyConfigured = !string.IsNullOrWhiteSpace(
         app.Configuration.GetValue<string>("NOTIFY_API_KEY")
     );
-    var cdpEnvironment = NotifySendingPolicy.ReadCdpEnvironment();
+    var cdpEnvironment = CdpEnvironment.Read();
     var sendingEnabled = NotifySendingPolicy.ShouldSendEmails(
         app.Configuration.GetValue<bool?>(NotifySendingPolicy.SendEmailsKey),
         cdpEnvironment,
