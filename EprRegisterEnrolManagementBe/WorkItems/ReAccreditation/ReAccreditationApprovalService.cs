@@ -420,8 +420,7 @@ internal sealed class ReAccreditationApprovalService(
             persisted,
             ActionId,
             FromStateId,
-            user,
-            cancellationToken
+            user
         );
 
         return WorkItemActionResult.Success(persisted);
@@ -692,10 +691,13 @@ internal sealed class ReAccreditationApprovalService(
         WorkItem workItem,
         string actionId,
         string fromStateId,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken
+        ClaimsPrincipal user
     )
     {
+    // The transition is already committed by the time hooks run, so a client
+    // that gives up waiting (management-fe times out) must not cancel them:
+    // the operator-backend push and its audit entries would be lost, leaving
+    // this service and the operator disagreeing about the application's state.
         foreach (var hook in _postActionHooks)
         {
             try
@@ -705,7 +707,7 @@ internal sealed class ReAccreditationApprovalService(
                     actionId,
                     fromStateId,
                     user,
-                    cancellationToken
+                    CancellationToken.None
                 );
             }
             catch (Exception ex)

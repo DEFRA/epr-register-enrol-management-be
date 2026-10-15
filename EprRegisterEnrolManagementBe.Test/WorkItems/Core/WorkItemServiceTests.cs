@@ -177,6 +177,62 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task ApplyAction_hooks_still_run_with_a_live_token_after_the_caller_gives_up()
+    {
+        // The transition is committed before hooks run. A caller that stops
+        // waiting (management-fe aborts its request) cancels the request token;
+        // that must not cancel the hooks, or the operator-backend push that
+        // follows a slow hook is lost and the two services disagree about the
+        // application's state.
+        var type = BuildType(
+            transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]
+        );
+        var workItem = await SeedAsync();
+        using var requestAborted = new CancellationTokenSource();
+
+        var slowHook = Substitute.For<IWorkItemPostActionHook>();
+        slowHook
+            .OnActionAppliedAsync(
+                Arg.Any<WorkItem>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(_ =>
+            {
+                requestAborted.Cancel();
+                return Task.CompletedTask;
+            });
+        var pushHook = Substitute.For<IWorkItemPostActionHook>();
+        var service = new WorkItemService(
+            new WorkItemRegistry([type]),
+            _persistence,
+            NullLogger<WorkItemService>.Instance,
+            _time,
+            postActionHooks: [slowHook, pushHook]
+        );
+
+        var result = await service.ApplyActionAsync(
+            workItem.Id,
+            "approve",
+            User(),
+            requestAborted.Token
+        );
+
+        Assert.True(result.IsSuccess);
+        await pushHook
+            .Received(1)
+            .OnActionAppliedAsync(
+                Arg.Any<WorkItem>(),
+                "approve",
+                "submitted",
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Is<CancellationToken>(token => !token.IsCancellationRequested)
+            );
+    }
+
+    [Fact]
     public async Task ApplyAction_transitions_via_a_different_declared_action()
     {
         var type = BuildType(
