@@ -307,7 +307,7 @@ internal sealed class ReAccreditationDulyMakingService(
         // sends the DulyMade operator email (AC07) and pushes the new status to
         // the operator backend (AC09). It happens strictly after the save, so a
         // hook that writes its own audit entry cannot collide with our write.
-        await InvokeActionAppliedHooksAsync(persisted, ActionId, FromStateId, user, cancellationToken);
+        await InvokeActionAppliedHooksAsync(persisted, ActionId, FromStateId, user);
 
         return WorkItemActionResult.Success(persisted);
     }
@@ -422,10 +422,13 @@ internal sealed class ReAccreditationDulyMakingService(
         WorkItem workItem,
         string actionId,
         string fromStateId,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken
+        ClaimsPrincipal user
     )
     {
+    // The transition is already committed by the time hooks run, so a client
+    // that gives up waiting (management-fe times out) must not cancel them:
+    // the operator-backend push and its audit entries would be lost, leaving
+    // this service and the operator disagreeing about the application's state.
         foreach (var hook in _postActionHooks)
         {
             try
@@ -435,7 +438,7 @@ internal sealed class ReAccreditationDulyMakingService(
                     actionId,
                     fromStateId,
                     user,
-                    cancellationToken
+                    CancellationToken.None
                 );
             }
             catch (Exception ex)

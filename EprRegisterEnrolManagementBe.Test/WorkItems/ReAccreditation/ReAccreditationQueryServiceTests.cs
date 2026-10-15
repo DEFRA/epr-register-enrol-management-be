@@ -298,7 +298,7 @@ public class ReAccreditationQueryServiceTests
                 && d["sections"] == "business-plan,prn-tonnage"
                 && d["reason"] == "Tonnage does not reconcile"),
             harness.User,
-            ct);
+            CancellationToken.None);
     }
 
     [Fact]
