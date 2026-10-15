@@ -7,7 +7,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// is observed outside a development environment. The actual
 /// <see cref="WorkItemSeederHostedService"/> is intentionally NOT
 /// registered in that case (see
-/// <see cref="WorkItemModuleExtensions.AddWorkItemSeederIfDevelopment"/>),
+/// <see cref="WorkItemModuleExtensions.AddWorkItemSeeders"/>),
 /// because the seeder writes rows that reference stub user identifiers
 /// which must never appear in a real Mongo collection.
 /// </summary>

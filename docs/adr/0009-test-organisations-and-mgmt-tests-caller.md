@@ -10,8 +10,8 @@ The `epr-register-enrol-mgmt-tests` journey suite has to run unchanged on
 the compose stack and on CDP **test**. On test:
 
 - Mongo is never reset, so the suite cannot rely on seeded fixtures. The
-  management-be seeder runs in Development only. The suite has to create
-  its own uniquely named work items.
+  management-be demo seeder runs in Development only. The suite has to
+  create its own uniquely named work items.
 - ReEx is real, and it 404s the organisations the suite invents, so the
   RA-254 prior-year section never renders for them.
 - Every authenticated request must be HMAC-signed by a registered caller
@@ -40,6 +40,22 @@ the compose stack and on CDP **test**. On test:
    through the existing `AddCallerSecret` only when that secret is set AND
    the switch is on. It uses the unchanged v3 HMAC contract, timestamp
    window and nonce store.
+4. **Journey-test fixtures, reset on every boot.** Two fixtures need a shape
+   or a history the API never produces: the RA-342 legacy template
+   snapshot, and the RA-611 SLA clock started before 1 January. Modules
+   provide such fixtures as raw BSON documents with fixed ids
+   (`ITestOrganisationFixtureSeeder`).
+   - `TestOrganisationFixtureHostedService` replaces them through
+     `IWorkItemFixtureStore`. `WorkItemPersistence` implements it, but it
+     is not part of `IWorkItemPersistence`: no endpoint and no engine path
+     can write an unvalidated document.
+   - It runs alongside the Development demo seeder (compose) and, on its
+     own, wherever the switch is on (CDP test).
+   - The demo set stays Development-only, so manual testers on test never
+     see demo items.
+   - The RA-611 clock start is 14 November of the previous year, derived
+     from `TimeProvider` at each boot, so it stays before 1 January in
+     every year.
 
 ## Consequences
 
@@ -52,6 +68,9 @@ the compose stack and on CDP **test**. On test:
   sets it must set the management-fe and backend secrets too.
 - A real organisation whose id happens to start `e2e-` would get stub ReEx
   data on test. ReEx ids are GUIDs or numeric, so no real id collides.
+- Anything done to the two fixtures, by a journey run or a manual tester,
+  is lost at the next boot. That is the point: every run starts from the
+  same state.
 
 ## Verification
 
@@ -67,3 +86,10 @@ the compose stack and on CDP **test**. On test:
   - it is rejected when signed with another caller's secret;
   - Development header-trust is unchanged when the caller is half
     configured.
+- `WorkItemSeederGatingTests`: which seeders are registered for each
+  combination of environment, `WorkItems:SeedOnStartup` and the switch.
+- `ReAccreditationTestOrganisationFixturesTests`:
+  - the clock-start rule either side of New Year;
+  - the legacy fixture listing on the worklist and opening by id over
+    HTTP, against real Mongo;
+  - a reset restoring a mutated fixture.

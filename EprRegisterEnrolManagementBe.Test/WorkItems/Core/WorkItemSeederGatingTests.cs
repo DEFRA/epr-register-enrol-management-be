@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Hosting;
@@ -12,7 +13,8 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// reference stub user identifiers, so it must only be wired up when the
 /// host is in Development AND <c>WorkItems:SeedOnStartup=true</c>. These
 /// tests pin the gating contract so a misconfigured production deploy
-/// cannot pollute the live Mongo collection.
+/// cannot pollute the live Mongo collection, and (RA-000) when the e2e-
+/// fixture reset comes with it.
 ///
 /// The seed flag is supplied via <see cref="IWebHostBuilder.UseSetting"/>,
 /// which feeds <c>WebApplicationBuilder.Configuration</c> before
@@ -33,44 +35,55 @@ public class WorkItemSeederGatingTests
 
     public WorkItemSeederGatingTests(MongoIntegrationFixture fixture) => _fixture = fixture;
 
-    [Fact]
-    public void Seeder_is_not_registered_in_Production_even_when_flag_true()
+    /// <summary>
+    /// RA-000 gate matrix for <see cref="WorkItemModuleExtensions.AddWorkItemSeeders"/>:
+    /// the demo set needs Development + the flag (a non-Development flag only
+    /// warns); the e2e- fixtures come with the demo set and, on their own,
+    /// with TestOrganisations__Enabled in any environment, so CDP test gets
+    /// the fixtures without the demo items. Prod + TestOrganisations refusing
+    /// to start is pinned by TestOrganisationsWiringTests.
+    /// </summary>
+    [Theory]
+    [InlineData("Development", true, false, true, false, true)]
+    [InlineData("Development", true, true, true, false, true)]
+    [InlineData("Development", false, false, false, false, false)]
+    [InlineData("Development", false, true, false, false, true)]
+    [InlineData("Production", true, false, false, true, false)]
+    [InlineData("Production", false, true, false, false, true)]
+    [InlineData("Production", true, true, false, true, true)]
+    [InlineData("Production", false, false, false, false, false)]
+    public void Seeders_registered_match_the_environment_and_flags(
+        string environment,
+        bool seedOnStartup,
+        bool testOrganisations,
+        bool expectDemoSeeder,
+        bool expectMisconfigurationWarning,
+        bool expectFixtureReset
+    )
     {
-        using var factory = CreateFactory("Production", seedOnStartup: true);
+        using var factory = CreateFactory(environment, seedOnStartup, testOrganisations);
 
         var hostedServices = factory.Services.GetServices<IHostedService>().ToList();
 
-        Assert.DoesNotContain(hostedServices, s => s is WorkItemSeederHostedService);
-        // The misconfiguration warning service IS registered so the
-        // mistake surfaces in startup logs.
-        Assert.Contains(hostedServices, s => s is WorkItemSeederMisconfigurationWarningHostedService);
+        Assert.Equal(expectDemoSeeder, hostedServices.Any(s => s is WorkItemSeederHostedService));
+        Assert.Equal(
+            expectMisconfigurationWarning,
+            hostedServices.Any(s => s is WorkItemSeederMisconfigurationWarningHostedService)
+        );
+        Assert.Equal(
+            expectFixtureReset,
+            hostedServices.Any(s => s is TestOrganisationFixtureHostedService)
+        );
     }
 
-    [Fact]
-    public void Seeder_is_registered_in_Development_when_flag_true()
-    {
-        using var factory = CreateFactory("Development", seedOnStartup: true);
-
-        var hostedServices = factory.Services.GetServices<IHostedService>().ToList();
-
-        Assert.Contains(hostedServices, s => s is WorkItemSeederHostedService);
-        Assert.DoesNotContain(hostedServices, s => s is WorkItemSeederMisconfigurationWarningHostedService);
-    }
-
-    [Fact]
-    public void Seeder_is_not_registered_in_Development_when_flag_false()
-    {
-        using var factory = CreateFactory("Development", seedOnStartup: false);
-
-        var hostedServices = factory.Services.GetServices<IHostedService>().ToList();
-
-        Assert.DoesNotContain(hostedServices, s => s is WorkItemSeederHostedService);
-        Assert.DoesNotContain(hostedServices, s => s is WorkItemSeederMisconfigurationWarningHostedService);
-    }
-
-    private EphemeralMongoTestFactory CreateFactory(string environment, bool seedOnStartup) =>
+    private EphemeralMongoTestFactory CreateFactory(
+        string environment,
+        bool seedOnStartup,
+        bool testOrganisations
+    ) =>
         new(_fixture, "seeder-gating", environment, new Dictionary<string, string?>
         {
             [SeedFlagConfigKey] = seedOnStartup ? "true" : "false",
+            [TestOrganisations.EnabledKey] = testOrganisations ? "true" : "false",
         });
 }

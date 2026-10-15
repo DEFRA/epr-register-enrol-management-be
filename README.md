@@ -181,7 +181,7 @@ per-environment list — the tables below summarise it.
 | `OPERATOR_BACKEND_SHARED_SECRET` | Yes | Signs this service's outbound query-note push to `epr-register-enrol-backend` — must match backend's `AUTH_SHARED_SECRET__MANAGEMENT_BE` exactly |
 | `Auth__BackendClientId` | No | Expected `x-cdp-client-id` on inbound calls from backend (default `epr-register-enrol-backend`) |
 | `Auth__ManagementFeClientId` | No | Expected `x-cdp-client-id` on inbound calls from management-fe (default `frontend`) — must differ from `Auth__BackendClientId` or the service throws at first request |
-| `TestOrganisations__Enabled` | No | Default `false`. CDP **test** only (RA-000): routes ReEx lookups for `e2e-` test organisations to `StubReExAccreditationClient` and enables the mgmt-tests caller below. The service refuses to start with it `true` when `ENVIRONMENT=prod` |
+| `TestOrganisations__Enabled` | No | Default `false`. CDP **test** only (RA-000): routes ReEx lookups for `e2e-` test organisations to `StubReExAccreditationClient`, enables the mgmt-tests caller below, and resets the two e2e- journey-test fixtures on every boot (without the demo seed set). The service refuses to start with it `true` when `ENVIRONMENT=prod` |
 | `AUTH_SHARED_SECRET__MGMT_TESTS` | Yes | Verifies inbound signed requests from the `epr-register-enrol-mgmt-tests` journey suite — must match the suite's `MANAGEMENT_BE_SHARED_SECRET`. Registered only when `TestOrganisations__Enabled=true`; never set in prod |
 | `Auth__MgmtTestsClientId` | No | Expected `x-cdp-client-id` on inbound calls from the mgmt-tests suite (default `epr-register-enrol-mgmt-tests`) |
 | `OperatorBackendApi__Enabled` | No | Master switch for the outbound query-note push to backend. `false` locally, `true` in dev/test/perf-test/ext-test/prod |
@@ -229,7 +229,7 @@ Notify-testing walkthrough.
 | `Cors__AllowedOrigins` | No | CORS allow-list (array). Empty = deny-all |
 | `Accreditation__CurrentYear` | No | Current accreditation year for business logic |
 | `ArchiveJob__IntervalHours` / `ArchiveJob__BatchSize` | No | Background archive job tuning |
-| `WorkItems__SeedOnStartup` | No | Seeds fixture work items on boot. `true` in Development only |
+| `WorkItems__SeedOnStartup` | No | Seeds demo work items on boot, plus the e2e- journey-test fixtures. Honoured in Development only |
 | `ENVIRONMENT` | No | Platform environment name (`local`/`dev`/`test`/`perf-test`/`ext-test`/`prod`) |
 
 ### Example local/testing values

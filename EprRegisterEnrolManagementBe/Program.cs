@@ -190,6 +190,12 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // See docs in EprRegisterEnrolManagementBe/WorkItems/Core for the contract a module must implement.
     services.AddWorkItemFramework();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
+    // RA-000: the e2e- fixture reset writes through the same persistence
+    // instance (a single writer of the collection), via an interface the
+    // engine and endpoints never see.
+    services.AddSingleton<IWorkItemFixtureStore>(sp =>
+        (IWorkItemFixtureStore)sp.GetRequiredService<IWorkItemPersistence>()
+    );
     // RA-131: SLA extend / override is a cross-cutting framework concern
     // (universal rules: audit shape, operator notify on extend via
     // post-action hooks) so it lives next to the framework, not in a
@@ -226,12 +232,13 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     services.AddHostedService<SlaBreachBackgroundService>();
     services.AddHostedService<ArchiveBackgroundService>();
 
-    // The seeder writes records referencing stub user ids, so it is
+    // The demo seeder writes records referencing stub user ids, so it is
     // gated to Development hosts even when WorkItems:SeedOnStartup=true.
     // A misconfiguration warning is emitted at startup if the flag is
-    // observed in any other environment. See
-    // WorkItemModuleExtensions.AddWorkItemSeederIfDevelopment.
-    services.AddWorkItemSeederIfDevelopment(builder.Environment, builder.Configuration);
+    // observed in any other environment. RA-000: TestOrganisations__Enabled
+    // separately resets the e2e- journey-test fixtures on every boot. See
+    // WorkItemModuleExtensions.AddWorkItemSeeders.
+    services.AddWorkItemSeeders(builder.Environment, builder.Configuration);
 }
 
 [ExcludeFromCodeCoverage]

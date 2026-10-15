@@ -113,6 +113,11 @@ test only, via cdp-app-config) turns on:
   `StubReExAccreditationClient` (real ReEx 404s them) and sends everything else
   to real ReEx. This is what makes the RA-254 prior-year section render for
   journey-test items.
+- **Journey-test fixtures.** On every boot, `TestOrganisationFixtureHostedService`
+  replaces two work items with fixed ids with their pristine documents:
+  the RA-342 legacy-snapshot item (`00000342-0000-4000-8000-000000000342`) and the
+  RA-611 pre-year-start item (`00000611-0000-4000-8000-000000000611`). The demo
+  seed set does **not** run (it needs Development).
 - **The mgmt-tests caller.** `AUTH_SHARED_SECRET__MGMT_TESTS` is registered as
   a third HMAC caller (same v3 contract as below), so the suite can create work
   items with `POST /work-items` and drive operator-side transitions.
