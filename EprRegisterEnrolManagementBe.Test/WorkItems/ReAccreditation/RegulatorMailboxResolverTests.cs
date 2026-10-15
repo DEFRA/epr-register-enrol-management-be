@@ -7,7 +7,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 public class RegulatorMailboxResolverTests
 {
-    private const string EnglandMailbox = "packagingnotifications@environment-agency.gov.uk";
+    private const string EnglandMailbox = "england@example.test";
 
     private static RegulatorMailboxResolver CreateSut(params (string Nation, string Mailbox)[] mailboxes)
     {
@@ -21,10 +21,12 @@ public class RegulatorMailboxResolverTests
     }
 
     /// <summary>
-    /// Mirrors the shipped appsettings: England populated, the other nations
-    /// present but empty placeholders pending their addresses (RA-244).
+    /// An environment that configures England only and leaves the other
+    /// nations blank. Real addresses are set per environment; the shipped
+    /// appsettings.json default is blank for every nation (see
+    /// NotifyConfigTests).
     /// </summary>
-    private static RegulatorMailboxResolver CreateDefaultSut() => CreateSut(
+    private static RegulatorMailboxResolver CreateEnglandOnlySut() => CreateSut(
         ("England", EnglandMailbox),
         ("Scotland", ""),
         ("Wales", ""),
@@ -35,7 +37,7 @@ public class RegulatorMailboxResolverTests
     [Fact]
     public void Resolve_returns_configured_mailbox_for_England()
     {
-        var sut = CreateDefaultSut();
+        var sut = CreateEnglandOnlySut();
 
         Assert.Equal(EnglandMailbox, sut.Resolve(Nation.England));
     }
@@ -56,9 +58,9 @@ public class RegulatorMailboxResolverTests
     [InlineData(Nation.Scotland)]
     [InlineData(Nation.Wales)]
     [InlineData(Nation.NorthernIreland)]
-    public void Resolve_returns_null_for_nations_with_empty_placeholder(Nation nation)
+    public void Resolve_returns_null_for_nations_left_blank(Nation nation)
     {
-        var sut = CreateDefaultSut();
+        var sut = CreateEnglandOnlySut();
 
         Assert.Null(sut.Resolve(nation));
     }
@@ -87,7 +89,7 @@ public class RegulatorMailboxResolverTests
     [Fact]
     public void Resolve_returns_null_for_null_nation()
     {
-        var sut = CreateDefaultSut();
+        var sut = CreateEnglandOnlySut();
 
         Assert.Null(sut.Resolve(null));
     }

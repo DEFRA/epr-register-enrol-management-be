@@ -112,7 +112,7 @@ public class NotifyTemplateContractTests
         // empty and fail the "required placeholders are non-empty" check
         // below for England, the nation BuildRepresentativeWorkItem stamps.
         var regulatorMailboxResolver = Substitute.For<IRegulatorMailboxResolver>();
-        regulatorMailboxResolver.Resolve(Nation.England).Returns("packagingnotifications@environment-agency.gov.uk");
+        regulatorMailboxResolver.Resolve(Nation.England).Returns("england@example.test");
         var persistence = Substitute.For<IWorkItemPersistence>();
         // This contract asserts required placeholders are non-empty — i.e. it
         // describes a correctly-configured environment.
