@@ -181,13 +181,18 @@ per-environment list — the tables below summarise it.
 | `OPERATOR_BACKEND_SHARED_SECRET` | Yes | Signs this service's outbound query-note push to `epr-register-enrol-backend` — must match backend's `AUTH_SHARED_SECRET__MANAGEMENT_BE` exactly |
 | `Auth__BackendClientId` | No | Expected `x-cdp-client-id` on inbound calls from backend (default `epr-register-enrol-backend`) |
 | `Auth__ManagementFeClientId` | No | Expected `x-cdp-client-id` on inbound calls from management-fe (default `frontend`) — must differ from `Auth__BackendClientId` or the service throws at first request |
+| `TestOrganisations__Enabled` | No | Default `false`. CDP **test** only (RA-000): routes ReEx lookups for `e2e-` test organisations to `StubReExAccreditationClient`, enables the mgmt-tests caller below, and resets the two e2e- journey-test fixtures on every boot (without the demo seed set). The service refuses to start with it `true` when `ENVIRONMENT=prod` |
+| `AUTH_SHARED_SECRET__MGMT_TESTS` | Yes | Verifies inbound signed requests from the `epr-register-enrol-mgmt-tests` journey suite — must match the suite's `MANAGEMENT_BE_SHARED_SECRET`. Registered only when `TestOrganisations__Enabled=true`; never set in prod |
+| `Auth__MgmtTestsClientId` | No | Expected `x-cdp-client-id` on inbound calls from the mgmt-tests suite (default `epr-register-enrol-mgmt-tests`) |
 | `OperatorBackendApi__Enabled` | No | Master switch for the outbound query-note push to backend. `false` locally, `true` in dev/test/perf-test/ext-test/prod |
 | `OperatorBackendApi__Url` | No | Base URL of `epr-register-enrol-backend` |
 | `OperatorBackendApi__ClientId` | No | `clientId` this service asserts on its outbound push (default `epr-register-enrol-management-be`) — must match backend's `CaseManagementAuth:ExpectedClientId` |
 
-All three secret-shaped values above are optional in Development (the
-handler falls back to header-trust mode, and the outbound push is disabled
-by default) but required in every other environment.
+The `BACKEND`, `MANAGEMENT_FE` and `OPERATOR_BACKEND` secrets are optional in
+Development (the handler falls back to header-trust mode while no caller
+secret at all is registered, and the outbound push is disabled by default) but
+required in every other environment. `AUTH_SHARED_SECRET__MGMT_TESTS` is
+optional everywhere and set only on CDP test.
 
 ### External ReEx accreditation API
 
@@ -197,7 +202,10 @@ by default) but required in every other environment.
 | `REEX_API_BASIC_AUTH_USERNAME` | Yes | Basic Auth username — pulls prior-year accreditation/tonnage/business-plan data into re-accreditation work items |
 | `REEX_API_BASIC_AUTH_PASSWORD` | Yes | Basic Auth password |
 
-Blank in Development — `StubReExAccreditationClient` runs instead.
+Blank in Development — `StubReExAccreditationClient` runs instead. With
+credentials set and `TestOrganisations__Enabled=true` (CDP test), organisation
+ids starting `e2e-` are still answered by the stub and everything else by real
+ReEx.
 
 ### GOV.UK Notify
 
@@ -221,7 +229,7 @@ Notify-testing walkthrough.
 | `Cors__AllowedOrigins` | No | CORS allow-list (array). Empty = deny-all |
 | `Accreditation__CurrentYear` | No | Current accreditation year for business logic |
 | `ArchiveJob__IntervalHours` / `ArchiveJob__BatchSize` | No | Background archive job tuning |
-| `WorkItems__SeedOnStartup` | No | Seeds fixture work items on boot. `true` in Development only |
+| `WorkItems__SeedOnStartup` | No | Seeds demo work items on boot, plus the e2e- journey-test fixtures. Honoured in Development only |
 | `ENVIRONMENT` | No | Platform environment name (`local`/`dev`/`test`/`perf-test`/`ext-test`/`prod`) |
 
 ### Example local/testing values

@@ -34,28 +34,6 @@ public static class NotifySendingPolicy
     public const string SendEmailsKey = "NOTIFY_SENDEMAILS";
 
     /// <summary>
-    /// CDP platform environment name (<c>local</c>, <c>dev</c>, <c>test</c>,
-    /// <c>perf-test</c>, <c>ext-test</c>, <c>prod</c>, …). Same variable the
-    /// frontends bind their <c>environment</c> config to.
-    /// </summary>
-    public const string EnvironmentVariable = "ENVIRONMENT";
-
-    /// <summary>
-    /// Read the CDP environment name from the process environment.
-    ///
-    /// Deliberately NOT read through <see cref="IConfiguration"/>:
-    /// <c>ENVIRONMENT</c> is also <c>WebHostDefaults.EnvironmentKey</c>, so
-    /// whenever the ASP.NET host environment is set explicitly (an
-    /// <c>ASPNETCORE_ENVIRONMENT</c> value, or <c>UseEnvironment</c> in a
-    /// <c>WebApplicationFactory</c> test) host configuration shadows the key
-    /// and <c>configuration["ENVIRONMENT"]</c> hands back the host
-    /// environment name — "Development", not "dev" — instead of the platform
-    /// value. Going straight to the variable keeps the two inputs separate.
-    /// </summary>
-    public static string? ReadCdpEnvironment() =>
-        Environment.GetEnvironmentVariable(EnvironmentVariable);
-
-    /// <summary>
     /// CDP environment names that never dispatch real email.
     /// </summary>
     private static readonly HashSet<string> NonSendingEnvironments = new(

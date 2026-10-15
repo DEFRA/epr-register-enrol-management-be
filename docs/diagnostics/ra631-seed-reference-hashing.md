@@ -16,7 +16,7 @@ integrity checks. The numeric format still has a finite collision space;
 SHA-256 does not make it a security token or guarantee unique references.
 
 Startup registration requires both a Development host and
-`WorkItems:SeedOnStartup=true` (`AddWorkItemSeederIfDevelopment`). Real
+`WorkItems:SeedOnStartup=true` (`AddWorkItemSeeders`). Real
 submissions use `ApplicationReferenceGenerator` through
 `WorkItemService.SubmitAsync`, independently of this helper.
 

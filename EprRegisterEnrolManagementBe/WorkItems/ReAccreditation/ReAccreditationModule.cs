@@ -24,6 +24,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IRegulatorMailboxResolver, RegulatorMailboxResolver>();
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
+        services.AddSingleton<ITestOrganisationFixtureSeeder, ReAccreditationTestOrganisationFixtures>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
         // RA-316: ReAccreditationSlaStampHook is deliberately gone. It restarted
         // the SLA clock at `now` whenever payment-received was applied, which

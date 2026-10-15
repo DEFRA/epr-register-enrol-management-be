@@ -321,9 +321,10 @@ public class ClientIdAuthenticationHandler(
         // compute an HMAC before failing, so response latency alone
         // could in principle distinguish the two. Accepted as
         // negligible here because the only client ids that could ever
-        // be confirmed "known" this way are the two documented public
-        // defaults (frontend, epr-register-enrol-backend) — there is
-        // nothing secret left to enumerate.
+        // be confirmed "known" this way are the documented public
+        // defaults (frontend, epr-register-enrol-backend and, on CDP test
+        // only, epr-register-enrol-mgmt-tests) — there is nothing secret
+        // left to enumerate.
         if (!Options.ClientSecrets.TryGetValue(clientId, out var secret))
         {
             Logger.LogWarning(

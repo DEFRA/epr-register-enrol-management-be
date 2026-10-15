@@ -113,7 +113,10 @@ public interface IWorkItemPersistence
     );
 }
 
-public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersistence
+public sealed class WorkItemPersistence
+    : MongoService<WorkItem>,
+        IWorkItemPersistence,
+        IWorkItemFixtureStore
 {
     // Computed once: state id → workflow rank (RA-324), used by the Status sort.
     private readonly IReadOnlyDictionary<string, int> _statusRank;
@@ -182,6 +185,32 @@ public sealed class WorkItemPersistence : MongoService<WorkItem>, IWorkItemPersi
     }
 
     [ExcludeFromCodeCoverage]
+    public async Task ResetAsync(
+        BsonDocument document,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (!document.TryGetValue("_id", out var id))
+        {
+            throw new ArgumentException("A fixture document must carry an _id.", nameof(document));
+        }
+
+        // Untyped view of the same collection: a fixture may hold elements
+        // WorkItem no longer declares, and must be stored exactly as built.
+        var raw = Collection.Database.GetCollection<BsonDocument>(
+            Collection.CollectionNamespace.CollectionName
+        );
+        await raw.ReplaceOneAsync(
+            Builders<BsonDocument>.Filter.Eq("_id", id),
+            document,
+            new ReplaceOptions { IsUpsert = true },
+            cancellationToken
+        );
+
+        Logger.LogInformation("Reset test organisation fixture {WorkItemId}", id);
+    }
+
     public async Task<WorkItem?> GetByIdAsync(
         Guid id,
         CancellationToken cancellationToken = default

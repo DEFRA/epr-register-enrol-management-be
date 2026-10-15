@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Config;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -35,37 +36,52 @@ public static class WorkItemModuleExtensions
     }
 
     /// <summary>
-    /// Conditionally register <see cref="WorkItemSeederHostedService"/>.
-    /// The seeder writes records that reference stub user identifiers
-    /// (e.g. <c>stub-standard-1</c>, <c>stub-assign-1</c>,
-    /// <c>stub-portal-client</c>), so it must NEVER run outside a
-    /// developer environment. Registration therefore requires both:
+    /// Conditionally register the two startup seeders.
     /// <list type="bullet">
-    ///   <item><see cref="IHostEnvironment.IsDevelopment"/> is <c>true</c></item>
-    ///   <item><c>WorkItems:SeedOnStartup</c> configuration is <c>true</c></item>
+    ///   <item><see cref="WorkItemSeederHostedService"/> — the demo data set.
+    ///   It writes records that reference stub user identifiers
+    ///   (e.g. <c>stub-standard-1</c>, <c>stub-assign-1</c>,
+    ///   <c>stub-portal-client</c>), so it must NEVER run outside a developer
+    ///   environment: it needs both <see cref="IHostEnvironment.IsDevelopment"/>
+    ///   and <c>WorkItems:SeedOnStartup</c>. If the flag is observed in any
+    ///   other environment a one-shot warning hosted service is registered
+    ///   instead, so the misconfiguration is visible in startup logs without
+    ///   ever touching the database.</item>
+    ///   <item><see cref="TestOrganisationFixtureHostedService"/> (RA-000) —
+    ///   the <c>e2e-</c> journey-test fixtures, reset on every boot. It runs
+    ///   alongside the demo set (Development + <c>WorkItems:SeedOnStartup</c>,
+    ///   i.e. the compose stack) and on its own wherever
+    ///   <c>TestOrganisations__Enabled</c> is on (CDP test), so the journey
+    ///   suite finds the same fixtures on both. Outside Development the demo
+    ///   set never comes with it, so manual testers on CDP test do not see
+    ///   demo items. Prod cannot reach it: the demo gate needs Development,
+    ///   and <see cref="TestOrganisations.EnsureNotEnabledInProd"/> refuses
+    ///   to start with test organisations on.</item>
     /// </list>
-    /// If the flag is observed in any other environment a one-shot
-    /// warning hosted service is registered so the misconfiguration is
-    /// visible in startup logs without ever touching the database.
     /// </summary>
-    public static IServiceCollection AddWorkItemSeederIfDevelopment(
+    public static IServiceCollection AddWorkItemSeeders(
         this IServiceCollection services,
         IHostEnvironment environment,
         IConfiguration configuration)
     {
         var seedFlag = configuration.GetValue("WorkItems:SeedOnStartup", false);
-        if (!seedFlag)
-        {
-            return services;
-        }
+        var seedDemoData = seedFlag && environment.IsDevelopment();
 
-        if (!environment.IsDevelopment())
+        if (seedFlag && !seedDemoData)
         {
             services.AddHostedService<WorkItemSeederMisconfigurationWarningHostedService>();
-            return services;
         }
 
-        services.AddHostedService<WorkItemSeederHostedService>();
+        if (seedDemoData)
+        {
+            services.AddHostedService<WorkItemSeederHostedService>();
+        }
+
+        if (seedDemoData || TestOrganisations.IsEnabled(configuration))
+        {
+            services.AddHostedService<TestOrganisationFixtureHostedService>();
+        }
+
         return services;
     }
 
