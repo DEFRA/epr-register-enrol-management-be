@@ -163,6 +163,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // whose from-state is 'queried' (a v12 snapshot already carries the
         // assessment-in-progress sla-extend self-loop).
         services.AddSingleton<IWorkItemMigration, ReAccreditationSlaExtendQuerySnapshotMigration>();
+        // RA-595 ("add" step): adds start-assessment ("Assessment started") to
+        // every existing work item's frozen snapshot (→ v15). Registered after
+        // every other snapshot migration so it is the one that sets the final
+        // version. Writes only the stored rules and template version; it keeps
+        // payment-received until management-fe has switched.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationStartAssessmentSnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply

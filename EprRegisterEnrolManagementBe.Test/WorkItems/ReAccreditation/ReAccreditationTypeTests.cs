@@ -12,8 +12,8 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        // RA-523: v14 retargets resume-during-duly-made to assessment-in-progress.
-        Assert.Equal("v14", _type.TemplateVersion);
+        // RA-595: v15 adds start-assessment ("Assessment started").
+        Assert.Equal("v15", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -102,6 +102,50 @@ public class ReAccreditationTypeTests
         Assert.NotNull(transition);
         Assert.Equal(fromStateId, transition!.FromStateId);
         Assert.Equal(toStateId, transition.ToStateId);
+    }
+
+    [Fact]
+    public void Declares_a_caller_invocable_assessment_started_step_from_duly_made()
+    {
+        // RA-595 (add step): start-assessment moves a duly-made case into
+        // assessment. Caller-invocable because management-fe applies it through
+        // the generic action route, as it does payment-received today.
+        var startAssessment = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "start-assessment"
+        );
+
+        Assert.Equal("duly-made", startAssessment.FromStateId);
+        Assert.Equal("assessment-in-progress", startAssessment.ToStateId);
+        Assert.Equal("Assessment started", startAssessment.DisplayName);
+        Assert.True(startAssessment.CallerInvocable);
+    }
+
+    [Fact]
+    public void Keeps_payment_received_until_management_fe_has_switched()
+    {
+        // RA-595 rollout: add, switch, remove. payment-received stays at v15 so
+        // the deployed management-fe keeps working; v16 removes it.
+        var paymentReceived = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "payment-received"
+        );
+
+        Assert.Equal("duly-made", paymentReceived.FromStateId);
+        Assert.Equal("assessment-in-progress", paymentReceived.ToStateId);
+        Assert.True(paymentReceived.CallerInvocable);
+    }
+
+    [Fact]
+    public void Decisions_and_sla_extend_are_not_widened_to_duly_made()
+    {
+        // RA-595: the backend keeps refusing decisions and deadline changes on
+        // a duly-made case, so the start step cannot be skipped.
+        Assert.DoesNotContain(
+            _type.Transitions,
+            t => t.FromStateId == "duly-made"
+                && t.ActionId is "sla-extend" or "submit-for-decision" or "reject"
+        );
     }
 
     [Fact]

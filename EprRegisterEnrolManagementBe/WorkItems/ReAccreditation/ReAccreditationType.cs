@@ -15,6 +15,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     private const string PaymentReceivedActionLabel = "Payment received";
     private const string QueryActionLabel = "Query";
     private const string ResumeActionLabel = "Resume";
+    private const string StartAssessmentActionLabel = "Assessment started";
     private const string WithdrawActionLabel = "Withdraw";
 
     public const string Id = "re-accreditation";
@@ -154,7 +155,17 @@ internal sealed class ReAccreditationType : IWorkItemType
     // those. Items snapshotted before v14 keep resume-during-duly-made ->
     // updated until ReAccreditationResumeDulyMadeAssessmentSnapshotMigration
     // patches their frozen snapshot.
-    public string TemplateVersion => "v14";
+    // v15 (RA-595, "add" step): added start-assessment (duly-made ->
+    // assessment-in-progress), display name "Assessment started". It is the
+    // step management-fe will apply (via the generic action route, so it is
+    // CallerInvocable) to move a duly-made case into assessment, replacing
+    // payment-received. payment-received is deliberately KEPT at v15 so the
+    // currently deployed management-fe keeps working; v16 removes it once the
+    // frontend has switched. Decisions and sla-extend stay assessment-only.
+    // Items snapshotted before v15 have no start-assessment transition until
+    // ReAccreditationStartAssessmentSnapshotMigration patches their frozen
+    // snapshot.
+    public string TemplateVersion => "v15";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -193,6 +204,17 @@ internal sealed class ReAccreditationType : IWorkItemType
         new WorkItemTransition(
             "payment-received",
             PaymentReceivedActionLabel,
+            s_dulyMade.Id,
+            s_assessmentInProgress.Id
+        ),
+        // RA-595: moves a duly-made case into assessment. Goes through the
+        // generic action path, so the action-applied audit entry and the
+        // UPDATED status push apply; ReAccreditationNotificationHook has no
+        // template for it, so no email is sent. Replaces payment-received,
+        // which is retained only until management-fe has switched (v16).
+        new WorkItemTransition(
+            "start-assessment",
+            StartAssessmentActionLabel,
             s_dulyMade.Id,
             s_assessmentInProgress.Id
         ),

@@ -463,6 +463,8 @@ public class ReAccreditationNotificationHookTests
     // notification audit entry for either action.
     [Theory]
     [InlineData("payment-received")]
+    // RA-595: "Assessment started" never had a template — no email.
+    [InlineData("start-assessment")]
     [InlineData("sla-extend")]
     public async Task OnActionAppliedAsync_removed_templates_do_not_call_notify_client(string actionId)
     {

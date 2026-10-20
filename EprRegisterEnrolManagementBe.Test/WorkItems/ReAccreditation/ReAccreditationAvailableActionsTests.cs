@@ -162,4 +162,46 @@ public class ReAccreditationAvailableActionsTests
         Assert.Contains("payment-received", projection.AvailableActions.Select(a => a.ActionId));
         Assert.All(projection.AvailableActions, a => Assert.True(a.CallerInvocable));
     }
+
+    [Fact]
+    public void Assessment_started_is_available_from_duly_made()
+    {
+        // RA-595: the frontend applies start-assessment through the generic
+        // action route, so it must be projected for a duly-made case.
+        var startAssessment = Assert.Single(
+            ProjectInState("duly-made").AvailableActions,
+            a => a.ActionId == "start-assessment"
+        );
+
+        Assert.Equal("Assessment started", startAssessment.DisplayName);
+        Assert.True(startAssessment.CallerInvocable);
+    }
+
+    [Theory]
+    [InlineData("submitted")]
+    [InlineData("assessment-in-progress")]
+    [InlineData("awaiting-decision")]
+    [InlineData("queried")]
+    [InlineData("updated")]
+    public void Assessment_started_is_not_available_outside_duly_made(string stateId)
+    {
+        // Positive control: the state still offers its own actions.
+        var actionIds = ProjectInState(stateId).AvailableActions.Select(a => a.ActionId).ToArray();
+
+        Assert.NotEmpty(actionIds);
+        Assert.DoesNotContain("start-assessment", actionIds);
+    }
+
+    [Fact]
+    public void Duly_made_still_offers_no_decision_or_sla_extend_action()
+    {
+        // RA-595: decisions and deadline changes stay assessment-only; the
+        // frontend shows them for duly-made from its own rule.
+        var actionIds = ProjectInState("duly-made").AvailableActions.Select(a => a.ActionId).ToArray();
+
+        Assert.Contains("start-assessment", actionIds);
+        Assert.DoesNotContain("sla-extend", actionIds);
+        Assert.DoesNotContain("submit-for-decision", actionIds);
+        Assert.DoesNotContain("reject", actionIds);
+    }
 }
