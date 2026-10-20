@@ -25,12 +25,6 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
-        // RA-316: ReAccreditationSlaStampHook is deliberately gone. It restarted
-        // the SLA clock at `now` whenever payment-received was applied, which
-        // would have wiped the payment-date anchoring duly making now
-        // establishes. The clock is started once, by
-        // ReAccreditationDulyMakingService, and payment-received no longer
-        // touches it.
         // The operator-backend pushes run before the email hook, which waits on
         // GOV.UK Notify (up to a 15s timeout per attempt, retried). Hooks run in
         // registration order inside the caller's request, so an email that is
