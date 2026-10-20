@@ -18,7 +18,8 @@ public class SlaBreachBackgroundServiceTests
     private static readonly DateTimeOffset s_fixedNow =
         new(2026, 5, 1, 12, 0, 0, TimeSpan.Zero);
 
-    private static WorkItem BreachedItem(TimeSpan? targetDuration = null)
+    private static WorkItem BreachedItem(
+        TimeSpan? targetDuration = null, string stateId = "assessment-in-progress")
     {
         var target = targetDuration ?? TimeSpan.FromDays(84);
         var clock = new WorkItemSlaClock
@@ -33,12 +34,25 @@ public class SlaBreachBackgroundServiceTests
         return new WorkItem
         {
             TypeId = "re-accreditation",
-            StateId = "assessment-in-progress",
+            StateId = stateId,
             SubmittedBy = "test-client",
             Payload = new BsonDocument(),
             SlaClock = clock
         };
     }
+
+    // Clock started 10 days ago with the default 84-day target → 74 days remaining.
+    private static WorkItem WithinDeadlineItem(string stateId = "assessment-in-progress") => new()
+    {
+        TypeId = "re-accreditation",
+        StateId = stateId,
+        SubmittedBy = "test-client",
+        Payload = new BsonDocument(),
+        SlaClock = new WorkItemSlaClock
+        {
+            StartedAt = s_fixedNow.AddDays(-10).UtcDateTime
+        }
+    };
 
     private sealed record Sut(
         SlaBreachBackgroundService Service,
@@ -52,9 +66,18 @@ public class SlaBreachBackgroundServiceTests
         var time = new FakeTimeProvider(now ?? s_fixedNow);
         var config = new ConfigurationBuilder().Build();
 
+        // Filter by the queried states, as the Mongo persistence does, so the
+        // tests cover which states the job actually checks.
         var items = (pageItems ?? []).ToList();
         persistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
-            .Returns(new WorkItemPage(items, items.Count, 1, items.Count));
+            .Returns(call =>
+            {
+                var query = call.Arg<WorkItemQuery>();
+                var matched = items
+                    .Where(i => query.StateIds is not { Count: > 0 } || query.StateIds.Contains(i.StateId))
+                    .ToList();
+                return new WorkItemPage(matched, matched.Count, 1, matched.Count);
+            });
 
         foreach (var item in items)
         {
@@ -198,23 +221,89 @@ public class SlaBreachBackgroundServiceTests
     [Fact]
     public async Task RunOnceAsync_skips_items_with_remaining_time()
     {
-        // Clock started 10 days ago with 84-day target → 74 days remaining.
-        var item = new WorkItem
-        {
-            TypeId = "re-accreditation",
-            StateId = "assessment-in-progress",
-            SubmittedBy = "test-client",
-            Payload = new BsonDocument(),
-            SlaClock = new WorkItemSlaClock
-            {
-                StartedAt = s_fixedNow.AddDays(-10).UtcDateTime
-            }
-        };
+        var item = WithinDeadlineItem();
         var sut = Build([item]);
 
         await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
 
         Assert.Empty(item.AuditLog);
         Assert.False(item.SlaClock!.Breached);
+    }
+
+    // ── RA-595: Duly made cases are checked as well as assessment ───────────
+
+    [Fact]
+    public async Task RunOnceAsync_breaches_an_overdue_duly_made_item()
+    {
+        var item = BreachedItem(stateId: "duly-made");
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(item.SlaClock!.Breached);
+        var breachEntry = Assert.Single(item.AuditLog, e => e.Action == "sla-breached");
+        Assert.Equal("duly-made", breachEntry.StateId);
+        Assert.Equal("84", breachEntry.Details["targetDays"]);
+        await sut.Persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_skips_a_duly_made_item_within_its_deadline()
+    {
+        var item = WithinDeadlineItem("duly-made");
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(item.AuditLog);
+        Assert.False(item.SlaClock!.Breached);
+        await sut.Persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_breaches_duly_made_and_assessment_items_in_one_run()
+    {
+        var dulyMade = BreachedItem(stateId: "duly-made");
+        var inAssessment = BreachedItem();
+        var sut = Build([dulyMade, inAssessment]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(dulyMade.SlaClock!.Breached);
+        Assert.True(inAssessment.SlaClock!.Breached);
+        Assert.Equal("assessment-in-progress",
+            Assert.Single(inAssessment.AuditLog, e => e.Action == "sla-breached").StateId);
+    }
+
+    [Theory]
+    [InlineData("queried")]
+    [InlineData("updated")]
+    [InlineData("awaiting-decision")]
+    [InlineData("submitted")]
+    public async Task RunOnceAsync_does_not_check_other_states(string stateId)
+    {
+        var item = BreachedItem(stateId: stateId);
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(item.SlaClock!.Breached);
+        Assert.Empty(item.AuditLog);
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_queries_only_duly_made_and_assessment_states()
+    {
+        var sut = Build();
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        await sut.Persistence.Received(1).QueryAsync(
+            Arg.Is<WorkItemQuery>(q =>
+                q.StateIds != null
+                && q.StateIds.Count == 2
+                && q.StateIds.Contains("duly-made")
+                && q.StateIds.Contains("assessment-in-progress")),
+            Arg.Any<CancellationToken>());
     }
 }
