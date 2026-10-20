@@ -12,8 +12,9 @@ public class ReAccreditationTypeTests
     {
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
-        // RA-595: v15 adds start-assessment ("Assessment started").
-        Assert.Equal("v15", _type.TemplateVersion);
+        // RA-595: v15 added start-assessment ("Assessment started"); v16
+        // removed payment-received.
+        Assert.Equal("v16", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -60,7 +61,7 @@ public class ReAccreditationTypeTests
     }
 
     [Theory]
-    [InlineData("payment-received", "duly-made", "assessment-in-progress")]
+    [InlineData("start-assessment", "duly-made", "assessment-in-progress")]
     [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress")]
     [InlineData("submit-for-decision", "assessment-in-progress", "awaiting-decision")]
     // RA-132: approve is NOT a generic-engine transition; it is handled
@@ -109,7 +110,7 @@ public class ReAccreditationTypeTests
     {
         // RA-595 (add step): start-assessment moves a duly-made case into
         // assessment. Caller-invocable because management-fe applies it through
-        // the generic action route, as it does payment-received today.
+        // the generic action route.
         var startAssessment = Assert.Single(
             _type.Transitions,
             t => t.ActionId == "start-assessment"
@@ -122,18 +123,16 @@ public class ReAccreditationTypeTests
     }
 
     [Fact]
-    public void Keeps_payment_received_until_management_fe_has_switched()
+    public void Does_not_declare_payment_received()
     {
-        // RA-595 rollout: add, switch, remove. payment-received stays at v15 so
-        // the deployed management-fe keeps working; v16 removes it.
-        var paymentReceived = Assert.Single(
+        // RA-595 rollout: add, switch, remove. v16 is the "remove" step:
+        // start-assessment is the only way from duly-made into assessment.
+        Assert.DoesNotContain(_type.Transitions, t => t.ActionId == "payment-received");
+        var intoAssessment = Assert.Single(
             _type.Transitions,
-            t => t.ActionId == "payment-received"
+            t => t.FromStateId == "duly-made" && t.ToStateId == "assessment-in-progress"
         );
-
-        Assert.Equal("duly-made", paymentReceived.FromStateId);
-        Assert.Equal("assessment-in-progress", paymentReceived.ToStateId);
-        Assert.True(paymentReceived.CallerInvocable);
+        Assert.Equal("start-assessment", intoAssessment.ActionId);
     }
 
     [Fact]

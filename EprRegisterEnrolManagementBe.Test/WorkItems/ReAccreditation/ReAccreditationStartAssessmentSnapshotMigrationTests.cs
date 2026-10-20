@@ -16,7 +16,10 @@ public class ReAccreditationStartAssessmentSnapshotMigrationTests
 {
     private const string ActionId = "start-assessment";
 
-    /// <summary>A v14 snapshot: the live template without start-assessment.</summary>
+    /// <summary>
+    /// A v14 snapshot: the live template without start-assessment, plus the
+    /// payment-received transition v14 still declared (v16 removed it).
+    /// </summary>
     private static WorkItemTemplateSnapshot BuildV14Snapshot()
     {
         var snapshot = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
@@ -24,7 +27,11 @@ public class ReAccreditationStartAssessmentSnapshotMigrationTests
         {
             TemplateVersion = "v14",
             States = snapshot.States,
-            Transitions = snapshot.Transitions.Where(t => t.ActionId != ActionId).ToList(),
+            Transitions = snapshot
+                .Transitions.Where(t => t.ActionId != ActionId)
+                .Append(new WorkItemTransition(
+                    "payment-received", "Payment received", "duly-made", "assessment-in-progress"))
+                .ToList(),
         };
     }
 

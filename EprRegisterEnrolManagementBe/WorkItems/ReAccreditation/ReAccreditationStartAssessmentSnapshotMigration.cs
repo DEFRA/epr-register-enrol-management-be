@@ -12,9 +12,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// frozen snapshot, not the live <see cref="ReAccreditationType"/>, so without
 /// this migration only items submitted after the deploy could be started with
 /// the new step. This is the "add" step of RA-595's add, switch, remove
-/// rollout: <c>payment-received</c> is deliberately left in place so the
-/// currently deployed management-fe keeps working; a later (v16) migration
-/// removes it.
+/// rollout: it leaves <c>payment-received</c> in place;
+/// <see cref="ReAccreditationRemovePaymentReceivedSnapshotMigration"/> (v16),
+/// registered straight after it, removes it.
 ///
 /// Writes only <see cref="WorkItem.TemplateSnapshot"/> and
 /// <see cref="WorkItem.TemplateVersion"/>. It never changes the state,
@@ -23,7 +23,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// is skipped, so a repeat boot writes nothing.
 ///
 /// Registered after every earlier snapshot migration, so an older item is
-/// brought up to v14 first and lands on v15 here.
+/// brought up to v14 first and lands on v15 here, then on v16 in the next
+/// migration.
 /// </summary>
 internal sealed class ReAccreditationStartAssessmentSnapshotMigration(
     ILogger<ReAccreditationStartAssessmentSnapshotMigration> logger)

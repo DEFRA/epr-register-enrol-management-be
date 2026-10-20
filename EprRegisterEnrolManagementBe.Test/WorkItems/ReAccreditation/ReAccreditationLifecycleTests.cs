@@ -27,11 +27,10 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// </summary>
 public class ReAccreditationLifecycleTests
 {
-    // RA-595: start-assessment ("Assessment started") is the new way out of
-    // duly-made; payment-received is kept until management-fe has switched.
+    // RA-595: start-assessment ("Assessment started") is the only way out of
+    // duly-made into assessment; v16 removed payment-received.
     [Theory]
     [InlineData("start-assessment")]
-    [InlineData("payment-received")]
     public async Task Walk_from_submitted_to_approved_records_full_audit_trail(string startActionId)
     {
         var ct = TestContext.Current.CancellationToken;

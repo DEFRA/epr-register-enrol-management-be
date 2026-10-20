@@ -159,10 +159,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemMigration, ReAccreditationSlaExtendQuerySnapshotMigration>();
         // RA-595 ("add" step): adds start-assessment ("Assessment started") to
         // every existing work item's frozen snapshot (→ v15). Registered after
-        // every other snapshot migration so it is the one that sets the final
-        // version. Writes only the stored rules and template version; it keeps
-        // payment-received until management-fe has switched.
+        // every older snapshot migration. Writes only the stored rules and
+        // template version; it leaves payment-received for the next migration.
         services.AddSingleton<IWorkItemMigration, ReAccreditationStartAssessmentSnapshotMigration>();
+        // RA-595 ("remove" step): removes payment-received from every existing
+        // work item's frozen snapshot (→ v16). Registered last of the snapshot
+        // migrations so it is the one that sets the final version.
+        // Writes only the stored rules and template version.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationRemovePaymentReceivedSnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply

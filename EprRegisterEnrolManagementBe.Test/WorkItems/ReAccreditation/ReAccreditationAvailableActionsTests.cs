@@ -149,17 +149,17 @@ public class ReAccreditationAvailableActionsTests
     }
 
     [Fact]
-    public void Payment_received_action_is_available_now_no_task_gate_exists()
+    public void Start_assessment_is_available_now_no_task_gate_exists_and_payment_received_is_gone()
     {
-        // RA-410: this used to assert 'payment-received' was absent while its
-        // task was outstanding and present once completed — the RA-364
-        // CallerInvocable filter was additive to that task gate, not a
-        // replacement for it. The task framework (and the gate) are gone, so
-        // the caller-invocable 'payment-received' is simply always available
-        // from 'duly-made' — regression cover for the ungating.
+        // RA-410: the task framework (and its gate) are gone, so the
+        // caller-invocable step out of 'duly-made' is simply always available
+        // — regression cover for the ungating. RA-595: that step is now
+        // start-assessment; v16 no longer declares payment-received.
         var projection = ProjectInState("duly-made");
+        var actionIds = projection.AvailableActions.Select(a => a.ActionId).ToArray();
 
-        Assert.Contains("payment-received", projection.AvailableActions.Select(a => a.ActionId));
+        Assert.Contains("start-assessment", actionIds);
+        Assert.DoesNotContain("payment-received", actionIds);
         Assert.All(projection.AvailableActions, a => Assert.True(a.CallerInvocable));
     }
 

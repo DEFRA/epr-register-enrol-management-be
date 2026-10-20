@@ -3540,17 +3540,21 @@ public class ReAccreditationEndpointTests
         Assert.Empty(persisted.AuditLog);
     }
 
-    [Fact]
-    public async Task Payment_received_still_moves_a_duly_made_case_into_assessment()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("bob-1")]
+    public async Task Payment_received_is_rejected_as_an_unknown_action_and_changes_nothing(
+        string? assignedToId)
     {
-        // RA-595 rollout: kept until management-fe has switched to start-assessment.
+        // RA-595 ("remove" step): v16 no longer declares payment-received, so a
+        // stale page or hand-crafted request can't bring the step back.
         var cancellationToken = TestContext.Current.CancellationToken;
-        var (adapter, pushed) = CapturingPushAdapter();
-        await using var factory = new ReAccreditationFactory(_fixture, pushAdapter: adapter);
+        await using var factory = new ReAccreditationFactory(_fixture);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildDulyMade(id, TenantClientId), cancellationToken);
+        await factory.SeedAsync(BuildDulyMade(id, TenantClientId, assignedToId), cancellationToken);
+        var before = await factory.Persistence.GetByIdAsync(id, cancellationToken);
 
         var response = await client.PostAsync(
             $"/work-items/{id}/actions/payment-received",
@@ -3558,11 +3562,58 @@ public class ReAccreditationEndpointTests
             cancellationToken
         );
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        Assert.Contains("'payment-received' is not declared", body);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(before!.ToBsonDocument(), persisted!.ToBsonDocument());
+    }
+
+    [Fact]
+    public async Task Payment_received_is_rejected_on_a_migrated_case_and_start_assessment_still_works()
+    {
+        // RA-595 ("remove" step): an existing v15 case still carries
+        // payment-received in its stored rules until the v16 migration runs.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildDulyMade(id, TenantClientId, "bob-1");
+        item.TemplateVersion = "v15";
+        item.TemplateSnapshot = new WorkItemTemplateSnapshot
+        {
+            TemplateVersion = "v15",
+            States = item.TemplateSnapshot!.States,
+            Transitions = item.TemplateSnapshot.Transitions
+                .Append(new WorkItemTransition(
+                    "payment-received", "Payment received", "duly-made", "assessment-in-progress"))
+                .ToList(),
+        };
+        await factory.SeedAsync(item, cancellationToken);
+        await new ReAccreditationRemovePaymentReceivedSnapshotMigration(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ReAccreditationRemovePaymentReceivedSnapshotMigration>.Instance
+        ).ApplyAsync(factory.Persistence, cancellationToken);
+        var migrated = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("v16", migrated!.TemplateVersion);
+
+        var rejected = await client.PostAsync(
+            $"/work-items/{id}/actions/payment-received", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+        Assert.Contains(
+            "'payment-received' is not declared",
+            await rejected.Content.ReadAsStringAsync(cancellationToken));
+        var unchanged = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(migrated.ToBsonDocument(), unchanged!.ToBsonDocument());
+
+        var started = await client.PostAsync(
+            $"/work-items/{id}/actions/start-assessment", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("assessment-in-progress", persisted!.StateId);
-        var push = await pushed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
-        Assert.Equal(("payment-received", "assessment-in-progress", "Payment received"), push);
+        Assert.Equal("bob-1", persisted.AssignedToId);
     }
 
     [Fact]

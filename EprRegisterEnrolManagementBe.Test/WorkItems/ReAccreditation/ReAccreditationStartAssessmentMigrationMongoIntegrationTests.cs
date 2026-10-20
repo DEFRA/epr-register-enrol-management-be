@@ -49,7 +49,10 @@ public sealed class ReAccreditationStartAssessmentMigrationMongoIntegrationTests
     private static ReAccreditationStartAssessmentSnapshotMigration BuildMigration() =>
         new(NullLogger<ReAccreditationStartAssessmentSnapshotMigration>.Instance);
 
-    /// <summary>v14: the live template without start-assessment.</summary>
+    /// <summary>
+    /// v14: the live template without start-assessment, plus the
+    /// payment-received transition v14 still declared (v16 removed it).
+    /// </summary>
     private static WorkItemTemplateSnapshot BuildV14Snapshot()
     {
         var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
@@ -57,7 +60,11 @@ public sealed class ReAccreditationStartAssessmentMigrationMongoIntegrationTests
         {
             TemplateVersion = "v14",
             States = live.States,
-            Transitions = live.Transitions.Where(t => t.ActionId != "start-assessment").ToList(),
+            Transitions = live
+                .Transitions.Where(t => t.ActionId != "start-assessment")
+                .Append(new WorkItemTransition(
+                    "payment-received", "Payment received", "duly-made", "assessment-in-progress"))
+                .ToList(),
         };
     }
 

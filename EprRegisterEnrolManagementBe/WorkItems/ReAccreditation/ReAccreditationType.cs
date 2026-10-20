@@ -12,7 +12,6 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 internal sealed class ReAccreditationType : IWorkItemType
 {
     private const string ContinueReviewActionLabel = "Continue review";
-    private const string PaymentReceivedActionLabel = "Payment received";
     private const string QueryActionLabel = "Query";
     private const string ResumeActionLabel = "Resume";
     private const string StartAssessmentActionLabel = "Assessment started";
@@ -165,7 +164,14 @@ internal sealed class ReAccreditationType : IWorkItemType
     // Items snapshotted before v15 have no start-assessment transition until
     // ReAccreditationStartAssessmentSnapshotMigration patches their frozen
     // snapshot.
-    public string TemplateVersion => "v15";
+    // v16 (RA-595, "remove" step): removed payment-received. management-fe
+    // now applies start-assessment, so a stale page or hand-crafted request
+    // for payment-received is rejected as an unknown action. Existing
+    // "Payment received" audit entries keep their stored display names.
+    // Items snapshotted before v16 keep payment-received until
+    // ReAccreditationRemovePaymentReceivedSnapshotMigration patches their
+    // frozen snapshot.
+    public string TemplateVersion => "v16";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -201,17 +207,11 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_dulyMade.Id,
             CallerInvocable: false
         ),
-        new WorkItemTransition(
-            "payment-received",
-            PaymentReceivedActionLabel,
-            s_dulyMade.Id,
-            s_assessmentInProgress.Id
-        ),
         // RA-595: moves a duly-made case into assessment. Goes through the
         // generic action path, so the action-applied audit entry and the
         // UPDATED status push apply; ReAccreditationNotificationHook has no
-        // template for it, so no email is sent. Replaces payment-received,
-        // which is retained only until management-fe has switched (v16).
+        // template for it, so no email is sent. Replaced payment-received (removed
+        // at v16).
         new WorkItemTransition(
             "start-assessment",
             StartAssessmentActionLabel,

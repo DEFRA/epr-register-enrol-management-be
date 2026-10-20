@@ -462,8 +462,8 @@ public class ReAccreditationNotificationHookTests
     // entry) is unaffected; this hook simply produces no Notify call or
     // notification audit entry for either action.
     [Theory]
-    [InlineData("payment-received")]
-    // RA-595: "Assessment started" never had a template — no email.
+    // RA-595: "Assessment started" never had a template — no email. (It
+    // replaced payment-received, which v16 no longer declares.)
     [InlineData("start-assessment")]
     [InlineData("sla-extend")]
     public async Task OnActionAppliedAsync_removed_templates_do_not_call_notify_client(string actionId)

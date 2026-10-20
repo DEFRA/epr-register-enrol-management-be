@@ -137,8 +137,8 @@ public class ReAccreditationStatusPushHookTests
     }
 
     [Theory]
-    [InlineData("payment-received", "assessment-in-progress", "duly-made")]
-    // RA-595: "Assessment started" pushes UPDATED exactly as payment-received does.
+    // RA-595: "Assessment started" pushes UPDATED, as payment-received did
+    // before v16 removed it.
     [InlineData("start-assessment", "assessment-in-progress", "duly-made")]
     [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress")]
     // RA-351: the queried sla-extend self-loop is a status change, not a move
