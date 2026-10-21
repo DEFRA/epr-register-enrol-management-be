@@ -106,6 +106,12 @@ public sealed class SlaService : ISlaService
     public const string ExtendActionId = "sla-extend";
 
     /// <summary>
+    /// How many read-validate-replace passes <see cref="ExtendAsync"/> makes
+    /// before reporting a concurrency conflict.
+    /// </summary>
+    private const int MaxAttempts = 3;
+
+    /// <summary>
     /// RA-611: the regulator's calendar. The deadline floor is decided on UK
     /// local dates, not UTC — during BST a UTC comparison is an hour out either
     /// side of midnight, which is exactly where an off-by-one-day rejection
@@ -212,6 +218,48 @@ public sealed class SlaService : ISlaService
         // ISO-8601 duration carries its sign AHEAD of the 'P' (-P14D). See
         // SlaEndpoints.TryParseDuration.
 
+        // RA-595: a change submitted from Duly made runs straight after
+        // start-assessment, whose status-push hook appends an audit entry in
+        // the background. If that write lands between our read and our
+        // replace, the replace conflicts. The caller sends no version, so
+        // re-read and apply the change again, up to MaxAttempts times — the
+        // same pattern as the approval and duly-making services.
+        WorkItemConcurrencyException? lastConflict = null;
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            try
+            {
+                return await ExtendOnceAsync(
+                    workItemId, additionalDuration, reason, user, cancellationToken);
+            }
+            catch (WorkItemConcurrencyException ex)
+            {
+                // Re-read and try again.
+                lastConflict = ex;
+            }
+        }
+
+        _logger.LogWarning(
+            lastConflict,
+            "SLA extend for work item {WorkItemId} abandoned after {Attempts} attempts due to repeated concurrency conflicts.",
+            workItemId, MaxAttempts);
+        return SlaActionResult.Failure(
+            SlaActionFailureCode.ConcurrencyConflict,
+            $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
+    }
+
+    /// <summary>
+    /// One read-validate-replace pass of <see cref="ExtendAsync"/>. Lets a
+    /// <see cref="WorkItemConcurrencyException"/> from the replace escape so
+    /// the caller can retry on a fresh read.
+    /// </summary>
+    private async Task<SlaActionResult> ExtendOnceAsync(
+        Guid workItemId,
+        TimeSpan additionalDuration,
+        string reason,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
         var workItem = await _persistence.GetByIdAsync(workItemId, cancellationToken);
         if (workItem is null)
         {
@@ -306,16 +354,7 @@ public sealed class SlaService : ISlaService
                 ["additionalDuration"] = XmlConvert.ToString(additionalDuration)
             });
 
-        try
-        {
-            await _persistence.ReplaceAsync(workItem, cancellationToken);
-        }
-        catch (WorkItemConcurrencyException)
-        {
-            return SlaActionResult.Failure(
-                SlaActionFailureCode.ConcurrencyConflict,
-                $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
-        }
+        await _persistence.ReplaceAsync(workItem, cancellationToken);
 
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) SLA extended by {AdditionalDuration} (target now {TargetDuration}) by {User}",

@@ -13,6 +13,8 @@ internal sealed class SlaBreachBackgroundService(
     ILogger<SlaBreachBackgroundService> logger,
     IConfiguration configuration) : BackgroundService
 {
+    private static readonly string[] s_breachCheckedStateIds = ["duly-made", "assessment-in-progress"];
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var interval = configuration.GetValue("SlaBreachJob:IntervalHours", 24.0);
@@ -47,12 +49,15 @@ internal sealed class SlaBreachBackgroundService(
 
         var now = timeProvider.GetUtcNow().UtcDateTime;
 
-        // Query items in assessment-in-progress (the only state that carries an SLA clock).
-        // Each run processes up to MaxPageSize items. In practice the active assessment
+        // Query the states a case is worked in while its SLA clock runs. The clock
+        // starts at duly making, and RA-595 lets regulators assess straight from
+        // duly-made, so duly-made cases are checked as well as assessment-in-progress.
+        // Queried cases are not checked.
+        // Each run processes up to MaxPageSize items. In practice the active
         // queue is small; if it ever exceeds MaxPageSize the job will catch remaining
         // items on the next nightly run.
         var query = new WorkItemQuery(
-            StateIds: ["assessment-in-progress"],
+            StateIds: s_breachCheckedStateIds,
             PageSize: WorkItemQuery.MaxPageSize);
         var page = await persistence.QueryAsync(query, cancellationToken);
 
@@ -123,7 +128,7 @@ internal sealed class SlaBreachBackgroundService(
         if (breached > 0 || page.Items.Count > 0)
         {
             logger.LogInformation(
-                "SLA breach job completed: {Total} items in assessment, {Breached} newly breached.",
+                "SLA breach job completed: {Total} items checked, {Breached} newly breached.",
                 page.Items.Count, breached);
         }
     }

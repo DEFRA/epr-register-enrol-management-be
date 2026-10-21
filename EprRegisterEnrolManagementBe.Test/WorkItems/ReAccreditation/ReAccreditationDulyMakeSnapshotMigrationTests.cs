@@ -41,7 +41,13 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         {
             TemplateVersion = "v10",
             States = live.States,
-            Transitions = live.Transitions.Where(t => t.ActionId != "duly-make").ToList(),
+            // payment-received was still declared at v10 (v16 removed it from
+            // the live type), so it is added back by hand.
+            Transitions = live
+                .Transitions.Where(t => t.ActionId != "duly-make")
+                .Append(new WorkItemTransition(
+                    "payment-received", "Payment received", "duly-made", "assessment-in-progress"))
+                .ToList(),
         };
     }
 
@@ -271,7 +277,8 @@ public class ReAccreditationDulyMakeSnapshotMigrationTests
         var after = item.TemplateSnapshot.Transitions.Select(t => t.ActionId).ToHashSet();
         Assert.Empty(before.Except(after));
         Assert.Equal(["duly-make"], after.Except(before));
-        // payment-received in particular survives — 16 e2e specs drive it.
+        // payment-received in particular survives: only the v16 migration
+        // (RA-595) removes it.
         Assert.Contains("payment-received", after);
     }
 

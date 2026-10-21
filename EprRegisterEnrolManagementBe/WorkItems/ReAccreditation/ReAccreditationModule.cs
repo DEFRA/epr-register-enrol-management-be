@@ -26,12 +26,6 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
         services.AddSingleton<ITestOrganisationFixtureSeeder, ReAccreditationTestOrganisationFixtures>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
-        // RA-316: ReAccreditationSlaStampHook is deliberately gone. It restarted
-        // the SLA clock at `now` whenever payment-received was applied, which
-        // would have wiped the payment-date anchoring duly making now
-        // establishes. The clock is started once, by
-        // ReAccreditationDulyMakingService, and payment-received no longer
-        // touches it.
         // The operator-backend pushes run before the email hook, which waits on
         // GOV.UK Notify (up to a 15s timeout per attempt, retried). Hooks run in
         // registration order inside the caller's request, so an email that is
@@ -164,6 +158,16 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // whose from-state is 'queried' (a v12 snapshot already carries the
         // assessment-in-progress sla-extend self-loop).
         services.AddSingleton<IWorkItemMigration, ReAccreditationSlaExtendQuerySnapshotMigration>();
+        // RA-595 ("add" step): adds start-assessment ("Assessment started") to
+        // every existing work item's frozen snapshot (→ v15). Registered after
+        // every older snapshot migration. Writes only the stored rules and
+        // template version; it leaves payment-received for the next migration.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationStartAssessmentSnapshotMigration>();
+        // RA-595 ("remove" step): removes payment-received from every existing
+        // work item's frozen snapshot (→ v16). Registered last of the snapshot
+        // migrations so it is the one that sets the final version.
+        // Writes only the stored rules and template version.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationRemovePaymentReceivedSnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply

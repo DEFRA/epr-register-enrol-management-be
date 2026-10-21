@@ -27,8 +27,11 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// </summary>
 public class ReAccreditationLifecycleTests
 {
-    [Fact]
-    public async Task Walk_from_submitted_to_approved_records_full_audit_trail()
+    // RA-595: start-assessment ("Assessment started") is the only way out of
+    // duly-made into assessment; v16 removed payment-received.
+    [Theory]
+    [InlineData("start-assessment")]
+    public async Task Walk_from_submitted_to_approved_records_full_audit_trail(string startActionId)
     {
         var ct = TestContext.Current.CancellationToken;
         var type = new ReAccreditationType();
@@ -133,7 +136,7 @@ public class ReAccreditationLifecycleTests
         );
 
         Assert.True(
-            (await engine.ApplyActionAsync(workItem.Id, "payment-received", user, ct)).IsSuccess
+            (await engine.ApplyActionAsync(workItem.Id, startActionId, user, ct)).IsSuccess
         );
 
         Assert.True(
@@ -151,7 +154,7 @@ public class ReAccreditationLifecycleTests
         // RA-410: no state contributes task-completed entries any more — the
         // task framework is gone, so the walk is shorter than it used to be.
         // 1 action-applied:duly-make + 1 sla-clock-started
-        // + 1 action-applied:payment-received + 1 action-applied:submit-for-decision
+        // + 1 action-applied:<start step> + 1 action-applied:submit-for-decision
         // + 3 approval entries (action-applied, sla-clock-stopped, accreditation-issued) = 7 total.
         Assert.Equal(7, workItem.AuditLog.Count);
         Assert.Contains(
@@ -411,6 +414,49 @@ public class ReAccreditationLifecycleTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
         Assert.Equal(terminalStateId, workItem.StateId);
+    }
+
+    /// <summary>
+    /// RA-595: start-assessment is only a way out of <c>duly-made</c>. Every
+    /// other state refuses it and the item does not move.
+    /// </summary>
+    [Theory]
+    [InlineData("submitted")]
+    [InlineData("assessment-in-progress")]
+    [InlineData("awaiting-decision")]
+    [InlineData("queried")]
+    [InlineData("updated")]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    public async Task Start_assessment_is_rejected_outside_duly_made(string stateId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var type = new ReAccreditationType();
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        var engine = new WorkItemService(
+            new WorkItemRegistry([type]),
+            persistence,
+            NullLogger<WorkItemService>.Instance
+        );
+
+        var workItem = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = stateId,
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+        persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var user = new ClaimsPrincipal(
+            new ClaimsIdentity([new Claim("user:id", "alice-1")], "test")
+        );
+        var result = await engine.ApplyActionAsync(workItem.Id, "start-assessment", user, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(stateId, workItem.StateId);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     /// <summary>

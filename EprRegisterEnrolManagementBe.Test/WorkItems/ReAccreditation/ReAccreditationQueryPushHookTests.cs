@@ -83,7 +83,7 @@ public class ReAccreditationQueryPushHookTests
 
     [Theory]
     [InlineData("submit-for-decision")]
-    [InlineData("payment-received")]
+    [InlineData("start-assessment")]
     [InlineData("withdraw")]
     [InlineData("approve")]
     public async Task OnActionAppliedAsync_ignores_non_query_actions(string actionId)

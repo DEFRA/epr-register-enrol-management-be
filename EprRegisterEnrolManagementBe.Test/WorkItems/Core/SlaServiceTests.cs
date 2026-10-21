@@ -757,11 +757,11 @@ public class SlaServiceTests
     }
 
     [Fact]
-    public async Task ExtendAsync_returns_concurrency_conflict_on_replace_exception()
+    public async Task ExtendAsync_returns_concurrency_conflict_when_every_attempt_conflicts()
     {
         var workItem = WorkItemWithClock();
         _persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>())
-            .Returns(workItem);
+            .Returns(_ => WorkItemWithClock(id: workItem.Id));
         _persistence.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new WorkItemConcurrencyException(workItem.Id, 0));
 
@@ -770,6 +770,50 @@ public class SlaServiceTests
             TeamLeader(), TestContext.Current.CancellationToken);
 
         Assert.Equal(SlaActionFailureCode.ConcurrencyConflict, result.FailureCode);
+        await _persistence.Received(3)
+            .ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        await _hook.DidNotReceiveWithAnyArgs()
+            .OnActionAppliedAsync(default!, default!, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    /// <summary>
+    /// RA-595: a deadline change submitted from Duly made runs straight after
+    /// start-assessment, whose status-push hook writes an audit entry in the
+    /// background. If that write lands between this service's read and its
+    /// replace, the replace conflicts. The request carries no version from
+    /// the caller, so the service re-reads and applies the change again
+    /// rather than refusing it.
+    /// </summary>
+    [Fact]
+    public async Task ExtendAsync_rereads_and_retries_after_a_concurrency_conflict()
+    {
+        var id = Guid.NewGuid();
+        _persistence.GetByIdAsync(id, Arg.Any<CancellationToken>())
+            .Returns(_ => WorkItemWithClock(id: id, targetDuration: TimeSpan.FromDays(84)));
+        var attempts = 0;
+        WorkItem? saved = null;
+        _persistence.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                if (++attempts == 1)
+                {
+                    throw new WorkItemConcurrencyException(id, 0);
+                }
+                saved = call.Arg<WorkItem>();
+                return Task.CompletedTask;
+            });
+
+        var result = await BuildService().ExtendAsync(
+            id, TimeSpan.FromDays(7), "reason",
+            TeamLeader(), TestContext.Current.CancellationToken);
+
+        Assert.True(result.IsSuccess);
+        await _persistence.Received(2).GetByIdAsync(id, Arg.Any<CancellationToken>());
+        Assert.NotNull(saved);
+        Assert.Equal(TimeSpan.FromDays(91), saved!.SlaClock!.TargetDuration);
+        Assert.Single(saved.AuditLog, e => e.Action == "sla-extended");
+        await _hook.Received(1)
+            .OnActionAppliedAsync(Arg.Any<WorkItem>(), SlaService.ExtendActionId, Arg.Any<string>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
     }
 
     // ── OverrideAsync — success path ──────────────────────────────────────────

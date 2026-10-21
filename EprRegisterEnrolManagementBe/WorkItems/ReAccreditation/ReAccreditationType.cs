@@ -12,9 +12,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 internal sealed class ReAccreditationType : IWorkItemType
 {
     private const string ContinueReviewActionLabel = "Continue review";
-    private const string PaymentReceivedActionLabel = "Payment received";
     private const string QueryActionLabel = "Query";
     private const string ResumeActionLabel = "Resume";
+    private const string StartAssessmentActionLabel = "Assessment started";
     private const string WithdrawActionLabel = "Withdraw";
 
     public const string Id = "re-accreditation";
@@ -154,7 +154,24 @@ internal sealed class ReAccreditationType : IWorkItemType
     // those. Items snapshotted before v14 keep resume-during-duly-made ->
     // updated until ReAccreditationResumeDulyMadeAssessmentSnapshotMigration
     // patches their frozen snapshot.
-    public string TemplateVersion => "v14";
+    // v15 (RA-595, "add" step): added start-assessment (duly-made ->
+    // assessment-in-progress), display name "Assessment started". It is the
+    // step management-fe will apply (via the generic action route, so it is
+    // CallerInvocable) to move a duly-made case into assessment, replacing
+    // payment-received. payment-received is deliberately KEPT at v15 so the
+    // currently deployed management-fe keeps working; v16 removes it once the
+    // frontend has switched. Decisions and sla-extend stay assessment-only.
+    // Items snapshotted before v15 have no start-assessment transition until
+    // ReAccreditationStartAssessmentSnapshotMigration patches their frozen
+    // snapshot.
+    // v16 (RA-595, "remove" step): removed payment-received. management-fe
+    // now applies start-assessment, so a stale page or hand-crafted request
+    // for payment-received is rejected as an unknown action. Existing
+    // "Payment received" audit entries keep their stored display names.
+    // Items snapshotted before v16 keep payment-received until
+    // ReAccreditationRemovePaymentReceivedSnapshotMigration patches their
+    // frozen snapshot.
+    public string TemplateVersion => "v16";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -190,9 +207,14 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_dulyMade.Id,
             CallerInvocable: false
         ),
+        // RA-595: moves a duly-made case into assessment. Goes through the
+        // generic action path, so the action-applied audit entry and the
+        // UPDATED status push apply; ReAccreditationNotificationHook has no
+        // template for it, so no email is sent. Replaced payment-received (removed
+        // at v16).
         new WorkItemTransition(
-            "payment-received",
-            PaymentReceivedActionLabel,
+            "start-assessment",
+            StartAssessmentActionLabel,
             s_dulyMade.Id,
             s_assessmentInProgress.Id
         ),
