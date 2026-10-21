@@ -773,7 +773,7 @@ public class SlaServiceTests
         await _persistence.Received(3)
             .ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
         await _hook.DidNotReceiveWithAnyArgs()
-            .OnActionAppliedAsync(default!, default!, default!, default!, default);
+            .OnActionAppliedAsync(default!, default!, default!, default!, TestContext.Current.CancellationToken);
     }
 
     /// <summary>

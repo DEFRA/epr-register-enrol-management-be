@@ -224,27 +224,28 @@ public sealed class SlaService : ISlaService
         // replace, the replace conflicts. The caller sends no version, so
         // re-read and apply the change again, up to MaxAttempts times — the
         // same pattern as the approval and duly-making services.
-        for (var attempt = 1; ; attempt++)
+        WorkItemConcurrencyException? lastConflict = null;
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             try
             {
                 return await ExtendOnceAsync(
                     workItemId, additionalDuration, reason, user, cancellationToken);
             }
-            catch (WorkItemConcurrencyException) when (attempt < MaxAttempts)
+            catch (WorkItemConcurrencyException ex)
             {
                 // Re-read and try again.
-            }
-            catch (WorkItemConcurrencyException)
-            {
-                _logger.LogWarning(
-                    "SLA extend for work item {WorkItemId} abandoned after {Attempts} attempts due to repeated concurrency conflicts.",
-                    workItemId, MaxAttempts);
-                return SlaActionResult.Failure(
-                    SlaActionFailureCode.ConcurrencyConflict,
-                    $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
+                lastConflict = ex;
             }
         }
+
+        _logger.LogWarning(
+            lastConflict,
+            "SLA extend for work item {WorkItemId} abandoned after {Attempts} attempts due to repeated concurrency conflicts.",
+            workItemId, MaxAttempts);
+        return SlaActionResult.Failure(
+            SlaActionFailureCode.ConcurrencyConflict,
+            $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry.");
     }
 
     /// <summary>
