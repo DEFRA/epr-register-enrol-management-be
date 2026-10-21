@@ -32,7 +32,7 @@ These are produced by the CDP portal at deploy time unless noted otherwise.
 | `OperatorBackendApi__ClientId` | Service config    | Defaults to `epr-register-enrol-management-be`. Only override if `epr-register-enrol-backend`'s `CaseManagementAuth:ExpectedClientId` expects a different value — prefer leaving both at their defaults. |
 | `Auth__ManagementFeClientId` | Service config  | The `clientId` (`x-cdp-client-id` value) that `management-fe` is expected to assert. Defaults to `frontend` — override only if `management-fe`'s own `BACKEND_API_CLIENT_ID` is set to something else. Must be distinct from `Auth__BackendClientId` (see RA-345 below). |
 | `Auth__BackendClientId` | Service config      | The `clientId` that `epr-register-enrol-backend` is expected to assert. Defaults to `epr-register-enrol-backend` — override only if that service's own `CaseWorking__ClientId` is set to something else. Must be distinct from `Auth__ManagementFeClientId`; the service throws at first request if the two collide. |
-| `ENVIRONMENT`              | CDP platform          | Platform environment name (`local`, `dev`, `test`, `perf-test`, `ext-test`, `prod`). Read by `NotifySendingPolicy` — see [Notify sending by environment](#notify-sending-by-environment) below. |
+| `ENVIRONMENT`              | CDP platform          | Platform environment name (`local`, `dev`, `test`, `perf-test`, `ext-test`, `prod`). Read by `CdpEnvironment.Read` for `NotifySendingPolicy` — see [Notify sending by environment](#notify-sending-by-environment) below — and for the [test organisations](#test-organisations-ra-000) prod startup guard. |
 | `NOTIFY_SENDEMAILS`        | Service config        | Optional. Overrides the environment-derived decision about whether email is really dispatched (`true`/`false`). A flat top-level key, matching `NOTIFY_API_KEY`'s convention. Leave unset in normal operation. |
 | `Notify__RegulatorMailboxes__<Nation>` | Service config | Regulator shared-mailbox address that regulator-facing emails are sent to, one per nation (`England`, `Scotland`, `Wales`, `NorthernIreland`). `appsettings.json` ships every nation blank, so each environment sets its own addresses in cdp-app-config. The real regulator inboxes are set in prod's config only; a non-prod environment never falls back to a real regulator. A missing or blank nation skips the send and records a `notification-skipped` audit entry with reason `missing-regulator-mailbox`. |
 
@@ -46,6 +46,7 @@ Create via the CDP self-service portal under the service's "secrets" tab:
 | `AUTH_SHARED_SECRET__BACKEND` | HMAC secret used to verify signed trust headers from `epr-register-enrol-backend` (see [BFF signing contract](#bff-signing-contract) below). Must match the secret `epr-register-enrol-backend` signs with (`CASE_MANAGEMENT_API_SHARED_SECRET` in that service — a flat name, not the nested `CaseWorking__*` form the rest of that service's `CaseWorking` config uses, per CDP's secrets naming convention). **Required in all non-Development environments.** Distinct from `AUTH_SHARED_SECRET__MANAGEMENT_FE` — this is the entire point of RA-345 (per-caller secrets): rotating or revoking one caller's secret must never require touching the other's. Generate with `openssl rand -base64 32`. |
 | `NOTIFY_API_KEY`     | GOV.UK Notify API key. Only takes effect when the `Notify__Enabled` master switch is `true` (RA-422; default `false`, set per environment in cdp-app-config). With the flag off — the default in every environment — the notification hook is never registered, so no email is sent and no `notification-*` audit entries are written regardless of this key. With the flag on but this key absent, the service boots with a no-op Notify client (notifications logged, not sent). Even with the flag on and this key set, dev and localhost suppress sending regardless — see [Notify sending by environment](#notify-sending-by-environment). |
 | `OPERATOR_BACKEND_SHARED_SECRET` | HMAC shared secret this service signs its outbound RA-311/MBE-1 query-push requests with — a flat name, not the nested `OperatorBackendApi__*` form the rest of that config section uses, per CDP's secrets naming convention. Must match `AUTH_SHARED_SECRET__MANAGEMENT_BE` on `epr-register-enrol-backend` exactly — a mismatch on either side 401s every push. The two secrets deliberately don't share a name: this service names its own outbound secrets by target/purpose (matching `epr-register-enrol-backend`'s own `CASE_MANAGEMENT_API_SHARED_SECRET` pattern for its outbound calls into this service), while `epr-register-enrol-backend` names its inbound secrets by caller (matching this service's own `AUTH_SHARED_SECRET__MANAGEMENT_FE`/`AUTH_SHARED_SECRET__BACKEND` pattern below) — same convention applied from each service's own side, not a shared literal name. **Required when `OperatorBackendApi__Enabled=true`** — startup fails otherwise. Generate with `openssl rand -base64 32`. Distinct from the two `AUTH_SHARED_SECRET__*` secrets above (this service's *inbound* secrets) and from whatever `epr-register-enrol-backend` uses for its own calls into this service (`CASE_MANAGEMENT_API_SHARED_SECRET`) — four separate secrets in total, not one, do not conflate them when rotating. |
+| `AUTH_SHARED_SECRET__MGMT_TESTS` | **CDP test only.** HMAC secret used to verify signed trust headers from the `epr-register-enrol-mgmt-tests` journey suite (clientId `Auth__MgmtTestsClientId`, default `epr-register-enrol-mgmt-tests`). Must match the suite's `MANAGEMENT_BE_SHARED_SECRET`. Registered only when `TestOrganisations__Enabled=true` as well; never set in prod. See [Test organisations](#test-organisations-ra-000). |
 
 > **RA-345 (per-caller secrets):** prior to RA-345 there was a single
 > `AUTH_SHARED_SECRET` shared by both inbound callers, with `clientId`
@@ -84,7 +85,7 @@ Notify. Suppressed sends are logged with
 `Notify integration: … sendingEnabled=… environment=…` records the decision.
 
 `ENVIRONMENT` is read straight from the process environment
-(`NotifySendingPolicy.ReadCdpEnvironment`), not through `IConfiguration`:
+(`CdpEnvironment.Read`), not through `IConfiguration`:
 `ENVIRONMENT` is also `WebHostDefaults.EnvironmentKey`, so when the ASP.NET
 host environment is set explicitly, host configuration shadows the key and
 `configuration["ENVIRONMENT"]` returns the host environment name
@@ -99,6 +100,34 @@ sending environment). Environment variables for deployed environments live in
 [DEFRA/cdp-app-config](https://github.com/DEFRA/cdp-app-config), not in this
 repo.
 
+## Test organisations (RA-000)
+
+The mgmt-tests journey suite runs against CDP **test**, whose Mongo is never
+reset and whose ReEx and operator journey backend are real. It provisions its
+own uniquely named data under organisation ids starting with the lower-case
+prefix `e2e-`. `TestOrganisations__Enabled` (default `false`; set `true` on
+test only, via cdp-app-config) turns on:
+
+- **ReEx routing.** With real ReEx credentials configured,
+  `TestOrganisationReExAccreditationClient` answers `e2e-` organisations from
+  `StubReExAccreditationClient` (real ReEx 404s them) and sends everything else
+  to real ReEx. This is what makes the RA-254 prior-year section render for
+  journey-test items.
+- **Journey-test fixtures.** On every boot, `TestOrganisationFixtureHostedService`
+  replaces two work items with fixed ids with their pristine documents:
+  the RA-342 legacy-snapshot item (`00000342-0000-4000-8000-000000000342`) and the
+  RA-611 pre-year-start item (`00000611-0000-4000-8000-000000000611`). The demo
+  seed set does **not** run (it needs Development).
+- **The mgmt-tests caller.** `AUTH_SHARED_SECRET__MGMT_TESTS` is registered as
+  a third HMAC caller (same v3 contract as below), so the suite can create work
+  items with `POST /work-items` and drive operator-side transitions.
+
+The service **refuses to start** when `TestOrganisations__Enabled=true` and
+`ENVIRONMENT=prod`. Note that registering any caller secret turns off
+Development header-trust for every caller, so a stack that sets
+`AUTH_SHARED_SECRET__MGMT_TESTS` must also set the management-fe and backend
+secrets.
+
 ## BFF signing contract
 
 Every request the BFF sends to this backend must carry four headers. The
@@ -111,7 +140,7 @@ signature, are rejected with `401`.
 | `x-cdp-client-id` | The clientId the caller asserts (each caller sets this from its own config — see RA-345 above). The `x-cdp-` prefix matches this scheme's other trust headers by convention only — this value is *not* injected or verified by CDP itself, which is exactly why the HMAC signature below exists. |
 | `x-cdp-auth-timestamp`    | ISO-8601 UTC instant the BFF assembled the request (e.g. `2026-05-18T10:00:00Z`). Must be within 5 minutes of the backend clock. |
 | `x-cdp-auth-nonce`        | Per-request opaque random token minted by the BFF (e.g. base64url of 16 random bytes). Single-use — a replayed nonce is rejected for 10 minutes. |
-| `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below), keyed with the secret registered for the asserted `x-cdp-client-id` (`AUTH_SHARED_SECRET__MANAGEMENT_FE` or `AUTH_SHARED_SECRET__BACKEND` — see RA-345 above). |
+| `x-cdp-auth-signature`    | Base64 HMAC-SHA256 of the canonical payload (see below), keyed with the secret registered for the asserted `x-cdp-client-id` (`AUTH_SHARED_SECRET__MANAGEMENT_FE`, `AUTH_SHARED_SECRET__BACKEND` or, on CDP test only, `AUTH_SHARED_SECRET__MGMT_TESTS` — see RA-345 above). |
 
 ### Canonical payload (v3)
 

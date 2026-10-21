@@ -24,6 +24,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IRegulatorMailboxResolver, RegulatorMailboxResolver>();
         services.AddSingleton<IReAccreditationDecisionService, ReAccreditationDecisionService>();
         services.AddSingleton<IWorkItemSeeder, ReAccreditationSeeder>();
+        services.AddSingleton<ITestOrganisationFixtureSeeder, ReAccreditationTestOrganisationFixtures>();
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationNationRoutingHook>();
         // The operator-backend pushes run before the email hook, which waits on
         // GOV.UK Notify (up to a 15s timeout per attempt, retried). Hooks run in

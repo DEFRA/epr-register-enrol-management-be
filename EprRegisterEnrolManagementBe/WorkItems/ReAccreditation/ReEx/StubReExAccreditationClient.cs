@@ -4,12 +4,16 @@ using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 
 /// <summary>
-/// Development stub: always returns a fixed prior-year record regardless of
-/// the identifiers passed, so the application-details page can be exercised
-/// locally without ReEx credentials. Registered when
-/// <c>REEX_API_BASIC_AUTH_USERNAME</c> is absent.
+/// Stub: always returns a fixed prior-year record regardless of the
+/// identifiers passed, so the application-details page can be exercised
+/// without ReEx credentials. Registered for every lookup when
+/// <c>REEX_API_BASIC_AUTH_USERNAME</c> is absent (local, compose), and for
+/// <c>e2e-</c> test organisations only via
+/// <see cref="TestOrganisationReExAccreditationClient"/> when
+/// <c>TestOrganisations__Enabled</c> is on (CDP test).
 /// </summary>
-internal sealed class StubReExAccreditationClient : IReExAccreditationClient
+internal sealed class StubReExAccreditationClient(TimeProvider timeProvider)
+    : IReExAccreditationClient
 {
     public Task<PriorYearAccreditationDto?> GetPriorYearAsync(
         string? organisationId,
@@ -17,7 +21,7 @@ internal sealed class StubReExAccreditationClient : IReExAccreditationClient
         int? year,
         CancellationToken cancellationToken = default)
     {
-        var priorYear = year ?? DateTime.UtcNow.Year - 1;
+        var priorYear = year ?? timeProvider.GetUtcNow().Year - 1;
 
         return Task.FromResult<PriorYearAccreditationDto?>(new PriorYearAccreditationDto
         {

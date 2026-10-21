@@ -441,6 +441,26 @@ fixture is the same pattern applied a second time: it needed its own new
 `seedKey` because it exercises a shape (`wasteProcessingType: "exporter"`
 with no `siteAddress`) that no existing fixture covers.
 
+### End-to-end test fixtures (RA-000): reset, not insert
+
+A second, separate hook covers fixtures the mgmt-tests journey suite needs but
+cannot create through the API. Modules register an
+`ITestOrganisationFixtureSeeder`, which returns whole BSON documents with
+fixed `_id`s on `e2e-` test organisations. `TestOrganisationFixtureHostedService`
+writes them through `IWorkItemFixtureStore.ResetAsync`, which is implemented by
+`WorkItemPersistence` (so the collection still has one writer) and is deliberately
+not on `IWorkItemPersistence`. It **replaces** each fixture on every boot, so a
+fixture is always pristine and content changes always reach every database.
+Raw BSON lets a fixture carry elements `WorkItem` no longer declares, such as
+a legacy template snapshot.
+
+`WorkItemModuleExtensions.AddWorkItemSeeders` registers it alongside the demo
+seeder (Development + `WorkItems:SeedOnStartup`, the compose stack) and, on
+its own, wherever `TestOrganisations__Enabled` is on (CDP test). The demo set
+never runs outside Development, and prod can reach neither: startup refuses
+`TestOrganisations__Enabled` there. The re-accreditation fixtures are in
+`ReAccreditationTestOrganisationFixtures`.
+
 ## Example: re-accreditation module (RA-98)
 
 Reference implementation that demonstrates the framework's "one folder + one

@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using Microsoft.Extensions.DependencyInjection;
@@ -83,12 +84,12 @@ public class NotifyEnvironmentGatingTests : IClassFixture<MongoIntegrationFixtur
     )
     {
         var previous = Environment.GetEnvironmentVariable(
-            NotifySendingPolicy.EnvironmentVariable
+            CdpEnvironment.Variable
         );
         try
         {
             Environment.SetEnvironmentVariable(
-                NotifySendingPolicy.EnvironmentVariable,
+                CdpEnvironment.Variable,
                 cdpEnvironment
             );
 
@@ -118,7 +119,7 @@ public class NotifyEnvironmentGatingTests : IClassFixture<MongoIntegrationFixtur
         finally
         {
             Environment.SetEnvironmentVariable(
-                NotifySendingPolicy.EnvironmentVariable,
+                CdpEnvironment.Variable,
                 previous
             );
         }
