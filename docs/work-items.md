@@ -126,7 +126,8 @@ That is the complete list of changes required outside the new module folder.
   than needing a rescue path. RA-410's
   `POST /work-items/re-accreditation/{id}/decision` is the reference case: it
   carries an application from `assessment-in-progress` through
-  `awaiting-decision` to `approved`/`rejected` in one call, because two calls
+  `awaiting-decision` to its decided state in one call (RA-527: an approval
+  now lands in the non-terminal `approved-pending-contact`), because two calls
   left a window in which an application stranded in `awaiting-decision` had
   no call to action to discharge it.
 
@@ -469,7 +470,7 @@ registration line" promise. All files live under
 
 | File | Role |
 | --- | --- |
-| `ReAccreditationType.cs` | Declares the states (`submitted`, `duly-made`, `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `reject`, `resume-during-*` and `continue-review-during-*` are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. |
+| `ReAccreditationType.cs` | Declares the states (`submitted`, `duly-made`, `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` (RA-527: approved, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `reject`, `make-determination-approved`, `resume-during-*` and `continue-review-during-*` are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. |
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
 | `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
 | `Endpoints/ReAccreditationEndpoints.cs` | Module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |

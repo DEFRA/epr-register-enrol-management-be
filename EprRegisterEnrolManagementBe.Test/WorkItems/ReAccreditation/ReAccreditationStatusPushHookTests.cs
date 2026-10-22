@@ -228,6 +228,26 @@ public class ReAccreditationStatusPushHookTests
     }
 
     [Fact]
+    public async Task OnActionAppliedAsync_never_pushes_the_step_one_approval_into_approved_pending_contact()
+    {
+        // RA-527: step 1 of an approval records the determination in the Case Management service only.
+        // The operator must not learn the outcome before the regulator has
+        // contacted them, so the pending state is never pushed.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = BuildSut();
+        var workItem = BuildWorkItem(
+            "approved-pending-contact",
+            "make-determination-approved",
+            "Make determination: Approved",
+            "awaiting-decision");
+
+        await sut.Hook.OnActionAppliedAsync(
+            workItem, "make-determination-approved", "awaiting-decision", s_user, ct);
+
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
+    }
+
+    [Fact]
     public async Task OnActionAppliedAsync_ignores_a_work_item_of_a_different_type()
     {
         // Mirrors ReAccreditationQueryPushHook's own type guard — this hook

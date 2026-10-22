@@ -164,10 +164,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // template version; it leaves payment-received for the next migration.
         services.AddSingleton<IWorkItemMigration, ReAccreditationStartAssessmentSnapshotMigration>();
         // RA-595 ("remove" step): removes payment-received from every existing
-        // work item's frozen snapshot (→ v16). Registered last of the snapshot
-        // migrations so it is the one that sets the final version.
-        // Writes only the stored rules and template version.
+        // work item's frozen snapshot (→ v16). Writes only the stored rules
+        // and template version.
         services.AddSingleton<IWorkItemMigration, ReAccreditationRemovePaymentReceivedSnapshotMigration>();
+        // RA-527: adds the approved-pending-contact state and the step 1
+        // make-determination-approved transition (→ v17). Registered last of
+        // the snapshot migrations so it is the one that sets the final
+        // version. Writes only the stored rules and template version.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationPendingContactSnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply

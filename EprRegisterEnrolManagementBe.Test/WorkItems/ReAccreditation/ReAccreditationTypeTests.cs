@@ -13,8 +13,8 @@ public class ReAccreditationTypeTests
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
         // RA-595: v15 added start-assessment ("Assessment started"); v16
-        // removed payment-received.
-        Assert.Equal("v16", _type.TemplateVersion);
+        // removed payment-received. RA-527: v17 added approved-pending-contact.
+        Assert.Equal("v17", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -31,6 +31,8 @@ public class ReAccreditationTypeTests
     [InlineData("queried", "Queried")]
     [InlineData("updated", "Updated")]
     [InlineData("withdrawn", "Withdrawn")]
+    // RA-527: the step 1 approval state reads "Approved" to the regulator.
+    [InlineData("approved-pending-contact", "Approved")]
     public void States_declare_expected_display_names(string stateId, string expectedDisplayName)
     {
         var state = _type.States.Single(s => s.Id == stateId);
@@ -58,6 +60,8 @@ public class ReAccreditationTypeTests
         Assert.False(states["queried"].IsTerminal);
         Assert.True(states.ContainsKey("updated"));
         Assert.False(states["updated"].IsTerminal);
+        // RA-527: an approval awaiting applicant contact is not yet applied.
+        Assert.False(states["approved-pending-contact"].IsTerminal);
     }
 
     [Theory]
@@ -92,6 +96,8 @@ public class ReAccreditationTypeTests
     [InlineData("withdraw-during-decision", "awaiting-decision", "withdrawn")]
     [InlineData("withdraw-during-query", "queried", "withdrawn")]
     [InlineData("withdraw-during-updated", "updated", "withdrawn")]
+    // RA-527: step 1 of an approval lands in the pending-contact state.
+    [InlineData("make-determination-approved", "awaiting-decision", "approved-pending-contact")]
     public void Declares_expected_transition(
         string actionId,
         string fromStateId,
@@ -162,6 +168,32 @@ public class ReAccreditationTypeTests
         Assert.Equal("queried", queriedSlaExtend!.ToStateId);
         Assert.Equal("Extend SLA", queriedSlaExtend.DisplayName);
         Assert.True(queriedSlaExtend.CallerInvocable);
+    }
+
+    [Fact]
+    public void Step_one_approval_is_reachable_only_through_the_decision_endpoint()
+    {
+        // RA-527: CallerInvocable false, so the generic action route cannot
+        // move an item into approved-pending-contact without the number being
+        // minted and stamped by the decision endpoint.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "make-determination-approved"
+        );
+
+        Assert.False(transition.CallerInvocable);
+    }
+
+    [Fact]
+    public void Nothing_leaves_approved_pending_contact_yet()
+    {
+        // RA-527 task 003: no query, withdraw, due-date change or
+        // re-determination from a pending approval. Reassign/unassign are not
+        // transitions, so they are unaffected.
+        Assert.DoesNotContain(
+            _type.Transitions,
+            t => t.FromStateId == "approved-pending-contact"
+        );
     }
 
     [Fact]

@@ -326,8 +326,16 @@ internal sealed class ReAccreditationStatusPushHook(
                 continue;
             }
 
+            // RA-527: a move onto a pending-contact state is step 1 of a
+            // determination. It is recorded in the Case Management service only — the operator must not
+            // see the outcome before the regulator has contacted them — so a
+            // pending state is never pushed.
             if (string.Equals(transition.ToStateId, "queried", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(transition.ToStateId, "withdrawn", StringComparison.OrdinalIgnoreCase))
+                || string.Equals(transition.ToStateId, "withdrawn", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    transition.ToStateId,
+                    ReAccreditationType.ApprovedPendingContactStateId,
+                    StringComparison.OrdinalIgnoreCase))
             {
                 excluded.Add(transition.ActionId);
             }

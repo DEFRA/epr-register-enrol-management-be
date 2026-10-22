@@ -27,12 +27,18 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// service — calling <see cref="IWorkItemService.ApplyActionAsync"/> directly
 /// with a server-computed action id — is the only route to either.
 ///
-/// Approving delegates to <see cref="IReAccreditationApprovalService"/> rather
-/// than reaching for the engine: that service owns accreditation-id issuance,
-/// the SLA clock stop, the queued publishing job and the decision
-/// notification, and bypassing it would silently drop all four.
+/// RA-527: approving is step 1 of a two-step determination. It mints the
+/// accreditation number and delegates to
+/// <see cref="IReAccreditationApprovalService.RecordApprovedDeterminationAsync"/>,
+/// which stamps it and moves the item to the non-terminal
+/// <c>approved-pending-contact</c> state. The outcome is not applied: no
+/// Registration &amp; Accreditation service push, no SLA clock stop, no
+/// publishing job and no Decision email — those belong to step 2
+/// ("confirm applicant contact"), so the operator never learns the outcome
+/// before the regulator has contacted them.
 ///
-/// epr-p86e / RA-410: the decision is gated on the Registration &amp;
+/// epr-p86e / RA-410: a refusal (still single-step until RA-527 task 005) is
+/// gated on the Registration &amp;
 /// Accreditation service status push. The Registration &amp; Accreditation
 /// service push is fired ONCE here, as a pre-commit gate for the
 /// final outcome, BEFORE either internal hop is persisted — and the
@@ -65,7 +71,6 @@ internal sealed class ReAccreditationLogDecisionService(
     private const string AssessmentStateId = "assessment-in-progress";
     private const string AwaitingDecisionStateId = "awaiting-decision";
     private const string SubmitForDecisionActionId = "submit-for-decision";
-    private const string ApproveActionId = "approve";
     private const string RejectActionId = "reject";
     private const string ApprovedStateId = "approved";
     private const string RejectedStateId = "rejected";
@@ -134,12 +139,18 @@ internal sealed class ReAccreditationLogDecisionService(
             );
         }
 
-        var targetStateId =
-            outcome == ReAccreditationDecisionOutcome.Approved ? ApprovedStateId : RejectedStateId;
+        var isApproval = outcome == ReAccreditationDecisionOutcome.Approved;
+
+        // RA-527: an approval is step 1 of two — it lands in the non-terminal
+        // approved-pending-contact state, not 'approved'. A refusal is still
+        // applied in one step (task 005 changes it).
+        var targetStateId = isApproval
+            ? ReAccreditationType.ApprovedPendingContactStateId
+            : RejectedStateId;
 
         // A double-click, or a client retrying a response it never received,
         // must not fail. Only a replay of the SAME outcome is a no-op; an item
-        // already closed the other way is a genuine conflict, because silently
+        // already decided the other way is a genuine conflict, because silently
         // succeeding would tell a caseworker their Refuse landed when the
         // application is in fact approved and an accreditation id is issued.
         if (string.Equals(workItem.StateId, targetStateId, StringComparison.OrdinalIgnoreCase))
@@ -155,7 +166,9 @@ internal sealed class ReAccreditationLogDecisionService(
         // Enumerated rather than read off the template, matching
         // ReAccreditationApprovalService: a decision must be refused on a
         // closed application even when its frozen snapshot is too old to
-        // carry terminal metadata.
+        // carry terminal metadata. RA-527: this includes an Approved replay
+        // on an application already Granted — the determination was made
+        // once, and step 2 is what applied it.
         if (
             string.Equals(workItem.StateId, ApprovedStateId, StringComparison.OrdinalIgnoreCase)
             || string.Equals(workItem.StateId, RejectedStateId, StringComparison.OrdinalIgnoreCase)
@@ -172,7 +185,9 @@ internal sealed class ReAccreditationLogDecisionService(
         // for the frontend's benefit — it never sends an application there —
         // but so that an application stranded mid-hop by an earlier failure,
         // or left there by the pre-RA-410 two-step flow, is finished by the
-        // identical call rather than needing a bespoke rescue path.
+        // identical call rather than needing a bespoke rescue path. Anything
+        // else — including RA-527's approved-pending-contact, whose
+        // determination is already final — is a conflict.
         var needsSubmitForDecision = string.Equals(
             workItem.StateId,
             AssessmentStateId,
@@ -195,52 +210,157 @@ internal sealed class ReAccreditationLogDecisionService(
             );
         }
 
-        var actionId =
-            outcome == ReAccreditationDecisionOutcome.Approved ? ApproveActionId : RejectActionId;
-        var actionDisplayName =
-            outcome == ReAccreditationDecisionOutcome.Approved ? "Approve" : "Reject";
+        // RA-527: checked here, before the mint and the hop, so an item still
+        // on pre-v17 rules (its snapshot not yet migrated) is refused with
+        // nothing written rather than parked in 'awaiting-decision' first.
+        if (isApproval && !DeclaresStepOneApproval(workItem))
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidTransition,
+                $"Work item {workItemId} is on template '{workItem.TemplateVersion}', which does not "
+                    + $"declare '{ReAccreditationType.MakeDeterminationApprovedActionId}'."
+            );
+        }
+
+        return isApproval
+            ? await RecordApprovalAsync(workItemId, needsSubmitForDecision, user, cancellationToken)
+            : await RecordRefusalAsync(workItem, needsSubmitForDecision, user, cancellationToken);
+    }
+
+    /// <summary>
+    /// RA-527 step 1 of an approval. Mints the accreditation number before
+    /// anything is written (a failed mint leaves the item untouched), takes
+    /// the <c>submit-for-decision</c> hop if needed, then has the approval
+    /// service stamp the number and move the item to
+    /// <c>approved-pending-contact</c>.
+    ///
+    /// Deliberately no operator-journey push: the operator must not learn of
+    /// the outcome before the regulator has contacted them. The SLA clock is
+    /// left running, nothing is published and no email is sent — all of that
+    /// is step 2 ("confirm applicant contact").
+    /// </summary>
+    private async Task<WorkItemActionResult> RecordApprovalAsync(
+        Guid workItemId,
+        bool needsSubmitForDecision,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
+    {
+        var correlationId = Guid.NewGuid();
+        var accreditationNumber = await approvalService.ResolveAccreditationNumberAsync(
+            workItemId,
+            correlationId,
+            cancellationToken
+        );
+
+        if (!accreditationNumber.IsSuccess)
+        {
+            logger.LogError(
+                "Log-decision for work item {WorkItemId} abandoned: an accreditation number could not "
+                    + "be resolved (correlation {CorrelationId}): {ErrorMessage}. No state was changed.",
+                workItemId,
+                correlationId,
+                accreditationNumber.ErrorMessage
+            );
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.AccreditationNumberUnavailable,
+                "The re-accreditation decision could not be recorded because an accreditation number "
+                    + "could not be obtained. No change was made; try again shortly."
+            );
+        }
+
+        if (
+            needsSubmitForDecision
+            && await ApplySubmitForDecisionAsync(workItemId, user, cancellationToken) is { } failed
+        )
+        {
+            return failed;
+        }
+
+        var result = await approvalService.RecordApprovedDeterminationAsync(
+            workItemId,
+            user,
+            accreditationNumber,
+            cancellationToken
+        );
+
+        if (result.IsSuccess)
+        {
+            logger.LogInformation(
+                "Re-accreditation work item {WorkItemId} determined as approved by {UserId}; "
+                    + "pending applicant contact.",
+                workItemId,
+                user.FindFirstValue("user:id")
+            );
+        }
+        else
+        {
+            // As for a refusal below: if the hop ran, the item sits in
+            // 'awaiting-decision', which this service accepts as an entry
+            // state, so the identical call can simply be retried. The number
+            // endpoint is idempotent, so a retry gets the same number back.
+            logger.LogWarning(
+                "Log-decision for work item {WorkItemId} failed at the step 1 approval ({FailureCode}); "
+                    + "the call may be safely retried.",
+                workItemId,
+                result.FailureCode
+            );
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Applies the internal <c>submit-for-decision</c> hop. Returns the
+    /// failure to hand back, or null when it landed. Nothing has been written
+    /// on failure, so the caller can simply retry.
+    /// </summary>
+    private async Task<WorkItemActionResult?> ApplySubmitForDecisionAsync(
+        Guid workItemId,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
+    {
+        var submitted = await engine.ApplyActionAsync(
+            workItemId,
+            SubmitForDecisionActionId,
+            user,
+            cancellationToken
+        );
+
+        if (submitted.IsSuccess)
+        {
+            return null;
+        }
+
+        logger.LogWarning(
+            "Log-decision for work item {WorkItemId} abandoned: could not apply "
+                + "'{ActionId}' ({FailureCode}).",
+            workItemId,
+            SubmitForDecisionActionId,
+            submitted.FailureCode
+        );
+        return submitted;
+    }
+
+    /// <summary>
+    /// A refusal, still applied in one step (RA-527 task 005 splits it):
+    /// pre-commit operator-journey push, then the hop, then <c>reject</c>.
+    /// </summary>
+    private async Task<WorkItemActionResult> RecordRefusalAsync(
+        WorkItem workItem,
+        bool needsSubmitForDecision,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
+    {
+        var workItemId = workItem.Id;
+        const string targetStateId = RejectedStateId;
+        const string actionId = RejectActionId;
+        const string actionDisplayName = "Reject";
         var toStateDisplayName = ResolveStateDisplayName(workItem, targetStateId);
         var correlationId = Guid.NewGuid();
         var occurredAt = _timeProvider.GetUtcNow().UtcDateTime;
-
-        // epr-r9oy PRE-PUSH NUMBER MINT. An approval must mint its
-        // accreditation number BEFORE the Registration & Accreditation
-        // service push below, not after: the
-        // backend's accreditation-number endpoint refuses once
-        // ApplicationStatus is terminal (RejectIfTerminal), and the push is
-        // exactly what makes it terminal. Minting first — while the
-        // Registration & Accreditation service still
-        // considers the application open — is what makes the mint succeed at
-        // all; minting after left ApproveAsync's own attempt permanently
-        // stuck (AccreditationNumberUnavailable on every retry, because by
-        // then the Registration & Accreditation service was already
-        // terminal). Reject never mints a number, so this
-        // is skipped entirely for that outcome.
-        AccreditationNumberResult? preResolvedAccreditationNumber = null;
-        if (outcome == ReAccreditationDecisionOutcome.Approved)
-        {
-            preResolvedAccreditationNumber = await approvalService.ResolveAccreditationNumberAsync(
-                workItemId,
-                correlationId,
-                cancellationToken
-            );
-
-            if (!preResolvedAccreditationNumber.IsSuccess)
-            {
-                logger.LogError(
-                    "Log-decision for work item {WorkItemId} abandoned: an accreditation number could not "
-                        + "be resolved (correlation {CorrelationId}): {ErrorMessage}. No state was changed.",
-                    workItemId,
-                    correlationId,
-                    preResolvedAccreditationNumber.ErrorMessage
-                );
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.AccreditationNumberUnavailable,
-                    "The re-accreditation decision could not be recorded because an accreditation number "
-                        + "could not be obtained. No change was made; try again shortly."
-                );
-            }
-        }
 
         // epr-p86e / RA-410 PRE-COMMIT REGISTRATION & ACCREDITATION SERVICE GATE. Notify the operator journey of
         // the final outcome BEFORE persisting either internal hop. On failure,
@@ -290,43 +410,20 @@ internal sealed class ReAccreditationLogDecisionService(
             );
         }
 
-        if (needsSubmitForDecision)
+        if (
+            needsSubmitForDecision
+            && await ApplySubmitForDecisionAsync(workItemId, user, cancellationToken) is { } failed
+        )
         {
-            var submitted = await engine.ApplyActionAsync(
-                workItemId,
-                SubmitForDecisionActionId,
-                user,
-                cancellationToken
-            );
-
-            if (!submitted.IsSuccess)
-            {
-                // Nothing has been written, so the caller can simply retry.
-                logger.LogWarning(
-                    "Log-decision for work item {WorkItemId} abandoned: could not apply "
-                        + "'{ActionId}' ({FailureCode}).",
-                    workItemId,
-                    SubmitForDecisionActionId,
-                    submitted.FailureCode
-                );
-                return submitted;
-            }
+            return failed;
         }
 
-        var result =
-            outcome == ReAccreditationDecisionOutcome.Approved
-                ? await approvalService.ApproveAsync(
-                    workItemId,
-                    user,
-                    cancellationToken,
-                    preResolvedAccreditationNumber
-                )
-                : await engine.ApplyActionAsync(
-                    workItemId,
-                    RejectActionId,
-                    user,
-                    cancellationToken
-                );
+        var result = await engine.ApplyActionAsync(
+            workItemId,
+            RejectActionId,
+            user,
+            cancellationToken
+        );
 
         if (result.IsSuccess)
         {
@@ -469,6 +566,24 @@ internal sealed class ReAccreditationLogDecisionService(
     /// raw id — mirroring ReAccreditationStatusPushHook's own resolution so the
     /// decision push carries the same display name the hook used to send.
     /// </summary>
+    /// <summary>
+    /// RA-527: does the work item's own frozen snapshot (or the live type, for
+    /// a legacy item with none) declare the step 1 approval transition? The
+    /// approval service applies the same rule; this is the up-front copy so
+    /// the refusal happens before any side effect.
+    /// </summary>
+    private static bool DeclaresStepOneApproval(WorkItem workItem)
+    {
+        IWorkItemTemplate template = (IWorkItemTemplate?)workItem.TemplateSnapshot ?? s_type;
+        return template.Transitions.Any(t =>
+            string.Equals(
+                t.ActionId,
+                ReAccreditationType.MakeDeterminationApprovedActionId,
+                StringComparison.OrdinalIgnoreCase
+            )
+        );
+    }
+
     private static string ResolveStateDisplayName(WorkItem workItem, string stateId)
     {
         IWorkItemTemplate template = (IWorkItemTemplate?)workItem.TemplateSnapshot ?? s_type;

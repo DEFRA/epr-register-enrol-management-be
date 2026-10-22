@@ -9,9 +9,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// re-accreditation work item. Approval is more than a generic state
 /// transition — it issues an accreditation id, stamps the SLA-clock-stopped
 /// timestamp, writes three audit entries atomically, and fans out
-/// post-action hooks plus a queued publishing job. Its only caller is
-/// <see cref="IReAccreditationLogDecisionService"/> (the /decision
-/// endpoint); wrapped behind an interface so it can be substituted in tests.
+/// post-action hooks plus a queued publishing job. RA-527: approval is now
+/// two steps. <see cref="RecordApprovedDeterminationAsync"/> is step 1, called
+/// by <see cref="IReAccreditationLogDecisionService"/> (the /decision
+/// endpoint); <see cref="ApproveAsync"/> applies the outcome and is step 2
+/// (confirm applicant contact, wired in task 004). Wrapped behind an
+/// interface so it can be substituted in tests.
 /// </summary>
 internal interface IReAccreditationApprovalService
 {
@@ -34,6 +37,26 @@ internal interface IReAccreditationApprovalService
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default,
         AccreditationNumberResult? preResolvedAccreditationNumber = null
+    );
+
+    /// <summary>
+    /// RA-527 step 1 of an approval: stamp <paramref name="accreditationNumber"/>
+    /// (already minted by the caller via <see cref="ResolveAccreditationNumberAsync"/>),
+    /// its start date and year on the payload, and move the work item from
+    /// <c>awaiting-decision</c> to the non-terminal <c>approved-pending-contact</c>
+    /// state in one write, with a "Determination made: Approved" audit entry.
+    ///
+    /// The outcome is not applied: the SLA clock is not stopped, no
+    /// accreditation-issued entry is written and no publishing job is queued.
+    /// Post-action hooks run with action id <c>make-determination-approved</c>;
+    /// none of them pushes or emails for it. An item already in
+    /// <c>approved-pending-contact</c> is an idempotent replay.
+    /// </summary>
+    Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
+        Guid workItemId,
+        ClaimsPrincipal user,
+        AccreditationNumberResult accreditationNumber,
+        CancellationToken cancellationToken = default
     );
 
     /// <summary>

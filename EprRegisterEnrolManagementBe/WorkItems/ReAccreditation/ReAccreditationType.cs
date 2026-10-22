@@ -19,6 +19,15 @@ internal sealed class ReAccreditationType : IWorkItemType
 
     public const string Id = "re-accreditation";
 
+    /// <summary>RA-527: the step 1 approval state (approved, applicant not yet contacted).</summary>
+    public const string ApprovedPendingContactStateId = "approved-pending-contact";
+
+    /// <summary>RA-527: the step 1 approval transition, awaiting-decision → approved-pending-contact.</summary>
+    public const string MakeDeterminationApprovedActionId = "make-determination-approved";
+
+    /// <summary>RA-527: display name of <see cref="MakeDeterminationApprovedActionId"/>.</summary>
+    public const string MakeDeterminationApprovedDisplayName = "Make determination: Approved";
+
     // RA-324 (AC06): state DisplayNames align with the prototype "Applications"
     // design. Only the labels change here — the state ids are the wire contract
     // the management-fe and mgmt-tests key off and MUST stay exactly as they
@@ -50,6 +59,18 @@ internal sealed class ReAccreditationType : IWorkItemType
     // ReAccreditationContinueReviewService from the resume-during-* action
     // that put the item here.
     private static readonly WorkItemState s_updated = new("updated", "Updated");
+
+    // RA-527: step 1 of the two-step determination. The regulator has
+    // approved and the accreditation number is minted, but the applicant has
+    // not yet been contacted, so the outcome is not applied: nothing is pushed
+    // to the operator journey, the SLA clock keeps running and no email is
+    // sent. Not terminal. Step 2 ("confirm applicant contact") moves it on to
+    // 'approved'. The "Approved" label is provisional and kept to this one
+    // declaration.
+    private static readonly WorkItemState s_approvedPendingContact = new(
+        ApprovedPendingContactStateId,
+        "Approved"
+    );
     private static readonly WorkItemState s_approved = new(
         "approved",
         "Granted",
@@ -171,7 +192,17 @@ internal sealed class ReAccreditationType : IWorkItemType
     // Items snapshotted before v16 keep payment-received until
     // ReAccreditationRemovePaymentReceivedSnapshotMigration patches their
     // frozen snapshot.
-    public string TemplateVersion => "v16";
+    // v17 (RA-527, two-step determination, step 1 for approvals): added the
+    // non-terminal 'approved-pending-contact' state ("Approved") and the
+    // make-determination-approved transition into it from
+    // 'awaiting-decision' (CallerInvocable: false — only
+    // POST /work-items/re-accreditation/{id}/decision reaches it, because it
+    // must mint and stamp the accreditation number). An Approved decision now
+    // lands there instead of going straight to 'approved'; nothing leaves it
+    // yet except reassign/unassign. Items snapshotted before v17 have neither
+    // until ReAccreditationPendingContactSnapshotMigration patches their
+    // frozen snapshot.
+    public string TemplateVersion => "v17";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
@@ -182,6 +213,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         s_awaitingDecision,
         s_queried,
         s_updated,
+        s_approvedPendingContact,
         s_approved,
         s_rejected,
         s_withdrawn,
@@ -281,6 +313,21 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Reject",
             s_awaitingDecision.Id,
             s_rejected.Id,
+            CallerInvocable: false
+        ),
+        // RA-527: step 1 of an approval. Applied by
+        // ReAccreditationApprovalService.RecordApprovedDeterminationAsync,
+        // reached only via POST /work-items/re-accreditation/{id}/decision,
+        // which mints the accreditation number and stamps it on the payload in
+        // the same write. CallerInvocable is false for the same reason as
+        // reject above: the generic action route would move the item without
+        // a number. Nothing is pushed to the operator journey for it (see
+        // ReAccreditationStatusPushHook) and no email is sent.
+        new WorkItemTransition(
+            MakeDeterminationApprovedActionId,
+            MakeDeterminationApprovedDisplayName,
+            s_awaitingDecision.Id,
+            s_approvedPendingContact.Id,
             CallerInvocable: false
         ),
         // RA-211 / RA-291: a case worker can query an application from any

@@ -1344,4 +1344,184 @@ public class ReAccreditationApprovalServiceTests
         Assert.Equal(BsonType.String, workItem.Payload["nation"].BsonType);
         Assert.Equal(nation.ToString(), workItem.Payload["nation"].AsString);
     }
+
+    // ──────────────── RA-527: step 1 — record an approved determination ────────────────
+
+    private static readonly AccreditationNumberResult s_mintedNumber =
+        AccreditationNumberResult.Success("A25ER5000270036WO");
+
+    /// <summary>
+    /// RA-527 step 1: the number minted by the caller is stamped with its
+    /// start date and year, the item moves to the non-terminal
+    /// approved-pending-contact state and the determination is audited. The
+    /// outcome is NOT applied yet: no SLA clock stop, no accreditation-issued
+    /// entry, no publishing job.
+    /// </summary>
+    [Fact]
+    public async Task RecordApprovedDeterminationAsync_stamps_the_number_and_moves_to_approved_pending_contact()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.RecordApprovedDeterminationAsync(
+            workItem.Id, DecisionMaker(), s_mintedNumber, ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("approved-pending-contact", workItem.StateId);
+        Assert.Equal(s_fixedNow.UtcDateTime, workItem.LastModifiedAt);
+
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        Assert.Equal("A25ER5000270036WO", payload.AccreditationId);
+        Assert.Equal(DateOnly.FromDateTime(s_fixedNow.UtcDateTime), payload.AccreditationStartDate);
+        Assert.Equal(2025, payload.AccreditationYear);
+        // The SLA clock keeps running until the outcome is applied (step 2).
+        Assert.Null(payload.SlaClock?.StoppedAt);
+        Assert.Equal("Acme Ltd", payload.OrganisationName);
+
+        Assert.Collection(
+            workItem.AuditLog,
+            applied =>
+            {
+                Assert.Equal("action-applied", applied.Action);
+                Assert.Equal("make-determination-approved", applied.Details["actionId"]);
+                Assert.Equal("awaiting-decision", applied.Details["fromStateId"]);
+                Assert.Equal("approved-pending-contact", applied.Details["toStateId"]);
+            },
+            determination =>
+            {
+                Assert.Equal("determination-made", determination.Action);
+                Assert.Equal("Determination made: Approved", determination.ActionDisplayName);
+                Assert.Equal("approved", determination.Details["outcome"]);
+                Assert.Equal("A25ER5000270036WO", determination.Details["accreditationId"]);
+                Assert.Equal(DecisionMakerId, determination.CreatedBy);
+                Assert.Equal("Alice Example", determination.CreatedByName);
+            }
+        );
+        Assert.All(workItem.AuditLog, e => Assert.Equal("approved-pending-contact", e.StateId));
+
+        await sut.Persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await sut.NumberAdapter.DidNotReceiveWithAnyArgs().GenerateOrUpdateAccreditationNumberAsync(default!, ct);
+        await sut.Hooks[0]
+            .Received(1)
+            .OnActionAppliedAsync(
+                workItem,
+                "make-determination-approved",
+                "awaiting-decision",
+                Arg.Any<ClaimsPrincipal>(),
+                CancellationToken.None
+            );
+    }
+
+    [Fact]
+    public async Task RecordApprovedDeterminationAsync_is_an_idempotent_replay_when_already_pending_contact()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(stateId: "approved-pending-contact");
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.RecordApprovedDeterminationAsync(
+            workItem.Id, DecisionMaker(), s_mintedNumber, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.True(result.IsIdempotentReplay);
+        Assert.Empty(workItem.AuditLog);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+    }
+
+    [Theory]
+    [InlineData("approved", WorkItemActionFailureCode.TerminalState)]
+    [InlineData("rejected", WorkItemActionFailureCode.TerminalState)]
+    [InlineData("withdrawn", WorkItemActionFailureCode.TerminalState)]
+    [InlineData("assessment-in-progress", WorkItemActionFailureCode.InvalidTransition)]
+    [InlineData("queried", WorkItemActionFailureCode.InvalidTransition)]
+    public async Task RecordApprovedDeterminationAsync_refuses_outside_awaiting_decision(
+        string stateId,
+        WorkItemActionFailureCode expected)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(stateId: stateId);
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.RecordApprovedDeterminationAsync(
+            workItem.Id, DecisionMaker(), s_mintedNumber, ct);
+
+        Assert.Equal(expected, result.FailureCode);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task RecordApprovedDeterminationAsync_retries_on_concurrency_conflict()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        sut.Persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>())
+            .Returns(_ => BuildWorkItem());
+        var calls = 0;
+        sut.Persistence.When(p => p.ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>()))
+            .Do(call =>
+            {
+                calls++;
+                if (calls == 1)
+                {
+                    throw new WorkItemConcurrencyException(call.Arg<WorkItem>().Id, expectedVersion: 0);
+                }
+            });
+
+        var result = await sut.Service.RecordApprovedDeterminationAsync(
+            Guid.NewGuid(), DecisionMaker(), s_mintedNumber, ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal(2, calls);
+    }
+
+    [Fact]
+    public async Task RecordApprovedDeterminationAsync_returns_MissingActorIdentity_without_a_user_id()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+
+        var result = await sut.Service.RecordApprovedDeterminationAsync(
+            Guid.NewGuid(), AnonymousUser(), s_mintedNumber, ct);
+
+        Assert.Equal(WorkItemActionFailureCode.MissingActorIdentity, result.FailureCode);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, ct);
+    }
+
+    /// <summary>
+    /// RA-527: the guard that refuses an item carrying a real-format number
+    /// while not approved must let a pending-contact approval through, and
+    /// the number stamped at step 1 is reused — never re-minted.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_from_approved_pending_contact_reuses_the_step_one_number()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build("A25ER9999999999WO");
+        var workItem = BuildWorkItem(
+            stateId: "approved-pending-contact",
+            payload: new BsonDocument
+            {
+                ["organisationName"] = "Acme Ltd",
+                ["operatorOrganisationId"] = "500027",
+                ["operatorApplicationId"] = "APP-500027",
+                ["nation"] = "England",
+                ["accreditationId"] = "A25ER5000270036WO",
+            }
+        );
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("approved", workItem.StateId);
+        Assert.Equal("A25ER5000270036WO", workItem.Payload["accreditationId"].AsString);
+        await sut
+            .NumberAdapter.DidNotReceiveWithAnyArgs()
+            .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
+    }
 }

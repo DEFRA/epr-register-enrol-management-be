@@ -193,6 +193,59 @@ public class ReAccreditationAvailableActionsTests
     }
 
     [Fact]
+    public void Approved_pending_contact_offers_no_actions()
+    {
+        // RA-527: once a regulator has approved (step 1) the determination is
+        // final. No query, withdraw, due-date change/override (sla-extend) or
+        // re-determination is projected. Confirm-contact arrives in task 004.
+        var projection = ProjectInState("approved-pending-contact");
+
+        Assert.Empty(projection.AvailableActions);
+        Assert.False(projection.IsTerminal);
+    }
+
+    [Fact]
+    public async Task Approved_pending_contact_can_still_be_reassigned_and_unassigned()
+    {
+        // RA-527: someone else may need to make the applicant contact, so
+        // assignment stays open while the item is not terminal.
+        var ct = TestContext.Current.CancellationToken;
+        var persistence = new WorkItemPersistence(_clientFactory, NullLoggerFactory.Instance);
+        var type = new ReAccreditationType();
+        var item = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = "approved-pending-contact",
+            SubmittedAt = Now,
+            LastModifiedAt = Now,
+            SubmittedBy = "test-client",
+            AssignedToId = "alice-1",
+            AssignedToName = "Alice Example",
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+        await persistence.CreateAsync(item, ct);
+        var user = new System.Security.Claims.ClaimsPrincipal(
+            new System.Security.Claims.ClaimsIdentity(
+                [
+                    new System.Security.Claims.Claim("user:id", "alice-1"),
+                    new System.Security.Claims.Claim("user:name", "Alice Example"),
+                ],
+                "test"
+            )
+        );
+
+        var reassigned = await _service.AssignAsync(item.Id, "bob-1", "Bob Colleague", user, ct);
+        Assert.True(reassigned.IsSuccess, reassigned.Message);
+        Assert.Equal("bob-1", reassigned.WorkItem!.AssignedToId);
+
+        var unassigned = await _service.UnassignAsync(item.Id, user, ct);
+        Assert.True(unassigned.IsSuccess, unassigned.Message);
+        Assert.Null(unassigned.WorkItem!.AssignedToId);
+        Assert.Equal("approved-pending-contact", unassigned.WorkItem.StateId);
+    }
+
+    [Fact]
     public void Duly_made_still_offers_no_decision_or_sla_extend_action()
     {
         // RA-595: decisions and deadline changes stay assessment-only; the
