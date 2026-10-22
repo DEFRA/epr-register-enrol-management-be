@@ -38,13 +38,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </list>
 ///
 /// Because the checks run before the push, the operator is never told the
-/// outcome of an item the write would then refuse. Known gap (also true on
-/// main, follow-up tracked separately): if the push is delivered but the
-/// write then fails (repeated concurrency conflicts, or Mongo down), a retry
-/// sends a new <c>OccurredAt</c>; the operator journey, already at the
-/// terminal status, answers 409, which the push adapter treats as a failure,
-/// so the item needs manual intervention. An item whose write did land
-/// replays as success.
+/// outcome of an item the write would then refuse. If the push is delivered
+/// but the write then fails (repeated concurrency conflicts, or Mongo down),
+/// a retry sends a new <c>OccurredAt</c>; the operator journey, already at
+/// that terminal status, answers 200 with no change (RA-527 task 008, which
+/// closed the gap where it answered 409), so the retry goes on to make the
+/// write. An item whose write did land replays as success.
 /// </summary>
 internal sealed class ReAccreditationConfirmContactService(
     IWorkItemPersistence persistence,
@@ -129,9 +128,10 @@ internal sealed class ReAccreditationConfirmContactService(
         }
         else if (!result.IsSuccess)
         {
-            // Known gap (RA-527 tasks 004 and 007, as on main): a retry pushes a
-            // new OccurredAt, and an operator journey already at the terminal
-            // status answers 409, which the push adapter treats as a failure.
+            // A retry pushes a new OccurredAt. Since RA-527 task 008 the operator
+            // journey answers 200 with no change when it is already at that
+            // terminal status (it used to answer 409), so the retry can make the
+            // write. An operator journey without that change still refuses it.
             logger.LogWarning(
                 "Confirm-contact for work item {WorkItemId} failed at the write ({FailureCode}) after the "
                     + "operator journey was notified; a retry is likely to be refused by the operator journey "
