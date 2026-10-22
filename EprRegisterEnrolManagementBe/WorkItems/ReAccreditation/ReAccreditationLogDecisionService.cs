@@ -72,7 +72,7 @@ internal sealed class ReAccreditationLogDecisionService(
     private const string AwaitingDecisionStateId = "awaiting-decision";
     private const string SubmitForDecisionActionId = "submit-for-decision";
     private const string RejectActionId = "reject";
-    private const string ApprovedStateId = "approved";
+    private const string ApprovedStateId = ReAccreditationType.ApprovedStateId;
     private const string RejectedStateId = "rejected";
     private const string WithdrawnStateId = "withdrawn";
 

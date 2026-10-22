@@ -14,9 +14,6 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal static class ReAccreditationConfirmContactGuard
 {
-    /// <summary>The step 2 approval's target state ("Granted").</summary>
-    public const string ApprovedStateId = "approved";
-
     private const string AccreditationIdKey = "accreditationId";
 
     // RA-448 phase 2: mirrors the backend's own AC1 format regex
@@ -69,7 +66,7 @@ internal static class ReAccreditationConfirmContactGuard
             );
         }
 
-        if (Is(workItem.StateId, ApprovedStateId))
+        if (Is(workItem.StateId, ReAccreditationType.ApprovedStateId))
         {
             return WorkItemActionResult.IdempotentReplay(workItem);
         }

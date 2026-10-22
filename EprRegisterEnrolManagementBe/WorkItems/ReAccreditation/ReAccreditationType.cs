@@ -34,7 +34,10 @@ internal sealed class ReAccreditationType : IWorkItemType
     /// </summary>
     public const string ConfirmContactApprovedActionId = "confirm-contact-approved";
 
-    /// <summary>RA-527: display name of the step 2 ("confirm applicant contact") transitions.</summary>
+    /// <summary>RA-527: the terminal "Granted" state an approval reaches at step 2.</summary>
+    public const string ApprovedStateId = "approved";
+
+    /// <summary>RA-527: display name of the step 2 ("confirm applicant contact") transition.</summary>
     public const string ConfirmContactDisplayName = "Confirm applicant contact";
 
     // RA-324 (AC06): state DisplayNames align with the prototype "Applications"
@@ -81,7 +84,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         "Approved"
     );
     private static readonly WorkItemState s_approved = new(
-        "approved",
+        ApprovedStateId,
         "Granted",
         IsTerminal: true
     );

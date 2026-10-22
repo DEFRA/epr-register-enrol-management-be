@@ -84,7 +84,7 @@ internal sealed class ReAccreditationConfirmContactService(
         var delivery = await _decisionPush.PushAsync(
             workItem!,
             ReAccreditationType.ApprovedPendingContactStateId,
-            ReAccreditationConfirmContactGuard.ApprovedStateId,
+            ReAccreditationType.ApprovedStateId,
             ReAccreditationType.ConfirmContactApprovedActionId,
             ReAccreditationType.ConfirmContactDisplayName,
             appliedAt.UtcDateTime,

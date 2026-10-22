@@ -62,7 +62,7 @@ internal sealed class ReAccreditationApprovalService(
     private const string AccreditationIdKey = "accreditationId";
 
     private const int MaxAttempts = 3;
-    private const string ToStateId = ReAccreditationConfirmContactGuard.ApprovedStateId;
+    private const string ToStateId = ReAccreditationType.ApprovedStateId;
 
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly IWorkItemPostActionHook[] _postActionHooks = postActionHooks.ToArray();
