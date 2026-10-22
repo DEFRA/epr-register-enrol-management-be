@@ -7,36 +7,39 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <summary>
 /// RA-132: module-scoped service object that owns approval of a
 /// re-accreditation work item. Approval is more than a generic state
-/// transition — it issues an accreditation id, stamps the SLA-clock-stopped
-/// timestamp, writes three audit entries atomically, and fans out
-/// post-action hooks plus a queued publishing job. RA-527: approval is now
-/// two steps. <see cref="RecordApprovedDeterminationAsync"/> is step 1, called
-/// by <see cref="IReAccreditationLogDecisionService"/> (the /decision
-/// endpoint); <see cref="ApproveAsync"/> applies the outcome and is step 2
-/// (confirm applicant contact, wired in task 004). Wrapped behind an
-/// interface so it can be substituted in tests.
+/// transition — it issues an accreditation id, stops the SLA clock, writes
+/// its audit entries atomically, and fans out post-action hooks plus a queued
+/// publishing job. RA-527: approval is two steps.
+/// <see cref="RecordApprovedDeterminationAsync"/> is step 1, called by
+/// <see cref="IReAccreditationLogDecisionService"/> (the /decision endpoint);
+/// <see cref="ApproveAsync"/> applies the outcome and is step 2, called by
+/// <see cref="IReAccreditationConfirmContactService"/> (the /confirm-contact
+/// endpoint). Wrapped behind an interface so it can be substituted in tests.
 /// </summary>
 internal interface IReAccreditationApprovalService
 {
     /// <summary>
-    /// Approve the re-accreditation work item identified by
-    /// <paramref name="workItemId"/>. Returns a generic
-    /// <see cref="WorkItemActionResult"/> so the caller can
-    /// reuse the same problem-mapping switch the framework uses.
+    /// RA-527 step 2 of an approval ("confirm applicant contact"): move the
+    /// work item from <c>approved-pending-contact</c> to <c>approved</c>
+    /// ("Granted") in one write — the SLA clock stopped at
+    /// <paramref name="appliedAt"/>, an "Applicant contacted" audit entry for
+    /// <paramref name="user"/> and the action-applied, sla-clock-stopped and
+    /// accreditation-issued entries — then queue publishing and run the
+    /// post-action hooks (the Decision email).
     ///
-    /// epr-r9oy: <paramref name="preResolvedAccreditationNumber"/> lets a
-    /// caller (currently only <see cref="IReAccreditationLogDecisionService"/>)
-    /// supply a number already resolved via <see cref="ResolveAccreditationNumberAsync"/>
-    /// — required when the caller must mint the number BEFORE this application
-    /// is marked terminal elsewhere (the backend's accreditation-number endpoint
-    /// refuses once it is). Omitted, this method resolves its own number exactly
-    /// as before.
+    /// Reuses the accreditation number step 1 stamped; never mints one.
+    /// <paramref name="appliedAt"/> is the caller's single timestamp for the
+    /// whole step, also sent to the operator journey as the push's
+    /// <c>OccurredAt</c>. An item already <c>approved</c> is an idempotent
+    /// replay with no side effects. Returns a generic
+    /// <see cref="WorkItemActionResult"/> so the caller can reuse the same
+    /// problem-mapping switch the framework uses.
     /// </summary>
     Task<WorkItemActionResult> ApproveAsync(
         Guid workItemId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default,
-        AccreditationNumberResult? preResolvedAccreditationNumber = null
+        DateTimeOffset appliedAt,
+        CancellationToken cancellationToken = default
     );
 
     /// <summary>
@@ -62,10 +65,10 @@ internal interface IReAccreditationApprovalService
     /// <summary>
     /// epr-r9oy: resolves (mints, or returns the already-issued) accreditation
     /// number for <paramref name="workItemId"/> WITHOUT transitioning the work
-    /// item or writing anything — the same backend call <see cref="ApproveAsync"/>
-    /// makes internally, exposed standalone so a caller can mint it while the
-    /// application is still open, ahead of an operator-journey push that would
-    /// otherwise mark it terminal first and make the backend refuse the mint.
+    /// item or writing anything. RA-527: step 1 of an approval mints it here,
+    /// while the application is still open — the backend's number endpoint
+    /// refuses once the operator journey has marked it terminal — and
+    /// <see cref="RecordApprovedDeterminationAsync"/> stamps it.
     /// </summary>
     Task<AccreditationNumberResult> ResolveAccreditationNumberAsync(
         Guid workItemId,

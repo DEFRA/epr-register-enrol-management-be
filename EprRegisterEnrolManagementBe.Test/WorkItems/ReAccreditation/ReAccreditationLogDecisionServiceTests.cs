@@ -73,7 +73,7 @@ public class ReAccreditationLogDecisionServiceTests
             );
         await harness
             .ApprovalService.DidNotReceiveWithAnyArgs()
-            .ApproveAsync(default, default!, ct);
+            .ApproveAsync(default, default!, default, ct);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.Equal(["submit-for-decision", "reject"], harness.AppliedActionIds);
         await harness
             .ApprovalService.DidNotReceiveWithAnyArgs()
-            .ApproveAsync(default, default!, ct);
+            .ApproveAsync(default, default!, default, ct);
         await harness
             .ApprovalService.DidNotReceiveWithAnyArgs()
             .RecordApprovedDeterminationAsync(default, default!, default!, ct);

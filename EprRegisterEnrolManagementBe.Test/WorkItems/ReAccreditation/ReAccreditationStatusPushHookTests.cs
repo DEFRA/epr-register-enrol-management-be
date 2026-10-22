@@ -185,14 +185,16 @@ public class ReAccreditationStatusPushHookTests
 
     [Theory]
     [InlineData("submit-for-decision", "awaiting-decision", "assessment-in-progress")]
-    [InlineData("approve", "approved", "awaiting-decision")]
     [InlineData("reject", "rejected", "awaiting-decision")]
+    [InlineData("confirm-contact-approved", "approved", "approved-pending-contact")]
     public async Task OnActionAppliedAsync_ignores_the_decision_actions(
         string actionId, string toStateId, string fromStateId)
     {
-        // epr-p86e / RA-410: the three decision actions are now owned by
-        // ReAccreditationLogDecisionService, which fires the operator-journey
-        // push ONCE as a pre-commit gate. This hook must NOT push for any of
+        // epr-p86e / RA-410: the decision actions are owned by the service
+        // that applies the outcome (ReAccreditationLogDecisionService, or
+        // RA-527's ReAccreditationConfirmContactService for step 2 of an
+        // approval), which fires the operator-journey push ONCE as a
+        // pre-commit gate. This hook must NOT push for any of
         // them, or the item double-pushes (submit-for-decision + approve/reject)
         // — the bug that stranded applications in 'awaiting-decision' when the
         // operator journey was down.

@@ -151,12 +151,14 @@ public class ReAccreditationLifecycleTests
         );
         Assert.Equal("approved-pending-contact", workItem.StateId);
 
-        // RA-132: approve goes through the bespoke ReAccreditationApprovalService,
-        // not the generic engine — the generic engine no longer registers the
-        // approve transition so it cannot silently produce an item missing the
-        // accreditation id, SLA clock and audit entries. RA-527: it is now
-        // step 2, reusing the step 1 number.
-        Assert.True((await approvalService.ApproveAsync(workItem.Id, user, ct)).IsSuccess);
+        // RA-527 step 2 (confirm applicant contact) goes through the bespoke
+        // ReAccreditationApprovalService, not the generic engine — the
+        // confirm-contact transition is not caller-invocable, so the engine
+        // cannot produce an item missing the SLA clock stop and audit entries.
+        // It reuses the step 1 number.
+        Assert.True(
+            (await approvalService.ApproveAsync(workItem.Id, user, DateTimeOffset.UtcNow, ct)).IsSuccess
+        );
 
         Assert.Equal("approved", workItem.StateId);
         Assert.Equal("A27ER5000270036WO", workItem.Payload["accreditationId"].AsString);
@@ -166,8 +168,9 @@ public class ReAccreditationLifecycleTests
         // 1 action-applied:duly-make + 1 sla-clock-started
         // + 1 action-applied:<start step> + 1 action-applied:submit-for-decision
         // + 2 step 1 entries (action-applied, determination-made)
-        // + 3 approval entries (action-applied, sla-clock-stopped, accreditation-issued) = 9 total.
-        Assert.Equal(9, workItem.AuditLog.Count);
+        // + 4 step 2 entries (action-applied, applicant-contacted, sla-clock-stopped,
+        // accreditation-issued) = 10 total.
+        Assert.Equal(10, workItem.AuditLog.Count);
         Assert.Contains(
             workItem.AuditLog,
             e =>
@@ -178,7 +181,7 @@ public class ReAccreditationLifecycleTests
             workItem.AuditLog,
             e =>
                 e.Action == "action-applied"
-                && e.Details.GetValueOrDefault("actionId") == "approve"
+                && e.Details.GetValueOrDefault("actionId") == "confirm-contact-approved"
                 && e.Details.GetValueOrDefault("toStateId") == "approved"
         );
         Assert.All(

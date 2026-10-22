@@ -185,15 +185,22 @@ public class ReAccreditationTypeTests
     }
 
     [Fact]
-    public void Nothing_leaves_approved_pending_contact_yet()
+    public void Only_confirm_applicant_contact_leaves_approved_pending_contact()
     {
-        // RA-527 task 003: no query, withdraw, due-date change or
-        // re-determination from a pending approval. Reassign/unassign are not
+        // RA-527: no query, withdraw, due-date change or re-determination from
+        // a pending approval — only step 2, which applies the outcome. It is
+        // not caller-invocable: only the confirm-contact endpoint, which pushes
+        // to the operator journey first, reaches it. Reassign/unassign are not
         // transitions, so they are unaffected.
-        Assert.DoesNotContain(
+        var transition = Assert.Single(
             _type.Transitions,
             t => t.FromStateId == "approved-pending-contact"
         );
+
+        Assert.Equal("confirm-contact-approved", transition.ActionId);
+        Assert.Equal("Confirm applicant contact", transition.DisplayName);
+        Assert.Equal("approved", transition.ToStateId);
+        Assert.False(transition.CallerInvocable);
     }
 
     [Fact]

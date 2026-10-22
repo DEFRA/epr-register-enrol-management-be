@@ -97,6 +97,7 @@ internal sealed class ReAccreditationLogDecisionService(
 
     private static readonly ReAccreditationType s_type = new();
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
+    private readonly ReAccreditationDecisionPush _decisionPush = new(pushAdapter, auditAppender, logger);
 
     public async Task<WorkItemActionResult> LogDecisionAsync(
         Guid workItemId,
@@ -355,54 +356,24 @@ internal sealed class ReAccreditationLogDecisionService(
     )
     {
         var workItemId = workItem.Id;
-        const string targetStateId = RejectedStateId;
-        const string actionId = RejectActionId;
-        const string actionDisplayName = "Reject";
-        var toStateDisplayName = ResolveStateDisplayName(workItem, targetStateId);
-        var correlationId = Guid.NewGuid();
-        var occurredAt = _timeProvider.GetUtcNow().UtcDateTime;
 
         // epr-p86e / RA-410 PRE-COMMIT REGISTRATION & ACCREDITATION SERVICE GATE. Notify the operator journey of
         // the final outcome BEFORE persisting either internal hop. On failure,
         // nothing has been written, so there is nothing to revert — the item
         // stays exactly where it was and the caller gets a generic 500.
-        var pushResult = await pushAdapter.PushDecisionStatusChangedAsync(
-            workItemId,
-            correlationId,
+        var delivery = await _decisionPush.PushAsync(
+            workItem,
             PushFromStateId,
-            targetStateId,
-            toStateDisplayName,
-            actionId,
-            actionDisplayName,
-            occurredAt,
+            RejectedStateId,
+            RejectActionId,
+            "Reject",
+            _timeProvider.GetUtcNow().UtcDateTime,
+            user,
             cancellationToken
         );
 
-        if (!pushResult.IsSuccess && !pushResult.IsSkipped)
+        if (delivery.Failed)
         {
-            logger.LogWarning(
-                "Log-decision for work item {WorkItemId} abandoned: the operator journey could not be "
-                    + "notified (correlation {CorrelationId}): {ErrorMessage}. No state was changed.",
-                workItemId,
-                correlationId,
-                pushResult.ErrorMessage
-            );
-            await AppendStatusPushAuditAsync(
-                workItemId,
-                "status-push-failed",
-                "Status failed to send to the Registration & Accreditation service",
-                BuildPushDetails(
-                    correlationId,
-                    actionId,
-                    actionDisplayName,
-                    targetStateId,
-                    toStateDisplayName,
-                    extraKey: "errorMessage",
-                    extraValue: pushResult.ErrorMessage
-                ),
-                user,
-                cancellationToken
-            );
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UpstreamNotificationFailed,
                 "The re-accreditation decision could not be recorded because the operator journey could not "
@@ -430,52 +401,14 @@ internal sealed class ReAccreditationLogDecisionService(
             logger.LogInformation(
                 "Re-accreditation work item {WorkItemId} decided as {Outcome} by {UserId}",
                 workItemId,
-                targetStateId,
+                RejectedStateId,
                 user.FindFirstValue("user:id")
             );
 
             // Record the single decision push's outcome now the decision has
-            // landed, mirroring the audit entries ReAccreditationStatusPushHook
-            // used to emit for these actions (it no longer fires for them).
-            // Appended after the transition so it sits after the action-applied
-            // entries, exactly as the post-commit hook's entry did. A skipped
-            // (disabled) push is recorded under its own non-alerting outcome.
-            if (pushResult.IsSkipped)
-            {
-                await AppendStatusPushAuditAsync(
-                    workItemId,
-                    "status-push-skipped",
-                    "Status not sent to the Registration & Accreditation service (disabled)",
-                    BuildPushDetails(
-                        correlationId,
-                        actionId,
-                        actionDisplayName,
-                        targetStateId,
-                        toStateDisplayName,
-                        extraKey: "reason",
-                        extraValue: pushResult.ErrorMessage
-                    ),
-                    user,
-                    cancellationToken
-                );
-            }
-            else
-            {
-                await AppendStatusPushAuditAsync(
-                    workItemId,
-                    "status-push-sent",
-                    "Status sent to the Registration & Accreditation service",
-                    BuildPushDetails(
-                        correlationId,
-                        actionId,
-                        actionDisplayName,
-                        targetStateId,
-                        toStateDisplayName
-                    ),
-                    user,
-                    cancellationToken
-                );
-            }
+            // landed, so it sits after the action-applied entries, exactly as
+            // the post-commit hook's entry did.
+            await _decisionPush.RecordDeliveredAsync(delivery, user, cancellationToken);
         }
         else
         {
@@ -490,7 +423,7 @@ internal sealed class ReAccreditationLogDecisionService(
                 "Log-decision for work item {WorkItemId} failed at the {Outcome} step ({FailureCode}); "
                     + "the work item is in '{StateId}' and the call may be safely retried.",
                 workItemId,
-                targetStateId,
+                RejectedStateId,
                 result.FailureCode,
                 result.WorkItem?.StateId ?? AwaitingDecisionStateId
             );
@@ -499,73 +432,6 @@ internal sealed class ReAccreditationLogDecisionService(
         return result;
     }
 
-    /// <summary>
-    /// The details bag recorded on a decision-push audit entry, matching the
-    /// canonical key set ReAccreditationStatusPushHook writes (so management-fe's
-    /// audit-log projection renders it identically) plus an optional extra key
-    /// (<c>errorMessage</c> on a failure, <c>reason</c> on a skip).
-    /// </summary>
-    private static Dictionary<string, string?> BuildPushDetails(
-        Guid correlationId,
-        string actionId,
-        string actionDisplayName,
-        string toStateId,
-        string toStateDisplayName,
-        string? extraKey = null,
-        string? extraValue = null
-    )
-    {
-        var details = new Dictionary<string, string?>
-        {
-            ["actionId"] = actionId,
-            ["actionDisplayName"] = actionDisplayName,
-            ["fromStateId"] = PushFromStateId,
-            ["toStateId"] = toStateId,
-            ["toStateDisplayName"] = toStateDisplayName,
-            ["correlationId"] = correlationId.ToString(),
-        };
-        if (extraKey is not null)
-        {
-            details[extraKey] = extraValue;
-        }
-        return details;
-    }
-
-    private async Task AppendStatusPushAuditAsync(
-        Guid workItemId,
-        string action,
-        string actionDisplayName,
-        Dictionary<string, string?> details,
-        ClaimsPrincipal user,
-        CancellationToken cancellationToken
-    )
-    {
-        var appended = await auditAppender.AppendAsync(
-            workItemId,
-            action,
-            actionDisplayName,
-            details,
-            user,
-            cancellationToken
-        );
-        if (!appended)
-        {
-            logger.LogWarning(
-                "{Action} audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                action,
-                workItemId,
-                details.GetValueOrDefault("correlationId")
-            );
-        }
-    }
-
-    /// <summary>
-    /// Resolves the human-readable label for <paramref name="stateId"/> from
-    /// the work item's frozen template snapshot (preferred, so historical items
-    /// keep their labels) or the live type as a fallback, falling back to the
-    /// raw id — mirroring ReAccreditationStatusPushHook's own resolution so the
-    /// decision push carries the same display name the hook used to send.
-    /// </summary>
     /// <summary>
     /// RA-527: does the work item's own frozen snapshot (or the live type, for
     /// a legacy item with none) declare the step 1 approval transition? The
@@ -582,17 +448,6 @@ internal sealed class ReAccreditationLogDecisionService(
                 StringComparison.OrdinalIgnoreCase
             )
         );
-    }
-
-    private static string ResolveStateDisplayName(WorkItem workItem, string stateId)
-    {
-        IWorkItemTemplate template = (IWorkItemTemplate?)workItem.TemplateSnapshot ?? s_type;
-        var displayName = template
-            .States.FirstOrDefault(state =>
-                string.Equals(state.Id, stateId, StringComparison.OrdinalIgnoreCase)
-            )
-            ?.DisplayName;
-        return displayName ?? stateId;
     }
 
     private static WorkItemActionResult? RequireActorIdentity(ClaimsPrincipal user) =>

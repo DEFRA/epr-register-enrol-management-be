@@ -83,6 +83,12 @@ internal static class ReAccreditationEndpoints
     public const string LogDecisionProblemTitle = "Could not record re-accreditation decision";
 
     /// <summary>
+    /// RA-527: ProblemDetails title for every confirm-contact failure. Constant
+    /// for the same reason as <see cref="LogDecisionProblemTitle"/>.
+    /// </summary>
+    public const string ConfirmContactProblemTitle = "Could not confirm applicant contact";
+
+    /// <summary>
     /// ProblemDetails title for every duly-make failure. Constant across all of
     /// them on purpose: the frontend switches on <c>errorCode</c>, never on the
     /// title or the human-readable detail.
@@ -139,6 +145,16 @@ internal static class ReAccreditationEndpoints
             .WithName("LogReAccreditationDecision")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxDecisionBodyBytes))
+            .RequireAuthorization();
+
+        // RA-527: step 2 of the two-step determination ("confirm applicant
+        // contact"). Applies the outcome step 1 recorded: operator-journey push
+        // first, then one write. No body — the outcome was fixed at step 1.
+        // Same authorisation as /decision. The confirm-contact transition is
+        // CallerInvocable: false precisely so this is the only way in.
+        group
+            .MapPost("/{id:guid}/confirm-contact", ConfirmContact)
+            .WithName("ConfirmReAccreditationApplicantContact")
             .RequireAuthorization();
 
         // RA-291: bespoke query endpoint. The caller never names an action —
@@ -595,6 +611,62 @@ internal static class ReAccreditationEndpoints
             return TypedResults.NotFound();
         }
 
+        return DecisionProblem(result, LogDecisionProblemTitle);
+    }
+
+    /// <summary>
+    /// RA-527: confirm that the applicant has been contacted about the
+    /// determination, which applies it (step 2). From
+    /// <c>approved-pending-contact</c> the item moves to <c>approved</c>
+    /// ("Granted"): the operator journey is notified first — if it cannot be,
+    /// a generic 500 and nothing is applied — then the SLA clock stops,
+    /// publishing is queued and the Decision email is sent.
+    ///
+    /// A repeat call on an item already <c>approved</c> is an idempotent
+    /// replay (200 + the replay header). Any other state is a 409; a missing
+    /// item is a 404 and another type a 400 with
+    /// <c>errorCode: wrong-work-item-type</c>, as for <see cref="LogDecision"/>.
+    /// </summary>
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > ConfirmContact(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationConfirmContactService confirmContactService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await confirmContactService.ConfirmContactAsync(
+            id,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[WorkItemEndpoints.IdempotentReplayHeader] = "true";
+        }
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        return DecisionProblem(result, ConfirmContactProblemTitle);
+    }
+
+    /// <summary>
+    /// The ProblemDetails for a failed determination step (RA-410 /decision,
+    /// RA-527 /confirm-contact). Both share one failure vocabulary.
+    /// </summary>
+    private static ProblemHttpResult DecisionProblem(WorkItemActionResult result, string title)
+    {
         var decisionStatus = result.FailureCode switch
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
@@ -630,7 +702,7 @@ internal static class ReAccreditationEndpoints
                 : null;
 
         return TypedResults.Problem(
-            title: LogDecisionProblemTitle,
+            title: title,
             detail: result.Message,
             statusCode: decisionStatus,
             extensions: decisionExtensions

@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Security.Claims;
-using System.Text.RegularExpressions;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Background;
@@ -14,39 +13,40 @@ using ReAccreditationSlaClock = EprRegisterEnrolManagementBe.WorkItems.ReAccredi
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-132 default <see cref="IReAccreditationApprovalService"/>.
+/// RA-132 default <see cref="IReAccreditationApprovalService"/>. RA-527:
+/// approval is two steps, each one write.
 ///
-/// On a single <see cref="IWorkItemPersistence.ReplaceAsync"/> call the
-/// service:
-/// <list type="bullet">
-///   <item>Validates the work item exists, is a re-accreditation, is
-///   readable by the caller, and is in <c>assessment-in-progress</c>.
-///   RA-323: any authenticated caseworker may approve — there is no
-///   separate decision-maker role.</item>
-///   <item>Stamps a fresh accreditation id, today's date as the
-///   <c>AccreditationStartDate</c>, and a non-null
-///   <see cref="SlaClock.StoppedAt"/> on the payload.</item>
-///   <item>Transitions <c>StateId</c> to <c>approved</c>.</item>
-///   <item>Appends three audit entries in order: <c>approved</c> (the
-///   action-applied entry), <c>sla-clock-stopped</c>, and
-///   <c>accreditation-issued</c>.</item>
-/// </list>
+/// <see cref="RecordApprovedDeterminationAsync"/> (step 1, the determination)
+/// stamps the accreditation number its caller minted, with its start date and
+/// year, moves the item from <c>awaiting-decision</c> to the non-terminal
+/// <c>approved-pending-contact</c>, and records the determination. Nothing is
+/// applied.
 ///
-/// On a <see cref="WorkItemConcurrencyException"/> the operation is
-/// retried by reloading the latest document and re-running validation,
-/// up to <see cref="MaxAttempts"/> times — mirroring the
-/// <c>WorkItemAuditAppender</c> retry pattern.
-///
-/// After success the service enqueues a background job that appends a
+/// <see cref="ApproveAsync"/> (step 2, "confirm applicant contact") applies
+/// the outcome on a single <see cref="IWorkItemPersistence.ReplaceAsync"/>
+/// call: it checks the item against
+/// <see cref="ReAccreditationConfirmContactGuard"/> (pending contact, v17
+/// rules, the step 1 number present — it is reused, never re-minted), stamps
+/// <see cref="SlaClock.StoppedAt"/>, moves the item to <c>approved</c> and
+/// appends the action-applied, <c>applicant-contacted</c>,
+/// <c>sla-clock-stopped</c> and <c>accreditation-issued</c> audit entries.
+/// After the write it enqueues a background job that appends a
 /// <c>publishing-enqueued</c> audit entry via a scoped
 /// <see cref="IWorkItemAuditAppender"/>, then invokes the registered
 /// <see cref="IWorkItemPostActionHook"/>s with action id
-/// <c>approve</c> so the notification hook fires the decision email.
+/// <c>confirm-contact-approved</c> so the notification hook sends the
+/// Decision email. RA-323: any authenticated caseworker may approve — there
+/// is no separate decision-maker role.
 ///
-/// RA-448 phase 2: the accreditation id is no longer fabricated locally —
-/// it is resolved from the real backend via <see cref="IAccreditationNumberAdapter"/>,
-/// which returns a genuine, DEFRA-public-register-format number rather than
-/// the retired <c>AccreditationIdGenerator</c>'s local shape.
+/// On a <see cref="WorkItemConcurrencyException"/> either write is retried
+/// by reloading the latest document and re-running validation, up to
+/// <see cref="MaxAttempts"/> times — mirroring the
+/// <c>WorkItemAuditAppender</c> retry pattern.
+///
+/// RA-448 phase 2: the accreditation id is not fabricated locally — it is
+/// resolved from the real backend via <see cref="IAccreditationNumberAdapter"/>
+/// (<see cref="ResolveAccreditationNumberAsync"/>), which returns a genuine,
+/// DEFRA-public-register-format number.
 /// </summary>
 internal sealed class ReAccreditationApprovalService(
     IWorkItemPersistence persistence,
@@ -62,31 +62,7 @@ internal sealed class ReAccreditationApprovalService(
     private const string AccreditationIdKey = "accreditationId";
 
     private const int MaxAttempts = 3;
-    private const string FromStateId = "awaiting-decision";
-    private const string ToStateId = "approved";
-    private const string ActionId = "approve";
-
-    // RA-448 phase 2: mirrors the backend's own AC1 format regex
-    // (accreditation-number-generation.md), anchored to the 'A' prefix since
-    // this module only ever deals with accreditation numbers. Explicit
-    // matchTimeout: every quantifier here is bounded ({2}/{6}/{4}) with no
-    // nested/overlapping repetition, so catastrophic backtracking isn't
-    // actually reachable — but a fixed timeout costs nothing and is what
-    // static analysis (and defence-in-depth) expects of any Regex applied
-    // to a value that ultimately originates from a persisted document
-    // rather than a compile-time constant.
-    private static readonly Regex s_expectedAccreditationNumberFormat = new(
-        @"^A\d{2}(ER|EX|NR|NX|SR|SX|WR|WX)\d{6}\d{4}(AL|FB|GO|GR|PA|PL|ST|WO)$",
-        RegexOptions.Compiled,
-        TimeSpan.FromMilliseconds(250)
-    );
-
-    // RA-448 phase 2: fixed width of the retired local AccreditationIdGenerator's
-    // format (A{Year:2}{Agency:1}{OperatorType:1}{OrgId:6}{PostcodeSuffix:3}{Material:2}
-    // = 1+2+1+1+6+3+2 = 16). Used as the "is this the one known, explainable
-    // legacy shape" signal below — anything else non-matching stays treated
-    // as genuinely unexplained/corrupt, same as before this phase.
-    private const int LegacyAccreditationIdLength = 16;
+    private const string ToStateId = ReAccreditationConfirmContactGuard.ApprovedStateId;
 
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly IWorkItemPostActionHook[] _postActionHooks = postActionHooks.ToArray();
@@ -106,20 +82,19 @@ internal sealed class ReAccreditationApprovalService(
             );
         }
 
-        var resolution = await ResolveAccreditationNumberForWorkItemAsync(
+        return await ResolveAccreditationNumberForWorkItemAsync(
             workItem,
             _accreditationConfig.CurrentYear,
             correlationId,
             cancellationToken
         );
-        return resolution.NumberResult;
     }
 
     public async Task<WorkItemActionResult> ApproveAsync(
         Guid workItemId,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken = default,
-        AccreditationNumberResult? preResolvedAccreditationNumber = null
+        DateTimeOffset appliedAt,
+        CancellationToken cancellationToken = default
     )
     {
         ArgumentNullException.ThrowIfNull(user);
@@ -129,237 +104,25 @@ internal sealed class ReAccreditationApprovalService(
             return identityFailure;
         }
 
-        WorkItem? approved = null;
-        var approvedFromState = FromStateId;
-        // RA-448 phase 2: resolved at most once per ApproveAsync call and
-        // reused across concurrency retries below. The adapter call is a
-        // real, effectful backend request — unlike the old local generator,
-        // calling it again on every WorkItemConcurrencyException retry would
-        // ask the backend to "reapply" (YY+1) a number it just issued a
-        // moment ago on attempt 1, corrupting the count for no reason. See
-        // Phase 2 doc AC10/AC11.
-        //
-        // epr-r9oy: seeded from the caller's pre-resolved number when supplied
-        // (see IReAccreditationApprovalService.ApproveAsync's doc comment) so
-        // this method never calls the backend's accreditation-number endpoint
-        // a second time — that endpoint refuses once ApplicationStatus is
-        // terminal, which a caller resolving ahead of a Registration & Accreditation service push relies on.
-        AccreditationNumberResult? numberResult = preResolvedAccreditationNumber;
-        // RA-448 phase 2: one id for the whole logical approval attempt (not
-        // per retry), forwarded to the backend as X-Correlation-Id so this
-        // service's logs and the backend's logs for the same request can be
-        // joined on one value.
-        var correlationId = Guid.NewGuid();
-        var accreditationYear = _accreditationConfig.CurrentYear;
+        var appliedAtUtc = appliedAt.UtcDateTime;
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
 
-            if (workItem is null)
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.WorkItemNotFound,
-                    $"No work item exists with id '{workItemId}'."
-                );
-            }
-
+            // Re-checked on every attempt, against the item as it is now: a
+            // concurrent confirmation that landed first turns this into a
+            // replay, and anything else that moved the item refuses it.
             if (
-                !string.Equals(
-                    workItem.TypeId,
-                    ReAccreditationType.Id,
-                    StringComparison.OrdinalIgnoreCase
-                )
+                ReAccreditationConfirmContactGuard.Check(workItemId, workItem, registry) is
+                { } stop
             )
             {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.UnknownAction,
-                    $"Work item {workItemId} is of type '{workItem.TypeId}', not '{ReAccreditationType.Id}'."
-                );
+                return stop;
             }
 
-            // RA-133: idempotent re-approve. If the payload already
-            // carries an accreditation id and the item is in the
-            // approved state, return success without re-stamping or
-            // re-emitting audit/notification side-effects — regardless of
-            // that id's format: RA-448 phase 2 deliberately does not
-            // retroactively fix already-approved records (Phase 2 doc AC12),
-            // so this branch is unchanged from before.
-            //
-            // A present id on a NOT-yet-approved item is more nuanced. Only a
-            // value matching the RETIRED local AccreditationIdGenerator's
-            // known, specific shape (fixed-width, exactly
-            // LegacyAccreditationIdLength characters) is treated as unset and
-            // falls through to (re)issue a real one below — that is the one
-            // explainable "known legacy data" case RA-448 phase 2 exists to
-            // migrate. Anything else non-matching — the real backend format
-            // (still unexplained/corrupt pre-approval; a genuine number is
-            // only ever stamped by this same flow, on an item that then
-            // transitions to 'approved'), or any other unrecognised shape —
-            // is still treated as corrupt, exactly as before this change:
-            // silently reissuing a number over genuinely unexplained data
-            // would mask whatever produced it.
-            var existingAccreditationId = TryReadString(workItem.Payload, AccreditationIdKey);
-            if (!string.IsNullOrWhiteSpace(existingAccreditationId))
-            {
-                if (string.Equals(workItem.StateId, ToStateId, StringComparison.OrdinalIgnoreCase))
-                {
-                    return WorkItemActionResult.Success(workItem);
-                }
-
-                // RA-527: step 1 of the two-step determination minted this
-                // number and stamped it while moving the item to
-                // approved-pending-contact. That is the one legitimate way a
-                // real-format number reaches a not-yet-approved item, so it is
-                // reused as-is — never re-minted.
-                var isStepOneNumber =
-                    string.Equals(
-                        workItem.StateId,
-                        ReAccreditationType.ApprovedPendingContactStateId,
-                        StringComparison.OrdinalIgnoreCase
-                    ) && s_expectedAccreditationNumberFormat.IsMatch(existingAccreditationId);
-                if (isStepOneNumber)
-                {
-                    numberResult ??= AccreditationNumberResult.Success(existingAccreditationId);
-                }
-                else
-                {
-                    var isKnownLegacyFormat =
-                        existingAccreditationId.Length == LegacyAccreditationIdLength
-                        && !s_expectedAccreditationNumberFormat.IsMatch(existingAccreditationId);
-                    if (!isKnownLegacyFormat)
-                    {
-                        logger.LogWarning(
-                            "Work item {WorkItemId} carries accreditation id {AccreditationId} but is in state "
-                                + "{StateId}; refusing to re-issue.",
-                            workItem.Id,
-                            existingAccreditationId,
-                            workItem.StateId
-                        );
-                        return WorkItemActionResult.Failure(
-                            WorkItemActionFailureCode.InvalidTransition,
-                            $"Work item '{workItemId}' already carries accreditation id "
-                                + $"'{existingAccreditationId}' but is in state '{workItem.StateId}'. "
-                                + "Manual investigation required."
-                        );
-                    }
-
-                    logger.LogInformation(
-                        "Work item {WorkItemId} carries a non-standard-format accreditation id "
-                            + "{AccreditationId}; treating it as unset and issuing a real one via the backend.",
-                        workItem.Id,
-                        existingAccreditationId
-                    );
-                }
-            }
-
-            if (
-                string.Equals(workItem.StateId, ToStateId, StringComparison.OrdinalIgnoreCase)
-                || string.Equals(workItem.StateId, "rejected", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(workItem.StateId, "withdrawn", StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.TerminalState,
-                    $"Work item {workItemId} is in terminal state '{workItem.StateId}'; no actions are allowed."
-                );
-            }
-
-            // RA-527: approved-pending-contact (step 1 done) is accepted as
-            // well, so step 2 can apply the outcome with the step 1 number.
-            if (
-                !string.Equals(workItem.StateId, FromStateId, StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(
-                    workItem.StateId,
-                    ReAccreditationType.ApprovedPendingContactStateId,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            )
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.InvalidTransition,
-                    $"Action '{ActionId}' moves work items from '{FromStateId}' or "
-                        + $"'{ReAccreditationType.ApprovedPendingContactStateId}', "
-                        + $"but {workItemId} is in '{workItem.StateId}'."
-                );
-            }
-
-            // Resolved before any side effect: an approval on a work item
-            // whose type is neither registered nor snapshotted issues no
-            // accreditation id, stops no SLA clock, queues no publishing job,
-            // changes no state and writes no audit entry.
-            var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
-            if (template is null)
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.UnknownAction,
-                    $"Work item {workItemId} references unregistered type '{workItem.TypeId}' "
-                        + "and has no stored template snapshot."
-                );
-            }
-
-            var now = _timeProvider.GetUtcNow();
-            var nowUtc = now.UtcDateTime;
-            // Scoped to THIS iteration only (unlike numberResult): a retry
-            // iteration re-fetches a fresh workItem, so a payload deserialised
-            // on an earlier iteration must never be reused for the merge
-            // below — only the value set in the SAME iteration it is passed
-            // into TryApplyApprovalToPayload is safe to reuse.
-            ReAccreditationPayload? numberPayload = null;
-
-            if (numberResult is null)
-            {
-                var resolution = await ResolveAccreditationNumberForWorkItemAsync(
-                    workItem,
-                    accreditationYear,
-                    correlationId,
-                    cancellationToken
-                );
-
-                if (!resolution.NumberResult.IsSuccess)
-                {
-                    return resolution.FailureKind switch
-                    {
-                        AccreditationNumberFailureKind.PayloadCorrupt =>
-                            WorkItemActionResult.Failure(
-                                WorkItemActionFailureCode.InvalidTransition,
-                                $"Work item '{workItemId}' payload is corrupt and cannot be read. "
-                                    + "Inspect the server logs for details; a manual data repair may be required."
-                            ),
-                        AccreditationNumberFailureKind.MissingRequiredFields =>
-                            WorkItemActionResult.Failure(
-                                WorkItemActionFailureCode.InvalidTransition,
-                                $"Work item '{workItemId}' is missing data required to issue an accreditation number."
-                            ),
-                        _ => WorkItemActionResult.Failure(
-                            WorkItemActionFailureCode.AccreditationNumberUnavailable,
-                            $"Work item '{workItemId}' could not be approved: an accreditation number could "
-                                + "not be obtained. Try again, or contact support if the problem persists."
-                        ),
-                    };
-                }
-
-                numberResult = resolution.NumberResult;
-                // Reused by TryApplyApprovalToPayload below so the same,
-                // not-yet-mutated payload is not deserialised a second time
-                // on the common path (numberResult resolved on attempt 1).
-                numberPayload = resolution.Payload;
-            }
-
-            var accreditationId = numberResult.AccreditationNumber!;
-
-            var accreditationStartDate = ComputeAccreditationStartDate(accreditationYear, nowUtc);
-
-            if (
-                !TryApplyApprovalToPayload(
-                    workItem,
-                    accreditationId,
-                    accreditationStartDate,
-                    accreditationYear,
-                    now,
-                    numberPayload
-                )
-            )
+            var payload = TryStopSlaClock(workItem!, appliedAt);
+            if (payload is null)
             {
                 return WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.InvalidTransition,
@@ -368,37 +131,54 @@ internal sealed class ReAccreditationApprovalService(
                 );
             }
 
-            var previousState = workItem.StateId;
+            var previousState = workItem!.StateId;
             workItem.StateId = ToStateId;
-            workItem.LastModifiedAt = nowUtc;
+            workItem.LastModifiedAt = appliedAtUtc;
 
-            var auditDetails = new Dictionary<string, string?>
-            {
-                ["actionId"] = ActionId,
-                ["actionDisplayName"] = "Approve",
-                ["fromStateId"] = previousState,
-                ["toStateId"] = workItem.StateId,
-            };
-            AppendAudit(workItem, "action-applied", "Action applied", user, nowUtc, auditDetails);
+            AppendAudit(
+                workItem,
+                "action-applied",
+                "Action applied",
+                user,
+                appliedAtUtc,
+                new()
+                {
+                    ["actionId"] = ReAccreditationType.ConfirmContactApprovedActionId,
+                    ["actionDisplayName"] = ReAccreditationType.ConfirmContactDisplayName,
+                    ["fromStateId"] = previousState,
+                    ["toStateId"] = workItem.StateId,
+                }
+            );
+            AppendAudit(
+                workItem,
+                "applicant-contacted",
+                "Applicant contacted",
+                user,
+                appliedAtUtc,
+                new() { ["outcome"] = "approved" }
+            );
             AppendAudit(
                 workItem,
                 "sla-clock-stopped",
                 "SLA clock stopped",
                 user,
-                nowUtc,
-                new() { ["stoppedAt"] = now.ToString("O") }
+                appliedAtUtc,
+                new() { ["stoppedAt"] = appliedAt.ToString("O") }
             );
             AppendAudit(
                 workItem,
                 "accreditation-issued",
                 "Accreditation issued",
                 user,
-                nowUtc,
+                appliedAtUtc,
                 new()
                 {
-                    [AccreditationIdKey] = accreditationId,
-                    ["startDate"] = accreditationStartDate.ToString("yyyy-MM-dd"),
-                    ["accreditationYear"] = accreditationYear.ToString(
+                    [AccreditationIdKey] = payload.AccreditationId,
+                    ["startDate"] = payload.AccreditationStartDate?.ToString(
+                        "yyyy-MM-dd",
+                        CultureInfo.InvariantCulture
+                    ),
+                    ["accreditationYear"] = payload.AccreditationYear?.ToString(
                         CultureInfo.InvariantCulture
                     ),
                 }
@@ -407,48 +187,45 @@ internal sealed class ReAccreditationApprovalService(
             try
             {
                 await persistence.ReplaceAsync(workItem, cancellationToken);
-                approved = workItem;
-                approvedFromState = previousState;
-                break;
+            }
+            catch (WorkItemConcurrencyException) when (attempt < MaxAttempts)
+            {
+                continue;
             }
             catch (WorkItemConcurrencyException)
             {
-                if (attempt == MaxAttempts)
-                {
-                    logger.LogError(
-                        "ReAccreditation approval for work item {WorkItemId} abandoned after {Attempts} attempts "
-                            + "due to repeated concurrency conflicts.",
-                        workItemId,
-                        MaxAttempts
-                    );
-                    return WorkItemActionResult.Failure(
-                        WorkItemActionFailureCode.ConcurrencyConflict,
-                        $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry."
-                    );
-                }
+                logger.LogError(
+                    "ReAccreditation approval for work item {WorkItemId} abandoned after {Attempts} attempts "
+                        + "due to repeated concurrency conflicts.",
+                    workItemId,
+                    MaxAttempts
+                );
+                return WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.ConcurrencyConflict,
+                    $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry."
+                );
             }
+
+            logger.LogInformation(
+                "Re-accreditation work item {WorkItemId} approved (applicant contacted) by {UserId}",
+                workItem.Id,
+                user.FindFirstValue("user:id")
+            );
+
+            await EnqueuePublishingAuditAsync(workItem, user, cancellationToken);
+            await InvokeActionAppliedHooksAsync(
+                workItem,
+                ReAccreditationType.ConfirmContactApprovedActionId,
+                previousState,
+                user
+            );
+
+            return WorkItemActionResult.Success(workItem);
         }
 
-        // Loop has either returned (validation failure / exhausted retries)
-        // or assigned `approved`. The compiler does not see the latter so
-        // narrow with an assertion.
-        var persisted = approved!;
-
-        logger.LogInformation(
-            "Re-accreditation work item {WorkItemId} approved by {UserId}",
-            persisted.Id,
-            user.FindFirstValue("user:id")
-        );
-
-        await EnqueuePublishingAuditAsync(persisted, user, cancellationToken);
-        await InvokeActionAppliedHooksAsync(
-            persisted,
-            ActionId,
-            approvedFromState,
-            user
-        );
-
-        return WorkItemActionResult.Success(persisted);
+        // Unreachable: the final attempt either returns success or the
+        // ConcurrencyConflict failure above.
+        throw new InvalidOperationException("Approval retry loop exited unexpectedly.");
     }
 
     public async Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
@@ -495,16 +272,18 @@ internal sealed class ReAccreditationApprovalService(
             var nowUtc = now.UtcDateTime;
             var accreditationStartDate = ComputeAccreditationStartDate(accreditationYear, nowUtc);
 
-            if (
-                !TryApplyApprovalToPayload(
-                    workItem,
-                    accreditationId,
-                    accreditationStartDate,
-                    accreditationYear,
-                    stoppedAt: null,
-                    preDeserializedPayload: null
-                )
-            )
+            // The SLA clock is left running: the outcome is applied at step 2.
+            var stamped = TryUpdatePayload(
+                workItem,
+                payload =>
+                    payload with
+                    {
+                        AccreditationId = accreditationId,
+                        AccreditationStartDate = accreditationStartDate,
+                        AccreditationYear = accreditationYear,
+                    }
+            );
+            if (stamped is null)
             {
                 return WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.InvalidTransition,
@@ -668,35 +447,11 @@ internal sealed class ReAccreditationApprovalService(
     }
 
     /// <summary>
-    /// Discriminates why <see cref="AccreditationNumberResolution.NumberResult"/>
-    /// failed, so <see cref="ApproveAsync"/> can reconstruct the exact same
-    /// <see cref="WorkItemActionFailureCode"/> and message it always has for
-    /// each case — a bad/missing payload is caller error (InvalidTransition);
-    /// the backend call itself failing is AccreditationNumberUnavailable.
-    /// <see cref="ResolveAccreditationNumberAsync"/> only needs the result
-    /// itself, not this distinction.
+    /// epr-r9oy: the number-resolution step behind
+    /// <see cref="ResolveAccreditationNumberAsync"/>. Never throws — every
+    /// failure mode is a failed <see cref="AccreditationNumberResult"/>.
     /// </summary>
-    private enum AccreditationNumberFailureKind
-    {
-        None,
-        PayloadCorrupt,
-        MissingRequiredFields,
-        AdapterFailure,
-    }
-
-    private sealed record AccreditationNumberResolution(
-        AccreditationNumberResult NumberResult,
-        ReAccreditationPayload? Payload,
-        AccreditationNumberFailureKind FailureKind
-    );
-
-    /// <summary>
-    /// epr-r9oy: the number-resolution step factored out of <see cref="ApproveAsync"/>'s
-    /// retry loop so <see cref="ResolveAccreditationNumberAsync"/> can call it
-    /// standalone. Never throws — every failure mode maps to a
-    /// <see cref="AccreditationNumberResolution.FailureKind"/> instead.
-    /// </summary>
-    private async Task<AccreditationNumberResolution> ResolveAccreditationNumberForWorkItemAsync(
+    private async Task<AccreditationNumberResult> ResolveAccreditationNumberForWorkItemAsync(
         WorkItem workItem,
         int accreditationYear,
         Guid correlationId,
@@ -720,12 +475,8 @@ internal sealed class ReAccreditationApprovalService(
                     + "accreditation number.",
                 workItem.Id
             );
-            return new AccreditationNumberResolution(
-                AccreditationNumberResult.Failure(
-                    "Work item payload is corrupt and cannot be read."
-                ),
-                null,
-                AccreditationNumberFailureKind.PayloadCorrupt
+            return AccreditationNumberResult.Failure(
+                "Work item payload is corrupt and cannot be read."
             );
         }
 
@@ -740,13 +491,9 @@ internal sealed class ReAccreditationApprovalService(
                     + "(nation, operatorOrganisationId, or operatorApplicationId).",
                 workItem.Id
             );
-            return new AccreditationNumberResolution(
-                AccreditationNumberResult.Failure(
-                    "Work item is missing data required to request an accreditation number "
-                        + "(nation, operatorOrganisationId, or operatorApplicationId)."
-                ),
-                null,
-                AccreditationNumberFailureKind.MissingRequiredFields
+            return AccreditationNumberResult.Failure(
+                "Work item is missing data required to request an accreditation number "
+                    + "(nation, operatorOrganisationId, or operatorApplicationId)."
             );
         }
 
@@ -783,8 +530,8 @@ internal sealed class ReAccreditationApprovalService(
         // other route on that backend's accreditation-applications group keys
         // on the document id, not the registration id.
         //
-        // Regenerate=false, not true: a work item is approved at most once
-        // (the idempotent-return branch above blocks re-approval outright), so
+        // Regenerate=false, not true: a number is minted at most once per
+        // application (step 1 of an approval; step 2 reuses it), so
         // the only time this call runs twice for the SAME application is a
         // retry after a transient failure — attempt 1 may have already
         // committed a number the caller never saw acknowledged. Regenerate=true
@@ -816,71 +563,46 @@ internal sealed class ReAccreditationApprovalService(
                 correlationId,
                 numberResult.ErrorMessage
             );
-            return new AccreditationNumberResolution(
-                numberResult,
-                null,
-                AccreditationNumberFailureKind.AdapterFailure
-            );
         }
 
-        return new AccreditationNumberResolution(
-            numberResult,
-            freshPayload,
-            AccreditationNumberFailureKind.None
-        );
+        return numberResult;
     }
 
-    private bool TryApplyApprovalToPayload(
+    /// <summary>
+    /// Applies <paramref name="update"/> to the work item's payload and
+    /// returns the updated model, or null (logged) when the stored payload
+    /// cannot be read — writing over it would destroy existing payload data
+    /// (organisation name, registration number, nation, etc.).
+    /// </summary>
+    private ReAccreditationPayload? TryUpdatePayload(
         WorkItem workItem,
-        string accreditationId,
-        DateOnly accreditationStartDate,
-        int accreditationYear,
-        DateTimeOffset? stoppedAt,
-        ReAccreditationPayload? preDeserializedPayload
+        Func<ReAccreditationPayload, ReAccreditationPayload> update
     )
     {
+        // Deserialise → with-mutate → reserialise so the mongo-driver's
+        // serializer (camelCase convention, nested record) is the single
+        // source of truth for the on-disk shape.
         ReAccreditationPayload payload;
-        if (preDeserializedPayload is not null)
+        try
         {
-            // Caller already deserialised the same, not-yet-mutated
-            // workItem.Payload this iteration (to resolve the number-request
-            // fields) — reuse it rather than parsing the identical document
-            // a second time.
-            payload = preDeserializedPayload;
+            payload = BsonSerializer.Deserialize<ReAccreditationPayload>(
+                workItem.Payload ?? new BsonDocument()
+            );
         }
-        else
+        catch (Exception ex)
+            when (ex is BsonSerializationException or FormatException or InvalidCastException)
         {
-            // Deserialise → with-mutate → reserialise so the mongo-driver's
-            // serializer (camelCase convention, nested record) is the single
-            // source of truth for the on-disk shape.
-            try
-            {
-                payload = BsonSerializer.Deserialize<ReAccreditationPayload>(
-                    workItem.Payload ?? new BsonDocument()
-                );
-            }
-            catch (Exception ex)
-                when (ex is BsonSerializationException or FormatException or InvalidCastException)
-            {
-                logger.LogError(
-                    ex,
-                    "Re-accreditation approval for work item {WorkItemId} aborted: "
-                        + "existing payload could not be deserialised. Approving would destroy "
-                        + "existing payload data (organisation name, registration number, nation, etc.).",
-                    workItem.Id
-                );
-                return false;
-            }
+            logger.LogError(
+                ex,
+                "Re-accreditation approval for work item {WorkItemId} aborted: "
+                    + "existing payload could not be deserialised. Approving would destroy "
+                    + "existing payload data (organisation name, registration number, nation, etc.).",
+                workItem.Id
+            );
+            return null;
         }
 
-        var updated = payload with
-        {
-            AccreditationId = accreditationId,
-            AccreditationStartDate = accreditationStartDate,
-            AccreditationYear = accreditationYear,
-            // RA-527: step 1 (stoppedAt null) leaves the SLA clock running.
-            SlaClock = stoppedAt is { } stopped ? new ReAccreditationSlaClock(stopped) : payload.SlaClock,
-        };
+        var updated = update(payload);
 
         // RA-249: merge the modelled updates back over the *existing* payload rather
         // than replacing it wholesale. A full replace against this
@@ -894,8 +616,15 @@ internal sealed class ReAccreditationApprovalService(
         var merged = (workItem.Payload ?? new BsonDocument()).DeepClone().AsBsonDocument;
         merged.Merge(updated.ToBsonDocument(), overwriteExistingElements: true);
         workItem.ReplacePayload(merged);
-        return true;
+        return updated;
     }
+
+    /// <summary>RA-527 step 2: stops the payload's SLA clock at <paramref name="stoppedAt"/>.</summary>
+    private ReAccreditationPayload? TryStopSlaClock(WorkItem workItem, DateTimeOffset stoppedAt) =>
+        TryUpdatePayload(
+            workItem,
+            payload => payload with { SlaClock = new ReAccreditationSlaClock(stoppedAt) }
+        );
 
     private async Task EnqueuePublishingAuditAsync(
         WorkItem workItem,

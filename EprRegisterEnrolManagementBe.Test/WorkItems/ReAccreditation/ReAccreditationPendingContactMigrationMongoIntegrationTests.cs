@@ -17,8 +17,9 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// <summary>
 /// RA-527 (v16 → v17): runs the pending-contact rules migration against a real
 /// ephemeral Mongo, on v16 fixtures in a spread of states. It must add the
-/// non-terminal <c>approved-pending-contact</c> state and the
-/// <c>make-determination-approved</c> transition into it, set v17, leave every
+/// non-terminal <c>approved-pending-contact</c> state, the
+/// <c>make-determination-approved</c> transition into it and the
+/// <c>confirm-contact-approved</c> transition out of it, set v17, leave every
 /// other stored field exactly as it was, write nothing on a second run, and
 /// leave a migrated decision-ready item able to take a step 1 approval (which
 /// an unmigrated v16 item cannot).
@@ -57,7 +58,10 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
     private static ReAccreditationPendingContactSnapshotMigration BuildMigration() =>
         new(NullLogger<ReAccreditationPendingContactSnapshotMigration>.Instance);
 
-    /// <summary>v16: the live (v17) template without the pending-contact state and transition.</summary>
+    private static readonly string[] s_v17ActionIds =
+        ["make-determination-approved", "confirm-contact-approved"];
+
+    /// <summary>v16: the live (v17) template without the pending-contact state and transitions.</summary>
     private static WorkItemTemplateSnapshot BuildV16Snapshot()
     {
         var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
@@ -66,7 +70,7 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
             TemplateVersion = "v16",
             States = live.States.Where(s => s.Id != "approved-pending-contact").ToList(),
             Transitions = live
-                .Transitions.Where(t => t.ActionId != "make-determination-approved")
+                .Transitions.Where(t => !s_v17ActionIds.Contains(t.ActionId))
                 .ToList(),
         };
     }
@@ -156,6 +160,12 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
         Assert.Equal("approved-pending-contact", step1.ToStateId);
         Assert.False(step1.CallerInvocable);
 
+        var step2 = Assert.Single(
+            after.TemplateSnapshot.Transitions, t => t.ActionId == "confirm-contact-approved");
+        Assert.Equal("approved-pending-contact", step2.FromStateId);
+        Assert.Equal("approved", step2.ToStateId);
+        Assert.False(step2.CallerInvocable);
+
         // The migrated rules are exactly the live v17 rules.
         var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
         Assert.Equal(
@@ -168,7 +178,7 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
         // Every other rule is untouched.
         Assert.Equal(
             before.TemplateSnapshot!.Transitions,
-            after.TemplateSnapshot.Transitions.Where(t => t.ActionId != "make-determination-approved").ToList());
+            after.TemplateSnapshot.Transitions.Where(t => !s_v17ActionIds.Contains(t.ActionId)).ToList());
         Assert.Equal(
             before.TemplateSnapshot.States,
             after.TemplateSnapshot.States.Where(s => s.Id != "approved-pending-contact").ToList());
@@ -238,6 +248,46 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
 
         var after = (await _persistence.GetByIdAsync(item.Id, ct))!;
         Assert.Equal(before.ToBsonDocument(), after.ToBsonDocument());
+    }
+
+    /// <summary>
+    /// RA-527 task 004: an item already stamped v17 by the task 003 build of
+    /// this migration (the state and the step 1 transition, but not yet the
+    /// confirm-contact transition) gets the missing transition, so an
+    /// approval pending contact there can be confirmed.
+    /// </summary>
+    [Fact]
+    public async Task An_item_on_the_first_v17_rules_gains_the_confirm_contact_transition()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
+        var item = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = "approved-pending-contact",
+            SubmittedAt = s_now,
+            LastModifiedAt = s_now,
+            SubmittedBy = "seed",
+            TemplateVersion = "v17",
+            TemplateSnapshot = new WorkItemTemplateSnapshot
+            {
+                TemplateVersion = "v17",
+                States = live.States,
+                Transitions = live
+                    .Transitions.Where(t => t.ActionId != "confirm-contact-approved")
+                    .ToList(),
+            },
+        };
+        await _persistence.CreateAsync(item, ct);
+
+        await BuildMigration().ApplyAsync(_persistence, ct);
+
+        var after = (await _persistence.GetByIdAsync(item.Id, ct))!;
+        Assert.Equal("approved-pending-contact", after.StateId);
+        Assert.Equal(
+            live.Transitions.OrderBy(t => t.ActionId).ThenBy(t => t.FromStateId).ToList(),
+            after.TemplateSnapshot!.Transitions.OrderBy(t => t.ActionId).ThenBy(t => t.FromStateId).ToList());
+        Assert.Single(after.TemplateSnapshot.States, s => s.Id == "approved-pending-contact");
     }
 
     [Fact]

@@ -28,6 +28,15 @@ internal sealed class ReAccreditationType : IWorkItemType
     /// <summary>RA-527: display name of <see cref="MakeDeterminationApprovedActionId"/>.</summary>
     public const string MakeDeterminationApprovedDisplayName = "Make determination: Approved";
 
+    /// <summary>
+    /// RA-527: the step 2 approval transition ("confirm applicant contact"),
+    /// approved-pending-contact → approved.
+    /// </summary>
+    public const string ConfirmContactApprovedActionId = "confirm-contact-approved";
+
+    /// <summary>RA-527: display name of the step 2 ("confirm applicant contact") transitions.</summary>
+    public const string ConfirmContactDisplayName = "Confirm applicant contact";
+
     // RA-324 (AC06): state DisplayNames align with the prototype "Applications"
     // design. Only the labels change here — the state ids are the wire contract
     // the management-fe and mgmt-tests key off and MUST stay exactly as they
@@ -198,10 +207,13 @@ internal sealed class ReAccreditationType : IWorkItemType
     // 'awaiting-decision' (CallerInvocable: false — only
     // POST /work-items/re-accreditation/{id}/decision reaches it, because it
     // must mint and stamp the accreditation number). An Approved decision now
-    // lands there instead of going straight to 'approved'; nothing leaves it
-    // yet except reassign/unassign. Items snapshotted before v17 have neither
-    // until ReAccreditationPendingContactSnapshotMigration patches their
-    // frozen snapshot.
+    // lands there instead of going straight to 'approved'. Step 2 is the
+    // confirm-contact-approved transition (approved-pending-contact ->
+    // approved, CallerInvocable: false — only
+    // POST /work-items/re-accreditation/{id}/confirm-contact reaches it).
+    // Items snapshotted before v17 have none of these until
+    // ReAccreditationPendingContactSnapshotMigration patches their frozen
+    // snapshot.
     public string TemplateVersion => "v17";
     public WorkItemState InitialState => s_submitted;
 
@@ -328,6 +340,20 @@ internal sealed class ReAccreditationType : IWorkItemType
             MakeDeterminationApprovedDisplayName,
             s_awaitingDecision.Id,
             s_approvedPendingContact.Id,
+            CallerInvocable: false
+        ),
+        // RA-527: step 2 of an approval ("confirm applicant contact"). Applied
+        // by ReAccreditationApprovalService.ApproveAsync, reached only via
+        // POST /work-items/re-accreditation/{id}/confirm-contact, which pushes
+        // the outcome to the operator journey BEFORE this write, then stops
+        // the SLA clock, queues publishing and sends the Decision email.
+        // CallerInvocable is false so the generic action route cannot apply
+        // the outcome without any of that.
+        new WorkItemTransition(
+            ConfirmContactApprovedActionId,
+            ConfirmContactDisplayName,
+            s_approvedPendingContact.Id,
+            s_approved.Id,
             CallerInvocable: false
         ),
         // RA-211 / RA-291: a case worker can query an application from any

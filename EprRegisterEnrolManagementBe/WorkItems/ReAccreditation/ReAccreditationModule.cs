@@ -206,6 +206,13 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IReAccreditationLogDecisionService,
             ReAccreditationLogDecisionService
         >();
+        // RA-527: step 2 of the two-step determination ("confirm applicant
+        // contact"): pre-commit operator-journey push, then the approval
+        // service's single write.
+        services.AddSingleton<
+            IReAccreditationConfirmContactService,
+            ReAccreditationConfirmContactService
+        >();
         // RA-448 phase 2: the locally-fabricated accreditation id generator
         // (AccreditationIdGenerator/AccreditationIdLookup) and its
         // ULID-format backfill migration are gone. ReAccreditationApprovalService
