@@ -130,13 +130,19 @@ That is the complete list of changes required outside the new module folder.
   in the non-terminal `approved-pending-contact` or `rejected-pending-contact`
   and pushes nothing), because two calls left a window in which an
   application stranded in `awaiting-decision` had no call to action to
-  discharge it. RA-527's
+  discharge it. Step 1 of an approval stamps only the accreditation number;
+  the same outcome replays (200, no change) on its pending state and on its
+  own final state, as on `main`, and the other outcome is a 409. RA-527's
   `POST /work-items/re-accreditation/{id}/confirm-contact` (step 2) then
-  applies the outcome: it pushes `approved` or `rejected` to the operator
-  journey first (on failure nothing is applied), then one write moves the
-  item to its terminal state with the SLA clock stopped and "Applicant
-  contacted" audited. For an approval publishing is queued and the Decision
-  email follows; a refusal sends no email (RA-211).
+  applies the outcome, doing what the old single-step approve or refuse did.
+  Every check that could refuse the write (including payload readability)
+  runs first; then it pushes `approved` or `rejected` to the operator journey
+  (on failure nothing is applied; only `status-push-failed` is recorded),
+  then one write moves the item to its terminal state with "Applicant
+  contacted" audited. An approval also stops the SLA clock, stamps the
+  accreditation start date and year, queues publishing and sends the Decision
+  email. A refusal leaves the SLA clock running, as `main` did, and sends no
+  email (RA-211).
 
 ## Template versioning (RA-94)
 

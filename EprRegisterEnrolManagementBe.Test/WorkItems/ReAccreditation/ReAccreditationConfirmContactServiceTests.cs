@@ -99,7 +99,7 @@ public class ReAccreditationConfirmContactServiceTests
     /// The operator journey unreachable after the retry budget: nothing is
     /// applied (the approval service is never called) and the caller gets an
     /// UpstreamNotificationFailed the endpoint maps to a 500. A
-    /// status-push-failed entry is still recorded for support.
+    /// status-push-failed entry is still recorded (regulator-visible, as on main).
     /// </summary>
     [Fact]
     public async Task A_push_failure_applies_nothing_and_maps_to_500()
@@ -345,6 +345,30 @@ public class ReAccreditationConfirmContactServiceTests
 
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         Assert.Empty(harness.OrderedCalls);
+    }
+
+    /// <summary>
+    /// RA-527 task 007: step 2 writes the payload (an approval stamps the
+    /// start date and year), so an unreadable payload must refuse the step
+    /// BEFORE the operator journey is told the outcome — for both outcomes.
+    /// </summary>
+    [Theory]
+    [InlineData("approved-pending-contact")]
+    [InlineData("rejected-pending-contact")]
+    public async Task A_corrupt_payload_is_refused_before_the_push(string stateId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: stateId);
+        harness.WorkItem.Payload["accreditationStartDate"] = "not-a-date";
+
+        var result = await harness.Service.ConfirmContactAsync(harness.WorkItem.Id, harness.User, ct);
+
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        Assert.Contains("payload is corrupt", result.Message);
+        Assert.Empty(harness.OrderedCalls);
+        await harness
+            .AuditAppender.DidNotReceiveWithAnyArgs()
+            .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
     [Fact]

@@ -9,31 +9,41 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// RA-527 default <see cref="IReAccreditationConfirmContactService"/>. The
 /// outcome is the one step 1 recorded, read off the item's pending-contact
 /// state: <c>approved-pending-contact</c> → <c>approved</c>,
-/// <c>rejected-pending-contact</c> → <c>rejected</c>.
+/// <c>rejected-pending-contact</c> → <c>rejected</c>. Step 2 does what the
+/// old single-step approve or refuse did (RA-527 task 007).
 ///
 /// Run order, agreed for step 2 and the same for both outcomes:
 /// <list type="number">
+///   <item><b>Every check that could refuse the write</b>, through
+///   <see cref="ReAccreditationConfirmContactGuard"/>: pending state, the
+///   item's rules, a readable payload and, for an approval, the step 1
+///   number.</item>
 ///   <item><b>Pre-commit operator-journey push</b> (the decision push, with
 ///   its larger retry pipeline): to-state the terminal state, from-state the
 ///   pending state, one <c>OccurredAt</c>. If it cannot be delivered the step
 ///   is abandoned — UpstreamNotificationFailed, which the endpoint maps to a
-///   500 — with nothing applied (only the support-facing
-///   <c>status-push-failed</c> entry is recorded).</item>
+///   500 — with no state, SLA, outcome audit, publishing or email change.
+///   Only the <c>status-push-failed</c> entry ("Status failed to send to the
+///   Registration &amp; Accreditation service") is recorded, as on main; it is
+///   shown to regulators in the history. The regulator retries by confirming
+///   again.</item>
 ///   <item><b>One write</b> through
-///   <see cref="IReAccreditationApprovalService.ApproveAsync"/> or
-///   <see cref="IReAccreditationRefusalService.RefuseAsync"/>, which stops the
-///   SLA clock at that same timestamp (and, for an approval, queues
-///   publishing).</item>
+///   <see cref="IReAccreditationApprovalService.ApproveAsync"/> (stops the SLA
+///   clock at that same timestamp, stamps the accreditation start date and
+///   year, and queues publishing) or
+///   <see cref="IReAccreditationRefusalService.RefuseAsync"/> (state and audit
+///   only: as the old single-step refuse, the SLA clock is not stopped).</item>
 ///   <item><b>Post-action hooks</b>, fired by that service after its write:
 ///   the Decision email for an approval, nothing for a refusal (RA-211).</item>
 /// </list>
 ///
-/// Every rule that could refuse the write is checked BEFORE the push, through
-/// <see cref="ReAccreditationConfirmContactGuard"/>, so the operator is never
-/// told the outcome of an item the write would then refuse. If the write
-/// still fails after a delivered push (a concurrent change), the regulator
-/// retries: the operator journey drops the duplicate push by its
-/// <c>OccurredAt</c> ordering, and an item that did reach its terminal state
+/// Because the checks run before the push, the operator is never told the
+/// outcome of an item the write would then refuse. Known gap (also true on
+/// main, follow-up tracked separately): if the push is delivered but the
+/// write then fails (repeated concurrency conflicts, or Mongo down), a retry
+/// sends a new <c>OccurredAt</c>; the operator journey, already at the
+/// terminal status, answers 409, which the push adapter treats as a failure,
+/// so the item needs manual intervention. An item whose write did land
 /// replays as success.
 /// </summary>
 internal sealed class ReAccreditationConfirmContactService(
@@ -70,7 +80,10 @@ internal sealed class ReAccreditationConfirmContactService(
         }
 
         var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
-        if (ReAccreditationConfirmContactGuard.Check(workItemId, workItem, registry) is { } stop)
+        if (
+            ReAccreditationConfirmContactGuard.Check(workItemId, workItem, registry, logger: logger) is
+            { } stop
+        )
         {
             if (stop.IsIdempotentReplay)
             {
@@ -116,12 +129,13 @@ internal sealed class ReAccreditationConfirmContactService(
         }
         else if (!result.IsSuccess)
         {
-            // Known gap (RA-527 task 004): a retry pushes a new OccurredAt, and
-            // an operator journey already at the terminal status answers 409,
-            // which the push adapter treats as a failure.
+            // Known gap (RA-527 tasks 004 and 007, as on main): a retry pushes a
+            // new OccurredAt, and an operator journey already at the terminal
+            // status answers 409, which the push adapter treats as a failure.
             logger.LogWarning(
                 "Confirm-contact for work item {WorkItemId} failed at the write ({FailureCode}) after the "
-                    + "operator journey was notified; the call may be safely retried.",
+                    + "operator journey was notified; a retry is likely to be refused by the operator journey "
+                    + "and the item may need manual intervention.",
                 workItemId,
                 result.FailureCode
             );

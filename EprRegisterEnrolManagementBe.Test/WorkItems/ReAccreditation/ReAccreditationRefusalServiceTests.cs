@@ -120,11 +120,17 @@ public class ReAccreditationRefusalServiceTests
             );
     }
 
-    [Fact]
-    public async Task Step_one_is_an_idempotent_replay_when_already_pending_contact()
+    /// <summary>
+    /// A replay of the same outcome: on the pending state, or (RA-527 task
+    /// 007, as on main) on the final Refused state, which stays final.
+    /// </summary>
+    [Theory]
+    [InlineData("rejected-pending-contact")]
+    [InlineData("rejected")]
+    public async Task Step_one_is_an_idempotent_replay_when_already_refused_at_either_step(string stateId)
     {
         var ct = TestContext.Current.CancellationToken;
-        var workItem = BuildWorkItem("rejected-pending-contact");
+        var workItem = BuildWorkItem(stateId);
         var sut = BuildReturning(workItem);
 
         var result = await sut.Service.RecordRefusedDeterminationAsync(workItem.Id, s_user, ct);
@@ -135,7 +141,6 @@ public class ReAccreditationRefusalServiceTests
 
     [Theory]
     [InlineData("approved", WorkItemActionFailureCode.TerminalState)]
-    [InlineData("rejected", WorkItemActionFailureCode.TerminalState)]
     [InlineData("withdrawn", WorkItemActionFailureCode.TerminalState)]
     [InlineData("assessment-in-progress", WorkItemActionFailureCode.InvalidTransition)]
     [InlineData("approved-pending-contact", WorkItemActionFailureCode.InvalidTransition)]
@@ -156,11 +161,17 @@ public class ReAccreditationRefusalServiceTests
 
     // ──────────────── step 2: RefuseAsync ────────────────
 
+    /// <summary>
+    /// RA-527 task 007: step 2 of a refusal does what the old single-step
+    /// refuse did. It moves the item and audits it but does NOT stop the SLA
+    /// clock: the payload is untouched and there is no sla-clock-stopped entry.
+    /// </summary>
     [Fact]
-    public async Task Step_two_moves_to_rejected_and_stops_the_sla_clock_at_the_callers_instant()
+    public async Task Step_two_moves_to_rejected_and_leaves_the_sla_clock_running()
     {
         var ct = TestContext.Current.CancellationToken;
         var workItem = BuildWorkItem("rejected-pending-contact");
+        var payloadBefore = workItem.Payload.DeepClone();
         var sut = BuildReturning(workItem);
 
         var result = await sut.Service.RefuseAsync(workItem.Id, s_user, s_appliedAt, ct);
@@ -169,20 +180,19 @@ public class ReAccreditationRefusalServiceTests
         await sut.Persistence.Received(1).ReplaceAsync(workItem, ct);
         Assert.Equal("rejected", workItem.StateId);
         Assert.Equal(s_appliedAt.UtcDateTime, workItem.LastModifiedAt);
+        Assert.Equal(payloadBefore, workItem.Payload);
         var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
-        Assert.Equal(s_appliedAt, payload.SlaClock?.StoppedAt);
-        // An unmodelled key survives the payload round-trip.
-        Assert.Equal("RA-527-REF", workItem.Payload["applicationReference"].AsString);
+        Assert.Null(payload.SlaClock?.StoppedAt);
 
         Assert.Equal(
-            ["action-applied", "applicant-contacted", "sla-clock-stopped"],
+            ["action-applied", "applicant-contacted"],
             workItem.AuditLog.Select(a => a.Action)
         );
         Assert.Equal("confirm-contact-rejected", workItem.AuditLog[0].Details["actionId"]);
         var contacted = workItem.AuditLog[1];
         Assert.Equal("Applicant contacted", contacted.ActionDisplayName);
         Assert.Equal("alice-1", contacted.CreatedBy);
-        Assert.Equal(s_appliedAt.ToString("O"), workItem.AuditLog[2].Details["stoppedAt"]);
+        Assert.Equal(s_appliedAt.UtcDateTime, contacted.CreatedAt);
 
         await sut
             .Hook.Received(1)
@@ -304,7 +314,8 @@ public class ReAccreditationRefusalServiceTests
 
         Assert.True(result.IsSuccess, result.Message);
         Assert.Equal(2, calls);
-        Assert.Equal(3, result.WorkItem!.AuditLog.Count);
+        // action-applied and applicant-contacted, once each: the retry reloads.
+        Assert.Equal(2, result.WorkItem!.AuditLog.Count);
     }
 
     /// <summary>

@@ -1,11 +1,13 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
@@ -112,7 +114,8 @@ public class ReAccreditationApprovalServiceTests
         string accreditationId = "A25ER5000270036WO",
         int currentYear = 2025,
         DateTimeOffset? now = null,
-        bool registerType = true
+        bool registerType = true,
+        ILogger<ReAccreditationApprovalService>? logger = null
     )
     {
         var persistence = Substitute.For<IWorkItemPersistence>();
@@ -133,7 +136,7 @@ public class ReAccreditationApprovalServiceTests
             numberAdapter,
             queue,
             hooks,
-            NullLogger<ReAccreditationApprovalService>.Instance,
+            logger ?? NullLogger<ReAccreditationApprovalService>.Instance,
             Options.Create(new AccreditationConfig { CurrentYear = currentYear }),
             time
         );
@@ -149,7 +152,8 @@ public class ReAccreditationApprovalServiceTests
 
     /// <summary>
     /// A work item as step 1 leaves it: in approved-pending-contact, carrying
-    /// the minted number with its start date and year.
+    /// only the minted number (RA-527 task 007: the start date and year are
+    /// stamped at step 2).
     /// </summary>
     private static WorkItem BuildPendingContact(BsonDocument? payload = null)
     {
@@ -165,8 +169,6 @@ public class ReAccreditationApprovalServiceTests
                     ["operatorApplicationId"] = "APP-500027",
                     ["nation"] = "England",
                     ["accreditationId"] = StepOneNumber,
-                    ["accreditationStartDate"] = "2025-02-03",
-                    ["accreditationYear"] = 2025,
                 }
         );
         return workItem;
@@ -187,9 +189,10 @@ public class ReAccreditationApprovalServiceTests
     /// the caller's timestamp (the same one pushed to the operator journey),
     /// the item moves to Granted, and the action-applied, "Applicant
     /// contacted", sla-clock-stopped and accreditation-issued entries are
-    /// written. The step 1 number, start date and year are reused, never
-    /// re-minted. Publishing is queued and the hooks (the Decision email) run
-    /// with the confirm-contact action.
+    /// written. The step 1 number is reused, never re-minted; the start date
+    /// (from this step's instant) and year are stamped here (RA-527 task
+    /// 007). Publishing is queued and the hooks (the Decision email) run with
+    /// the confirm-contact action.
     /// </summary>
     [Fact]
     public async Task ApproveAsync_applies_the_approval_from_approved_pending_contact()
@@ -209,7 +212,7 @@ public class ReAccreditationApprovalServiceTests
         var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
         Assert.Equal(s_appliedAt, payload.SlaClock?.StoppedAt);
         Assert.Equal(StepOneNumber, payload.AccreditationId);
-        Assert.Equal(new DateOnly(2025, 2, 3), payload.AccreditationStartDate);
+        Assert.Equal(new DateOnly(2025, 3, 4), payload.AccreditationStartDate);
         Assert.Equal(2025, payload.AccreditationYear);
         Assert.Equal("Acme Ltd", payload.OrganisationName);
 
@@ -240,7 +243,7 @@ public class ReAccreditationApprovalServiceTests
             {
                 Assert.Equal("accreditation-issued", issued.Action);
                 Assert.Equal(StepOneNumber, issued.Details["accreditationId"]);
-                Assert.Equal("2025-02-03", issued.Details["startDate"]);
+                Assert.Equal("2025-03-04", issued.Details["startDate"]);
                 Assert.Equal("2025", issued.Details["accreditationYear"]);
             }
         );
@@ -266,6 +269,110 @@ public class ReAccreditationApprovalServiceTests
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
             .GenerateOrUpdateAccreditationNumberAsync(default!, ct);
+    }
+
+    /// <summary>
+    /// RA-133 / RA-527 task 007: the start date is 1 Jan of the configured
+    /// year, or the day applicant contact is confirmed when that is later (an
+    /// accreditation cannot start in the past). Stamped at step 2 from the
+    /// caller's instant, with the configured year.
+    /// </summary>
+    [Theory]
+    // configured year 2025, confirmed 2025-03-04 → the confirmation day.
+    [InlineData(2025, "2025-03-04T09:15:00Z", "2025-03-04")]
+    // configured year 2027 → Jan 1 of 2027 is later.
+    [InlineData(2027, "2025-03-04T09:15:00Z", "2027-01-01")]
+    // exactly on Jan 1.
+    [InlineData(2027, "2027-01-01T00:00:00Z", "2027-01-01")]
+    public async Task ApproveAsync_stamps_the_start_date_and_year_from_the_step_two_instant(
+        int currentYear,
+        string appliedAt,
+        string expectedStartDate
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build(currentYear: currentYear);
+        var workItem = BuildPendingContact();
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(
+            workItem.Id,
+            DecisionMaker(),
+            DateTimeOffset.Parse(appliedAt, System.Globalization.CultureInfo.InvariantCulture),
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        Assert.Equal(
+            DateOnly.Parse(expectedStartDate, System.Globalization.CultureInfo.InvariantCulture),
+            payload.AccreditationStartDate
+        );
+        Assert.Equal(currentYear, payload.AccreditationYear);
+        var issued = Assert.Single(workItem.AuditLog, a => a.Action == "accreditation-issued");
+        Assert.Equal(expectedStartDate, issued.Details["startDate"]);
+        Assert.Equal(
+            currentYear.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            issued.Details["accreditationYear"]
+        );
+    }
+
+    /// <summary>
+    /// RA-527 task 007: an item that reached approved-pending-contact before
+    /// step 1 stopped stamping the start date and year (dev/test data) has
+    /// both overwritten at step 2. The number is kept.
+    /// </summary>
+    [Fact]
+    public async Task ApproveAsync_overwrites_a_start_date_and_year_stamped_at_step_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build(currentYear: 2025);
+        var workItem = BuildPendingContact(
+            PendingPayloadWith(("accreditationStartDate", "2025-02-03"), ("accreditationYear", 2024))
+        );
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), s_appliedAt, ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        Assert.Equal(new DateOnly(2025, 3, 4), payload.AccreditationStartDate);
+        Assert.Equal(2025, payload.AccreditationYear);
+        Assert.Equal(StepOneNumber, payload.AccreditationId);
+    }
+
+    /// <summary>
+    /// RA-527 task 007 edge case: the number was minted at step 1 with the
+    /// year configured then; if the configured year has changed by step 2 the
+    /// stamped year differs from the one encoded in the number. Kept simple:
+    /// the approval still lands with the configured year, and a warning is
+    /// logged so the mismatch can be investigated.
+    /// </summary>
+    [Theory]
+    [InlineData(2026, true)]
+    [InlineData(2025, false)]
+    public async Task ApproveAsync_warns_when_the_configured_year_differs_from_the_numbers_year(
+        int currentYear,
+        bool expectWarning
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var logger = new ListLogger<ReAccreditationApprovalService>();
+        var sut = Build(currentYear: currentYear, logger: logger);
+        var workItem = BuildPendingContact();
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), s_appliedAt, ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal(currentYear, BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload).AccreditationYear);
+        Assert.Equal(
+            expectWarning,
+            logger.Records.Any(r =>
+                r.Level == LogLevel.Warning
+                && r.Message.Contains(StepOneNumber, StringComparison.Ordinal)
+            )
+        );
     }
 
     /// <summary>
@@ -1039,47 +1146,14 @@ public class ReAccreditationApprovalServiceTests
         AccreditationNumberResult.Success("A25ER5000270036WO");
 
     /// <summary>
-    /// RA-133: the start date is 1 Jan of the configured year, or the day of
-    /// the determination when that is later (an accreditation cannot start in
-    /// the past). Stamped at step 1, with the number.
+    /// RA-527 task 007: step 1 stamps only the accreditation id. The start
+    /// date and year are stamped at step 2 (confirm applicant contact), as
+    /// the old single-step approve did at its one write. Unmodelled keys
+    /// survive the payload round-trip (RA-249).
     /// </summary>
-    [Theory]
-    // s_fixedNow = 2025-02-03; configured year 2025 → today > Jan 1.
-    [InlineData(2025, "2025-02-03T12:30:00Z", "2025-02-03")]
-    // configured year 2027 → Jan 1 of 2027 > today.
-    [InlineData(2027, "2025-02-03T12:30:00Z", "2027-01-01")]
-    // exactly on Jan 1.
-    [InlineData(2027, "2027-01-01T00:00:00Z", "2027-01-01")]
-    public async Task RecordApprovedDeterminationAsync_stamps_the_start_date_and_year(
-        int currentYear,
-        string now,
-        string expectedStartDate
-    )
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var sut = Build(
-            currentYear: currentYear,
-            now: DateTimeOffset.Parse(now, System.Globalization.CultureInfo.InvariantCulture)
-        );
-        var workItem = BuildWorkItem();
-        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
-
-        await sut.Service.RecordApprovedDeterminationAsync(workItem.Id, DecisionMaker(), s_mintedNumber, ct);
-
-        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
-        Assert.Equal(
-            DateOnly.Parse(expectedStartDate, System.Globalization.CultureInfo.InvariantCulture),
-            payload.AccreditationStartDate
-        );
-        Assert.Equal(currentYear, payload.AccreditationYear);
-    }
-
     [Fact]
-    public async Task RecordApprovedDeterminationAsync_overwrites_a_stale_modelled_field_and_keeps_unmodelled_keys()
+    public async Task RecordApprovedDeterminationAsync_stamps_only_the_accreditation_id()
     {
-        // RA-249: merge must OVERWRITE existing elements, so a stale
-        // accreditationStartDate/year on the stored payload is replaced by the
-        // freshly computed values, while unmodelled keys survive.
         var ct = TestContext.Current.CancellationToken;
         var sut = Build(currentYear: 2025);
         var workItem = BuildWorkItem(
@@ -1090,8 +1164,6 @@ public class ReAccreditationApprovalServiceTests
                 ["operatorApplicationId"] = "APP-500027",
                 ["nation"] = "England",
                 ["applicationReference"] = "RA-000000999",
-                ["accreditationYear"] = 1999,
-                ["accreditationStartDate"] = "1999-01-01",
             }
         );
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
@@ -1102,8 +1174,57 @@ public class ReAccreditationApprovalServiceTests
         Assert.True(result.IsSuccess, result.Message);
         Assert.Equal("RA-000000999", workItem.Payload["applicationReference"].AsString);
         var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
-        Assert.Equal(2025, payload.AccreditationYear);
-        Assert.Equal(DateOnly.FromDateTime(s_fixedNow.UtcDateTime), payload.AccreditationStartDate);
+        Assert.Equal("A25ER5000270036WO", payload.AccreditationId);
+        Assert.Null(payload.AccreditationStartDate);
+        Assert.Null(payload.AccreditationYear);
+    }
+
+    /// <summary>
+    /// RA-527 task 007 (restored from main's single-step approve): an item
+    /// that already carries an accreditation id but is not approved is
+    /// unexplained data needing a human, not a second number. Nothing is
+    /// written. Only the retired local generator's known legacy shape (16
+    /// characters, not the real format) is treated as unset.
+    /// </summary>
+    [Theory]
+    [InlineData("A25ER5000270036WO")]
+    [InlineData("ACC-2025-A-DEADBEEF")]
+    public async Task RecordApprovedDeterminationAsync_refuses_an_item_that_already_carries_an_accreditation_id(
+        string existingId
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        workItem.Payload["accreditationId"] = existingId;
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.RecordApprovedDeterminationAsync(
+            workItem.Id, DecisionMaker(), AccreditationNumberResult.Success("A25ER5000270099WO"), ct);
+
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        Assert.Contains("Manual investigation required", result.Message);
+        Assert.Equal("awaiting-decision", workItem.StateId);
+        Assert.Equal(existingId, workItem.Payload["accreditationId"].AsString);
+        Assert.Empty(workItem.AuditLog);
+        await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task RecordApprovedDeterminationAsync_treats_a_legacy_format_id_as_unset()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem();
+        workItem.Payload["accreditationId"] = "A25ER00000000000";
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+
+        var result = await sut.Service.RecordApprovedDeterminationAsync(
+            workItem.Id, DecisionMaker(), s_mintedNumber, ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal("approved-pending-contact", workItem.StateId);
+        Assert.Equal("A25ER5000270036WO", workItem.Payload["accreditationId"].AsString);
     }
 
     /// <summary>RA-551 regression, for the step 1 payload round-trip.</summary>
@@ -1127,8 +1248,8 @@ public class ReAccreditationApprovalServiceTests
     }
 
     /// <summary>
-    /// RA-527 step 1: the number minted by the caller is stamped with its
-    /// start date and year, the item moves to the non-terminal
+    /// RA-527 step 1: the number minted by the caller is stamped (alone: the
+    /// start date and year wait for step 2), the item moves to the non-terminal
     /// approved-pending-contact state and the determination is audited. The
     /// outcome is NOT applied yet: no SLA clock stop, no accreditation-issued
     /// entry, no publishing job.
@@ -1150,8 +1271,9 @@ public class ReAccreditationApprovalServiceTests
 
         var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
         Assert.Equal("A25ER5000270036WO", payload.AccreditationId);
-        Assert.Equal(DateOnly.FromDateTime(s_fixedNow.UtcDateTime), payload.AccreditationStartDate);
-        Assert.Equal(2025, payload.AccreditationYear);
+        // The start date and year wait for step 2 (RA-527 task 007).
+        Assert.Null(payload.AccreditationStartDate);
+        Assert.Null(payload.AccreditationYear);
         // The SLA clock keeps running until the outcome is applied (step 2).
         Assert.Null(payload.SlaClock?.StoppedAt);
         Assert.Equal("Acme Ltd", payload.OrganisationName);
@@ -1191,25 +1313,36 @@ public class ReAccreditationApprovalServiceTests
             );
     }
 
-    [Fact]
-    public async Task RecordApprovedDeterminationAsync_is_an_idempotent_replay_when_already_pending_contact()
+    /// <summary>
+    /// A replay of the same outcome: on the pending state, or (RA-527 task
+    /// 007, as on main) on Granted, which stays Granted.
+    /// </summary>
+    [Theory]
+    [InlineData("approved-pending-contact")]
+    [InlineData("approved")]
+    public async Task RecordApprovedDeterminationAsync_is_an_idempotent_replay_when_already_approved_at_either_step(
+        string stateId
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
-        var workItem = BuildWorkItem(stateId: "approved-pending-contact");
+        var workItem = BuildPendingContact();
+        workItem.StateId = stateId;
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
         var result = await sut.Service.RecordApprovedDeterminationAsync(
-            workItem.Id, DecisionMaker(), s_mintedNumber, ct);
+            workItem.Id, DecisionMaker(), AccreditationNumberResult.Success("A25ER5000270099WO"), ct);
 
         Assert.True(result.IsSuccess);
         Assert.True(result.IsIdempotentReplay);
         Assert.Empty(workItem.AuditLog);
+        // The step 1 number is never overwritten (RA-527 task 007).
+        Assert.Equal(StepOneNumber, workItem.Payload["accreditationId"].AsString);
+        Assert.Equal(stateId, workItem.StateId);
         await sut.Persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
     }
 
     [Theory]
-    [InlineData("approved", WorkItemActionFailureCode.TerminalState)]
     [InlineData("rejected", WorkItemActionFailureCode.TerminalState)]
     [InlineData("withdrawn", WorkItemActionFailureCode.TerminalState)]
     [InlineData("assessment-in-progress", WorkItemActionFailureCode.InvalidTransition)]

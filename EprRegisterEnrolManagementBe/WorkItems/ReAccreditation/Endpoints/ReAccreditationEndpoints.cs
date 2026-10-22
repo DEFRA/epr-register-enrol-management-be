@@ -554,12 +554,13 @@ internal static class ReAccreditationEndpoints
     /// GOV.UK error summary against the radio group rather than parsing prose.
     ///
     /// A repeat call once the application is already in the requested
-    /// pending-contact state succeeds as an idempotent replay, so a
-    /// double-click or a retried request does not fail the caller. An
-    /// application already determined the OTHER way, or already Granted /
-    /// Refused / Withdrawn, is a 409, not a replay: reporting success would
-    /// tell a caseworker their refusal landed on an application that is in
-    /// fact approved and carrying an issued accreditation id.
+    /// pending-contact state, or (RA-527 task 007, as on main) already at that
+    /// outcome's final state, succeeds as an idempotent replay that changes
+    /// nothing, so a double-click or a retried request does not fail the
+    /// caller. An application already determined the OTHER way, or withdrawn,
+    /// is a 409, not a replay: reporting success would tell a caseworker their
+    /// refusal landed on an application that is in fact approved and carrying
+    /// an issued accreditation id.
     ///
     /// RA-527: nothing is pushed to the operator journey here; the pre-commit
     /// status push (epr-p86e) belongs to <see cref="ConfirmContact"/>.

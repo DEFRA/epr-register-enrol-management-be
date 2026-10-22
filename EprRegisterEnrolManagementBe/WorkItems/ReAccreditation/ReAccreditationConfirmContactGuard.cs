@@ -1,7 +1,5 @@
-using System.Text.RegularExpressions;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
-using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -17,23 +15,6 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal static class ReAccreditationConfirmContactGuard
 {
-    private const string AccreditationIdKey = "accreditationId";
-
-    // RA-448 phase 2: mirrors the backend's own AC1 format regex
-    // (accreditation-number-generation.md), anchored to the 'A' prefix since
-    // this module only ever deals with accreditation numbers. Explicit
-    // matchTimeout: every quantifier here is bounded ({2}/{6}/{4}) with no
-    // nested/overlapping repetition, so catastrophic backtracking isn't
-    // actually reachable — but a fixed timeout costs nothing and is what
-    // static analysis (and defence-in-depth) expects of any Regex applied
-    // to a value that ultimately originates from a persisted document
-    // rather than a compile-time constant.
-    private static readonly Regex s_expectedAccreditationNumberFormat = new(
-        @"^A\d{2}(ER|EX|NR|NX|SR|SX|WR|WX)\d{6}\d{4}(AL|FB|GO|GR|PA|PL|ST|WO)$",
-        RegexOptions.Compiled,
-        TimeSpan.FromMilliseconds(250)
-    );
-
     /// <summary>
     /// One outcome's step 2: the pending state it starts from, the terminal
     /// state it lands in and the transition between them.
@@ -78,16 +59,18 @@ internal static class ReAccreditationConfirmContactGuard
     ///
     /// The item must be in the step's pending state and its own frozen
     /// snapshot (or, for a legacy item with none, the registered type) must
-    /// declare the confirm-contact transition. An approval must also carry the
-    /// real-format accreditation number step 1 stamped: step 2 reuses that
-    /// number and never mints one, so an item without it needs a human, not a
-    /// new number.
+    /// declare the confirm-contact transition, and its payload must be
+    /// readable (step 2 must never write over a payload it cannot read). An
+    /// approval must also carry the real-format accreditation number step 1
+    /// stamped: step 2 reuses that number and never mints one, so an item
+    /// without it needs a human, not a new number.
     /// </summary>
     public static WorkItemActionResult? Check(
         Guid workItemId,
         WorkItem? workItem,
         IWorkItemRegistry registry,
-        Step? step = null
+        Step? step = null,
+        ILogger? logger = null
     )
     {
         if (workItem is null)
@@ -151,16 +134,26 @@ internal static class ReAccreditationConfirmContactGuard
             );
         }
 
+        // RA-527 task 007: step 2 writes the payload (an approval stamps the
+        // start date and year), and a payload that cannot be read must never
+        // be written over. Checked here, before the push, so the operator is
+        // never told the outcome of an item the write would then refuse.
+        if (ReAccreditationDecisionWrites.TryReadPayload(workItem, logger) is null)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidTransition,
+                $"Work item '{workItemId}' payload is corrupt and cannot be read. "
+                    + "Inspect the server logs for details; a manual data repair may be required."
+            );
+        }
+
         if (step.Outcome != ReAccreditationDecisionOutcome.Approved)
         {
             return null;
         }
 
-        var accreditationId = ReadString(workItem.Payload, AccreditationIdKey);
-        if (
-            string.IsNullOrWhiteSpace(accreditationId)
-            || !s_expectedAccreditationNumberFormat.IsMatch(accreditationId)
-        )
+        var accreditationId = ReAccreditationAccreditationNumber.Read(workItem.Payload);
+        if (!ReAccreditationAccreditationNumber.IsRealFormat(accreditationId))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
@@ -175,13 +168,4 @@ internal static class ReAccreditationConfirmContactGuard
 
     private static bool Is(string? value, string expected) =>
         string.Equals(value, expected, StringComparison.OrdinalIgnoreCase);
-
-    private static string? ReadString(BsonDocument? document, string fieldName)
-    {
-        if (document is null || !document.TryGetValue(fieldName, out var value))
-        {
-            return null;
-        }
-        return value.IsBsonNull ? null : value.ToString();
-    }
 }

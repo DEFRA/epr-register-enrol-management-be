@@ -6,15 +6,16 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
 /// epr-p86e / RA-410: the pre-commit operator-journey push for a final
-/// outcome, and the audit entries that record it. Shared by
-/// <see cref="ReAccreditationLogDecisionService"/> (a refusal, still single
-/// step) and RA-527's <see cref="ReAccreditationConfirmContactService"/>
-/// (step 2 of an approval).
+/// outcome, and the audit entries that record it. Used by RA-527's
+/// <see cref="ReAccreditationConfirmContactService"/> (step 2, confirm
+/// applicant contact, for both an approval and a refusal); step 1 of a
+/// determination makes no push.
 ///
 /// The caller pushes BEFORE it writes anything. When the push fails
 /// (after the adapter's own retry budget) the caller abandons the outcome
-/// with nothing changed except the support-facing <c>status-push-failed</c>
-/// entry this records. A disabled push
+/// with nothing changed except the <c>status-push-failed</c> entry this
+/// records, as the single-step decision did on main. That entry is shown to
+/// regulators in the history, not only to support. A disabled push
 /// (<see cref="OperatorBackendPushResult.IsSkipped"/>) is a pass — outcomes
 /// must still work where the push is switched off. Once the outcome has
 /// landed, <see cref="RecordDeliveredAsync"/> records <c>status-push-sent</c>

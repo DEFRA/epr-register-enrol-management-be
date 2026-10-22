@@ -15,12 +15,13 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///
 /// <see cref="RefuseAsync"/> (step 2, "confirm applicant contact") applies
 /// the outcome: it checks the item against
-/// <see cref="ReAccreditationConfirmContactGuard"/>, stamps
-/// <c>SlaClock.StoppedAt</c>, moves the item to <c>rejected</c> and appends
-/// the action-applied, <c>applicant-contacted</c> and <c>sla-clock-stopped</c>
-/// audit entries. Unlike an approval there is no accreditation number, no
-/// publishing job and no email (RA-211: regulators send refusal notices
-/// themselves).
+/// <see cref="ReAccreditationConfirmContactGuard"/>, moves the item to
+/// <c>rejected</c> and appends the action-applied and
+/// <c>applicant-contacted</c> audit entries. Unlike an approval there is no
+/// accreditation number, no publishing job and no email (RA-211: regulators
+/// send refusal notices themselves). RA-527 task 007: nor is the SLA clock
+/// stopped — the old single-step refuse (the generic engine <c>reject</c>)
+/// never stopped it, and step 2 does what that single step did.
 ///
 /// After each write the registered <see cref="IWorkItemPostActionHook"/>s run
 /// with the step's action id. On a <see cref="WorkItemConcurrencyException"/>
@@ -52,8 +53,7 @@ internal sealed class ReAccreditationRefusalService(
             new WriteStep(
                 ReAccreditationType.MakeDeterminationRejectedActionId,
                 ReAccreditationType.MakeDeterminationRejectedDisplayName,
-                ReAccreditationType.RejectedPendingContactStateId,
-                StopsSlaClock: false
+                ReAccreditationType.RejectedPendingContactStateId
             ),
             workItem => ValidateStepOneTarget(workItemId, workItem),
             (workItem, now) =>
@@ -81,18 +81,17 @@ internal sealed class ReAccreditationRefusalService(
             new WriteStep(
                 ReAccreditationType.ConfirmContactRejectedActionId,
                 ReAccreditationType.ConfirmContactDisplayName,
-                ReAccreditationType.RejectedStateId,
-                StopsSlaClock: true
+                ReAccreditationType.RejectedStateId
             ),
             workItem =>
                 ReAccreditationConfirmContactGuard.Check(
                     workItemId,
                     workItem,
                     registry,
-                    ReAccreditationConfirmContactGuard.Refusal
+                    ReAccreditationConfirmContactGuard.Refusal,
+                    logger
                 ),
             (workItem, now) =>
-            {
                 AppendAudit(
                     workItem,
                     "applicant-contacted",
@@ -100,37 +99,22 @@ internal sealed class ReAccreditationRefusalService(
                     user,
                     now.UtcDateTime,
                     new() { ["outcome"] = ReAccreditationType.RejectedStateId }
-                );
-                AppendAudit(
-                    workItem,
-                    "sla-clock-stopped",
-                    "SLA clock stopped",
-                    user,
-                    now.UtcDateTime,
-                    new() { ["stoppedAt"] = now.ToString("O") }
-                );
-            },
+                ),
             appliedAt,
             cancellationToken
         );
 
     /// <summary>
-    /// One step's write: the transition it applies, its target state, and
-    /// whether it stops the payload's SLA clock (at the write's timestamp).
+    /// One step's write: the transition it applies and its target state.
     /// </summary>
-    private sealed record WriteStep(
-        string ActionId,
-        string ActionDisplayName,
-        string ToStateId,
-        bool StopsSlaClock
-    );
+    private sealed record WriteStep(string ActionId, string ActionDisplayName, string ToStateId);
 
     /// <summary>
-    /// One step's write: load, guard, move to <see cref="WriteStep.ToStateId"/>
-    /// (stopping the SLA clock at <paramref name="now"/> when the step says
-    /// so), append the action-applied entry and then the step's own entries
-    /// (<paramref name="appendStepAudit"/>), replace, and run the hooks —
-    /// retried on a concurrency conflict.
+    /// One step's write: load, guard, move to
+    /// <see cref="WriteStep.ToStateId"/>, append the action-applied entry and
+    /// then the step's own entries (<paramref name="appendStepAudit"/>),
+    /// replace, and run the hooks — retried on a concurrency conflict. Neither
+    /// step touches the payload.
     /// </summary>
     private async Task<WorkItemActionResult> WriteAsync(
         Guid workItemId,
@@ -162,14 +146,6 @@ internal sealed class ReAccreditationRefusalService(
             }
 
             var previousState = workItem!.StateId;
-            if (step.StopsSlaClock && TryStopSlaClock(workItem, now, logger) is null)
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.InvalidTransition,
-                    $"Work item '{workItemId}' payload is corrupt and cannot be read. "
-                        + "Inspect the server logs for details; a manual data repair may be required."
-                );
-            }
             workItem.StateId = step.ToStateId;
             workItem.LastModifiedAt = now.UtcDateTime;
 
@@ -239,9 +215,10 @@ internal sealed class ReAccreditationRefusalService(
     /// <summary>
     /// The guards for <see cref="RecordRefusedDeterminationAsync"/>. Returns a
     /// result to hand straight back (failure, or an idempotent replay for an
-    /// item already pending contact) or null when the item may move. The step
-    /// 1 transition is checked against the item's own frozen snapshot, so a
-    /// case still on pre-v17 rules is refused until migrated.
+    /// item already refused, pending contact or Refused) or null when the item
+    /// may move. The step 1 transition is checked against the item's own
+    /// frozen snapshot, so a case still on pre-v17 rules is refused until
+    /// migrated.
     /// </summary>
     private WorkItemActionResult? ValidateStepOneTarget(Guid workItemId, WorkItem? workItem)
     {
@@ -261,14 +238,18 @@ internal sealed class ReAccreditationRefusalService(
             );
         }
 
-        if (Is(workItem.StateId, ReAccreditationType.RejectedPendingContactStateId))
+        // RA-527 task 007 (as on main): Refused replays on Refused too, which
+        // stays Refused.
+        if (
+            Is(workItem.StateId, ReAccreditationType.RejectedPendingContactStateId)
+            || Is(workItem.StateId, ReAccreditationType.RejectedStateId)
+        )
         {
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
         if (
             Is(workItem.StateId, ReAccreditationType.ApprovedStateId)
-            || Is(workItem.StateId, ReAccreditationType.RejectedStateId)
             || Is(workItem.StateId, ReAccreditationType.WithdrawnStateId)
         )
         {

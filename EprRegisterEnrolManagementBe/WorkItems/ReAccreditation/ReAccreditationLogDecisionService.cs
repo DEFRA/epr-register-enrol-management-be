@@ -105,13 +105,21 @@ internal sealed class ReAccreditationLogDecisionService(
         var targetStateId = isApproval
             ? ReAccreditationType.ApprovedPendingContactStateId
             : ReAccreditationType.RejectedPendingContactStateId;
+        var finalStateId = isApproval ? ApprovedStateId : RejectedStateId;
 
         // A double-click, or a client retrying a response it never received,
         // must not fail. Only a replay of the SAME outcome is a no-op; an item
         // already decided the other way is a genuine conflict, because silently
         // succeeding would tell a caseworker their Refuse landed when the
         // application is in fact approved and an accreditation id is issued.
-        if (string.Equals(workItem.StateId, targetStateId, StringComparison.OrdinalIgnoreCase))
+        // RA-527 task 007 (user decision: response codes match main): the same
+        // outcome replays on the item's own final state too, not only on its
+        // pending-contact state. The replay changes nothing, so the item never
+        // moves back to step 1.
+        if (
+            string.Equals(workItem.StateId, targetStateId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(workItem.StateId, finalStateId, StringComparison.OrdinalIgnoreCase)
+        )
         {
             logger.LogInformation(
                 "Log-decision for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
@@ -124,9 +132,9 @@ internal sealed class ReAccreditationLogDecisionService(
         // Enumerated rather than read off the template, matching
         // ReAccreditationApprovalService: a decision must be refused on a
         // closed application even when its frozen snapshot is too old to
-        // carry terminal metadata. RA-527: this includes a replay of the same
-        // outcome on an application already Granted or Refused — the
-        // determination was made once, and step 2 is what applied it.
+        // carry terminal metadata. Reaching here on Granted or Refused means
+        // the OTHER outcome (the same outcome replayed above), a conflict as on
+        // main.
         if (
             string.Equals(workItem.StateId, ApprovedStateId, StringComparison.OrdinalIgnoreCase)
             || string.Equals(workItem.StateId, RejectedStateId, StringComparison.OrdinalIgnoreCase)
@@ -181,6 +189,20 @@ internal sealed class ReAccreditationLogDecisionService(
                 $"Work item {workItemId} is on template '{workItem.TemplateVersion}', which does not "
                     + $"declare '{stepOneActionId}'."
             );
+        }
+
+        // RA-527 task 007: restored from the single-step approve on main. An
+        // item that already carries an accreditation id (other than the known
+        // legacy shape) is refused here, before the mint and the hop, so
+        // nothing is minted or written. A refusal mints nothing, so it is not
+        // blocked.
+        if (
+            isApproval
+            && ReAccreditationAccreditationNumber.RefuseIfAlreadyIssued(workItemId, workItem, logger)
+                is { } alreadyIssued
+        )
+        {
+            return alreadyIssued;
         }
 
         return isApproval

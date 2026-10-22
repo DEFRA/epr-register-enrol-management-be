@@ -17,17 +17,20 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// approval is two steps, each one write.
 ///
 /// <see cref="RecordApprovedDeterminationAsync"/> (step 1, the determination)
-/// stamps the accreditation number its caller minted, with its start date and
-/// year, moves the item from <c>awaiting-decision</c> to the non-terminal
+/// stamps the accreditation number its caller minted (only the number: RA-527
+/// task 007), moves the item from <c>awaiting-decision</c> to the non-terminal
 /// <c>approved-pending-contact</c>, and records the determination. Nothing is
-/// applied.
+/// applied. An item that already carries an accreditation id is refused
+/// (<see cref="ReAccreditationAccreditationNumber.RefuseIfAlreadyIssued"/>):
+/// the number is minted once and never overwritten.
 ///
 /// <see cref="ApproveAsync"/> (step 2, "confirm applicant contact") applies
 /// the outcome on a single <see cref="IWorkItemPersistence.ReplaceAsync"/>
 /// call: it checks the item against
 /// <see cref="ReAccreditationConfirmContactGuard"/> (pending contact, v17
-/// rules, the step 1 number present — it is reused, never re-minted), stamps
-/// <see cref="SlaClock.StoppedAt"/>, moves the item to <c>approved</c> and
+/// rules, a readable payload, the step 1 number present — it is reused, never
+/// re-minted), stamps <see cref="SlaClock.StoppedAt"/> and the accreditation
+/// start date and year, moves the item to <c>approved</c> and
 /// appends the action-applied, <c>applicant-contacted</c>,
 /// <c>sla-clock-stopped</c> and <c>accreditation-issued</c> audit entries.
 /// After the write it enqueues a background job that appends a
@@ -59,8 +62,6 @@ internal sealed class ReAccreditationApprovalService(
     TimeProvider? timeProvider = null
 ) : IReAccreditationApprovalService
 {
-    private const string AccreditationIdKey = "accreditationId";
-
     private const int MaxAttempts = 3;
     private const string ToStateId = ReAccreditationType.ApprovedStateId;
 
@@ -118,7 +119,8 @@ internal sealed class ReAccreditationApprovalService(
                     workItemId,
                     workItem,
                     registry,
-                    ReAccreditationConfirmContactGuard.Approval
+                    ReAccreditationConfirmContactGuard.Approval,
+                    logger
                 ) is
                 { } stop
             )
@@ -126,7 +128,27 @@ internal sealed class ReAccreditationApprovalService(
                 return stop;
             }
 
-            var payload = TryStopSlaClock(workItem!, appliedAt, logger);
+            // RA-527 task 007: the start date and year are stamped here, in
+            // the one write that applies the approval, as the old single-step
+            // approve did: the year is the configured one, and the start date
+            // is computed from this step's own instant. The step 1 number is
+            // reused (the guard has checked it), never re-minted.
+            var accreditationYear = _accreditationConfig.CurrentYear;
+            var accreditationStartDate = ComputeAccreditationStartDate(
+                accreditationYear,
+                appliedAtUtc
+            );
+            var payload = TryUpdatePayload(
+                workItem!,
+                p =>
+                    p with
+                    {
+                        SlaClock = new SlaClock(appliedAt),
+                        AccreditationStartDate = accreditationStartDate,
+                        AccreditationYear = accreditationYear,
+                    },
+                logger
+            );
             if (payload is null)
             {
                 return WorkItemActionResult.Failure(
@@ -178,7 +200,7 @@ internal sealed class ReAccreditationApprovalService(
                 appliedAtUtc,
                 new()
                 {
-                    [AccreditationIdKey] = payload.AccreditationId,
+                    [ReAccreditationAccreditationNumber.PayloadKey] = payload.AccreditationId,
                     ["startDate"] = payload.AccreditationStartDate?.ToString(
                         "yyyy-MM-dd",
                         CultureInfo.InvariantCulture
@@ -216,6 +238,7 @@ internal sealed class ReAccreditationApprovalService(
                 workItem.Id,
                 user.FindFirstValue("user:id")
             );
+            WarnOnYearMismatch(workItem.Id, payload.AccreditationId, accreditationYear);
 
             await EnqueuePublishingAuditAsync(workItem, user, cancellationToken);
             await InvokeActionAppliedHooksAsync(
@@ -262,7 +285,6 @@ internal sealed class ReAccreditationApprovalService(
         }
 
         var accreditationId = accreditationNumber.AccreditationNumber;
-        var accreditationYear = _accreditationConfig.CurrentYear;
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -277,18 +299,13 @@ internal sealed class ReAccreditationApprovalService(
             var previousState = workItem!.StateId;
             var now = _timeProvider.GetUtcNow();
             var nowUtc = now.UtcDateTime;
-            var accreditationStartDate = ComputeAccreditationStartDate(accreditationYear, nowUtc);
 
-            // The SLA clock is left running: the outcome is applied at step 2.
+            // RA-527 task 007: only the number. The start date and year are
+            // stamped at step 2, which applies the outcome, and the SLA clock
+            // is left running until then.
             var stamped = TryUpdatePayload(
                 workItem,
-                payload =>
-                    payload with
-                    {
-                        AccreditationId = accreditationId,
-                        AccreditationStartDate = accreditationStartDate,
-                        AccreditationYear = accreditationYear,
-                    },
+                payload => payload with { AccreditationId = accreditationId },
                 logger
             );
             if (stamped is null)
@@ -326,7 +343,7 @@ internal sealed class ReAccreditationApprovalService(
                 new()
                 {
                     ["outcome"] = "approved",
-                    [AccreditationIdKey] = accreditationId,
+                    [ReAccreditationAccreditationNumber.PayloadKey] = accreditationId,
                 }
             );
 
@@ -377,9 +394,10 @@ internal sealed class ReAccreditationApprovalService(
     /// <summary>
     /// RA-527: the guards for <see cref="RecordApprovedDeterminationAsync"/>.
     /// Returns a result to hand straight back (failure, or an idempotent replay
-    /// for an item already pending contact) or null when the item may move.
-    /// The step 1 transition is checked against the item's own frozen
-    /// snapshot, so a case still on pre-v17 rules is refused until migrated.
+    /// for an item already approved, pending contact or Granted) or null when
+    /// the item may move. The step 1 transition is checked against the item's
+    /// own frozen snapshot, so a case still on pre-v17 rules is refused until
+    /// migrated.
     /// </summary>
     private WorkItemActionResult? ValidateStepOneTarget(Guid workItemId, WorkItem? workItem)
     {
@@ -399,20 +417,22 @@ internal sealed class ReAccreditationApprovalService(
             );
         }
 
+        // RA-527 task 007 (as on main): Approved replays on Granted too, which
+        // stays Granted.
         if (
             string.Equals(
                 workItem.StateId,
                 ReAccreditationType.ApprovedPendingContactStateId,
                 StringComparison.OrdinalIgnoreCase
             )
+            || string.Equals(workItem.StateId, ToStateId, StringComparison.OrdinalIgnoreCase)
         )
         {
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
         if (
-            string.Equals(workItem.StateId, ToStateId, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(workItem.StateId, ReAccreditationType.RejectedStateId, StringComparison.OrdinalIgnoreCase)
+            string.Equals(workItem.StateId, ReAccreditationType.RejectedStateId, StringComparison.OrdinalIgnoreCase)
             || string.Equals(workItem.StateId, ReAccreditationType.WithdrawnStateId, StringComparison.OrdinalIgnoreCase)
         )
         {
@@ -441,7 +461,10 @@ internal sealed class ReAccreditationApprovalService(
             );
         }
 
-        return null;
+        // RA-527 task 007: restored from the single-step approve on main.
+        // Checked on every attempt as well as by the log-decision service
+        // before the mint.
+        return ReAccreditationAccreditationNumber.RefuseIfAlreadyIssued(workItemId, workItem, logger);
     }
 
     /// <summary>
@@ -454,6 +477,31 @@ internal sealed class ReAccreditationApprovalService(
         var jan1 = new DateOnly(accreditationYear, 1, 1);
         var today = DateOnly.FromDateTime(nowUtc);
         return today > jan1 ? today : jan1;
+    }
+
+    /// <summary>
+    /// RA-527 task 007 edge case. The number is minted at step 1 with the
+    /// year configured then, and the year is stamped at step 2 with the year
+    /// configured now. If the configured year changed in between, the two
+    /// disagree. Kept deliberately simple: the approval still lands with the
+    /// configured year, and the mismatch — visible in the number's own
+    /// two-digit year segment — is logged for investigation.
+    /// </summary>
+    private void WarnOnYearMismatch(Guid workItemId, string? accreditationId, int accreditationYear)
+    {
+        var encodedYear = ReAccreditationAccreditationNumber.EncodedYear(accreditationId);
+        if (encodedYear is { } year && year != accreditationYear)
+        {
+            logger.LogWarning(
+                "Work item {WorkItemId} was approved with accreditation year {AccreditationYear}, but its "
+                    + "accreditation number {AccreditationId} was minted for {EncodedYear}: the configured "
+                    + "accreditation year changed between the determination and confirming applicant contact.",
+                workItemId,
+                accreditationYear,
+                accreditationId,
+                year
+            );
+        }
     }
 
     /// <summary>
@@ -588,7 +636,7 @@ internal sealed class ReAccreditationApprovalService(
         // close over and hand to the background job; the queued
         // delegate runs on its own DI scope.
         var workItemId = workItem.Id;
-        var accreditationIdValue = TryReadString(workItem.Payload, AccreditationIdKey);
+        var accreditationIdValue = ReAccreditationAccreditationNumber.Read(workItem.Payload);
 
         await backgroundTaskQueue.QueueAsync(
             async (scopedServices, ct) =>
@@ -600,7 +648,7 @@ internal sealed class ReAccreditationApprovalService(
                     actionDisplayName: "Publishing enqueued",
                     details: new Dictionary<string, string?>
                     {
-                        [AccreditationIdKey] = accreditationIdValue,
+                        [ReAccreditationAccreditationNumber.PayloadKey] = accreditationIdValue,
                     },
                     user,
                     ct
@@ -608,14 +656,5 @@ internal sealed class ReAccreditationApprovalService(
             },
             cancellationToken
         );
-    }
-
-    private static string? TryReadString(BsonDocument? document, string fieldName)
-    {
-        if (document is null || !document.TryGetValue(fieldName, out var value))
-        {
-            return null;
-        }
-        return value.IsBsonNull ? null : value.ToString();
     }
 }

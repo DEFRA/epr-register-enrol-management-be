@@ -287,12 +287,15 @@ public class ReAccreditationLogDecisionServiceTests
 
     /// <summary>
     /// A double-click or a client retrying a response it never received must
-    /// not fail. RA-527: each outcome's replay target is the pending-contact
-    /// state its step 1 lands in.
+    /// not fail. RA-527: each outcome replays on the pending-contact state its
+    /// step 1 lands in and (task 007, as on main) on its own final state —
+    /// nothing moves back to step 1, nothing is minted or written.
     /// </summary>
     [Theory]
     [InlineData("approved-pending-contact", true)]
     [InlineData("rejected-pending-contact", false)]
+    [InlineData("approved", true)]
+    [InlineData("rejected", false)]
     public async Task Replaying_the_same_outcome_is_an_idempotent_no_op(
         string stateId,
         bool approve
@@ -317,15 +320,13 @@ public class ReAccreditationLogDecisionServiceTests
 
     /// <summary>
     /// The opposite outcome on an already-decided application is a conflict,
-    /// never a replay and never last-write-wins. RA-527: so is any decision on
-    /// an application that is already Granted or Refused — a determination
-    /// can only be made once, and step 2 is what applied it.
+    /// never a replay and never last-write-wins, as on main; so is any
+    /// decision on a withdrawn application. (The same outcome on its own final
+    /// state is a replay: see above.)
     /// </summary>
     [Theory]
     [InlineData("approved", false)]
-    [InlineData("approved", true)]
     [InlineData("rejected", true)]
-    [InlineData("rejected", false)]
     [InlineData("withdrawn", true)]
     [InlineData("withdrawn", false)]
     public async Task A_decision_on_a_closed_application_is_refused(
@@ -413,6 +414,78 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         Assert.Empty(harness.OrderedCalls);
+    }
+
+    /// <summary>
+    /// RA-527 task 007 (restored from main's single-step approve): an item
+    /// not yet approved that already carries an accreditation id is refused
+    /// with "Manual investigation required" before a number is minted or the
+    /// hop is taken. Only the retired generator's legacy shape is treated as
+    /// unset.
+    /// </summary>
+    [Theory]
+    [InlineData("A25ER5000270036WO")]
+    [InlineData("ACC-2025-A-DEADBEEF")]
+    public async Task Approving_an_item_that_already_carries_an_accreditation_id_is_refused_before_the_mint(
+        string existingId
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+        harness.WorkItem.Payload["accreditationId"] = existingId;
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Approved,
+            harness.User,
+            ct
+        );
+
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        Assert.Contains("Manual investigation required", result.Message);
+        Assert.Empty(harness.AppliedActionIds);
+        Assert.Empty(harness.OrderedCalls);
+    }
+
+    [Fact]
+    public async Task Approving_an_item_with_a_legacy_format_accreditation_id_mints_a_real_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+        harness.WorkItem.Payload["accreditationId"] = "A25ER00000000000";
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Approved,
+            harness.User,
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal(
+            ["resolve-number", "submit-for-decision", "record-approved-determination"],
+            harness.OrderedCalls
+        );
+    }
+
+    /// <summary>
+    /// A refusal mints nothing, so an existing id does not block it.
+    /// </summary>
+    [Fact]
+    public async Task Refusing_an_item_that_carries_an_accreditation_id_is_not_blocked()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+        harness.WorkItem.Payload["accreditationId"] = "A25ER5000270036WO";
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Rejected,
+            harness.User,
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
     }
 
     // --------------------------- guards ---------------------------

@@ -46,6 +46,35 @@ internal static class ReAccreditationDecisionWrites
     }
 
     /// <summary>
+    /// The work item's payload as the model, or null (logged) when the stored
+    /// payload cannot be read. Writing over an unreadable payload would destroy
+    /// existing data (organisation name, registration number, nation, etc.), so
+    /// a null here must refuse the write. RA-527 task 007: also used by
+    /// <see cref="ReAccreditationConfirmContactGuard"/> before the push.
+    /// </summary>
+    public static ReAccreditationPayload? TryReadPayload(WorkItem workItem, ILogger? logger)
+    {
+        try
+        {
+            return BsonSerializer.Deserialize<ReAccreditationPayload>(
+                workItem.Payload ?? new BsonDocument()
+            );
+        }
+        catch (Exception ex)
+            when (ex is BsonSerializationException or FormatException or InvalidCastException)
+        {
+            logger?.LogError(
+                ex,
+                "Re-accreditation determination for work item {WorkItemId} refused: "
+                    + "existing payload could not be deserialised. Writing it would destroy "
+                    + "existing payload data (organisation name, registration number, nation, etc.).",
+                workItem.Id
+            );
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Applies <paramref name="update"/> to the work item's payload and
     /// returns the updated model, or null (logged) when the stored payload
     /// cannot be read — writing over it would destroy existing payload data
@@ -60,23 +89,8 @@ internal static class ReAccreditationDecisionWrites
         // Deserialise → with-mutate → reserialise so the mongo-driver's
         // serializer (camelCase convention, nested record) is the single
         // source of truth for the on-disk shape.
-        ReAccreditationPayload payload;
-        try
+        if (TryReadPayload(workItem, logger) is not { } payload)
         {
-            payload = BsonSerializer.Deserialize<ReAccreditationPayload>(
-                workItem.Payload ?? new BsonDocument()
-            );
-        }
-        catch (Exception ex)
-            when (ex is BsonSerializationException or FormatException or InvalidCastException)
-        {
-            logger.LogError(
-                ex,
-                "Re-accreditation determination for work item {WorkItemId} aborted: "
-                    + "existing payload could not be deserialised. Writing it would destroy "
-                    + "existing payload data (organisation name, registration number, nation, etc.).",
-                workItem.Id
-            );
             return null;
         }
 
@@ -96,18 +110,6 @@ internal static class ReAccreditationDecisionWrites
         workItem.ReplacePayload(merged);
         return updated;
     }
-
-    /// <summary>Stops the payload's SLA clock at <paramref name="stoppedAt"/>.</summary>
-    public static ReAccreditationPayload? TryStopSlaClock(
-        WorkItem workItem,
-        DateTimeOffset stoppedAt,
-        ILogger logger
-    ) =>
-        TryUpdatePayload(
-            workItem,
-            payload => payload with { SlaClock = new SlaClock(stoppedAt) },
-            logger
-        );
 
     /// <summary>
     /// Runs every post-action hook for a committed write. A failing hook is
