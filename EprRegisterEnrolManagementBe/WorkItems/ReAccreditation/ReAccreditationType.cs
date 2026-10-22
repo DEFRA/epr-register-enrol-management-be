@@ -260,8 +260,9 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_awaitingDecision.Id,
             CallerInvocable: false
         ),
-        // RA-132: approve is handled exclusively by ReAccreditationApprovalService
-        // via POST /work-items/re-accreditation/{id}/approve. The transition is NOT
+        // RA-132: approve is handled exclusively by ReAccreditationApprovalService,
+        // reached only via POST /work-items/re-accreditation/{id}/decision
+        // (RA-527 removed the old bespoke /approve route). The transition is NOT
         // registered here so the generic engine rejects any attempt to call
         // /work-items/{id}/actions/approve, preventing a caller from bypassing the
         // bespoke side-effects (accreditation id issuance, SLA clock stop, queued

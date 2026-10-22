@@ -127,17 +127,6 @@ internal static class ReAccreditationEndpoints
             .WithMetadata(new RequestSizeLimitAttribute(MaxDulyMakeBodyBytes))
             .RequireAuthorization();
 
-        // RA-132: bespoke approve endpoint. The generic
-        // /work-items/{id}/actions/approve transition still exists in the
-        // template snapshot, but the module-owned route is the canonical
-        // path because it stamps the accreditation id / SLA clock and
-        // queues the publishing job; routing through the framework's
-        // generic action handler would skip those side effects.
-        group
-            .MapPost("/{id:guid}/approve", Approve)
-            .WithName("ApproveReAccreditation")
-            .RequireAuthorization();
-
         // RA-410: bespoke log-decision endpoint. Both hops of a determination
         // (submit-for-decision, then approve/reject) run server-side on this
         // one call — submit-for-decision and reject are registered
@@ -535,57 +524,6 @@ internal static class ReAccreditationEndpoints
     }
 
     /// <summary>
-    /// RA-132: approve a re-accreditation work item. Delegates to the
-    /// module-scoped <see cref="IReAccreditationApprovalService"/> so the
-    /// bespoke approval workflow (accreditation id issuance, SLA clock
-    /// stop, queued publishing job) runs atomically with the state
-    /// transition. Failure codes map onto problem statuses with the same
-    /// vocabulary the framework's <c>/actions/{actionId}</c> endpoint
-    /// uses.
-    /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Approve(
-        [FromRoute] Guid id,
-        HttpContext httpContext,
-        [FromServices] IReAccreditationApprovalService approvalService,
-        [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken
-    )
-    {
-        var result = await approvalService.ApproveAsync(id, httpContext.User, cancellationToken);
-        if (result.IsSuccess)
-        {
-            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
-        }
-
-        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
-        {
-            return TypedResults.NotFound();
-        }
-
-        var status = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
-            WorkItemActionFailureCode.TerminalState
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            // RA-448 phase 2: the backend accreditation-number call failed
-            // (or timed out) before anything was persisted — a transient
-            // server-side dependency problem, not a malformed request, so
-            // this maps to a generic 500 like LogDecision's own upstream
-            // push failure does, not a 4xx.
-            WorkItemActionFailureCode.AccreditationNumberUnavailable =>
-                StatusCodes.Status500InternalServerError,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        return TypedResults.Problem(
-            title: "Could not approve re-accreditation",
-            detail: result.Message,
-            statusCode: status
-        );
-    }
-
-    /// <summary>
     /// RA-410: record the final determination on a re-accreditation
     /// application. One call carries it from <c>assessment-in-progress</c>
     /// through <c>awaiting-decision</c> to <c>approved</c> / <c>rejected</c>,
@@ -674,12 +612,10 @@ internal static class ReAccreditationEndpoints
             // errorCode is attached: the frontend shows a generic try-again.
             WorkItemActionFailureCode.UpstreamNotificationFailed =>
                 StatusCodes.Status500InternalServerError,
-            // RA-475: the same 500 /approve has always given this failure (see
-            // the enum's own doc, and ApproveReAccreditation's switch). It was
-            // simply missing from this switch, so a decision blocked by the
-            // accreditation-number call answered 400 while the identical failure on
-            // /approve answered 500 — and management-fe reads a 400 as a client
-            // validation problem.
+            // RA-475: the backend accreditation-number call failed (or timed
+            // out) before anything was persisted — a server-side dependency
+            // problem, not a malformed request, so a generic 500 rather than
+            // the 400 management-fe reads as a client validation problem.
             WorkItemActionFailureCode.AccreditationNumberUnavailable =>
                 StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,

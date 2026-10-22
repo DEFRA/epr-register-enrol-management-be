@@ -9,15 +9,16 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// re-accreditation work item. Approval is more than a generic state
 /// transition — it issues an accreditation id, stamps the SLA-clock-stopped
 /// timestamp, writes three audit entries atomically, and fans out
-/// post-action hooks plus a queued publishing job. Wrapped behind an
-/// interface so endpoints can be tested with a substitute.
+/// post-action hooks plus a queued publishing job. Its only caller is
+/// <see cref="IReAccreditationLogDecisionService"/> (the /decision
+/// endpoint); wrapped behind an interface so it can be substituted in tests.
 /// </summary>
 internal interface IReAccreditationApprovalService
 {
     /// <summary>
     /// Approve the re-accreditation work item identified by
     /// <paramref name="workItemId"/>. Returns a generic
-    /// <see cref="WorkItemActionResult"/> so the calling endpoint can
+    /// <see cref="WorkItemActionResult"/> so the caller can
     /// reuse the same problem-mapping switch the framework uses.
     ///
     /// epr-r9oy: <paramref name="preResolvedAccreditationNumber"/> lets a

@@ -2921,29 +2921,6 @@ public class ReAccreditationEndpointTests
         Assert.Equal("payment-date-required", problem.GetProperty("errorCode").GetString());
     }
 
-    // -------------------- Approve: remaining failure-code branches --------------------
-
-    [Fact]
-    public async Task Approve_returns_conflict_when_another_writer_wins_the_race()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var id = Guid.NewGuid();
-        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id);
-        using var client = factory.CreateClient();
-
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/approve",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("awaiting-decision", persisted!.StateId);
-    }
-
     // -------------------- LogDecision: remaining failure-code branches --------------------
 
     [Fact]
@@ -3756,10 +3733,16 @@ public class ReAccreditationEndpointTests
         };
     }
 
-    // -------------------- RA-132: Approve endpoint --------------------
+    // -------------------- RA-527: bespoke approve endpoint removed --------------------
 
+    /// <summary>
+    /// RA-527: the RA-132 bespoke <c>POST …/re-accreditation/{id}/approve</c>
+    /// route is gone. Since RA-410 every determination goes through
+    /// <c>/decision</c>; a route that approved directly would bypass the
+    /// determination flow. The item must be left untouched.
+    /// </summary>
     [Fact]
-    public async Task Approve_returns_ok_and_transitions_to_approved_for_decision_maker()
+    public async Task Approve_route_no_longer_exists()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
@@ -3770,136 +3753,19 @@ public class ReAccreditationEndpointTests
 
         var response = await client.PostAsync(
             $"/work-items/re-accreditation/{id}/approve",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.NotNull(persisted);
-        Assert.Equal("approved", persisted!.StateId);
-        // 1 for the approval ReplaceAsync, +1 for the queued publishing
-        // audit, +1 for the notification hook's audit-sent entry.
-        Assert.True(persisted.Version >= 1);
-        var payload = MongoDB.Bson.Serialization.BsonSerializer.Deserialize<ReAccreditationPayload>(
-            persisted.Payload
-        );
-        Assert.False(string.IsNullOrEmpty(payload.AccreditationId));
-        Assert.NotNull(payload.AccreditationStartDate);
-        Assert.NotNull(payload.SlaClock?.StoppedAt);
-    }
-
-    [Fact]
-    public async Task Approve_returns_not_found_for_missing_work_item()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{Guid.NewGuid()}/approve",
             content: null,
             cancellationToken
         );
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-    }
-
-    [Fact]
-    public async Task Approve_succeeds_for_item_not_submitted_by_caller()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, "other-tenant"), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/approve",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("approved", persisted!.StateId);
-    }
-
-    /// <summary>
-    /// RA-346 / AC2 (superseded by RA-410): the bespoke approve endpoint sits
-    /// outside the generic engine, so it never met the framework's
-    /// task-completeness gate and used to enforce an equivalent IncompleteTasks
-    /// check of its own, refusing a caseworker with 409 while
-    /// <c>record-decision-rationale</c> was still outstanding. The task
-    /// framework (and the gate) are gone, so the identical seed now simply
-    /// succeeds — regression cover for the ungating.
-    /// </summary>
-    [Fact]
-    public async Task Approve_succeeds_now_the_task_gate_is_removed()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/approve",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.NotNull(persisted);
-        Assert.Equal("approved", persisted!.StateId);
-    }
-
-    /// <summary>
-    /// RA-448 phase 2 review follow-up: exercises the new
-    /// WorkItemActionFailureCode.AccreditationNumberUnavailable → 500 mapping
-    /// end-to-end, via a real HTTP round trip against a substituted
-    /// IAccreditationNumberAdapter that reports failure. Every other approve
-    /// test uses ReAccreditationFactory's default success-returning fake, so
-    /// this arm of the endpoint's status-code switch was otherwise untested.
-    /// </summary>
-    [Fact]
-    public async Task Approve_returns_internal_server_error_when_the_accreditation_number_adapter_fails()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        var failingNumberAdapter = Substitute.For<IAccreditationNumberAdapter>();
-        failingNumberAdapter
-            .GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Any<AccreditationNumberRequest>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(AccreditationNumberResult.Failure("backend unreachable"));
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            numberAdapter: failingNumberAdapter
-        );
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/approve",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("awaiting-decision", persisted!.StateId);
     }
 
     /// <summary>
-    /// RA-475: the same AccreditationNumberUnavailable → 500 mapping the test above exercises
-    /// on /approve, but via the single-call /decision path (LogDecision's own switch), which
-    /// was the actual arm added and previously untested — /approve's switch already had it.
+    /// RA-475: the AccreditationNumberUnavailable → 500 mapping via the single-call
+    /// /decision path (LogDecision's own switch), the only route that reaches the
+    /// approval service.
     /// </summary>
     [Fact]
     public async Task Decision_returns_internal_server_error_when_the_accreditation_number_adapter_fails()
@@ -4281,52 +4147,6 @@ public class ReAccreditationEndpointTests
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("assessment-in-progress", persisted!.StateId);
         Assert.Empty(persisted.AuditLog);
-    }
-
-    /// <summary>
-    /// RA-346: pins the rest of the approve endpoint's failure-code mapping
-    /// alongside the new IncompleteTasks arm — a mutation that no longer
-    /// requires a forwarded user id must still 401 rather than fall through
-    /// to the catch-all 400.
-    /// </summary>
-    [Fact]
-    public async Task Approve_returns_unauthorized_without_a_forwarded_user_id()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAwaitingDecision(id, TenantClientId), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/approve",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("awaiting-decision", persisted!.StateId);
-    }
-
-    [Fact]
-    public async Task Approve_returns_bad_request_when_not_in_awaiting_decision()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
-
-        var response = await client.PostAsync(
-            $"/work-items/re-accreditation/{id}/approve",
-            content: null,
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     // -------------------- RA-469: Update recycling operations endpoint --------------------
