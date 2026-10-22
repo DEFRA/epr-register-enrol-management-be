@@ -128,14 +128,13 @@ internal sealed class ReAccreditationConfirmContactService(
         }
         else if (!result.IsSuccess)
         {
-            // A retry pushes a new OccurredAt. Since RA-527 task 008 the operator
-            // journey answers 200 with no change when it is already at that
-            // terminal status (it used to answer 409), so the retry can make the
-            // write. An operator journey without that change still refuses it.
+            // The retry's push carries a new OccurredAt; the operator journey used
+            // to answer 409 to that, but since RA-527 task 008 it answers 200 with
+            // no change. An operator journey deployed without task 008 still refuses it.
             logger.LogWarning(
                 "Confirm-contact for work item {WorkItemId} failed at the write ({FailureCode}) after the "
-                    + "operator journey was notified; a retry is likely to be refused by the operator journey "
-                    + "and the item may need manual intervention.",
+                    + "operator journey was notified; a retry should complete the confirmation (the operator "
+                    + "journey accepts a repeat of the same final status).",
                 workItemId,
                 result.FailureCode
             );
