@@ -34,8 +34,9 @@ public class ReAccreditationTypeTests
     [InlineData("withdrawn", "Withdrawn")]
     // RA-527: the step 1 approval state reads "Approved" to the regulator.
     [InlineData("approved-pending-contact", "Approved")]
-    // RA-527: and the step 1 refusal state reads "Refusing" (provisional).
-    [InlineData("rejected-pending-contact", "Refusing")]
+    // RA-527: and the step 1 refusal state reads "Refused", the same as the
+    // final rejected state.
+    [InlineData("rejected-pending-contact", "Refused")]
     public void States_declare_expected_display_names(string stateId, string expectedDisplayName)
     {
         var state = _type.States.Single(s => s.Id == stateId);

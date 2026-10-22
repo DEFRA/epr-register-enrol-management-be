@@ -98,8 +98,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     // not yet been contacted, so the outcome is not applied: nothing is pushed
     // to the operator journey, the SLA clock keeps running and no email is
     // sent. Not terminal. Step 2 ("confirm applicant contact") moves it on to
-    // 'approved'. The "Approved" label is provisional and kept to this one
-    // declaration.
+    // 'approved'.
     private static readonly WorkItemState s_approvedPendingContact = new(
         ApprovedPendingContactStateId,
         "Approved"
@@ -115,11 +114,12 @@ internal sealed class ReAccreditationType : IWorkItemType
     // the outcome is not applied: nothing is pushed to the operator journey
     // and the SLA clock keeps running (no email is sent for a refusal at all,
     // RA-211). Not terminal. Step 2 ("confirm applicant contact") moves it on
-    // to 'rejected'. The "Refusing" label is provisional and kept to this one
-    // declaration.
+    // to 'rejected'. It reads "Refused", the same as the final 'rejected'
+    // state (an earlier, unreleased build of v17 had a different label, which
+    // ReAccreditationPendingContactSnapshotMigration corrects).
     private static readonly WorkItemState s_rejectedPendingContact = new(
         RejectedPendingContactStateId,
-        "Refusing"
+        "Refused"
     );
     private static readonly WorkItemState s_rejected = new(
         RejectedStateId,
@@ -249,7 +249,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     // POST /work-items/re-accreditation/{id}/confirm-contact reaches it).
     // A refusal follows the same two steps: make-determination-rejected
     // (awaiting-decision -> the non-terminal 'rejected-pending-contact',
-    // "Refusing") then confirm-contact-rejected (rejected-pending-contact ->
+    // "Refused") then confirm-contact-rejected (rejected-pending-contact ->
     // rejected), both CallerInvocable: false. The single-step 'reject'
     // transition (awaiting-decision -> rejected) is removed, so nothing
     // refuses an application without both steps. v17 was still unreleased

@@ -3893,7 +3893,7 @@ public class ReAccreditationEndpointTests
 
     /// <summary>
     /// RA-527 step 1 of a refusal: the determination is recorded and the item
-    /// moves to the non-terminal rejected-pending-contact ("Refusing") state.
+    /// moves to the non-terminal rejected-pending-contact ("Refused") state.
     /// No number is minted and nothing is applied: no operator-journey push,
     /// the SLA clock still running, no publishing and no email. Only
     /// reassign/unassign and confirm-contact remain (none is a projected
@@ -4980,11 +4980,11 @@ public class ReAccreditationEndpointTests
     /// RA-527 step 2 of a refusal: the operator-journey push is a hard
     /// pre-commit gate, as for an approval. When it cannot be delivered,
     /// confirming contact is abandoned with a generic 500 and nothing applied:
-    /// still Refusing, the SLA clock still running, no outcome entries — only
-    /// the regulator-visible status-push-failed entry. Once the operator journey
-    /// answers again the identical call applies the refusal. (Carries over the
-    /// RA-410 refusal push-failure tests, which replaced the deleted mgmt-tests
-    /// ra-410-decision-operator-failure.e2e.js.)
+    /// still pending contact, the SLA clock still running, no outcome
+    /// entries — only the regulator-visible status-push-failed entry. Once the
+    /// operator journey answers again the identical call applies the refusal.
+    /// (Carries over the RA-410 refusal push-failure tests, which replaced the
+    /// deleted mgmt-tests ra-410-decision-operator-failure.e2e.js.)
     /// </summary>
     [Fact]
     public async Task Confirm_contact_applies_no_refusal_when_the_operator_journey_push_fails_and_succeeds_on_retry()

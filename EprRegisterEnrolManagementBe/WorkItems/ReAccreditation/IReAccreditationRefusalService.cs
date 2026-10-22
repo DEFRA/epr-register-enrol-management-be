@@ -18,7 +18,7 @@ internal interface IReAccreditationRefusalService
     /// <summary>
     /// RA-527 step 1 of a refusal: move the work item from
     /// <c>awaiting-decision</c> to the non-terminal
-    /// <c>rejected-pending-contact</c> ("Refusing") state in one write, with
+    /// <c>rejected-pending-contact</c> ("Refused") state in one write, with
     /// a "Determination made: Refused" audit entry.
     ///
     /// The outcome is not applied: no number is minted, the SLA clock is not

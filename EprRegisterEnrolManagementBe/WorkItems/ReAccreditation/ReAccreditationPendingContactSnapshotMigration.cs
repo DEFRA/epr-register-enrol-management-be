@@ -34,7 +34,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// already declares both states and all four transitions, and no
 /// <c>reject</c>, is skipped, and each change is only made when needed — so an
 /// item stamped v17 by an earlier build of this migration (RA-527 tasks 003
-/// and 004, approvals only) gains just what it lacks.
+/// and 004, approvals only) gains just what it lacks. An item stamped v17
+/// while the step 1 refusal state had its earlier, provisional label has just
+/// that state's declaration replaced with the frozen one ("Refused", RA-527
+/// task 010); v17 was unreleased, so this stays v17 rather than becoming a
+/// v18.
 ///
 /// Registered last of the snapshot migrations (straight after the v16 one),
 /// so it is the one that sets the final version.
@@ -51,7 +55,7 @@ internal sealed class ReAccreditationPendingContactSnapshotMigration(
     private static readonly WorkItemState[] s_states =
     [
         new("approved-pending-contact", "Approved"),
-        new("rejected-pending-contact", "Refusing"),
+        new("rejected-pending-contact", "Refused"),
     ];
 
     private static readonly WorkItemTransition[] s_transitions =
@@ -88,12 +92,14 @@ internal sealed class ReAccreditationPendingContactSnapshotMigration(
 
     public override string Name =>
         "ReAccreditation: add approved-/rejected-pending-contact states + make-determination-* and "
-        + "confirm-contact-* transitions, remove reject, in snapshot (v16 → v17)";
+        + "confirm-contact-* transitions, remove reject, correct an earlier pending-state label, "
+        + "in snapshot (v16 → v17)";
 
     protected override bool NeedsMigration(WorkItem workItem) =>
         workItem.TemplateSnapshot is { } snapshot
         && (
             s_states.Any(s => !DeclaresState(snapshot, s))
+            || snapshot.States.Any(DiffersFromFrozenPendingState)
             || s_transitions.Any(t => !Declares(snapshot, t.ActionId))
             || Declares(snapshot, RemovedActionId)
         );
@@ -101,7 +107,9 @@ internal sealed class ReAccreditationPendingContactSnapshotMigration(
     protected override void PatchSnapshot(WorkItem workItem)
     {
         var snapshot = workItem.TemplateSnapshot!;
-        var states = snapshot.States.ToList();
+        // A pending-contact state declared by an earlier build of v17 with a
+        // different label is replaced in place by the frozen one.
+        var states = snapshot.States.Select(s => DiffersFromFrozenPendingState(s) ? FrozenState(s) : s).ToList();
         states.AddRange(s_states.Where(s => !DeclaresState(snapshot, s)));
 
         var transitions = snapshot
@@ -119,7 +127,18 @@ internal sealed class ReAccreditationPendingContactSnapshotMigration(
     }
 
     private static bool DeclaresState(WorkItemTemplateSnapshot snapshot, WorkItemState state) =>
-        snapshot.States.Any(s => string.Equals(s.Id, state.Id, StringComparison.OrdinalIgnoreCase));
+        snapshot.States.Any(s => IsSameState(s, state));
+
+    // One of the pending-contact states, declared differently from the frozen
+    // v17 declaration (for example under an earlier label).
+    private static bool DiffersFromFrozenPendingState(WorkItemState state) =>
+        s_states.Any(s => IsSameState(s, state) && s != state);
+
+    private static WorkItemState FrozenState(WorkItemState state) =>
+        s_states.Single(s => IsSameState(s, state));
+
+    private static bool IsSameState(WorkItemState a, WorkItemState b) =>
+        string.Equals(a.Id, b.Id, StringComparison.OrdinalIgnoreCase);
 
     private static bool Declares(WorkItemTemplateSnapshot snapshot, string actionId) =>
         snapshot.Transitions.Any(t => IsAction(t, actionId));

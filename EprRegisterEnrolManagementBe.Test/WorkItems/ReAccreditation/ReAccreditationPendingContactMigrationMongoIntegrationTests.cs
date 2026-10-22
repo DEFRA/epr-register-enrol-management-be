@@ -187,9 +187,9 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
         Assert.Equal("approved", step2.ToStateId);
         Assert.False(step2.CallerInvocable);
 
-        var refusing = Assert.Single(after.TemplateSnapshot.States, s => s.Id == "rejected-pending-contact");
-        Assert.Equal("Refusing", refusing.DisplayName);
-        Assert.False(refusing.IsTerminal);
+        var refusedPending = Assert.Single(after.TemplateSnapshot.States, s => s.Id == "rejected-pending-contact");
+        Assert.Equal("Refused", refusedPending.DisplayName);
+        Assert.False(refusedPending.IsTerminal);
 
         var refusalStep1 = Assert.Single(
             after.TemplateSnapshot.Transitions, t => t.ActionId == "make-determination-rejected");
@@ -344,6 +344,67 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
         Assert.Equal(
             live.States.OrderBy(s => s.Id).ToList(),
             after.TemplateSnapshot.States.OrderBy(s => s.Id).ToList());
+    }
+
+    /// <summary>
+    /// RA-527 (task 010): an earlier build of v17 labelled the step 1 refusal
+    /// state "Refusing". The label is now "Refused" (still v17, which is
+    /// unreleased), so an item already stamped v17 with the old label has just
+    /// that label corrected: its state, every other rule and every other
+    /// stored field stay as they were, and a second run writes nothing.
+    /// </summary>
+    [Theory]
+    [InlineData("rejected-pending-contact")]
+    [InlineData("awaiting-decision")]
+    [InlineData("rejected")]
+    public async Task An_item_on_v17_with_the_earlier_refusal_label_has_only_that_label_corrected(
+        string stateId)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
+        var earlierStates = live
+            .States.Select(s =>
+                s.Id == "rejected-pending-contact" ? s with { DisplayName = "Refusing" } : s)
+            .ToList();
+        var item = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = stateId,
+            SubmittedAt = s_now,
+            LastModifiedAt = s_now,
+            SubmittedBy = "seed",
+            TemplateVersion = "v17",
+            TemplateSnapshot = new WorkItemTemplateSnapshot
+            {
+                TemplateVersion = "v17",
+                States = earlierStates,
+                Transitions = live.Transitions.ToList(),
+            },
+        };
+        await _persistence.CreateAsync(item, ct);
+        var before = (await _persistence.GetByIdAsync(item.Id, ct))!;
+
+        await BuildMigration().ApplyAsync(_persistence, ct);
+
+        var after = (await _persistence.GetByIdAsync(item.Id, ct))!;
+        Assert.Equal(
+            "Refused",
+            Assert.Single(after.TemplateSnapshot!.States, s => s.Id == "rejected-pending-contact").DisplayName);
+        // Exactly the live v17 rules, in the order they were stored.
+        Assert.Equal(live.States, after.TemplateSnapshot.States);
+        Assert.Equal(live.Transitions, after.TemplateSnapshot.Transitions);
+        Assert.Equal("v17", after.TemplateVersion);
+        Assert.Equal(before.Version + 1, after.Version);
+
+        // Nothing else moved.
+        after.TemplateSnapshot = before.TemplateSnapshot;
+        after.Version = before.Version;
+        Assert.Equal(before.ToBsonDocument(), after.ToBsonDocument());
+
+        // And a second run leaves the corrected item alone.
+        var afterFirst = (await _persistence.GetByIdAsync(item.Id, ct))!.ToBsonDocument();
+        await BuildMigration().ApplyAsync(_persistence, ct);
+        Assert.Equal(afterFirst, (await _persistence.GetByIdAsync(item.Id, ct))!.ToBsonDocument());
     }
 
     [Fact]
