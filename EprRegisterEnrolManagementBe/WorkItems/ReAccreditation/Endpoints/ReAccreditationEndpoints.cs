@@ -134,8 +134,8 @@ internal static class ReAccreditationEndpoints
             .RequireAuthorization();
 
         // RA-410: bespoke log-decision endpoint. Both hops of a determination
-        // (submit-for-decision, then approve/reject) run server-side on this
-        // one call — submit-for-decision and reject are registered
+        // (submit-for-decision, then the outcome's step 1 — RA-527) run
+        // server-side on this one call — both are registered
         // CallerInvocable: false precisely so this is the only way in. Two
         // calls from the frontend would leave a window in which a failure
         // between them stranded the application in 'awaiting-decision' with no
@@ -540,9 +540,10 @@ internal static class ReAccreditationEndpoints
     }
 
     /// <summary>
-    /// RA-410: record the final determination on a re-accreditation
-    /// application. One call carries it from <c>assessment-in-progress</c>
-    /// through <c>awaiting-decision</c> to <c>approved</c> / <c>rejected</c>,
+    /// RA-410: record the determination on a re-accreditation application.
+    /// One call carries it from <c>assessment-in-progress</c> through
+    /// <c>awaiting-decision</c> to (RA-527, step 1 of two)
+    /// <c>approved-pending-contact</c> / <c>rejected-pending-contact</c>,
     /// with both hops applied server-side by
     /// <see cref="IReAccreditationLogDecisionService"/>.
     ///
@@ -552,17 +553,16 @@ internal static class ReAccreditationEndpoints
     /// (mirroring <see cref="DulyMake"/>) so the frontend can bind them to a
     /// GOV.UK error summary against the radio group rather than parsing prose.
     ///
-    /// A repeat call once the application is already in the requested terminal
-    /// state succeeds as an idempotent replay, so a double-click or a retried
-    /// request does not fail the caller. An application already closed the
-    /// OTHER way is a 409, not a replay: reporting success would tell a
-    /// caseworker their refusal landed on an application that is in fact
-    /// approved and carrying an issued accreditation id.
+    /// A repeat call once the application is already in the requested
+    /// pending-contact state succeeds as an idempotent replay, so a
+    /// double-click or a retried request does not fail the caller. An
+    /// application already determined the OTHER way, or already Granted /
+    /// Refused / Withdrawn, is a 409, not a replay: reporting success would
+    /// tell a caseworker their refusal landed on an application that is in
+    /// fact approved and carrying an issued accreditation id.
     ///
-    /// epr-p86e / RA-410: the decision is gated on the operator-journey status
-    /// push, fired once before anything is persisted. If it cannot be delivered
-    /// within its retry budget the decision is abandoned with a generic 500 and
-    /// no state changes — the item stays exactly where it was.
+    /// RA-527: nothing is pushed to the operator journey here; the pre-commit
+    /// status push (epr-p86e) belongs to <see cref="ConfirmContact"/>.
     /// </summary>
     public static async Task<
         Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
@@ -618,11 +618,13 @@ internal static class ReAccreditationEndpoints
     /// RA-527: confirm that the applicant has been contacted about the
     /// determination, which applies it (step 2). From
     /// <c>approved-pending-contact</c> the item moves to <c>approved</c>
-    /// ("Granted"): the operator journey is notified first — if it cannot be,
-    /// a generic 500 and nothing is applied — then the SLA clock stops,
-    /// publishing is queued and the Decision email is sent.
+    /// ("Granted"), from <c>rejected-pending-contact</c> to <c>rejected</c>
+    /// ("Refused"): the operator journey is notified first — if it cannot be,
+    /// a generic 500 and nothing is applied — then the SLA clock stops. For an
+    /// approval publishing is queued and the Decision email is sent; a
+    /// refusal sends no email (RA-211).
     ///
-    /// A repeat call on an item already <c>approved</c> is an idempotent
+    /// A repeat call on an item already <c>approved</c> or <c>rejected</c> is an idempotent
     /// replay (200 + the replay header). Any other state is a 409; a missing
     /// item is a 404 and another type a 400 with
     /// <c>errorCode: wrong-work-item-type</c>, as for <see cref="LogDecision"/>.

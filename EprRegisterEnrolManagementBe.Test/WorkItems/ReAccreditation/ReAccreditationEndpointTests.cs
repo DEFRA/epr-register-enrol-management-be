@@ -1199,7 +1199,6 @@ public class ReAccreditationEndpointTests
     [InlineData("queried")]
     // ... nor can one whose outcome is already recorded.
     [InlineData("approved")]
-    [InlineData("rejected")]
     [InlineData("withdrawn")]
     // RA-527: nor one whose determination is made but not yet applied.
     [InlineData("approved-pending-contact")]
@@ -2084,7 +2083,6 @@ public class ReAccreditationEndpointTests
 
     [Theory]
     [InlineData("approved")]
-    [InlineData("rejected")]
     [InlineData("withdrawn")]
     public async Task ResumeFromQuery_returns_conflict_for_a_decided_outcome(string stateId)
     {
@@ -2359,7 +2357,6 @@ public class ReAccreditationEndpointTests
 
     [Theory]
     [InlineData("approved")]
-    [InlineData("rejected")]
     [InlineData("withdrawn")]
     [InlineData("queried")]
     public async Task ContinueReview_returns_conflict_when_not_updated(string stateId)
@@ -2999,92 +2996,6 @@ public class ReAccreditationEndpointTests
             )
             .Returns(results[0], results[1..]);
         return adapter;
-    }
-
-    /// <summary>
-    /// epr-p86e / RA-410: the decision push to the operator journey is a hard
-    /// pre-commit gate. When it cannot be delivered the decision is abandoned
-    /// before anything is persisted: a generic 500 (management-fe shows its
-    /// "Could not log a decision" flash), the item still in
-    /// <c>assessment-in-progress</c> — not decided, not stranded in the
-    /// internal <c>awaiting-decision</c> waypoint — no accreditation id, and
-    /// only the support-facing <c>status-push-failed</c> audit entry. Replaces
-    /// the deleted mgmt-tests ra-410-decision-operator-failure.e2e.js, which
-    /// needed a stub operator journey armed to fail and so could not run against CDP test.
-    /// RA-527: refusals only — an approval is step 1 and pushes nothing (see
-    /// Decision_approved_never_touches_the_operator_journey_even_when_it_is_down).
-    /// </summary>
-    [Fact]
-    public async Task Decision_returns_internal_server_error_when_the_operator_journey_push_fails()
-    {
-        const string outcome = "rejected";
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            pushAdapter: DecisionPushAdapterReturning(
-                OperatorBackendPushResult.Failure("operator journey unreachable")
-            )
-        );
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
-
-        var response = await client.PostAsJsonAsync(
-            $"/work-items/re-accreditation/{id}/decision",
-            new { outcome },
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("assessment-in-progress", persisted!.StateId);
-        Assert.False(persisted.Payload.Contains("accreditationId"));
-        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "action-applied");
-        var pushFailed = Assert.Single(persisted.AuditLog);
-        Assert.Equal("status-push-failed", pushFailed.Action);
-    }
-
-    /// <summary>
-    /// RA-410: the failed attempt leaves nothing half-committed. Once the
-    /// operator journey answers again, the SAME item — still decidable from
-    /// <c>assessment-in-progress</c> — takes the identical decision call to
-    /// its terminal state. RA-527: refusals only, as above.
-    /// </summary>
-    [Fact]
-    public async Task Decision_succeeds_on_retry_once_the_operator_journey_push_recovers()
-    {
-        const string outcome = "rejected";
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(
-            _fixture,
-            pushAdapter: DecisionPushAdapterReturning(
-                OperatorBackendPushResult.Failure("operator journey unreachable"),
-                OperatorBackendPushResult.Success()
-            )
-        );
-        using var client = factory.CreateClient();
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
-
-        var failed = await client.PostAsJsonAsync(
-            $"/work-items/re-accreditation/{id}/decision",
-            new { outcome },
-            cancellationToken
-        );
-        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
-
-        var retried = await client.PostAsJsonAsync(
-            $"/work-items/re-accreditation/{id}/decision",
-            new { outcome },
-            cancellationToken
-        );
-
-        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
-        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal(outcome, persisted!.StateId);
-        Assert.False(persisted.Payload.Contains("accreditationId"));
     }
 
     [Fact]
@@ -3978,11 +3889,102 @@ public class ReAccreditationEndpointTests
         Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "status-push-failed");
     }
 
+    /// <summary>
+    /// RA-527 step 1 of a refusal: the determination is recorded and the item
+    /// moves to the non-terminal rejected-pending-contact ("Refusing") state.
+    /// No number is minted and nothing is applied: no operator-journey push,
+    /// the SLA clock still running, no publishing and no email. Only
+    /// reassign/unassign and confirm-contact remain (none is a projected
+    /// generic action).
+    /// </summary>
     [Fact]
-    public async Task Decision_rejects_in_one_call_from_assessment()
+    public async Task Decision_refused_records_step_one_and_applies_nothing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
+        var pushAdapter = DecisionPushAdapterReturning(OperatorBackendPushResult.Success());
+        var numberAdapter = Substitute.For<IAccreditationNumberAdapter>();
+        var notifyClient = Substitute.For<INotifyClient>();
+        var backgroundTaskQueue = Substitute.For<IBackgroundTaskQueue>();
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            pushAdapter: pushAdapter,
+            numberAdapter: numberAdapter,
+            notifyClient: notifyClient,
+            backgroundTaskQueue: backgroundTaskQueue
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var seeded = BuildAssessmentInProgress(id, TenantClientId);
+        seeded.Payload["operatorEmail"] = "operator@example.com";
+        await factory.SeedAsync(seeded, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "rejected" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("rejected-pending-contact", body.GetProperty("stateId").GetString());
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("rejected-pending-contact", persisted!.StateId);
+
+        // No number is minted for a refusal.
+        await numberAdapter
+            .DidNotReceiveWithAnyArgs()
+            .GenerateOrUpdateAccreditationNumberAsync(default!, default);
+        Assert.False(persisted.Payload.Contains("accreditationId"));
+
+        // The determination is in the history, made by the caller.
+        var determination = Assert.Single(persisted.AuditLog, a => a.Action == "determination-made");
+        Assert.Equal("Determination made: Refused", determination.ActionDisplayName);
+        Assert.Equal(DefaultUserId, determination.CreatedBy);
+        var applied = persisted
+            .AuditLog.Where(e => e.Action == "action-applied")
+            .Select(e => e.Details.GetValueOrDefault("actionId"))
+            .ToList();
+        Assert.Equal(["submit-for-decision", "make-determination-rejected"], applied);
+
+        // Nothing is applied: no push, SLA still running, no publishing, no email.
+        Assert.Empty(pushAdapter.ReceivedCalls());
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(persisted.Payload);
+        Assert.Null(payload.SlaClock?.StoppedAt);
+        Assert.DoesNotContain(
+            persisted.AuditLog,
+            a => a.Action is "sla-clock-stopped" or "applicant-contacted" or "publishing-enqueued"
+                || a.Action.StartsWith("status-push-", StringComparison.Ordinal)
+        );
+        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: default);
+
+        // Query, withdraw, due-date change and re-determination are all gone.
+        var projected = await client.GetFromJsonAsync<JsonElement>(
+            $"/work-items/{id}",
+            cancellationToken
+        );
+        Assert.Equal("rejected-pending-contact", projected.GetProperty("stateId").GetString());
+        Assert.Empty(projected.GetProperty("availableActions").EnumerateArray());
+    }
+
+    /// <summary>
+    /// RA-527: step 1 of a refusal never talks to the operator journey, so it
+    /// still lands while the operator journey is down.
+    /// </summary>
+    [Fact]
+    public async Task Decision_refused_never_touches_the_operator_journey_even_when_it_is_down()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            pushAdapter: DecisionPushAdapterReturning(
+                OperatorBackendPushResult.Failure("operator journey unreachable")
+            )
+        );
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -3996,7 +3998,8 @@ public class ReAccreditationEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("rejected", persisted!.StateId);
+        Assert.Equal("rejected-pending-contact", persisted!.StateId);
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "status-push-failed");
     }
 
     /// <summary>
@@ -4251,10 +4254,10 @@ public class ReAccreditationEndpointTests
 
     /// <summary>
     /// The mirror image of the frontend's own guard: a client older than v12
-    /// does not know <c>reject</c> stopped being caller-invocable and can
-    /// still post it. Only this server-side check stops a caseworker refusing
-    /// an application without ever seeing the decision page, so it must refuse
-    /// before any transition is applied.
+    /// can still post <c>reject</c>. Only this server-side check stops a
+    /// caseworker refusing an application without ever seeing the decision
+    /// page, so it must refuse before any transition is applied. RA-527: the
+    /// transition is gone from v17 altogether, so it is now an unknown action.
     /// </summary>
     [Fact]
     public async Task Reject_is_rejected_server_side_as_not_caller_invocable()
@@ -4590,17 +4593,17 @@ public class ReAccreditationEndpointTests
 
     /// <summary>
     /// RA-527: contact can only be confirmed for an application pending
-    /// contact. Anything else — not yet determined, queried, refused or
-    /// withdrawn — is a 409, and nothing is pushed or written.
+    /// contact. Anything else — not yet determined, queried or withdrawn — is
+    /// a 409, and nothing is pushed or written. (Granted and Refused are
+    /// replays.)
     /// </summary>
     [Theory]
     [InlineData("submitted")]
     [InlineData("assessment-in-progress")]
     [InlineData("awaiting-decision")]
     [InlineData("queried")]
-    [InlineData("rejected")]
     [InlineData("withdrawn")]
-    public async Task Confirm_contact_is_refused_outside_approved_pending_contact(string stateId)
+    public async Task Confirm_contact_is_refused_outside_a_pending_contact_state(string stateId)
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         var pushAdapter = DecisionPushAdapterReturning(OperatorBackendPushResult.Success());
@@ -4707,6 +4710,309 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("approved-pending-contact", persisted!.StateId);
+    }
+
+    // -------------------- RA-527: a refusal, step 1 and step 2 --------------------
+
+    /// <summary>
+    /// Takes a freshly seeded <c>assessment-in-progress</c> application through
+    /// step 1 (Refused) on the real /decision endpoint, so step 2 starts from
+    /// exactly what production leaves behind.
+    /// </summary>
+    private static async Task<WorkItem> SeedRejectedPendingContactAsync(
+        ReAccreditationFactory factory,
+        HttpClient client,
+        Guid id,
+        CancellationToken cancellationToken
+    )
+    {
+        var seeded = BuildAssessmentInProgress(id, TenantClientId);
+        seeded.Payload["operatorEmail"] = "operator@example.com";
+        await factory.SeedAsync(seeded, cancellationToken);
+
+        var stepOne = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "rejected" },
+            cancellationToken
+        );
+        Assert.Equal(HttpStatusCode.OK, stepOne.StatusCode);
+
+        var pending = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("rejected-pending-contact", pending!.StateId);
+        return pending;
+    }
+
+    /// <summary>
+    /// RA-527 step 2 of a refusal: confirming applicant contact applies it.
+    /// The operator journey is told first (to-state <c>rejected</c>,
+    /// from-state <c>rejected-pending-contact</c>), then one write moves the
+    /// item to Refused with the SLA clock stopped at the push's own timestamp
+    /// and the "Applicant contacted" audit entry. No email (RA-211), nothing
+    /// published and no accreditation issued.
+    /// </summary>
+    [Fact]
+    public async Task Confirm_contact_applies_the_refusal()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var pushAdapter = DecisionPushAdapterReturning(OperatorBackendPushResult.Success());
+        var notifyClient = Substitute.For<INotifyClient>();
+        var backgroundTaskQueue = Substitute.For<IBackgroundTaskQueue>();
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            pushAdapter: pushAdapter,
+            notifyClient: notifyClient,
+            backgroundTaskQueue: backgroundTaskQueue
+        );
+        using var client = factory.CreateClient();
+        // Positive control: the email hook is live, so "no email" below means
+        // it chose not to send one.
+        Assert.Contains(
+            factory.Services.GetServices<IWorkItemPostActionHook>(),
+            h => h is ReAccreditationNotificationHook
+        );
+
+        var id = Guid.NewGuid();
+        await SeedRejectedPendingContactAsync(factory, client, id, cancellationToken);
+
+        var response = await PostConfirmContactAsync(client, id, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal("rejected", body.GetProperty("stateId").GetString());
+
+        // The operator journey is told the final outcome, once.
+        var push = Assert.Single(
+            pushAdapter.ReceivedCalls(),
+            c => c.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync)
+        );
+        var pushArgs = push.GetArguments();
+        Assert.Equal(id, pushArgs[0]);
+        Assert.Equal("rejected-pending-contact", pushArgs[2]);
+        Assert.Equal("rejected", pushArgs[3]);
+        Assert.Equal("Refused", pushArgs[4]);
+        Assert.Equal(ReAccreditationType.ConfirmContactRejectedActionId, pushArgs[5]);
+        var occurredAt = (DateTime)pushArgs[7]!;
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("rejected", persisted!.StateId);
+
+        // SLA clock stopped at the push's own timestamp; no number anywhere.
+        var payload = BsonSerializer.Deserialize<ReAccreditationPayload>(persisted.Payload);
+        Assert.Equal(occurredAt, payload.SlaClock?.StoppedAt?.UtcDateTime);
+        Assert.Null(payload.AccreditationId);
+
+        // "Applicant contacted", made by the caller, and the SLA stop.
+        var contacted = Assert.Single(persisted.AuditLog, a => a.Action == "applicant-contacted");
+        Assert.Equal("Applicant contacted", contacted.ActionDisplayName);
+        Assert.Equal(DefaultUserId, contacted.CreatedBy);
+        Assert.Equal(DefaultUserName, contacted.CreatedByName);
+        var applied = persisted
+            .AuditLog.Where(e => e.Action == "action-applied")
+            .Select(e => e.Details.GetValueOrDefault("actionId"))
+            .ToList();
+        Assert.Equal(
+            [
+                "submit-for-decision",
+                "make-determination-rejected",
+                ReAccreditationType.ConfirmContactRejectedActionId,
+            ],
+            applied
+        );
+        Assert.Single(persisted.AuditLog, a => a.Action == "sla-clock-stopped");
+        Assert.Single(persisted.AuditLog, a => a.Action == "status-push-sent");
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "accreditation-issued");
+
+        // Nothing published and no email.
+        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: default);
+    }
+
+    /// <summary>
+    /// RA-527 step 2 of a refusal: the operator-journey push is a hard
+    /// pre-commit gate, as for an approval. When it cannot be delivered,
+    /// confirming contact is abandoned with a generic 500 and nothing applied:
+    /// still Refusing, the SLA clock still running, no outcome entries — only
+    /// the support-facing status-push-failed entry. Once the operator journey
+    /// answers again the identical call applies the refusal. (Carries over the
+    /// RA-410 refusal push-failure tests, which replaced the deleted mgmt-tests
+    /// ra-410-decision-operator-failure.e2e.js.)
+    /// </summary>
+    [Fact]
+    public async Task Confirm_contact_applies_no_refusal_when_the_operator_journey_push_fails_and_succeeds_on_retry()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            pushAdapter: DecisionPushAdapterReturning(
+                OperatorBackendPushResult.Failure("operator journey unreachable"),
+                OperatorBackendPushResult.Success()
+            )
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var pending = await SeedRejectedPendingContactAsync(factory, client, id, cancellationToken);
+
+        var failed = await PostConfirmContactAsync(client, id, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, failed.StatusCode);
+        var unchanged = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("rejected-pending-contact", unchanged!.StateId);
+        var unchangedPayload = BsonSerializer.Deserialize<ReAccreditationPayload>(unchanged.Payload);
+        Assert.Null(unchangedPayload.SlaClock?.StoppedAt);
+        var added = Assert.Single(unchanged.AuditLog.Skip(pending.AuditLog.Count));
+        Assert.Equal("status-push-failed", added.Action);
+
+        var retried = await PostConfirmContactAsync(client, id, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, retried.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("rejected", persisted!.StateId);
+        Assert.Single(persisted.AuditLog, a => a.Action == "applicant-contacted");
+    }
+
+    /// <summary>
+    /// RA-527: confirming again once the refusal is applied succeeds, flagged
+    /// as a replay, with no side effects.
+    /// </summary>
+    [Fact]
+    public async Task Confirm_contact_replay_on_a_refused_application_is_idempotent()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var pushAdapter = DecisionPushAdapterReturning(OperatorBackendPushResult.Success());
+        await using var factory = new ReAccreditationFactory(_fixture, pushAdapter: pushAdapter);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await SeedRejectedPendingContactAsync(factory, client, id, cancellationToken);
+        var first = await PostConfirmContactAsync(client, id, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var afterFirst = (await factory.Persistence.GetByIdAsync(id, cancellationToken))!;
+
+        var replay = await PostConfirmContactAsync(client, id, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.True(replay.Headers.Contains(WorkItemEndpoints.IdempotentReplayHeader));
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("rejected", persisted!.StateId);
+        Assert.Equal(afterFirst.AuditLog.Count, persisted.AuditLog.Count);
+        Assert.Equal(afterFirst.Version, persisted.Version);
+        Assert.Single(
+            pushAdapter.ReceivedCalls(),
+            c => c.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync)
+        );
+    }
+
+    /// <summary>
+    /// RA-527: Refused again on an item already refused at step 1 succeeds,
+    /// flagged as a replay, with no new audit entries.
+    /// </summary>
+    [Fact]
+    public async Task Decision_refused_replay_is_idempotent_and_flags_the_replay()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var afterFirst = await SeedRejectedPendingContactAsync(factory, client, id, cancellationToken);
+
+        var replay = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "rejected" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, replay.StatusCode);
+        Assert.True(replay.Headers.Contains(WorkItemEndpoints.IdempotentReplayHeader));
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("rejected-pending-contact", persisted!.StateId);
+        Assert.Equal(afterFirst.AuditLog.Count, persisted.AuditLog.Count);
+        Assert.Equal(afterFirst.Version, persisted.Version);
+    }
+
+    /// <summary>
+    /// RA-527: Approved on an item already refused at step 1 is a conflict —
+    /// the determination is final — and changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task Decision_approved_on_an_application_pending_refusal_is_refused_and_changes_nothing()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var numberAdapter = Substitute.For<IAccreditationNumberAdapter>();
+        await using var factory = new ReAccreditationFactory(_fixture, numberAdapter: numberAdapter);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var before = await SeedRejectedPendingContactAsync(factory, client, id, cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(before.ToBsonDocument(), persisted!.ToBsonDocument());
+        Assert.Empty(numberAdapter.ReceivedCalls());
+    }
+
+    /// <summary>
+    /// RA-527: a Refused application has had its determination made and
+    /// applied; making it again is a conflict, not a replay — it would move a
+    /// terminal item back to step 1.
+    /// </summary>
+    [Fact]
+    public async Task Decision_refused_on_a_refused_application_is_refused()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "rejected", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "rejected" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    /// <summary>
+    /// RA-527: neither refusal transition is caller-invocable, so the generic
+    /// action route can neither record a refusal nor apply one.
+    /// </summary>
+    [Theory]
+    [InlineData("awaiting-decision", "make-determination-rejected")]
+    [InlineData("rejected-pending-contact", "confirm-contact-rejected")]
+    public async Task The_refusal_transitions_are_rejected_on_the_generic_action_route(
+        string stateId,
+        string actionId
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, stateId, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/actions/{actionId}",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(stateId, persisted!.StateId);
+        Assert.Empty(persisted.AuditLog);
     }
 
     // -------------------- RA-469: Update recycling operations endpoint --------------------

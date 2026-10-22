@@ -8,7 +8,7 @@ using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
-using ReAccreditationSlaClock = EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models.SlaClock;
+using static EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReAccreditationDecisionWrites;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -114,14 +114,19 @@ internal sealed class ReAccreditationApprovalService(
             // concurrent confirmation that landed first turns this into a
             // replay, and anything else that moved the item refuses it.
             if (
-                ReAccreditationConfirmContactGuard.Check(workItemId, workItem, registry) is
+                ReAccreditationConfirmContactGuard.Check(
+                    workItemId,
+                    workItem,
+                    registry,
+                    ReAccreditationConfirmContactGuard.Approval
+                ) is
                 { } stop
             )
             {
                 return stop;
             }
 
-            var payload = TryStopSlaClock(workItem!, appliedAt);
+            var payload = TryStopSlaClock(workItem!, appliedAt, logger);
             if (payload is null)
             {
                 return WorkItemActionResult.Failure(
@@ -214,10 +219,12 @@ internal sealed class ReAccreditationApprovalService(
 
             await EnqueuePublishingAuditAsync(workItem, user, cancellationToken);
             await InvokeActionAppliedHooksAsync(
+                _postActionHooks,
                 workItem,
                 ReAccreditationType.ConfirmContactApprovedActionId,
                 previousState,
-                user
+                user,
+                logger
             );
 
             return WorkItemActionResult.Success(workItem);
@@ -281,7 +288,8 @@ internal sealed class ReAccreditationApprovalService(
                         AccreditationId = accreditationId,
                         AccreditationStartDate = accreditationStartDate,
                         AccreditationYear = accreditationYear,
-                    }
+                    },
+                logger
             );
             if (stamped is null)
             {
@@ -351,10 +359,12 @@ internal sealed class ReAccreditationApprovalService(
             );
 
             await InvokeActionAppliedHooksAsync(
+                _postActionHooks,
                 workItem,
                 ReAccreditationType.MakeDeterminationApprovedActionId,
                 previousState,
-                user
+                user,
+                logger
             );
             return WorkItemActionResult.Success(workItem);
         }
@@ -402,8 +412,8 @@ internal sealed class ReAccreditationApprovalService(
 
         if (
             string.Equals(workItem.StateId, ToStateId, StringComparison.OrdinalIgnoreCase)
-            || string.Equals(workItem.StateId, "rejected", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(workItem.StateId, "withdrawn", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(workItem.StateId, ReAccreditationType.RejectedStateId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(workItem.StateId, ReAccreditationType.WithdrawnStateId, StringComparison.OrdinalIgnoreCase)
         )
         {
             return WorkItemActionResult.Failure(
@@ -568,64 +578,6 @@ internal sealed class ReAccreditationApprovalService(
         return numberResult;
     }
 
-    /// <summary>
-    /// Applies <paramref name="update"/> to the work item's payload and
-    /// returns the updated model, or null (logged) when the stored payload
-    /// cannot be read — writing over it would destroy existing payload data
-    /// (organisation name, registration number, nation, etc.).
-    /// </summary>
-    private ReAccreditationPayload? TryUpdatePayload(
-        WorkItem workItem,
-        Func<ReAccreditationPayload, ReAccreditationPayload> update
-    )
-    {
-        // Deserialise → with-mutate → reserialise so the mongo-driver's
-        // serializer (camelCase convention, nested record) is the single
-        // source of truth for the on-disk shape.
-        ReAccreditationPayload payload;
-        try
-        {
-            payload = BsonSerializer.Deserialize<ReAccreditationPayload>(
-                workItem.Payload ?? new BsonDocument()
-            );
-        }
-        catch (Exception ex)
-            when (ex is BsonSerializationException or FormatException or InvalidCastException)
-        {
-            logger.LogError(
-                ex,
-                "Re-accreditation approval for work item {WorkItemId} aborted: "
-                    + "existing payload could not be deserialised. Approving would destroy "
-                    + "existing payload data (organisation name, registration number, nation, etc.).",
-                workItem.Id
-            );
-            return null;
-        }
-
-        var updated = update(payload);
-
-        // RA-249: merge the modelled updates back over the *existing* payload rather
-        // than replacing it wholesale. A full replace against this
-        // [BsonIgnoreExtraElements] model dropped every unmodelled payload key
-        // (applicationReference, source, siteAddress*, ...) on approval, which turned
-        // the application ref into the work-item Guid downstream.
-        // Note: Merge is a shallow top-level merge — an unmodelled key nested
-        // *inside* a modelled top-level object would still be lost (that object is
-        // round-tripped through the model before overwriting). All keys at risk today
-        // (applicationReference, source, siteAddress*) are top-level, so they survive.
-        var merged = (workItem.Payload ?? new BsonDocument()).DeepClone().AsBsonDocument;
-        merged.Merge(updated.ToBsonDocument(), overwriteExistingElements: true);
-        workItem.ReplacePayload(merged);
-        return updated;
-    }
-
-    /// <summary>RA-527 step 2: stops the payload's SLA clock at <paramref name="stoppedAt"/>.</summary>
-    private ReAccreditationPayload? TryStopSlaClock(WorkItem workItem, DateTimeOffset stoppedAt) =>
-        TryUpdatePayload(
-            workItem,
-            payload => payload with { SlaClock = new ReAccreditationSlaClock(stoppedAt) }
-        );
-
     private async Task EnqueuePublishingAuditAsync(
         WorkItem workItem,
         ClaimsPrincipal user,
@@ -655,82 +607,6 @@ internal sealed class ReAccreditationApprovalService(
                 );
             },
             cancellationToken
-        );
-    }
-
-    private async Task InvokeActionAppliedHooksAsync(
-        WorkItem workItem,
-        string actionId,
-        string fromStateId,
-        ClaimsPrincipal user
-    )
-    {
-    // The transition is already committed by the time hooks run, so a client
-    // that gives up waiting (management-fe times out) must not cancel them:
-    // the operator-backend push and its audit entries would be lost, leaving
-    // this service and the operator disagreeing about the application's state.
-        foreach (var hook in _postActionHooks)
-        {
-            try
-            {
-                await hook.OnActionAppliedAsync(
-                    workItem,
-                    actionId,
-                    fromStateId,
-                    user,
-                    CancellationToken.None
-                );
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(
-                    ex,
-                    "Post-action transition hook {HookType} failed for work item {WorkItemId} action {ActionId}",
-                    hook.GetType().FullName,
-                    workItem.Id,
-                    actionId
-                );
-            }
-        }
-    }
-
-    private static void AppendAudit(
-        WorkItem workItem,
-        string action,
-        string actionDisplayName,
-        ClaimsPrincipal user,
-        DateTime createdAt,
-        Dictionary<string, string?> details
-    )
-    {
-        workItem.AuditLog.Add(
-            new WorkItemAuditEntry
-            {
-                Action = action,
-                ActionDisplayName = actionDisplayName,
-                Details = details,
-                CreatedAt = createdAt,
-                CreatedBy = user.FindFirstValue("user:id"),
-                CreatedByName = user.FindFirstValue("user:name"),
-                // epr-rr9s: snapshot the state as of this event. Callers invoke
-                // this AFTER any state mutation, so workItem.StateId is the
-                // resulting post-mutation state for this entry.
-                StateId = workItem.StateId,
-            }
-        );
-    }
-
-    private static WorkItemActionResult? RequireActorIdentity(ClaimsPrincipal user)
-    {
-        var id = user.FindFirstValue("user:id");
-        if (!string.IsNullOrWhiteSpace(id))
-        {
-            return null;
-        }
-        return WorkItemActionResult.Failure(
-            WorkItemActionFailureCode.MissingActorIdentity,
-            "Mutating this work item requires an authenticated end user; "
-                + "the request did not include a 'user:id' claim."
         );
     }
 

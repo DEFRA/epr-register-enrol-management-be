@@ -775,18 +775,26 @@ public class ReAccreditationNotificationHookTests
     // re-add is caught. The reject transition itself (and its own
     // action-applied audit entry) is a WorkItemService concern, exercised
     // separately in ReAccreditationLifecycleTests; this hook only owns the
-    // notification side-effect and must produce none for reject.
-    [Fact]
-    public async Task OnActionAppliedAsync_reject_does_not_call_notify_client()
+    // notification side-effect and must produce none for a refusal. RA-527:
+    // a refusal is two steps now, and neither step emails.
+    [Theory]
+    [InlineData("reject", "awaiting-decision", "rejected")]
+    [InlineData("make-determination-rejected", "awaiting-decision", "rejected-pending-contact")]
+    [InlineData("confirm-contact-rejected", "rejected-pending-contact", "rejected")]
+    public async Task OnActionAppliedAsync_a_refusal_does_not_call_notify_client(
+        string actionId,
+        string fromStateId,
+        string stateId
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
 
-        var workItem = BuildWorkItem(stateId: "rejected");
+        var workItem = BuildWorkItem(stateId: stateId);
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId, s_user, ct);
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()

@@ -31,7 +31,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// rejection notice manually (outside this service) so they can include
 /// right-of-appeal detail the automated Decision template doesn't carry.
 /// The reject transition itself and its own audit entry are unaffected;
-/// this hook simply never fires a Notify call for it.
+/// this hook simply never fires a Notify call for it. RA-527: neither is
+/// either step of the two-step refusal (<c>make-determination-rejected</c>,
+/// <c>confirm-contact-rejected</c>).
 ///
 /// RA-581: <c>payment-received</c> (<c>AssessmentInProgress</c>) and
 /// <c>sla-extend</c> (<c>SlaExtended</c>) were removed from the mapping —

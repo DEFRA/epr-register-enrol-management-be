@@ -18,10 +18,13 @@ internal interface IReAccreditationConfirmContactService
     /// <c>approved-pending-contact</c>: push "Granted" to the operator journey
     /// first (on failure nothing is applied), then move the item to
     /// <c>approved</c> with the SLA clock stopped, an "Applicant contacted"
-    /// audit entry, publishing queued and the Decision email sent.
+    /// audit entry, publishing queued and the Decision email sent. From
+    /// <c>rejected-pending-contact</c>: push "Refused" first, then move the
+    /// item to <c>rejected</c> with the SLA clock stopped and an "Applicant
+    /// contacted" audit entry — no email and nothing published.
     ///
-    /// An item already <c>approved</c> is an idempotent replay with no side
-    /// effects; any other state is a conflict.
+    /// An item already <c>approved</c> or <c>rejected</c> is an idempotent
+    /// replay with no side effects; any other state is a conflict.
     /// </summary>
     Task<WorkItemActionResult> ConfirmContactAsync(
         Guid workItemId,

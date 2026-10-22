@@ -40,6 +40,27 @@ internal sealed class ReAccreditationType : IWorkItemType
     /// <summary>RA-527: display name of the step 2 ("confirm applicant contact") transition.</summary>
     public const string ConfirmContactDisplayName = "Confirm applicant contact";
 
+    /// <summary>RA-527: the step 1 refusal state (refused, applicant not yet contacted).</summary>
+    public const string RejectedPendingContactStateId = "rejected-pending-contact";
+
+    /// <summary>RA-527: the step 1 refusal transition, awaiting-decision → rejected-pending-contact.</summary>
+    public const string MakeDeterminationRejectedActionId = "make-determination-rejected";
+
+    /// <summary>RA-527: display name of <see cref="MakeDeterminationRejectedActionId"/>.</summary>
+    public const string MakeDeterminationRejectedDisplayName = "Make determination: Refused";
+
+    /// <summary>
+    /// RA-527: the step 2 refusal transition ("confirm applicant contact"),
+    /// rejected-pending-contact → rejected.
+    /// </summary>
+    public const string ConfirmContactRejectedActionId = "confirm-contact-rejected";
+
+    /// <summary>RA-527: the terminal "Refused" state a refusal reaches at step 2.</summary>
+    public const string RejectedStateId = "rejected";
+
+    /// <summary>The terminal "Withdrawn" state.</summary>
+    public const string WithdrawnStateId = "withdrawn";
+
     // RA-324 (AC06): state DisplayNames align with the prototype "Applications"
     // design. Only the labels change here — the state ids are the wire contract
     // the management-fe and mgmt-tests key off and MUST stay exactly as they
@@ -88,13 +109,25 @@ internal sealed class ReAccreditationType : IWorkItemType
         "Granted",
         IsTerminal: true
     );
+
+    // RA-527: step 1 of the two-step determination for a refusal. The
+    // regulator has refused, but the applicant has not yet been contacted, so
+    // the outcome is not applied: nothing is pushed to the operator journey
+    // and the SLA clock keeps running (no email is sent for a refusal at all,
+    // RA-211). Not terminal. Step 2 ("confirm applicant contact") moves it on
+    // to 'rejected'. The "Refusing" label is provisional and kept to this one
+    // declaration.
+    private static readonly WorkItemState s_rejectedPendingContact = new(
+        RejectedPendingContactStateId,
+        "Refusing"
+    );
     private static readonly WorkItemState s_rejected = new(
-        "rejected",
+        RejectedStateId,
         "Refused",
         IsTerminal: true
     );
     private static readonly WorkItemState s_withdrawn = new(
-        "withdrawn",
+        WithdrawnStateId,
         "Withdrawn",
         IsTerminal: true
     );
@@ -214,6 +247,13 @@ internal sealed class ReAccreditationType : IWorkItemType
     // confirm-contact-approved transition (approved-pending-contact ->
     // approved, CallerInvocable: false — only
     // POST /work-items/re-accreditation/{id}/confirm-contact reaches it).
+    // A refusal follows the same two steps: make-determination-rejected
+    // (awaiting-decision -> the non-terminal 'rejected-pending-contact',
+    // "Refusing") then confirm-contact-rejected (rejected-pending-contact ->
+    // rejected), both CallerInvocable: false. The single-step 'reject'
+    // transition (awaiting-decision -> rejected) is removed, so nothing
+    // refuses an application without both steps. v17 was still unreleased
+    // when the refusal half was added, so it joined v17 rather than a v18.
     // Items snapshotted before v17 have none of these until
     // ReAccreditationPendingContactSnapshotMigration patches their frozen
     // snapshot.
@@ -230,6 +270,7 @@ internal sealed class ReAccreditationType : IWorkItemType
         s_updated,
         s_approvedPendingContact,
         s_approved,
+        s_rejectedPendingContact,
         s_rejected,
         s_withdrawn,
     ];
@@ -315,21 +356,12 @@ internal sealed class ReAccreditationType : IWorkItemType
         // bespoke side-effects (accreditation id issuance, SLA clock stop, queued
         // publishing job).
         //
-        // RA-410: reject is now CallerInvocable: false for the same reason as
-        // submit-for-decision above. Both halves of a decision are driven by
-        // ReAccreditationLogDecisionService through the single /decision
-        // endpoint, so the pair either both happen or neither does. The action
-        // id stays 'reject' and the target state stays 'rejected' — the
-        // regulator-facing "Refused" wording is a frontend label only, and
-        // renaming either would break every notification template and stored
-        // audit entry that names them.
-        new WorkItemTransition(
-            "reject",
-            "Reject",
-            s_awaitingDecision.Id,
-            s_rejected.Id,
-            CallerInvocable: false
-        ),
+        // RA-527: the single-step 'reject' transition (RA-410, awaiting-decision
+        // -> rejected) is gone for the same reason: a refusal is now the two
+        // steps below (make-determination-rejected, then
+        // confirm-contact-rejected). The target state stays 'rejected' and
+        // stored audit entries that name 'reject' are untouched.
+        //
         // RA-527: step 1 of an approval. Applied by
         // ReAccreditationApprovalService.RecordApprovedDeterminationAsync,
         // reached only via POST /work-items/re-accreditation/{id}/decision,
@@ -357,6 +389,34 @@ internal sealed class ReAccreditationType : IWorkItemType
             ConfirmContactDisplayName,
             s_approvedPendingContact.Id,
             s_approved.Id,
+            CallerInvocable: false
+        ),
+        // RA-527: step 1 of a refusal. Applied by
+        // ReAccreditationRefusalService.RecordRefusedDeterminationAsync,
+        // reached only via POST /work-items/re-accreditation/{id}/decision. No
+        // number is minted. CallerInvocable is false so the generic action
+        // route cannot record a determination without its audit entry.
+        // Nothing is pushed to the operator journey for it (see
+        // ReAccreditationStatusPushHook) and no email is sent.
+        new WorkItemTransition(
+            MakeDeterminationRejectedActionId,
+            MakeDeterminationRejectedDisplayName,
+            s_awaitingDecision.Id,
+            s_rejectedPendingContact.Id,
+            CallerInvocable: false
+        ),
+        // RA-527: step 2 of a refusal ("confirm applicant contact"). Applied
+        // by ReAccreditationRefusalService.RefuseAsync, reached only via
+        // POST /work-items/re-accreditation/{id}/confirm-contact, which pushes
+        // the outcome to the operator journey BEFORE this write, which stops
+        // the SLA clock. No email (RA-211: regulators send refusal notices
+        // themselves) and nothing to publish. CallerInvocable is false so the
+        // generic action route cannot apply the outcome without the push.
+        new WorkItemTransition(
+            ConfirmContactRejectedActionId,
+            ConfirmContactDisplayName,
+            s_rejectedPendingContact.Id,
+            s_rejected.Id,
             CallerInvocable: false
         ),
         // RA-211 / RA-291: a case worker can query an application from any

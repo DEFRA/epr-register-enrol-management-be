@@ -167,10 +167,11 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // work item's frozen snapshot (→ v16). Writes only the stored rules
         // and template version.
         services.AddSingleton<IWorkItemMigration, ReAccreditationRemovePaymentReceivedSnapshotMigration>();
-        // RA-527: adds the approved-pending-contact state and the step 1
-        // make-determination-approved transition (→ v17). Registered last of
-        // the snapshot migrations so it is the one that sets the final
-        // version. Writes only the stored rules and template version.
+        // RA-527: adds the two pending-contact states, both outcomes' step 1
+        // (make-determination-*) and step 2 (confirm-contact-*) transitions, and
+        // removes the single-step reject (→ v17). Registered last of the
+        // snapshot migrations so it is the one that sets the final version.
+        // Writes only the stored rules and template version.
         services.AddSingleton<IWorkItemMigration, ReAccreditationPendingContactSnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
@@ -207,8 +208,8 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             ReAccreditationLogDecisionService
         >();
         // RA-527: step 2 of the two-step determination ("confirm applicant
-        // contact"): pre-commit operator-journey push, then the approval
-        // service's single write.
+        // contact"): pre-commit operator-journey push, then the approval or
+        // refusal service's single write.
         services.AddSingleton<
             IReAccreditationConfirmContactService,
             ReAccreditationConfirmContactService
@@ -234,6 +235,10 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             HttpOverseasSiteRecyclingOperationsAdapter
         >();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
+        // RA-527: both steps of a refusal (the counterpart of the approval
+        // service): step 1 for the log-decision service, step 2 for the
+        // confirm-contact service.
+        services.AddSingleton<IReAccreditationRefusalService, ReAccreditationRefusalService>();
         // RA-316: bespoke duly-making workflow. Owns the submitted → duly-made
         // transition and the side effect the generic engine cannot perform —
         // anchoring the 12-week SLA clock to the regulator-entered payment date.

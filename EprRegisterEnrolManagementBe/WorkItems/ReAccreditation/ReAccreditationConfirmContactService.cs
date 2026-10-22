@@ -1,39 +1,46 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-527 default <see cref="IReAccreditationConfirmContactService"/>.
+/// RA-527 default <see cref="IReAccreditationConfirmContactService"/>. The
+/// outcome is the one step 1 recorded, read off the item's pending-contact
+/// state: <c>approved-pending-contact</c> → <c>approved</c>,
+/// <c>rejected-pending-contact</c> → <c>rejected</c>.
 ///
-/// Run order, agreed for step 2:
+/// Run order, agreed for step 2 and the same for both outcomes:
 /// <list type="number">
 ///   <item><b>Pre-commit operator-journey push</b> (the decision push, with
-///   its larger retry pipeline): to-state <c>approved</c>, from-state
-///   <c>approved-pending-contact</c>, one <c>OccurredAt</c>. If it cannot be
-///   delivered the step is abandoned — UpstreamNotificationFailed, which the
-///   endpoint maps to a 500 — with nothing applied (only the support-facing
-///   <c>status-push-failed</c> entry is recorded, as for a refusal).</item>
+///   its larger retry pipeline): to-state the terminal state, from-state the
+///   pending state, one <c>OccurredAt</c>. If it cannot be delivered the step
+///   is abandoned — UpstreamNotificationFailed, which the endpoint maps to a
+///   500 — with nothing applied (only the support-facing
+///   <c>status-push-failed</c> entry is recorded).</item>
 ///   <item><b>One write</b> through
-///   <see cref="IReAccreditationApprovalService.ApproveAsync"/>, which stops
-///   the SLA clock at that same timestamp and queues publishing.</item>
-///   <item><b>Post-action hooks</b> (the Decision email), fired by the
-///   approval service after its write.</item>
+///   <see cref="IReAccreditationApprovalService.ApproveAsync"/> or
+///   <see cref="IReAccreditationRefusalService.RefuseAsync"/>, which stops the
+///   SLA clock at that same timestamp (and, for an approval, queues
+///   publishing).</item>
+///   <item><b>Post-action hooks</b>, fired by that service after its write:
+///   the Decision email for an approval, nothing for a refusal (RA-211).</item>
 /// </list>
 ///
 /// Every rule that could refuse the write is checked BEFORE the push, through
 /// <see cref="ReAccreditationConfirmContactGuard"/>, so the operator is never
-/// told "Granted" about an item the write would then refuse. If the write
+/// told the outcome of an item the write would then refuse. If the write
 /// still fails after a delivered push (a concurrent change), the regulator
 /// retries: the operator journey drops the duplicate push by its
-/// <c>OccurredAt</c> ordering, and an item that did reach <c>approved</c>
+/// <c>OccurredAt</c> ordering, and an item that did reach its terminal state
 /// replays as success.
 /// </summary>
 internal sealed class ReAccreditationConfirmContactService(
     IWorkItemPersistence persistence,
     IWorkItemRegistry registry,
     IReAccreditationApprovalService approvalService,
+    IReAccreditationRefusalService refusalService,
     IOperatorBackendPushAdapter pushAdapter,
     IWorkItemAuditAppender auditAppender,
     ILogger<ReAccreditationConfirmContactService> logger,
@@ -57,13 +64,9 @@ internal sealed class ReAccreditationConfirmContactService(
 
         // Checked before anything else so a missing identity is a 401 before
         // the operator journey is told anything.
-        if (string.IsNullOrWhiteSpace(user.FindFirstValue("user:id")))
+        if (ReAccreditationDecisionWrites.RequireActorIdentity(user) is { } identityFailure)
         {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.MissingActorIdentity,
-                "Mutating this work item requires an authenticated end user; "
-                    + "the request did not include a 'user:id' claim."
-            );
+            return identityFailure;
         }
 
         var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
@@ -80,12 +83,14 @@ internal sealed class ReAccreditationConfirmContactService(
             return stop;
         }
 
+        // The guard passed, so the item is in one of the two pending states.
+        var step = ReAccreditationConfirmContactGuard.ForPendingState(workItem!.StateId)!;
         var appliedAt = _timeProvider.GetUtcNow();
         var delivery = await _decisionPush.PushAsync(
-            workItem!,
-            ReAccreditationType.ApprovedPendingContactStateId,
-            ReAccreditationType.ApprovedStateId,
-            ReAccreditationType.ConfirmContactApprovedActionId,
+            workItem,
+            step.PendingStateId,
+            step.TerminalStateId,
+            step.ActionId,
             ReAccreditationType.ConfirmContactDisplayName,
             appliedAt.UtcDateTime,
             user,
@@ -100,12 +105,10 @@ internal sealed class ReAccreditationConfirmContactService(
             );
         }
 
-        var result = await approvalService.ApproveAsync(
-            workItemId,
-            user,
-            appliedAt,
-            cancellationToken
-        );
+        var result =
+            step.Outcome == ReAccreditationDecisionOutcome.Approved
+                ? await approvalService.ApproveAsync(workItemId, user, appliedAt, cancellationToken)
+                : await refusalService.RefuseAsync(workItemId, user, appliedAt, cancellationToken);
 
         if (result.IsSuccess && !result.IsIdempotentReplay)
         {
@@ -113,6 +116,9 @@ internal sealed class ReAccreditationConfirmContactService(
         }
         else if (!result.IsSuccess)
         {
+            // Known gap (RA-527 task 004): a retry pushes a new OccurredAt, and
+            // an operator journey already at the terminal status answers 409,
+            // which the push adapter treats as a failure.
             logger.LogWarning(
                 "Confirm-contact for work item {WorkItemId} failed at the write ({FailureCode}) after the "
                     + "operator journey was notified; the call may be safely retried.",

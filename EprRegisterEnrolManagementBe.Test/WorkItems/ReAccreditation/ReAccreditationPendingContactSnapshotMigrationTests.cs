@@ -6,9 +6,9 @@ using NSubstitute;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-527 (v16 → v17). The Mongo round-trip on v16 fixtures (state and
-/// transition added, every other field unchanged, second run writes nothing,
-/// a migrated item can take a step 1 approval) is covered by
+/// RA-527 (v16 → v17). The Mongo round-trip on v16 fixtures (states and
+/// transitions added, reject removed, every other field unchanged, second run writes nothing,
+/// a migrated item can take a step 1 determination) is covered by
 /// <see cref="ReAccreditationPendingContactMigrationMongoIntegrationTests"/>.
 /// This covers the one case that can't be stored there: no snapshot at all.
 /// </summary>

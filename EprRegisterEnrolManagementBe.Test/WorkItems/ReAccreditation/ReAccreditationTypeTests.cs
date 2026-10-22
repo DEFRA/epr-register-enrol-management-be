@@ -13,7 +13,8 @@ public class ReAccreditationTypeTests
         Assert.Equal("re-accreditation", _type.TypeId);
         Assert.Equal("Re-accreditation", _type.DisplayName);
         // RA-595: v15 added start-assessment ("Assessment started"); v16
-        // removed payment-received. RA-527: v17 added approved-pending-contact.
+        // removed payment-received. RA-527: v17 added the two pending-contact
+        // states and removed reject.
         Assert.Equal("v17", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
@@ -33,6 +34,8 @@ public class ReAccreditationTypeTests
     [InlineData("withdrawn", "Withdrawn")]
     // RA-527: the step 1 approval state reads "Approved" to the regulator.
     [InlineData("approved-pending-contact", "Approved")]
+    // RA-527: and the step 1 refusal state reads "Refusing" (provisional).
+    [InlineData("rejected-pending-contact", "Refusing")]
     public void States_declare_expected_display_names(string stateId, string expectedDisplayName)
     {
         var state = _type.States.Single(s => s.Id == stateId);
@@ -62,6 +65,7 @@ public class ReAccreditationTypeTests
         Assert.False(states["updated"].IsTerminal);
         // RA-527: an approval awaiting applicant contact is not yet applied.
         Assert.False(states["approved-pending-contact"].IsTerminal);
+        Assert.False(states["rejected-pending-contact"].IsTerminal);
     }
 
     [Theory]
@@ -70,7 +74,7 @@ public class ReAccreditationTypeTests
     [InlineData("submit-for-decision", "assessment-in-progress", "awaiting-decision")]
     // RA-132: approve is NOT a generic-engine transition; it is handled
     // exclusively by ReAccreditationApprovalService.
-    [InlineData("reject", "awaiting-decision", "rejected")]
+    // RA-527: the single-step reject is gone; see Does_not_declare_reject.
     // RA-291: query is available from every pre-decision state.
     [InlineData("query-during-duly-making", "submitted", "queried")]
     [InlineData("query-during-duly-made", "duly-made", "queried")]
@@ -98,6 +102,9 @@ public class ReAccreditationTypeTests
     [InlineData("withdraw-during-updated", "updated", "withdrawn")]
     // RA-527: step 1 of an approval lands in the pending-contact state.
     [InlineData("make-determination-approved", "awaiting-decision", "approved-pending-contact")]
+    // RA-527: so does step 1 of a refusal, and step 2 applies it.
+    [InlineData("make-determination-rejected", "awaiting-decision", "rejected-pending-contact")]
+    [InlineData("confirm-contact-rejected", "rejected-pending-contact", "rejected")]
     public void Declares_expected_transition(
         string actionId,
         string fromStateId,
@@ -149,7 +156,7 @@ public class ReAccreditationTypeTests
         Assert.DoesNotContain(
             _type.Transitions,
             t => t.FromStateId == "duly-made"
-                && t.ActionId is "sla-extend" or "submit-for-decision" or "reject"
+                && t.ActionId is "sla-extend" or "submit-for-decision" or "make-determination-rejected"
         );
     }
 
@@ -201,6 +208,39 @@ public class ReAccreditationTypeTests
         Assert.Equal("Confirm applicant contact", transition.DisplayName);
         Assert.Equal("approved", transition.ToStateId);
         Assert.False(transition.CallerInvocable);
+    }
+
+    [Fact]
+    public void Only_confirm_applicant_contact_leaves_rejected_pending_contact()
+    {
+        // RA-527: the same restriction for a pending refusal — only step 2,
+        // reachable only through the confirm-contact endpoint.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.FromStateId == "rejected-pending-contact"
+        );
+
+        Assert.Equal("confirm-contact-rejected", transition.ActionId);
+        Assert.Equal("Confirm applicant contact", transition.DisplayName);
+        Assert.Equal("rejected", transition.ToStateId);
+        Assert.False(transition.CallerInvocable);
+    }
+
+    [Fact]
+    public void Does_not_declare_reject()
+    {
+        // RA-527: a refusal is two steps. The single-step reject
+        // (awaiting-decision -> rejected) is gone, so the only way into
+        // 'rejected' is step 2, and the only way into a refusal is step 1,
+        // which is not caller-invocable.
+        Assert.DoesNotContain(_type.Transitions, t => t.ActionId == "reject");
+        var intoRejected = Assert.Single(_type.Transitions, t => t.ToStateId == "rejected");
+        Assert.Equal("confirm-contact-rejected", intoRejected.ActionId);
+        var stepOne = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "make-determination-rejected"
+        );
+        Assert.False(stepOne.CallerInvocable);
     }
 
     [Fact]

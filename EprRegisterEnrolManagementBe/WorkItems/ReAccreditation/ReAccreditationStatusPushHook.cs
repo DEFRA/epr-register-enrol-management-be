@@ -32,12 +32,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// transition is excluded automatically instead of needing this hook
 /// updated in lockstep.
 ///
-/// epr-p86e / RA-410: the decision actions (<c>submit-for-decision</c>,
-/// <c>reject</c> and, RA-527, <c>confirm-contact-approved</c>) are also excluded — see
-/// <see cref="BuildExcludedActionIds"/>. Their operator-journey push is owned
-/// by the service that applies the outcome
-/// (<see cref="ReAccreditationLogDecisionService"/> /
-/// <see cref="ReAccreditationConfirmContactService"/>), which fires it exactly
+/// epr-p86e / RA-410: the decision actions (<c>submit-for-decision</c> and,
+/// RA-527, <c>confirm-contact-approved</c> / <c>confirm-contact-rejected</c>)
+/// are also excluded — see <see cref="BuildExcludedActionIds"/>. Their
+/// operator-journey push is owned by the service that applies the outcome
+/// (<see cref="ReAccreditationConfirmContactService"/>), which fires it exactly
 /// once as a pre-commit gate for the final outcome; this hook pushing again
 /// after each committed hop was the double-push that stranded applications in
 /// <c>awaiting-decision</c> when the operator journey was down.
@@ -328,15 +327,20 @@ internal sealed class ReAccreditationStatusPushHook(
                 continue;
             }
 
-            // RA-527: a move onto a pending-contact state is step 1 of a
-            // determination. It is recorded in the Case Management service only — the operator must not
-            // see the outcome before the regulator has contacted them — so a
-            // pending state is never pushed.
+            // RA-527: a move onto a pending-contact state (approved or
+            // refused) is step 1 of a determination. It is recorded in the
+            // Case Management service only — the operator must not see the
+            // outcome before the regulator has contacted them — so a pending
+            // state is never pushed.
             if (string.Equals(transition.ToStateId, "queried", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(transition.ToStateId, "withdrawn", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(
                     transition.ToStateId,
                     ReAccreditationType.ApprovedPendingContactStateId,
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    transition.ToStateId,
+                    ReAccreditationType.RejectedPendingContactStateId,
                     StringComparison.OrdinalIgnoreCase))
             {
                 excluded.Add(transition.ActionId);
@@ -344,19 +348,18 @@ internal sealed class ReAccreditationStatusPushHook(
         }
 
         // epr-p86e / RA-410: the decision actions are excluded here so this
-        // post-action hook never pushes for them. The operator-journey push
-        // for a final outcome is owned by the service that applies it —
-        // ReAccreditationLogDecisionService for a refusal, RA-527's
-        // ReAccreditationConfirmContactService for step 2 of an approval
-        // (confirm-contact-approved) — which fires it exactly ONCE as a
+        // post-action hook never pushes for them. RA-527: the operator-journey
+        // push for a final outcome is owned by
+        // ReAccreditationConfirmContactService (step 2, confirm-contact-approved
+        // / confirm-contact-rejected), which fires it exactly ONCE as a
         // pre-commit gate, before anything is persisted. Left in, this hook
-        // would push again after each committed transition, which is the
-        // double-push (submit-for-decision + approve/reject) that stranded
+        // would push again after the committed transition — the double-push
+        // (submit-for-decision + approve/reject) that once stranded
         // applications in 'awaiting-decision' when the operator journey was
         // unreachable.
         excluded.Add("submit-for-decision");
-        excluded.Add("reject");
         excluded.Add(ReAccreditationType.ConfirmContactApprovedActionId);
+        excluded.Add(ReAccreditationType.ConfirmContactRejectedActionId);
         return excluded;
     }
 

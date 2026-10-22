@@ -192,20 +192,25 @@ public class ReAccreditationAvailableActionsTests
         Assert.DoesNotContain("start-assessment", actionIds);
     }
 
-    [Fact]
-    public void Approved_pending_contact_offers_no_actions()
+    [Theory]
+    [InlineData("approved-pending-contact")]
+    [InlineData("rejected-pending-contact")]
+    public void A_pending_contact_state_offers_no_generic_actions(string stateId)
     {
-        // RA-527: once a regulator has approved (step 1) the determination is
+        // RA-527: once a regulator has determined (step 1, either outcome) it is
         // final. No query, withdraw, due-date change/override (sla-extend) or
-        // re-determination is projected. Confirm-contact arrives in task 004.
-        var projection = ProjectInState("approved-pending-contact");
+        // re-determination is projected; confirm-contact has its own endpoint
+        // and is not caller-invocable, so it is not projected either.
+        var projection = ProjectInState(stateId);
 
         Assert.Empty(projection.AvailableActions);
         Assert.False(projection.IsTerminal);
     }
 
-    [Fact]
-    public async Task Approved_pending_contact_can_still_be_reassigned_and_unassigned()
+    [Theory]
+    [InlineData("approved-pending-contact")]
+    [InlineData("rejected-pending-contact")]
+    public async Task A_pending_contact_state_can_still_be_reassigned_and_unassigned(string stateId)
     {
         // RA-527: someone else may need to make the applicant contact, so
         // assignment stays open while the item is not terminal.
@@ -215,7 +220,7 @@ public class ReAccreditationAvailableActionsTests
         var item = new WorkItem
         {
             TypeId = ReAccreditationType.Id,
-            StateId = "approved-pending-contact",
+            StateId = stateId,
             SubmittedAt = Now,
             LastModifiedAt = Now,
             SubmittedBy = "test-client",
@@ -242,7 +247,7 @@ public class ReAccreditationAvailableActionsTests
         var unassigned = await _service.UnassignAsync(item.Id, user, ct);
         Assert.True(unassigned.IsSuccess, unassigned.Message);
         Assert.Null(unassigned.WorkItem!.AssignedToId);
-        Assert.Equal("approved-pending-contact", unassigned.WorkItem.StateId);
+        Assert.Equal(stateId, unassigned.WorkItem.StateId);
     }
 
     [Fact]

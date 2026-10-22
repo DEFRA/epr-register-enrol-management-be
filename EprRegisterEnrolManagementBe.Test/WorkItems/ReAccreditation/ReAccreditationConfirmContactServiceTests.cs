@@ -10,7 +10,7 @@ using NSubstitute;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-527 step 2 ("confirm applicant contact"). The push-before-write rules
+/// RA-527 step 2 ("confirm applicant contact"), for both outcomes. The push-before-write rules
 /// carried over from <see cref="ReAccreditationLogDecisionServiceTests"/>:
 /// the operator journey is told first, with one timestamp that the write then
 /// uses to stop the SLA clock; a failed push applies nothing; a skipped push
@@ -28,6 +28,7 @@ public class ReAccreditationConfirmContactServiceTests
             Substitute.For<IWorkItemPersistence>(),
             new WorkItemRegistry([new ReAccreditationType()]),
             Substitute.For<IReAccreditationApprovalService>(),
+            Substitute.For<IReAccreditationRefusalService>(),
             Substitute.For<IOperatorBackendPushAdapter>(),
             Substitute.For<IWorkItemAuditAppender>(),
             NullLogger<ReAccreditationConfirmContactService>.Instance
@@ -200,17 +201,107 @@ public class ReAccreditationConfirmContactServiceTests
             .AppendAsync(default, default!, default!, default!, default!, ct);
     }
 
+    // --------------------------- a refusal ---------------------------
+
+    /// <summary>
+    /// RA-527: the same run order for a refusal. The push lands before the
+    /// write, carries to-state rejected / from-state rejected-pending-contact,
+    /// and its OccurredAt is the instant the refusal service stops the SLA
+    /// clock at. The approval service is never involved.
+    /// </summary>
+    [Fact]
+    public async Task Pushes_refused_to_the_operator_journey_then_applies_the_refusal_at_the_same_instant()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "rejected-pending-contact");
+        harness.WorkItem.Payload.Remove("accreditationId");
+
+        var result = await harness.Service.ConfirmContactAsync(harness.WorkItem.Id, harness.User, ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal(["registration-accreditation-push", "refuse"], harness.OrderedCalls);
+        await harness
+            .PushAdapter.Received(1)
+            .PushDecisionStatusChangedAsync(
+                harness.WorkItem.Id,
+                Arg.Any<Guid>(),
+                "rejected-pending-contact",
+                "rejected",
+                "Refused",
+                "confirm-contact-rejected",
+                "Confirm applicant contact",
+                s_now.UtcDateTime,
+                ct
+            );
+        await harness
+            .RefusalService.Received(1)
+            .RefuseAsync(harness.WorkItem.Id, harness.User, s_now, ct);
+        Assert.Empty(harness.ApprovalService.ReceivedCalls());
+        await harness
+            .AuditAppender.Received(1)
+            .AppendAsync(
+                harness.WorkItem.Id,
+                "status-push-sent",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["actionId"] == "confirm-contact-rejected" && d["toStateId"] == "rejected"
+                ),
+                harness.User,
+                ct
+            );
+    }
+
+    [Fact]
+    public async Task A_push_failure_applies_no_refusal_and_maps_to_500()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(
+            stateId: "rejected-pending-contact",
+            pushResult: OperatorBackendPushResult.Failure("operator journey unreachable")
+        );
+
+        var result = await harness.Service.ConfirmContactAsync(harness.WorkItem.Id, harness.User, ct);
+
+        Assert.Equal(WorkItemActionFailureCode.UpstreamNotificationFailed, result.FailureCode);
+        await harness
+            .RefusalService.DidNotReceiveWithAnyArgs()
+            .RefuseAsync(default, default!, default, ct);
+    }
+
+    [Fact]
+    public async Task A_refusal_on_rules_without_its_confirm_contact_transition_is_refused_before_the_push()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "rejected-pending-contact");
+        var snapshot = harness.WorkItem.TemplateSnapshot!;
+        harness.WorkItem.TemplateSnapshot = new WorkItemTemplateSnapshot
+        {
+            TemplateVersion = "v16",
+            States = snapshot.States,
+            Transitions = snapshot
+                .Transitions.Where(t => t.ActionId != "confirm-contact-rejected")
+                .ToList(),
+        };
+
+        var result = await harness.Service.ConfirmContactAsync(harness.WorkItem.Id, harness.User, ct);
+
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        Assert.Empty(harness.OrderedCalls);
+    }
+
     // --------------------------- guards: nothing reaches the operator journey ---------------------------
 
     /// <summary>
-    /// Already Granted (a retry, or a second click): an idempotent replay
-    /// with no push and no write.
+    /// Already Granted or Refused (a retry, or a second click): an idempotent
+    /// replay with no push and no write.
     /// </summary>
-    [Fact]
-    public async Task Confirming_an_approved_item_is_an_idempotent_replay_with_no_push()
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    public async Task Confirming_a_decided_item_is_an_idempotent_replay_with_no_push(string stateId)
     {
         var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(stateId: "approved");
+        var harness = new Harness(stateId: stateId);
 
         var result = await harness.Service.ConfirmContactAsync(harness.WorkItem.Id, harness.User, ct);
 
@@ -220,12 +311,11 @@ public class ReAccreditationConfirmContactServiceTests
     }
 
     [Theory]
-    [InlineData("rejected", WorkItemActionFailureCode.TerminalState)]
     [InlineData("withdrawn", WorkItemActionFailureCode.TerminalState)]
     [InlineData("assessment-in-progress", WorkItemActionFailureCode.InvalidTransition)]
     [InlineData("awaiting-decision", WorkItemActionFailureCode.InvalidTransition)]
     [InlineData("queried", WorkItemActionFailureCode.InvalidTransition)]
-    public async Task Confirming_outside_approved_pending_contact_is_refused_before_the_push(
+    public async Task Confirming_outside_a_pending_contact_state_is_refused_before_the_push(
         string stateId,
         WorkItemActionFailureCode expected
     )
@@ -387,6 +477,20 @@ public class ReAccreditationConfirmContactServiceTests
                     return approveResult ?? WorkItemActionResult.Success(WorkItem);
                 });
 
+            RefusalService = Substitute.For<IReAccreditationRefusalService>();
+            RefusalService
+                .RefuseAsync(
+                    Arg.Any<Guid>(),
+                    Arg.Any<ClaimsPrincipal>(),
+                    Arg.Any<DateTimeOffset>(),
+                    Arg.Any<CancellationToken>()
+                )
+                .Returns(_ =>
+                {
+                    OrderedCalls.Add("refuse");
+                    return WorkItemActionResult.Success(WorkItem);
+                });
+
             var claims = new List<Claim> { new("client_id", "test-client") };
             if (withUserId)
             {
@@ -399,6 +503,7 @@ public class ReAccreditationConfirmContactServiceTests
                 Persistence,
                 new WorkItemRegistry([type]),
                 ApprovalService,
+                RefusalService,
                 PushAdapter,
                 AuditAppender,
                 NullLogger<ReAccreditationConfirmContactService>.Instance,
@@ -409,6 +514,7 @@ public class ReAccreditationConfirmContactServiceTests
         public WorkItem WorkItem { get; }
         public IWorkItemPersistence Persistence { get; }
         public IReAccreditationApprovalService ApprovalService { get; }
+        public IReAccreditationRefusalService RefusalService { get; }
         public IOperatorBackendPushAdapter PushAdapter { get; }
         public IWorkItemAuditAppender AuditAppender { get; }
         public ClaimsPrincipal User { get; }

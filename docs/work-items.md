@@ -126,15 +126,17 @@ That is the complete list of changes required outside the new module folder.
   than needing a rescue path. RA-410's
   `POST /work-items/re-accreditation/{id}/decision` is the reference case: it
   carries an application from `assessment-in-progress` through
-  `awaiting-decision` to its decided state in one call (RA-527: an approval
-  now lands in the non-terminal `approved-pending-contact`), because two calls
-  left a window in which an application stranded in `awaiting-decision` had
-  no call to action to discharge it. RA-527's
+  `awaiting-decision` to its determination in one call (RA-527: it now lands
+  in the non-terminal `approved-pending-contact` or `rejected-pending-contact`
+  and pushes nothing), because two calls left a window in which an
+  application stranded in `awaiting-decision` had no call to action to
+  discharge it. RA-527's
   `POST /work-items/re-accreditation/{id}/confirm-contact` (step 2) then
-  applies the approval: it pushes `approved` to the operator journey first
-  (on failure nothing is applied), then one write moves the item to
-  `approved` with the SLA clock stopped, "Applicant contacted" audited and
-  publishing queued, and the Decision email follows.
+  applies the outcome: it pushes `approved` or `rejected` to the operator
+  journey first (on failure nothing is applied), then one write moves the
+  item to its terminal state with the SLA clock stopped and "Applicant
+  contacted" audited. For an approval publishing is queued and the Decision
+  email follows; a refusal sends no email (RA-211).
 
 ## Template versioning (RA-94)
 
@@ -475,7 +477,7 @@ registration line" promise. All files live under
 
 | File | Role |
 | --- | --- |
-| `ReAccreditationType.cs` | Declares the states (`submitted`, `duly-made`, `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` (RA-527: approved, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `reject`, `make-determination-approved`, `confirm-contact-approved`, `resume-during-*` and `continue-review-during-*` are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. |
+| `ReAccreditationType.cs` | Declares the states (`submitted`, `duly-made`, `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` / `rejected-pending-contact` (RA-527: determined, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `make-determination-approved` / `-rejected`, `confirm-contact-approved` / `-rejected`, `resume-during-*` and `continue-review-during-*` are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. |
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
 | `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
 | `Endpoints/ReAccreditationEndpoints.cs` | Module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
