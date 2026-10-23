@@ -29,8 +29,11 @@ public class ReAccreditationConfirmContactServiceTests
             new WorkItemRegistry([new ReAccreditationType()]),
             Substitute.For<IReAccreditationApprovalService>(),
             Substitute.For<IReAccreditationRefusalService>(),
-            Substitute.For<IOperatorBackendPushAdapter>(),
-            Substitute.For<IWorkItemAuditAppender>(),
+            new ReAccreditationDecisionPush(
+                Substitute.For<IOperatorBackendPushAdapter>(),
+                Substitute.For<IWorkItemAuditAppender>(),
+                NullLogger<ReAccreditationDecisionPush>.Instance
+            ),
             NullLogger<ReAccreditationConfirmContactService>.Instance
         );
 
@@ -528,8 +531,11 @@ public class ReAccreditationConfirmContactServiceTests
                 new WorkItemRegistry([type]),
                 ApprovalService,
                 RefusalService,
-                PushAdapter,
-                AuditAppender,
+                new ReAccreditationDecisionPush(
+                    PushAdapter,
+                    AuditAppender,
+                    NullLogger<ReAccreditationDecisionPush>.Instance
+                ),
                 NullLogger<ReAccreditationConfirmContactService>.Instance,
                 new FakeTimeProvider(s_now)
             );

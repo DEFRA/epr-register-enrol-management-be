@@ -355,9 +355,10 @@ internal sealed class ReAccreditationApprovalService(
             {
                 continue;
             }
-            catch (WorkItemConcurrencyException)
+            catch (WorkItemConcurrencyException ex)
             {
                 logger.LogError(
+                    ex,
                     "Step 1 approval for work item {WorkItemId} abandoned after {Attempts} attempts "
                         + "due to repeated concurrency conflicts.",
                     workItemId,

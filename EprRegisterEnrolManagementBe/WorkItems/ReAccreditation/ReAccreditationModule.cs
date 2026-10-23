@@ -210,6 +210,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // RA-527: step 2 of the two-step determination ("confirm applicant
         // contact"): pre-commit operator-journey push, then the approval or
         // refusal service's single write.
+        services.AddSingleton<ReAccreditationDecisionPush>();
         services.AddSingleton<
             IReAccreditationConfirmContactService,
             ReAccreditationConfirmContactService

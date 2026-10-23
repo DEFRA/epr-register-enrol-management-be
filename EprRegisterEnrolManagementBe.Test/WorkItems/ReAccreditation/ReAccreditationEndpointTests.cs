@@ -3846,10 +3846,10 @@ public class ReAccreditationEndpointTests
             a => a.Action is "sla-clock-stopped" or "accreditation-issued" or "publishing-enqueued"
                 || a.Action.StartsWith("status-push-", StringComparison.Ordinal)
         );
-        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, cancellationToken);
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: default);
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: cancellationToken);
 
         // Query, withdraw, due-date change and re-determination are all gone.
         var projected = await client.GetFromJsonAsync<JsonElement>(
@@ -3937,7 +3937,7 @@ public class ReAccreditationEndpointTests
         // No number is minted for a refusal.
         await numberAdapter
             .DidNotReceiveWithAnyArgs()
-            .GenerateOrUpdateAccreditationNumberAsync(default!, default);
+            .GenerateOrUpdateAccreditationNumberAsync(default!, cancellationToken);
         Assert.False(persisted.Payload.Contains("accreditationId"));
 
         // The determination is in the history, made by the caller.
@@ -3959,10 +3959,10 @@ public class ReAccreditationEndpointTests
             a => a.Action is "sla-clock-stopped" or "applicant-contacted" or "publishing-enqueued"
                 || a.Action.StartsWith("status-push-", StringComparison.Ordinal)
         );
-        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, cancellationToken);
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: default);
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: cancellationToken);
 
         // Query, withdraw, due-date change and re-determination are all gone.
         var projected = await client.GetFromJsonAsync<JsonElement>(
@@ -4602,7 +4602,7 @@ public class ReAccreditationEndpointTests
         Assert.Single(persisted.AuditLog, a => a.Action == "status-push-sent");
 
         // Publishing queued, and the Decision email sent to the operator.
-        await backgroundTaskQueue.ReceivedWithAnyArgs(1).QueueAsync(default!, default);
+        await backgroundTaskQueue.ReceivedWithAnyArgs(1).QueueAsync(default!, cancellationToken);
         await notifyClient
             .Received(1)
             .SendEmailAsync(
@@ -4655,10 +4655,10 @@ public class ReAccreditationEndpointTests
         Assert.Equal(pending.Payload, unchanged.Payload);
         var added = Assert.Single(unchanged.AuditLog.Skip(pending.AuditLog.Count));
         Assert.Equal("status-push-failed", added.Action);
-        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, cancellationToken);
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: default);
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: cancellationToken);
 
         var retried = await PostConfirmContactAsync(client, id, cancellationToken);
 
@@ -4970,10 +4970,10 @@ public class ReAccreditationEndpointTests
         Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "accreditation-issued");
 
         // Nothing published and no email.
-        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, cancellationToken);
         await notifyClient
             .DidNotReceiveWithAnyArgs()
-            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: default);
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: cancellationToken);
     }
 
     /// <summary>

@@ -1300,7 +1300,7 @@ public class ReAccreditationApprovalServiceTests
         Assert.All(workItem.AuditLog, e => Assert.Equal("approved-pending-contact", e.StateId));
 
         await sut.Persistence.Received(1).ReplaceAsync(workItem, Arg.Any<CancellationToken>());
-        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, default);
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
         await sut.NumberAdapter.DidNotReceiveWithAnyArgs().GenerateOrUpdateAccreditationNumberAsync(default!, ct);
         await sut.Hooks[0]
             .Received(1)

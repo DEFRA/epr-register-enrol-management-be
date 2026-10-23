@@ -1,5 +1,4 @@
 using System.Security.Claims;
-using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 
@@ -50,18 +49,12 @@ internal sealed class ReAccreditationConfirmContactService(
     IWorkItemRegistry registry,
     IReAccreditationApprovalService approvalService,
     IReAccreditationRefusalService refusalService,
-    IOperatorBackendPushAdapter pushAdapter,
-    IWorkItemAuditAppender auditAppender,
+    ReAccreditationDecisionPush decisionPush,
     ILogger<ReAccreditationConfirmContactService> logger,
     TimeProvider? timeProvider = null
 ) : IReAccreditationConfirmContactService
 {
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
-    private readonly ReAccreditationDecisionPush _decisionPush = new(
-        pushAdapter,
-        auditAppender,
-        logger
-    );
 
     public async Task<WorkItemActionResult> ConfirmContactAsync(
         Guid workItemId,
@@ -98,11 +91,9 @@ internal sealed class ReAccreditationConfirmContactService(
         // The guard passed, so the item is in one of the two pending states.
         var step = ReAccreditationConfirmContactGuard.ForPendingState(workItem!.StateId)!;
         var appliedAt = _timeProvider.GetUtcNow();
-        var delivery = await _decisionPush.PushAsync(
+        var delivery = await decisionPush.PushAsync(
             workItem,
-            step.PendingStateId,
-            step.TerminalStateId,
-            step.ActionId,
+            step,
             ReAccreditationType.ConfirmContactDisplayName,
             appliedAt.UtcDateTime,
             user,
@@ -124,7 +115,7 @@ internal sealed class ReAccreditationConfirmContactService(
 
         if (result.IsSuccess && !result.IsIdempotentReplay)
         {
-            await _decisionPush.RecordDeliveredAsync(delivery, user, cancellationToken);
+            await decisionPush.RecordDeliveredAsync(delivery, user, cancellationToken);
         }
         else if (!result.IsSuccess)
         {

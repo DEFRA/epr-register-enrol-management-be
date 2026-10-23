@@ -27,7 +27,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 internal sealed class ReAccreditationDecisionPush(
     IOperatorBackendPushAdapter pushAdapter,
     IWorkItemAuditAppender auditAppender,
-    ILogger logger
+    ILogger<ReAccreditationDecisionPush> logger
 )
 {
     private static readonly ReAccreditationType s_type = new();
@@ -39,9 +39,7 @@ internal sealed class ReAccreditationDecisionPush(
     /// </summary>
     public async Task<Delivery> PushAsync(
         WorkItem workItem,
-        string fromStateId,
-        string toStateId,
-        string actionId,
+        ReAccreditationConfirmContactGuard.Step step,
         string actionDisplayName,
         DateTime occurredAt,
         ClaimsPrincipal user,
@@ -49,6 +47,7 @@ internal sealed class ReAccreditationDecisionPush(
     )
     {
         var correlationId = Guid.NewGuid();
+        var (_, fromStateId, toStateId, actionId) = step;
         var toStateDisplayName = ResolveStateDisplayName(workItem, toStateId);
         var pushResult = await pushAdapter.PushDecisionStatusChangedAsync(
             workItem.Id,
