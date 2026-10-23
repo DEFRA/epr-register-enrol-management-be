@@ -58,7 +58,7 @@ public class NotifyTemplateContractTests
             { null, "SubmissionConfirmation", false },
             { "duly-make", "DulyMade", true },
             { "query-during-assessment", "Queried", false },
-            { "approve", "Decision", false },
+            { "confirm-contact-approved", "Decision", false },
         };
 
     [Theory]

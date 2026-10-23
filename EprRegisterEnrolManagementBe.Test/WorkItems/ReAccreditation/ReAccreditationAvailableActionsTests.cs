@@ -192,6 +192,64 @@ public class ReAccreditationAvailableActionsTests
         Assert.DoesNotContain("start-assessment", actionIds);
     }
 
+    [Theory]
+    [InlineData("approved-pending-contact")]
+    [InlineData("rejected-pending-contact")]
+    public void A_pending_contact_state_offers_no_generic_actions(string stateId)
+    {
+        // RA-527: once a regulator has determined (step 1, either outcome) it is
+        // final. No query, withdraw, due-date change/override (sla-extend) or
+        // re-determination is projected; confirm-contact has its own endpoint
+        // and is not caller-invocable, so it is not projected either.
+        var projection = ProjectInState(stateId);
+
+        Assert.Empty(projection.AvailableActions);
+        Assert.False(projection.IsTerminal);
+    }
+
+    [Theory]
+    [InlineData("approved-pending-contact")]
+    [InlineData("rejected-pending-contact")]
+    public async Task A_pending_contact_state_can_still_be_reassigned_and_unassigned(string stateId)
+    {
+        // RA-527: someone else may need to make the applicant contact, so
+        // assignment stays open while the item is not terminal.
+        var ct = TestContext.Current.CancellationToken;
+        var persistence = new WorkItemPersistence(_clientFactory, NullLoggerFactory.Instance);
+        var type = new ReAccreditationType();
+        var item = new WorkItem
+        {
+            TypeId = ReAccreditationType.Id,
+            StateId = stateId,
+            SubmittedAt = Now,
+            LastModifiedAt = Now,
+            SubmittedBy = "test-client",
+            AssignedToId = "alice-1",
+            AssignedToName = "Alice Example",
+            TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+            TemplateVersion = type.TemplateVersion,
+        };
+        await persistence.CreateAsync(item, ct);
+        var user = new System.Security.Claims.ClaimsPrincipal(
+            new System.Security.Claims.ClaimsIdentity(
+                [
+                    new System.Security.Claims.Claim("user:id", "alice-1"),
+                    new System.Security.Claims.Claim("user:name", "Alice Example"),
+                ],
+                "test"
+            )
+        );
+
+        var reassigned = await _service.AssignAsync(item.Id, "bob-1", "Bob Colleague", user, ct);
+        Assert.True(reassigned.IsSuccess, reassigned.Message);
+        Assert.Equal("bob-1", reassigned.WorkItem!.AssignedToId);
+
+        var unassigned = await _service.UnassignAsync(item.Id, user, ct);
+        Assert.True(unassigned.IsSuccess, unassigned.Message);
+        Assert.Null(unassigned.WorkItem!.AssignedToId);
+        Assert.Equal(stateId, unassigned.WorkItem.StateId);
+    }
+
     [Fact]
     public void Duly_made_still_offers_no_decision_or_sla_extend_action()
     {

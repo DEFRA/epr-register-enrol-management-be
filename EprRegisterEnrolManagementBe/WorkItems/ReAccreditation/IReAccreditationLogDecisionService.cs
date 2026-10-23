@@ -16,7 +16,8 @@ internal interface IReAccreditationLogDecisionService
 {
     /// <summary>
     /// Move a work item from <c>assessment-in-progress</c> through
-    /// <c>awaiting-decision</c> to its terminal state, applying both hops
+    /// <c>awaiting-decision</c> to its decided state (RA-527: for an approval,
+    /// the non-terminal <c>approved-pending-contact</c>), applying both hops
     /// server-side so the caller makes exactly one call.
     ///
     /// Also accepts a work item already sitting in <c>awaiting-decision</c>,

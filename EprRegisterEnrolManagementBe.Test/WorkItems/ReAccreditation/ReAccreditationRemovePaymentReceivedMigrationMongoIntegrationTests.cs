@@ -341,8 +341,11 @@ public sealed class ReAccreditationRemovePaymentReceivedMigrationMongoIntegratio
     }
 
     [Fact]
-    public void It_is_registered_after_the_start_assessment_migration_so_it_sets_the_final_version()
+    public void It_is_registered_after_the_start_assessment_migration()
     {
+        // RA-527: no longer the last snapshot migration — the v17
+        // ReAccreditationPendingContactSnapshotMigration runs after it and
+        // sets the final version (see its own integration tests).
         var services = new ServiceCollection();
         new ReAccreditationModule().RegisterServices(services, new ConfigurationBuilder().Build());
 
@@ -350,11 +353,7 @@ public sealed class ReAccreditationRemovePaymentReceivedMigrationMongoIntegratio
             .Where(d => d.ServiceType == typeof(IWorkItemMigration))
             .Select(d => d.ImplementationType)
             .ToList();
-        var snapshotMigrations = migrations
-            .Where(t => t is not null && typeof(ReAccreditationSnapshotMigrationBase).IsAssignableFrom(t))
-            .ToList();
 
-        Assert.Equal(typeof(ReAccreditationRemovePaymentReceivedSnapshotMigration), snapshotMigrations[^1]);
         Assert.True(
             migrations.IndexOf(typeof(ReAccreditationStartAssessmentSnapshotMigration))
             < migrations.IndexOf(typeof(ReAccreditationRemovePaymentReceivedSnapshotMigration)));

@@ -18,7 +18,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// Mapping:
 /// <list type="bullet">
 ///   <item>Submission                                  → <c>SubmissionConfirmation</c></item>
-///   <item>Action <c>approve</c>                       → <c>Decision</c></item>
+///   <item>Action <c>confirm-contact-approved</c> (RA-527 step 2) → <c>Decision</c></item>
 ///   <item>Action <c>query-during-assessment</c> / <c>query-during-decision</c> → <c>Queried</c></item>
 ///   <item>Action <c>withdraw</c> / <c>withdraw-during-*</c> → <c>Withdrawn</c></item>
 /// </list>
@@ -31,7 +31,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// rejection notice manually (outside this service) so they can include
 /// right-of-appeal detail the automated Decision template doesn't carry.
 /// The reject transition itself and its own audit entry are unaffected;
-/// this hook simply never fires a Notify call for it.
+/// this hook simply never fires a Notify call for it. RA-527: neither is
+/// either step of the two-step refusal (<c>make-determination-rejected</c>,
+/// <c>confirm-contact-rejected</c>).
 ///
 /// RA-581: <c>payment-received</c> (<c>AssessmentInProgress</c>) and
 /// <c>sla-extend</c> (<c>SlaExtended</c>) were removed from the mapping —
@@ -151,7 +153,9 @@ internal sealed class ReAccreditationNotificationHook(
         // audit descriptions ("Application marked duly made email sent/failed")
         // come out identical to the ones it replaces.
         ["duly-make"] = ("DulyMade", "Application marked duly made"),
-        ["approve"] = ("Decision", "Decision recorded: approved"),
+        // RA-527: the Decision email goes with the outcome, at step 2
+        // (confirm applicant contact), never at the step 1 determination.
+        [ReAccreditationType.ConfirmContactApprovedActionId] = ("Decision", "Decision recorded: approved"),
         ["query-during-duly-making"] = (QueriedTemplateKey, ApplicationQueriedDescription),
         ["query-during-duly-made"] = (QueriedTemplateKey, ApplicationQueriedDescription),
         ["query-during-assessment"] = (QueriedTemplateKey, ApplicationQueriedDescription),

@@ -83,6 +83,12 @@ internal static class ReAccreditationEndpoints
     public const string LogDecisionProblemTitle = "Could not record re-accreditation decision";
 
     /// <summary>
+    /// RA-527: ProblemDetails title for every confirm-contact failure. Constant
+    /// for the same reason as <see cref="LogDecisionProblemTitle"/>.
+    /// </summary>
+    public const string ConfirmContactProblemTitle = "Could not confirm applicant contact";
+
+    /// <summary>
     /// ProblemDetails title for every duly-make failure. Constant across all of
     /// them on purpose: the frontend switches on <c>errorCode</c>, never on the
     /// title or the human-readable detail.
@@ -127,20 +133,9 @@ internal static class ReAccreditationEndpoints
             .WithMetadata(new RequestSizeLimitAttribute(MaxDulyMakeBodyBytes))
             .RequireAuthorization();
 
-        // RA-132: bespoke approve endpoint. The generic
-        // /work-items/{id}/actions/approve transition still exists in the
-        // template snapshot, but the module-owned route is the canonical
-        // path because it stamps the accreditation id / SLA clock and
-        // queues the publishing job; routing through the framework's
-        // generic action handler would skip those side effects.
-        group
-            .MapPost("/{id:guid}/approve", Approve)
-            .WithName("ApproveReAccreditation")
-            .RequireAuthorization();
-
         // RA-410: bespoke log-decision endpoint. Both hops of a determination
-        // (submit-for-decision, then approve/reject) run server-side on this
-        // one call — submit-for-decision and reject are registered
+        // (submit-for-decision, then the outcome's step 1 — RA-527) run
+        // server-side on this one call — both are registered
         // CallerInvocable: false precisely so this is the only way in. Two
         // calls from the frontend would leave a window in which a failure
         // between them stranded the application in 'awaiting-decision' with no
@@ -150,6 +145,16 @@ internal static class ReAccreditationEndpoints
             .WithName("LogReAccreditationDecision")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxDecisionBodyBytes))
+            .RequireAuthorization();
+
+        // RA-527: step 2 of the two-step determination ("confirm applicant
+        // contact"). Applies the outcome step 1 recorded: operator-journey push
+        // first, then one write. No body — the outcome was fixed at step 1.
+        // Same authorisation as /decision. The confirm-contact transition is
+        // CallerInvocable: false precisely so this is the only way in.
+        group
+            .MapPost("/{id:guid}/confirm-contact", ConfirmContact)
+            .WithName("ConfirmReAccreditationApplicantContact")
             .RequireAuthorization();
 
         // RA-291: bespoke query endpoint. The caller never names an action —
@@ -535,60 +540,10 @@ internal static class ReAccreditationEndpoints
     }
 
     /// <summary>
-    /// RA-132: approve a re-accreditation work item. Delegates to the
-    /// module-scoped <see cref="IReAccreditationApprovalService"/> so the
-    /// bespoke approval workflow (accreditation id issuance, SLA clock
-    /// stop, queued publishing job) runs atomically with the state
-    /// transition. Failure codes map onto problem statuses with the same
-    /// vocabulary the framework's <c>/actions/{actionId}</c> endpoint
-    /// uses.
-    /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Approve(
-        [FromRoute] Guid id,
-        HttpContext httpContext,
-        [FromServices] IReAccreditationApprovalService approvalService,
-        [FromServices] IWorkItemService engine,
-        CancellationToken cancellationToken
-    )
-    {
-        var result = await approvalService.ApproveAsync(id, httpContext.User, cancellationToken);
-        if (result.IsSuccess)
-        {
-            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
-        }
-
-        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
-        {
-            return TypedResults.NotFound();
-        }
-
-        var status = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
-            WorkItemActionFailureCode.TerminalState
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            // RA-448 phase 2: the backend accreditation-number call failed
-            // (or timed out) before anything was persisted — a transient
-            // server-side dependency problem, not a malformed request, so
-            // this maps to a generic 500 like LogDecision's own upstream
-            // push failure does, not a 4xx.
-            WorkItemActionFailureCode.AccreditationNumberUnavailable =>
-                StatusCodes.Status500InternalServerError,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        return TypedResults.Problem(
-            title: "Could not approve re-accreditation",
-            detail: result.Message,
-            statusCode: status
-        );
-    }
-
-    /// <summary>
-    /// RA-410: record the final determination on a re-accreditation
-    /// application. One call carries it from <c>assessment-in-progress</c>
-    /// through <c>awaiting-decision</c> to <c>approved</c> / <c>rejected</c>,
+    /// RA-410: record the determination on a re-accreditation application.
+    /// One call carries it from <c>assessment-in-progress</c> through
+    /// <c>awaiting-decision</c> to (RA-527, step 1 of two)
+    /// <c>approved-pending-contact</c> / <c>rejected-pending-contact</c>,
     /// with both hops applied server-side by
     /// <see cref="IReAccreditationLogDecisionService"/>.
     ///
@@ -598,17 +553,17 @@ internal static class ReAccreditationEndpoints
     /// (mirroring <see cref="DulyMake"/>) so the frontend can bind them to a
     /// GOV.UK error summary against the radio group rather than parsing prose.
     ///
-    /// A repeat call once the application is already in the requested terminal
-    /// state succeeds as an idempotent replay, so a double-click or a retried
-    /// request does not fail the caller. An application already closed the
-    /// OTHER way is a 409, not a replay: reporting success would tell a
-    /// caseworker their refusal landed on an application that is in fact
-    /// approved and carrying an issued accreditation id.
+    /// A repeat call once the application is already in the requested
+    /// pending-contact state, or (RA-527 task 007, as on main) already at that
+    /// outcome's final state, succeeds as an idempotent replay that changes
+    /// nothing, so a double-click or a retried request does not fail the
+    /// caller. An application already determined the OTHER way, or withdrawn,
+    /// is a 409, not a replay: reporting success would tell a caseworker their
+    /// refusal landed on an application that is in fact approved and carrying
+    /// an issued accreditation id.
     ///
-    /// epr-p86e / RA-410: the decision is gated on the operator-journey status
-    /// push, fired once before anything is persisted. If it cannot be delivered
-    /// within its retry budget the decision is abandoned with a generic 500 and
-    /// no state changes — the item stays exactly where it was.
+    /// RA-527: nothing is pushed to the operator journey here; the pre-commit
+    /// status push (epr-p86e) belongs to <see cref="ConfirmContact"/>.
     /// </summary>
     public static async Task<
         Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
@@ -657,6 +612,64 @@ internal static class ReAccreditationEndpoints
             return TypedResults.NotFound();
         }
 
+        return DecisionProblem(result, LogDecisionProblemTitle);
+    }
+
+    /// <summary>
+    /// RA-527: confirm that the applicant has been contacted about the
+    /// determination, which applies it (step 2). From
+    /// <c>approved-pending-contact</c> the item moves to <c>approved</c>
+    /// ("Granted"), from <c>rejected-pending-contact</c> to <c>rejected</c>
+    /// ("Refused"): the operator journey is notified first — if it cannot be,
+    /// a generic 500 and nothing is applied — then the SLA clock stops. For an
+    /// approval publishing is queued and the Decision email is sent; a
+    /// refusal sends no email (RA-211).
+    ///
+    /// A repeat call on an item already <c>approved</c> or <c>rejected</c> is an idempotent
+    /// replay (200 + the replay header). Any other state is a 409; a missing
+    /// item is a 404 and another type a 400 with
+    /// <c>errorCode: wrong-work-item-type</c>, as for <see cref="LogDecision"/>.
+    /// </summary>
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > ConfirmContact(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationConfirmContactService confirmContactService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await confirmContactService.ConfirmContactAsync(
+            id,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[WorkItemEndpoints.IdempotentReplayHeader] = "true";
+        }
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        return DecisionProblem(result, ConfirmContactProblemTitle);
+    }
+
+    /// <summary>
+    /// The ProblemDetails for a failed determination step (RA-410 /decision,
+    /// RA-527 /confirm-contact). Both share one failure vocabulary.
+    /// </summary>
+    private static ProblemHttpResult DecisionProblem(WorkItemActionResult result, string title)
+    {
         var decisionStatus = result.FailureCode switch
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
@@ -674,12 +687,10 @@ internal static class ReAccreditationEndpoints
             // errorCode is attached: the frontend shows a generic try-again.
             WorkItemActionFailureCode.UpstreamNotificationFailed =>
                 StatusCodes.Status500InternalServerError,
-            // RA-475: the same 500 /approve has always given this failure (see
-            // the enum's own doc, and ApproveReAccreditation's switch). It was
-            // simply missing from this switch, so a decision blocked by the
-            // accreditation-number call answered 400 while the identical failure on
-            // /approve answered 500 — and management-fe reads a 400 as a client
-            // validation problem.
+            // RA-475: the backend accreditation-number call failed (or timed
+            // out) before anything was persisted — a server-side dependency
+            // problem, not a malformed request, so a generic 500 rather than
+            // the 400 management-fe reads as a client validation problem.
             WorkItemActionFailureCode.AccreditationNumberUnavailable =>
                 StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
@@ -694,7 +705,7 @@ internal static class ReAccreditationEndpoints
                 : null;
 
         return TypedResults.Problem(
-            title: LogDecisionProblemTitle,
+            title: title,
             detail: result.Message,
             statusCode: decisionStatus,
             extensions: decisionExtensions
