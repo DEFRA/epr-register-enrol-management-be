@@ -677,7 +677,7 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_sends_Decision_template_on_approve()
+    public async Task OnActionAppliedAsync_sends_Decision_template_on_confirm_contact_approved()
     {
         // RA-581: the Decision template was simplified to a generic "a
         // decision has been made, check the service" message — it no longer
@@ -685,6 +685,8 @@ public class ReAccreditationNotificationHookTests
         // NotifyTemplateContract.RequiredPlaceholders["Decision"]).
         // RA-211: reject deliberately sends no notification at all — see
         // OnActionAppliedAsync_reject_does_not_call_notify_client below.
+        // RA-527: sent at step 2 (confirm applicant contact), alongside the
+        // GRANTED status, never at the step 1 determination.
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
@@ -703,8 +705,8 @@ public class ReAccreditationNotificationHookTests
 
         await sut.OnActionAppliedAsync(
             workItem,
-            "approve",
-            fromStateId: "awaiting-decision",
+            "confirm-contact-approved",
+            fromStateId: "approved-pending-contact",
             s_user,
             ct
         );
@@ -757,7 +759,7 @@ public class ReAccreditationNotificationHookTests
         };
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(workItem, "approve", fromStateId: "submitted", s_user, ct);
+        await sut.OnActionAppliedAsync(workItem, "confirm-contact-approved", fromStateId: "approved-pending-contact", s_user, ct);
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()
@@ -773,18 +775,26 @@ public class ReAccreditationNotificationHookTests
     // re-add is caught. The reject transition itself (and its own
     // action-applied audit entry) is a WorkItemService concern, exercised
     // separately in ReAccreditationLifecycleTests; this hook only owns the
-    // notification side-effect and must produce none for reject.
-    [Fact]
-    public async Task OnActionAppliedAsync_reject_does_not_call_notify_client()
+    // notification side-effect and must produce none for a refusal. RA-527:
+    // a refusal is two steps now, and neither step emails.
+    [Theory]
+    [InlineData("reject", "awaiting-decision", "rejected")]
+    [InlineData("make-determination-rejected", "awaiting-decision", "rejected-pending-contact")]
+    [InlineData("confirm-contact-rejected", "rejected-pending-contact", "rejected")]
+    public async Task OnActionAppliedAsync_a_refusal_does_not_call_notify_client(
+        string actionId,
+        string fromStateId,
+        string stateId
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
 
-        var workItem = BuildWorkItem(stateId: "rejected");
+        var workItem = BuildWorkItem(stateId: stateId);
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(workItem, "reject", "awaiting-decision", s_user, ct);
+        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId, s_user, ct);
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()

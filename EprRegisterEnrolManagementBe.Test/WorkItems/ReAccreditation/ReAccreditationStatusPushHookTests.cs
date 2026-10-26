@@ -185,14 +185,15 @@ public class ReAccreditationStatusPushHookTests
 
     [Theory]
     [InlineData("submit-for-decision", "awaiting-decision", "assessment-in-progress")]
-    [InlineData("approve", "approved", "awaiting-decision")]
-    [InlineData("reject", "rejected", "awaiting-decision")]
+    [InlineData("confirm-contact-rejected", "rejected", "rejected-pending-contact")]
+    [InlineData("confirm-contact-approved", "approved", "approved-pending-contact")]
     public async Task OnActionAppliedAsync_ignores_the_decision_actions(
         string actionId, string toStateId, string fromStateId)
     {
-        // epr-p86e / RA-410: the three decision actions are now owned by
-        // ReAccreditationLogDecisionService, which fires the operator-journey
-        // push ONCE as a pre-commit gate. This hook must NOT push for any of
+        // epr-p86e / RA-410: the decision actions are owned by the service
+        // that applies the outcome (RA-527's ReAccreditationConfirmContactService,
+        // step 2 of either outcome), which fires the operator-journey push ONCE as a
+        // pre-commit gate. This hook must NOT push for any of
         // them, or the item double-pushes (submit-for-decision + approve/reject)
         // — the bug that stranded applications in 'awaiting-decision' when the
         // operator journey was down.
@@ -223,6 +224,30 @@ public class ReAccreditationStatusPushHookTests
         var workItem = BuildWorkItem("queried", actionId, "Some action", "submitted");
 
         await sut.Hook.OnActionAppliedAsync(workItem, actionId, "submitted", s_user, ct);
+
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
+    }
+
+    [Theory]
+    [InlineData("approved-pending-contact", "make-determination-approved", "Make determination: Approved")]
+    [InlineData("rejected-pending-contact", "make-determination-rejected", "Make determination: Refused")]
+    public async Task OnActionAppliedAsync_never_pushes_a_step_one_determination(
+        string toStateId, string actionId, string actionDisplayName)
+    {
+        // RA-527: step 1 of either outcome records the determination in the
+        // Case Management service only.
+        // The operator must not learn the outcome before the regulator has
+        // contacted them, so the pending state is never pushed.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = BuildSut();
+        var workItem = BuildWorkItem(
+            toStateId,
+            actionId,
+            actionDisplayName,
+            "awaiting-decision");
+
+        await sut.Hook.OnActionAppliedAsync(
+            workItem, actionId, "awaiting-decision", s_user, ct);
 
         await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
     }

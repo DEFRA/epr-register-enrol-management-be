@@ -32,10 +32,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// transition is excluded automatically instead of needing this hook
 /// updated in lockstep.
 ///
-/// epr-p86e / RA-410: the three decision actions (<c>submit-for-decision</c>,
-/// <c>approve</c>, <c>reject</c>) are also excluded — see
-/// <see cref="BuildExcludedActionIds"/>. Their operator-journey push is owned
-/// by <see cref="ReAccreditationLogDecisionService"/>, which fires it exactly
+/// epr-p86e / RA-410: the decision actions (<c>submit-for-decision</c> and,
+/// RA-527, <c>confirm-contact-approved</c> / <c>confirm-contact-rejected</c>)
+/// are also excluded — see <see cref="BuildExcludedActionIds"/>. Their
+/// operator-journey push is owned by the service that applies the outcome
+/// (<see cref="ReAccreditationConfirmContactService"/>), which fires it exactly
 /// once as a pre-commit gate for the final outcome; this hook pushing again
 /// after each committed hop was the double-push that stranded applications in
 /// <c>awaiting-decision</c> when the operator journey was down.
@@ -326,27 +327,39 @@ internal sealed class ReAccreditationStatusPushHook(
                 continue;
             }
 
+            // RA-527: a move onto a pending-contact state (approved or
+            // refused) is step 1 of a determination. It is recorded in the
+            // Case Management service only — the operator must not see the
+            // outcome before the regulator has contacted them — so a pending
+            // state is never pushed.
             if (string.Equals(transition.ToStateId, "queried", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(transition.ToStateId, "withdrawn", StringComparison.OrdinalIgnoreCase))
+                || string.Equals(transition.ToStateId, "withdrawn", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    transition.ToStateId,
+                    ReAccreditationType.ApprovedPendingContactStateId,
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    transition.ToStateId,
+                    ReAccreditationType.RejectedPendingContactStateId,
+                    StringComparison.OrdinalIgnoreCase))
             {
                 excluded.Add(transition.ActionId);
             }
         }
 
-        // epr-p86e / RA-410: the three decision actions are excluded here so
-        // this post-action hook never pushes for them. The operator-journey
-        // push for a decision is owned by ReAccreditationLogDecisionService,
-        // which fires it exactly ONCE as a pre-commit gate for the final
-        // outcome — before either internal hop is persisted. Left in, this
-        // hook would push again after each committed transition, which is the
-        // double-push (submit-for-decision + approve/reject) that stranded
+        // epr-p86e / RA-410: the decision actions are excluded here so this
+        // post-action hook never pushes for them. RA-527: the operator-journey
+        // push for a final outcome is owned by
+        // ReAccreditationConfirmContactService (step 2, confirm-contact-approved
+        // / confirm-contact-rejected), which fires it exactly ONCE as a
+        // pre-commit gate, before anything is persisted. Left in, this hook
+        // would push again after the committed transition — the double-push
+        // (submit-for-decision + approve/reject) that once stranded
         // applications in 'awaiting-decision' when the operator journey was
-        // unreachable. 'approve' has no declared transition (it is handled by
-        // ReAccreditationApprovalService), so it must be listed literally
-        // rather than derived from the transition set.
+        // unreachable.
         excluded.Add("submit-for-decision");
-        excluded.Add("approve");
-        excluded.Add("reject");
+        excluded.Add(ReAccreditationType.ConfirmContactApprovedActionId);
+        excluded.Add(ReAccreditationType.ConfirmContactRejectedActionId);
         return excluded;
     }
 
@@ -372,10 +385,8 @@ internal sealed class ReAccreditationStatusPushHook(
     /// <see cref="ReAccreditationApprovalService"/>, or
     /// <see cref="ReAccreditationDulyMadeHook"/>) always appends immediately
     /// before invoking post-action hooks. Preferred over a template
-    /// transition lookup because some actions this hook fires for (e.g.
-    /// <c>approve</c>, <c>duly-make</c>) are handled entirely outside the
-    /// declared transition set and have no <see cref="WorkItemTransition"/>
-    /// to look up. Falls back to the raw action id if no matching entry is
+    /// transition lookup because an action may be applied outside the
+    /// generic engine, and its own entry is the label it was applied under. Falls back to the raw action id if no matching entry is
     /// found.
     /// </summary>
     private static string ResolveActionDisplayName(WorkItem workItem, string actionId)

@@ -4,7 +4,6 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -12,34 +11,27 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// <summary>
 /// RA-410: one caller-visible call carries a re-accreditation application from
 /// <c>assessment-in-progress</c>, through the <c>awaiting-decision</c> hop, to
-/// its terminal state — and approving still runs the bespoke approval
-/// workflow rather than a bare engine transition.
+/// its determination.
+///
+/// RA-527: a determination is step 1 of two, for either outcome. An Approved
+/// determination mints the number and lands in <c>approved-pending-contact</c>
+/// through the approval service; a Refused one mints nothing and lands in
+/// <c>rejected-pending-contact</c> through the refusal service. Neither pushes
+/// to the operator journey — the push-before-write rules live with step 2, in
+/// <see cref="ReAccreditationConfirmContactServiceTests"/>.
 /// </summary>
 public class ReAccreditationLogDecisionServiceTests
 {
-    [Fact]
-    public void Constructor_defaults_time_provider_when_omitted()
-    {
-        // Covers the `timeProvider ?? TimeProvider.System` branch, which the
-        // Harness below never exercises because it always supplies a
-        // FakeTimeProvider explicitly. The assignment runs at construction,
-        // so merely building the service exercises the branch.
-        var service = new ReAccreditationLogDecisionService(
-            Substitute.For<IWorkItemPersistence>(),
-            Substitute.For<IWorkItemService>(),
-            Substitute.For<IReAccreditationApprovalService>(),
-            Substitute.For<IOperatorBackendPushAdapter>(),
-            Substitute.For<IWorkItemAuditAppender>(),
-            NullLogger<ReAccreditationLogDecisionService>.Instance
-        );
-
-        Assert.NotNull(service);
-    }
-
     // --------------------------- the two-hop happy paths ---------------------------
 
+    /// <summary>
+    /// RA-527: approving records the determination (step 1) through the
+    /// approval service, which stamps the number and moves the item to
+    /// approved-pending-contact. It never applies the outcome: ApproveAsync
+    /// (SLA stop, publishing, Decision email) is step 2's job.
+    /// </summary>
     [Fact]
-    public async Task Approving_from_assessment_applies_submit_for_decision_then_the_approval_service()
+    public async Task Approving_from_assessment_applies_submit_for_decision_then_records_the_step_one_approval()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(stateId: "assessment-in-progress");
@@ -52,24 +44,28 @@ public class ReAccreditationLogDecisionServiceTests
         );
 
         Assert.True(result.IsSuccess);
-        await harness
-            .Engine.Received(1)
-            .ApplyActionAsync(harness.WorkItem.Id, "submit-for-decision", harness.User, ct);
-        // The accreditation id, SLA clock stop, publishing job and decision
-        // email all live in the approval service. Reaching 'approved' through
-        // the engine instead would silently drop every one of them.
+        Assert.Equal(["submit-for-decision"], harness.AppliedActionIds);
         await harness
             .ApprovalService.Received(1)
-            .ApproveAsync(
+            .RecordApprovedDeterminationAsync(
                 harness.WorkItem.Id,
                 harness.User,
-                ct,
-                Arg.Any<AccreditationNumberResult?>()
+                Arg.Any<AccreditationNumberResult>(),
+                ct
             );
+        await harness
+            .ApprovalService.DidNotReceiveWithAnyArgs()
+            .ApproveAsync(default, default!, default, ct);
     }
 
+    /// <summary>
+    /// RA-527: refusing records the determination (step 1) through the
+    /// refusal service, which moves the item to rejected-pending-contact. It
+    /// never applies the outcome: RefuseAsync (SLA stop) is step 2's job, and
+    /// nothing goes near the approval service.
+    /// </summary>
     [Fact]
-    public async Task Rejecting_from_assessment_applies_submit_for_decision_then_reject()
+    public async Task Refusing_from_assessment_applies_submit_for_decision_then_records_the_step_one_refusal()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(stateId: "assessment-in-progress");
@@ -82,23 +78,23 @@ public class ReAccreditationLogDecisionServiceTests
         );
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(["submit-for-decision", "reject"], harness.AppliedActionIds);
+        Assert.Equal(["submit-for-decision"], harness.AppliedActionIds);
         await harness
-            .ApprovalService.DidNotReceiveWithAnyArgs()
-            .ApproveAsync(default, default!, ct);
+            .RefusalService.Received(1)
+            .RecordRefusedDeterminationAsync(harness.WorkItem.Id, harness.User, ct);
+        await harness
+            .RefusalService.DidNotReceiveWithAnyArgs()
+            .RefuseAsync(default, default!, default, ct);
+        Assert.Empty(harness.ApprovalService.ReceivedCalls());
     }
 
     /// <summary>
-    /// The ordering is the point of the whole service: for an Approved
-    /// outcome the accreditation number must be minted before anything else,
-    /// because the backend's accreditation-number endpoint refuses once the
-    /// application is terminal — and the operator-journey push right after it
-    /// is exactly what makes it terminal. The push is still the gate for the
-    /// rest of the sequence: it must land before the hop, which in turn lands
-    /// before the outcome — never after or alongside.
+    /// RA-527: an approval mints its number before anything is written, then
+    /// takes the hop, then records the determination. There is no
+    /// operator-journey push at step 1 at all.
     /// </summary>
     [Fact]
-    public async Task Resolve_number_precedes_registration_accreditation_push_which_precedes_submit_for_decision_which_precedes_the_outcome()
+    public async Task Approving_resolves_the_number_then_takes_the_hop_then_records_the_determination()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(stateId: "assessment-in-progress");
@@ -111,9 +107,30 @@ public class ReAccreditationLogDecisionServiceTests
         );
 
         Assert.Equal(
-            ["resolve-number", "registration-accreditation-push", "submit-for-decision", "approve"],
+            ["resolve-number", "submit-for-decision", "record-approved-determination"],
             harness.OrderedCalls
         );
+    }
+
+    /// <summary>
+    /// RA-527: a refusal takes the hop, then records the determination. There
+    /// is no operator-journey push at step 1 (and none at all in this
+    /// service, which has no push adapter).
+    /// </summary>
+    [Fact]
+    public async Task Refusing_takes_the_hop_then_records_the_determination()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+
+        await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Rejected,
+            harness.User,
+            ct
+        );
+
+        Assert.Equal(["submit-for-decision", "record-refused-determination"], harness.OrderedCalls);
     }
 
     /// <summary>
@@ -141,14 +158,12 @@ public class ReAccreditationLogDecisionServiceTests
     }
 
     /// <summary>
-    /// epr-r9oy: the number minted ahead of the Registration & Accreditation service push is the SAME instance
-    /// forwarded to ApproveAsync — ApproveAsync must not resolve its own,
-    /// second number. A second resolution would hit the backend's
-    /// accreditation-number endpoint after the push above has already made
-    /// the application terminal, and that call always fails.
+    /// The number minted before anything is written is the SAME instance
+    /// handed to the step 1 write — the approval service must not mint a
+    /// second one.
     /// </summary>
     [Fact]
-    public async Task The_number_resolved_ahead_of_the_push_is_forwarded_unchanged_to_approve()
+    public async Task The_number_resolved_up_front_is_forwarded_unchanged_to_the_step_one_write()
     {
         var ct = TestContext.Current.CancellationToken;
         var expected = AccreditationNumberResult.Success("A25ER5000270036WO");
@@ -161,20 +176,18 @@ public class ReAccreditationLogDecisionServiceTests
             ct
         );
 
-        Assert.Same(expected, harness.LastApproveNumberArgument);
+        Assert.Same(expected, harness.LastRecordedNumberArgument);
         await harness
             .ApprovalService.Received(1)
             .ResolveAccreditationNumberAsync(harness.WorkItem.Id, Arg.Any<Guid>(), ct);
     }
 
     /// <summary>
-    /// Mirrors the Registration & Accreditation service push-failure test below: a failed mint must also
-    /// abandon the decision before anything is written, and — critically —
-    /// before the Registration & Accreditation service push, which would otherwise mark the application
-    /// terminal on the backend for a decision that never actually completed.
+    /// A failed mint abandons the determination before anything is written,
+    /// so the caller can simply retry.
     /// </summary>
     [Fact]
-    public async Task A_number_resolution_failure_abandons_the_decision_before_notifying_the_operator_journey()
+    public async Task A_number_resolution_failure_abandons_the_decision_before_anything_is_written()
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(
@@ -192,241 +205,9 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.AccreditationNumberUnavailable, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
-        Assert.DoesNotContain("registration-accreditation-push", harness.OrderedCalls);
-        await harness
-            .PushAdapter.DidNotReceiveWithAnyArgs()
-            .PushDecisionStatusChangedAsync(
-                default,
-                default,
-                default!,
-                default!,
-                default!,
-                default!,
-                default!,
-                default,
-                ct
-            );
         await harness
             .ApprovalService.DidNotReceiveWithAnyArgs()
-            .ApproveAsync(default, default!, ct);
-    }
-
-    // --------------------------- the operator-journey gate ---------------------------
-
-    /// <summary>
-    /// epr-p86e / RA-410: the Registration & Accreditation service push is fired exactly once — for the final
-    /// decision only, never for the internal submit-for-decision waypoint — and
-    /// with the deliberate 'awaiting-decision' fromState contract-match.
-    /// </summary>
-    [Theory]
-    [InlineData(true, "approve", "approved")]
-    [InlineData(false, "reject", "rejected")]
-    public async Task The_registration_accreditation_push_fires_exactly_once_for_the_final_decision(
-        bool approve,
-        string expectedActionId,
-        string expectedToStateId
-    )
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(stateId: "assessment-in-progress");
-
-        await harness.Service.LogDecisionAsync(
-            harness.WorkItem.Id,
-            Outcome(approve),
-            harness.User,
-            ct
-        );
-
-        Assert.Equal(1, harness.OrderedCalls.Count(c => c == "registration-accreditation-push"));
-        await harness
-            .PushAdapter.Received(1)
-            .PushDecisionStatusChangedAsync(
-                harness.WorkItem.Id,
-                Arg.Any<Guid>(),
-                "awaiting-decision",
-                expectedToStateId,
-                Arg.Any<string>(),
-                expectedActionId,
-                Arg.Any<string>(),
-                Arg.Any<DateTime>(),
-                ct
-            );
-    }
-
-    /// <summary>
-    /// The whole point: the Registration & Accreditation service unreachable after the retry budget means the
-    /// decision is abandoned before anything is written. No hop, no approval,
-    /// the item stays put, and the caller gets an UpstreamNotificationFailed
-    /// the endpoint maps to a 500.
-    /// </summary>
-    [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task A_registration_accreditation_push_failure_records_no_state_change_and_maps_to_500(bool approve)
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(
-            stateId: "assessment-in-progress",
-            pushResult: OperatorBackendPushResult.Failure("operator journey unreachable")
-        );
-
-        var result = await harness.Service.LogDecisionAsync(
-            harness.WorkItem.Id,
-            Outcome(approve),
-            harness.User,
-            ct
-        );
-
-        Assert.False(result.IsSuccess);
-        Assert.Equal(WorkItemActionFailureCode.UpstreamNotificationFailed, result.FailureCode);
-        Assert.Empty(harness.AppliedActionIds);
-        await harness
-            .ApprovalService.DidNotReceiveWithAnyArgs()
-            .ApproveAsync(default, default!, ct);
-        // A status-push-failed audit entry is still recorded for support.
-        await harness
-            .AuditAppender.Received(1)
-            .AppendAsync(
-                harness.WorkItem.Id,
-                "status-push-failed",
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string?>>(),
-                harness.User,
-                ct
-            );
-    }
-
-    /// <summary>
-    /// A disabled push (Skipped) is a pass, not a failure — a decision must
-    /// still complete in an environment where the Registration & Accreditation service push is switched off, and
-    /// it is recorded under the non-alerting status-push-skipped outcome.
-    /// </summary>
-    [Fact]
-    public async Task A_skipped_registration_accreditation_push_still_completes_the_decision()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(
-            stateId: "assessment-in-progress",
-            pushResult: OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false.")
-        );
-
-        var result = await harness.Service.LogDecisionAsync(
-            harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
-            harness.User,
-            ct
-        );
-
-        Assert.True(result.IsSuccess);
-        await harness
-            .ApprovalService.Received(1)
-            .ApproveAsync(
-                harness.WorkItem.Id,
-                harness.User,
-                ct,
-                Arg.Any<AccreditationNumberResult?>()
-            );
-        await harness
-            .AuditAppender.Received(1)
-            .AppendAsync(
-                harness.WorkItem.Id,
-                "status-push-skipped",
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string?>>(),
-                harness.User,
-                ct
-            );
-    }
-
-    /// <summary>
-    /// On a successful decision a status-push-sent audit entry is recorded, so
-    /// the single decision push is still visible in the audit trail now the
-    /// post-action hook no longer fires for it.
-    /// </summary>
-    [Fact]
-    public async Task A_successful_decision_records_a_status_push_sent_audit_entry()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(stateId: "assessment-in-progress");
-
-        await harness.Service.LogDecisionAsync(
-            harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
-            harness.User,
-            ct
-        );
-
-        await harness
-            .AuditAppender.Received(1)
-            .AppendAsync(
-                harness.WorkItem.Id,
-                "status-push-sent",
-                "Status sent to the Registration & Accreditation service",
-                Arg.Any<Dictionary<string, string?>>(),
-                harness.User,
-                ct
-            );
-    }
-
-    [Fact]
-    public async Task A_decision_still_succeeds_when_the_status_push_audit_entry_fails_to_persist()
-    {
-        // Covers AppendStatusPushAuditAsync's `if (!appended)` warning
-        // branch: the decision itself must not fail just because the
-        // follow-up audit write did.
-        var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(stateId: "assessment-in-progress");
-        harness
-            .AuditAppender.AppendAsync(
-                Arg.Any<Guid>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<Dictionary<string, string?>>(),
-                Arg.Any<ClaimsPrincipal>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(false);
-
-        var result = await harness.Service.LogDecisionAsync(
-            harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
-            harness.User,
-            ct
-        );
-
-        Assert.True(result.IsSuccess);
-    }
-
-    /// <summary>
-    /// The push is gated behind the same guards as the hops: a decision refused
-    /// on a guard (here a conflicting terminal outcome) must not notify the Registration & Accreditation service.
-    /// </summary>
-    [Fact]
-    public async Task A_guard_failure_does_not_notify_the_operator_journey()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var harness = new Harness(stateId: "approved");
-
-        await harness.Service.LogDecisionAsync(
-            harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Rejected,
-            harness.User,
-            ct
-        );
-
-        await harness
-            .PushAdapter.DidNotReceiveWithAnyArgs()
-            .PushDecisionStatusChangedAsync(
-                default,
-                default,
-                default!,
-                default!,
-                default!,
-                default!,
-                default!,
-                default,
-                ct
-            );
+            .RecordApprovedDeterminationAsync(default, default!, default!, ct);
     }
 
     // --------------------------- resumability ---------------------------
@@ -457,14 +238,20 @@ public class ReAccreditationLogDecisionServiceTests
 
         Assert.True(result.IsSuccess);
         Assert.DoesNotContain("submit-for-decision", harness.AppliedActionIds);
+        Assert.Equal(
+            [approve ? "record-approved-determination" : "record-refused-determination"],
+            harness.OrderedCalls.Where(c => c.StartsWith("record-", StringComparison.Ordinal))
+        );
     }
 
     /// <summary>
     /// A failed hop must write nothing and record no decision, so the caller
     /// can simply retry.
     /// </summary>
-    [Fact]
-    public async Task A_failed_submit_for_decision_records_no_outcome()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_failed_submit_for_decision_records_no_outcome(bool approve)
     {
         var ct = TestContext.Current.CancellationToken;
         var harness = new Harness(stateId: "assessment-in-progress");
@@ -481,7 +268,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            Outcome(approve),
             harness.User,
             ct
         );
@@ -490,12 +277,23 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
         await harness
             .ApprovalService.DidNotReceiveWithAnyArgs()
-            .ApproveAsync(default, default!, ct);
+            .RecordApprovedDeterminationAsync(default, default!, default!, ct);
+        await harness
+            .RefusalService.DidNotReceiveWithAnyArgs()
+            .RecordRefusedDeterminationAsync(default, default!, ct);
     }
 
     // --------------------------- idempotency and conflict ---------------------------
 
+    /// <summary>
+    /// A double-click or a client retrying a response it never received must
+    /// not fail. RA-527: each outcome replays on the pending-contact state its
+    /// step 1 lands in and (task 007, as on main) on its own final state —
+    /// nothing moves back to step 1, nothing is minted or written.
+    /// </summary>
     [Theory]
+    [InlineData("approved-pending-contact", true)]
+    [InlineData("rejected-pending-contact", false)]
     [InlineData("approved", true)]
     [InlineData("rejected", false)]
     public async Task Replaying_the_same_outcome_is_an_idempotent_no_op(
@@ -517,22 +315,21 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.True(result.IsSuccess);
         Assert.True(result.IsIdempotentReplay);
         Assert.Empty(harness.AppliedActionIds);
-        await harness
-            .ApprovalService.DidNotReceiveWithAnyArgs()
-            .ApproveAsync(default, default!, ct);
+        Assert.Empty(harness.OrderedCalls);
     }
 
     /// <summary>
     /// The opposite outcome on an already-decided application is a conflict,
-    /// never a replay and never last-write-wins. Reporting success would tell
-    /// a caseworker their refusal landed on an application that is in fact
-    /// approved and carrying an issued accreditation id.
+    /// never a replay and never last-write-wins, as on main; so is any
+    /// decision on a withdrawn application. (The same outcome on its own final
+    /// state is a replay: see above.)
     /// </summary>
     [Theory]
     [InlineData("approved", false)]
     [InlineData("rejected", true)]
     [InlineData("withdrawn", true)]
-    public async Task A_conflicting_outcome_on_a_decided_application_is_refused(
+    [InlineData("withdrawn", false)]
+    public async Task A_decision_on_a_closed_application_is_refused(
         string stateId,
         bool approve
     )
@@ -551,9 +348,144 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.TerminalState, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
-        await harness
-            .ApprovalService.DidNotReceiveWithAnyArgs()
-            .ApproveAsync(default, default!, ct);
+        Assert.Empty(harness.OrderedCalls);
+    }
+
+    /// <summary>
+    /// RA-527: the opposite outcome on an application already determined at
+    /// step 1 is a conflict. The determination is final; nothing is minted,
+    /// pushed or written.
+    /// </summary>
+    [Theory]
+    [InlineData("approved-pending-contact", false)]
+    [InlineData("rejected-pending-contact", true)]
+    public async Task The_opposite_outcome_on_an_application_pending_contact_is_refused(
+        string stateId,
+        bool approve
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: stateId);
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            Outcome(approve),
+            harness.User,
+            ct
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        Assert.Empty(harness.AppliedActionIds);
+        Assert.Empty(harness.OrderedCalls);
+    }
+
+    /// <summary>
+    /// RA-527: every check runs before any side effect. An item whose frozen
+    /// snapshot predates v17 cannot take its outcome's step 1 transition, so
+    /// it is refused before a number is minted or the hop is taken —
+    /// otherwise it would be parked in awaiting-decision and then refused.
+    /// </summary>
+    [Theory]
+    [InlineData(true, "make-determination-approved")]
+    [InlineData(false, "make-determination-rejected")]
+    public async Task A_determination_on_pre_v17_rules_is_refused_before_any_side_effect(
+        bool approve,
+        string stepOneActionId
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+        var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
+        harness.WorkItem.TemplateSnapshot = new WorkItemTemplateSnapshot
+        {
+            TemplateVersion = "v16",
+            States = live.States,
+            Transitions = live.Transitions.Where(t => t.ActionId != stepOneActionId).ToList(),
+        };
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            Outcome(approve),
+            harness.User,
+            ct
+        );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        Assert.Empty(harness.OrderedCalls);
+    }
+
+    /// <summary>
+    /// RA-527 task 007 (restored from main's single-step approve): an item
+    /// not yet approved that already carries an accreditation id is refused
+    /// with "Manual investigation required" before a number is minted or the
+    /// hop is taken. Only the retired generator's legacy shape is treated as
+    /// unset.
+    /// </summary>
+    [Theory]
+    [InlineData("A25ER5000270036WO")]
+    [InlineData("ACC-2025-A-DEADBEEF")]
+    public async Task Approving_an_item_that_already_carries_an_accreditation_id_is_refused_before_the_mint(
+        string existingId
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+        harness.WorkItem.Payload["accreditationId"] = existingId;
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Approved,
+            harness.User,
+            ct
+        );
+
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
+        Assert.Contains("Manual investigation required", result.Message);
+        Assert.Empty(harness.AppliedActionIds);
+        Assert.Empty(harness.OrderedCalls);
+    }
+
+    [Fact]
+    public async Task Approving_an_item_with_a_legacy_format_accreditation_id_mints_a_real_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+        harness.WorkItem.Payload["accreditationId"] = "A25ER00000000000";
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Approved,
+            harness.User,
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
+        Assert.Equal(
+            ["resolve-number", "submit-for-decision", "record-approved-determination"],
+            harness.OrderedCalls
+        );
+    }
+
+    /// <summary>
+    /// A refusal mints nothing, so an existing id does not block it.
+    /// </summary>
+    [Fact]
+    public async Task Refusing_an_item_that_carries_an_accreditation_id_is_not_blocked()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness(stateId: "assessment-in-progress");
+        harness.WorkItem.Payload["accreditationId"] = "A25ER5000270036WO";
+
+        var result = await harness.Service.LogDecisionAsync(
+            harness.WorkItem.Id,
+            ReAccreditationDecisionOutcome.Rejected,
+            harness.User,
+            ct
+        );
+
+        Assert.True(result.IsSuccess, result.Message);
     }
 
     // --------------------------- guards ---------------------------
@@ -578,6 +510,7 @@ public class ReAccreditationLogDecisionServiceTests
         Assert.False(result.IsSuccess);
         Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         Assert.Empty(harness.AppliedActionIds);
+        Assert.Empty(harness.OrderedCalls);
     }
 
     [Fact]
@@ -648,7 +581,6 @@ public class ReAccreditationLogDecisionServiceTests
             bool seedWorkItem = true,
             string typeId = ReAccreditationType.Id,
             bool withUserId = true,
-            OperatorBackendPushResult? pushResult = null,
             AccreditationNumberResult? numberResult = null
         )
         {
@@ -663,39 +595,6 @@ public class ReAccreditationLogDecisionServiceTests
             Persistence
                 .GetByIdAsync(WorkItem.Id, Arg.Any<CancellationToken>())
                 .Returns(seedWorkItem ? WorkItem : null);
-
-            // The pre-commit operator-journey gate. Default is a successful
-            // push so the happy paths proceed; failure/skip paths override it.
-            PushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
-            PushAdapter
-                .PushDecisionStatusChangedAsync(
-                    Arg.Any<Guid>(),
-                    Arg.Any<Guid>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<DateTime>(),
-                    Arg.Any<CancellationToken>()
-                )
-                .Returns(call =>
-                {
-                    OrderedCalls.Add("registration-accreditation-push");
-                    return pushResult ?? OperatorBackendPushResult.Success();
-                });
-
-            AuditAppender = Substitute.For<IWorkItemAuditAppender>();
-            AuditAppender
-                .AppendAsync(
-                    Arg.Any<Guid>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<Dictionary<string, string?>>(),
-                    Arg.Any<ClaimsPrincipal>(),
-                    Arg.Any<CancellationToken>()
-                )
-                .Returns(true);
 
             Engine = Substitute.For<IWorkItemService>();
             Engine
@@ -714,8 +613,7 @@ public class ReAccreditationLogDecisionServiceTests
                 });
 
             ApprovalService = Substitute.For<IReAccreditationApprovalService>();
-            // epr-r9oy: minted BEFORE the Registration & Accreditation service push for an Approved outcome — see
-            // ResolveAccreditationNumberAsync_precedes_registration_accreditation_push_for_approved below.
+            // Minted before anything is written for an Approved outcome.
             // Default is a successful mint so the happy paths proceed; the
             // failure path overrides it via the numberResult parameter.
             ApprovalService
@@ -730,16 +628,29 @@ public class ReAccreditationLogDecisionServiceTests
                     return numberResult ?? AccreditationNumberResult.Success("A25ER5000270036WO");
                 });
             ApprovalService
-                .ApproveAsync(
+                .RecordApprovedDeterminationAsync(
                     Arg.Any<Guid>(),
                     Arg.Any<ClaimsPrincipal>(),
-                    Arg.Any<CancellationToken>(),
-                    Arg.Any<AccreditationNumberResult?>()
+                    Arg.Any<AccreditationNumberResult>(),
+                    Arg.Any<CancellationToken>()
                 )
                 .Returns(call =>
                 {
-                    OrderedCalls.Add("approve");
-                    LastApproveNumberArgument = call.ArgAt<AccreditationNumberResult?>(3);
+                    OrderedCalls.Add("record-approved-determination");
+                    LastRecordedNumberArgument = call.ArgAt<AccreditationNumberResult>(2);
+                    return WorkItemActionResult.Success(WorkItem);
+                });
+
+            RefusalService = Substitute.For<IReAccreditationRefusalService>();
+            RefusalService
+                .RecordRefusedDeterminationAsync(
+                    Arg.Any<Guid>(),
+                    Arg.Any<ClaimsPrincipal>(),
+                    Arg.Any<CancellationToken>()
+                )
+                .Returns(_ =>
+                {
+                    OrderedCalls.Add("record-refused-determination");
                     return WorkItemActionResult.Success(WorkItem);
                 });
 
@@ -755,10 +666,8 @@ public class ReAccreditationLogDecisionServiceTests
                 Persistence,
                 Engine,
                 ApprovalService,
-                PushAdapter,
-                AuditAppender,
-                NullLogger<ReAccreditationLogDecisionService>.Instance,
-                new FakeTimeProvider()
+                RefusalService,
+                NullLogger<ReAccreditationLogDecisionService>.Instance
             );
         }
 
@@ -766,12 +675,11 @@ public class ReAccreditationLogDecisionServiceTests
         public IWorkItemPersistence Persistence { get; }
         public IWorkItemService Engine { get; }
         public IReAccreditationApprovalService ApprovalService { get; }
-        public IOperatorBackendPushAdapter PushAdapter { get; }
-        public IWorkItemAuditAppender AuditAppender { get; }
+        public IReAccreditationRefusalService RefusalService { get; }
         public ClaimsPrincipal User { get; }
         public ReAccreditationLogDecisionService Service { get; }
         public List<string> AppliedActionIds { get; } = [];
         public List<string> OrderedCalls { get; } = [];
-        public AccreditationNumberResult? LastApproveNumberArgument { get; private set; }
+        public AccreditationNumberResult? LastRecordedNumberArgument { get; private set; }
     }
 }

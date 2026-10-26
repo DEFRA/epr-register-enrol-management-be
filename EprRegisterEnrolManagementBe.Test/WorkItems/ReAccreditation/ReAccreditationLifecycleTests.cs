@@ -143,20 +143,34 @@ public class ReAccreditationLifecycleTests
             (await engine.ApplyActionAsync(workItem.Id, "submit-for-decision", user, ct)).IsSuccess
         );
 
-        // RA-132: approve goes through the bespoke ReAccreditationApprovalService,
-        // not the generic engine — the generic engine no longer registers the
-        // approve transition so it cannot silently produce an item missing the
-        // accreditation id, SLA clock and audit entries.
-        Assert.True((await approvalService.ApproveAsync(workItem.Id, user, ct)).IsSuccess);
+        // RA-527 step 1: the determination is recorded with a freshly minted
+        // number, but the outcome is not applied yet.
+        var minted = AccreditationNumberResult.Success("A27ER5000270036WO");
+        Assert.True(
+            (await approvalService.RecordApprovedDeterminationAsync(workItem.Id, user, minted, ct)).IsSuccess
+        );
+        Assert.Equal("approved-pending-contact", workItem.StateId);
+
+        // RA-527 step 2 (confirm applicant contact) goes through the bespoke
+        // ReAccreditationApprovalService, not the generic engine — the
+        // confirm-contact transition is not caller-invocable, so the engine
+        // cannot produce an item missing the SLA clock stop and audit entries.
+        // It reuses the step 1 number.
+        Assert.True(
+            (await approvalService.ApproveAsync(workItem.Id, user, DateTimeOffset.UtcNow, ct)).IsSuccess
+        );
 
         Assert.Equal("approved", workItem.StateId);
+        Assert.Equal("A27ER5000270036WO", workItem.Payload["accreditationId"].AsString);
 
         // RA-410: no state contributes task-completed entries any more — the
         // task framework is gone, so the walk is shorter than it used to be.
         // 1 action-applied:duly-make + 1 sla-clock-started
         // + 1 action-applied:<start step> + 1 action-applied:submit-for-decision
-        // + 3 approval entries (action-applied, sla-clock-stopped, accreditation-issued) = 7 total.
-        Assert.Equal(7, workItem.AuditLog.Count);
+        // + 2 step 1 entries (action-applied, determination-made)
+        // + 4 step 2 entries (action-applied, applicant-contacted, sla-clock-stopped,
+        // accreditation-issued) = 10 total.
+        Assert.Equal(10, workItem.AuditLog.Count);
         Assert.Contains(
             workItem.AuditLog,
             e =>
@@ -167,7 +181,7 @@ public class ReAccreditationLifecycleTests
             workItem.AuditLog,
             e =>
                 e.Action == "action-applied"
-                && e.Details.GetValueOrDefault("actionId") == "approve"
+                && e.Details.GetValueOrDefault("actionId") == "confirm-contact-approved"
                 && e.Details.GetValueOrDefault("toStateId") == "approved"
         );
         Assert.All(
