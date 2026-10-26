@@ -199,6 +199,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // leaves its own distinct audit entry. Runs unconditionally, relying on its
         // own idempotency, same as every other backfill migration in this file.
         services.AddSingleton<IWorkItemMigration, ReAccreditationNationRepresentationMigration>();
+        // RA-691: one-off correction of two incorrectly sequenced 2027
+        // accreditation numbers. Gated like the epr-2uxy migration above (off
+        // by default, spot-check required, dry run unless apply is set), so
+        // it is safe to register unconditionally. Writes only
+        // payload.accreditationId plus an audit entry; no state change.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationAccreditationNumberCorrectionMigration>();
         // RA-132: module-scoped approval service that owns the bespoke
         // approval workflow (id issuance, SLA clock stop, queued publishing).
         // RA-410: module-scoped service that owns the single-call decision
