@@ -31,8 +31,11 @@ internal sealed class ReAccreditationChangePaymentDateService(
 ) : IReAccreditationChangePaymentDateService
 {
     private const int MaxAttempts = 3;
-    private const string ActionId = "change-payment-date";
-    private const string ActionDisplayName = "Change payment date";
+    // A dedicated audit action, not `action-applied`: this is not a state
+    // transition, and a transition-shaped entry would be mistaken for a resume
+    // entry by ReAccreditationUpdatedOrigin (same pattern as `sla-extended`).
+    private const string AuditAction = "payment-date-changed";
+    private const string AuditActionDisplayName = "Payment date changed";
     private const string DateFormat = "yyyy-MM-dd";
 
     public async Task<WorkItemActionResult> ChangePaymentDateAsync(
@@ -215,14 +218,10 @@ internal sealed class ReAccreditationChangePaymentDateService(
         workItem.AuditLog.Add(
             new WorkItemAuditEntry
             {
-                Action = "action-applied",
-                ActionDisplayName = "Action applied",
+                Action = AuditAction,
+                ActionDisplayName = AuditActionDisplayName,
                 Details = new Dictionary<string, string?>
                 {
-                    ["actionId"] = ActionId,
-                    ["actionDisplayName"] = ActionDisplayName,
-                    ["fromStateId"] = workItem.StateId,
-                    ["toStateId"] = workItem.StateId,
                     ["previousPaymentDate"] = previousPaymentDate.ToString(DateFormat),
                     ["paymentDate"] = paymentDate.ToString(DateFormat),
                     ["reason"] = reason,

@@ -2976,7 +2976,7 @@ public class ReAccreditationEndpointTests
         );
         Assert.Equal(newDate, persisted.Payload!["paymentDate"].AsString);
         var entry = Assert.Single(persisted.AuditLog);
-        Assert.Equal("change-payment-date", entry.Details["actionId"]);
+        Assert.Equal("payment-date-changed", entry.Action);
         Assert.Equal("Typo at duly making.", entry.Details["reason"]);
     }
 

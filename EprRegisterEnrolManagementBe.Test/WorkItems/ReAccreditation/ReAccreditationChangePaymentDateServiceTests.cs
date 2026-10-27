@@ -135,14 +135,13 @@ public class ReAccreditationChangePaymentDateServiceTests
         await service.ChangePaymentDateAsync(workItem.Id, s_newDate, Reason, User(), ct);
 
         var entry = Assert.Single(workItem.AuditLog);
-        Assert.Equal("action-applied", entry.Action);
+        Assert.Equal("payment-date-changed", entry.Action);
+        Assert.Equal("Payment date changed", entry.ActionDisplayName);
         Assert.Equal("alice-1", entry.CreatedBy);
         Assert.Equal("Alice Example", entry.CreatedByName);
         Assert.Equal("duly-made", entry.StateId);
-        Assert.Equal("change-payment-date", entry.Details["actionId"]);
-        Assert.Equal("Change payment date", entry.Details["actionDisplayName"]);
-        Assert.Equal("duly-made", entry.Details["fromStateId"]);
-        Assert.Equal("duly-made", entry.Details["toStateId"]);
+        Assert.DoesNotContain("fromStateId", entry.Details.Keys);
+        Assert.DoesNotContain("toStateId", entry.Details.Keys);
         Assert.Equal("2026-07-15", entry.Details["previousPaymentDate"]);
         Assert.Equal("2026-07-20", entry.Details["paymentDate"]);
         Assert.Equal(Reason, entry.Details["reason"]);
