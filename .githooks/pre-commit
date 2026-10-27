@@ -20,4 +20,6 @@ echo "pre-commit: dotnet format style --verify-no-changes"
 dotnet format style --verify-no-changes
 
 echo "pre-commit: dotnet test"
-dotnet test --nologo --verbosity quiet
+# No --nologo: under the MTP runner (global.json) dotnet test forwards it to
+# the test app, which rejects it as an unknown option (exit code 5).
+dotnet test --verbosity quiet
