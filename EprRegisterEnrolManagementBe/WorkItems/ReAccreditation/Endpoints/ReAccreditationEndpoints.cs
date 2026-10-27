@@ -68,6 +68,11 @@ internal static class ReAccreditationEndpoints
     // yyyy-MM-dd string, so 4 KiB is already absurdly generous.
     public const long MaxDulyMakeBodyBytes = 4 * 1024;
 
+    // RA-576: the change-payment-date endpoint also calls .DisableValidation(),
+    // so it carries its own size guard. A legitimate body is a date plus a
+    // reason of at most 200 words (~1.5 KiB); 16 KiB leaves ample headroom.
+    public const long MaxChangePaymentDateBodyBytes = 16 * 1024;
+
     // RA-410: same rationale as MaxDulyMakeBodyBytes — the decision endpoint
     // calls .DisableValidation() (it owns its own outcome validation so it can
     // attach a machine-readable errorCode the frontend switches on), so it must
@@ -94,6 +99,12 @@ internal static class ReAccreditationEndpoints
     /// title or the human-readable detail.
     /// </summary>
     public const string DulyMakeProblemTitle = "Could not complete duly making";
+
+    /// <summary>
+    /// RA-576: ProblemDetails title for every change-payment-date failure.
+    /// Constant for the same reason as <see cref="DulyMakeProblemTitle"/>.
+    /// </summary>
+    public const string ChangePaymentDateProblemTitle = "Could not change payment date";
 
     /// <summary>
     /// ProblemDetails title for every recycling-operations update failure.
@@ -131,6 +142,16 @@ internal static class ReAccreditationEndpoints
             .WithName("DulyMakeReAccreditation")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxDulyMakeBodyBytes))
+            .RequireAuthorization();
+
+        // RA-576: correct the payment date entered at duly making. Edits the
+        // payload and appends an audit entry only; state and SLA clock are
+        // untouched. No role restriction, like duly-make.
+        group
+            .MapPost("/{id:guid}/change-payment-date", ChangePaymentDate)
+            .WithName("ChangePaymentDateReAccreditation")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxChangePaymentDateBodyBytes))
             .RequireAuthorization();
 
         // RA-410: bespoke log-decision endpoint. Both hops of a determination
@@ -464,6 +485,87 @@ internal static class ReAccreditationEndpoints
 
         return TypedResults.Problem(
             title: DulyMakeProblemTitle,
+            detail: result.Message,
+            statusCode: status,
+            extensions: extensions
+        );
+    }
+
+    /// <summary>
+    /// RA-576: change the payment date of a re-accreditation work item.
+    ///
+    /// Validation happens here, like <see cref="DulyMake"/>, so a 400 can carry
+    /// the stable <c>errorCode</c> and the <c>field</c> (<c>paymentDate</c> or
+    /// <c>reason</c>) the frontend binds to a GOV.UK error summary. Refusals
+    /// from the service (terminal state, no payment date, concurrency) are 409s.
+    /// </summary>
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > ChangePaymentDate(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromBody] ChangePaymentDateRequest? request,
+        [FromServices] IReAccreditationChangePaymentDateService changePaymentDateService,
+        [FromServices] IWorkItemService engine,
+        [FromServices] TimeProvider timeProvider,
+        CancellationToken cancellationToken
+    )
+    {
+        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        var validation = ReAccreditationChangePaymentDateValidator.Validate(
+            request?.PaymentDate,
+            request?.Reason,
+            today
+        );
+
+        if (!validation.IsValid)
+        {
+            return TypedResults.Problem(
+                title: ChangePaymentDateProblemTitle,
+                detail: validation.Detail,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    [ErrorCodeKey] = validation.ErrorCode,
+                    ["field"] = validation.Field,
+                }
+            );
+        }
+
+        var result = await changePaymentDateService.ChangePaymentDateAsync(
+            id,
+            validation.PaymentDate!.Value,
+            validation.Reason!,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        var status = result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
+            WorkItemActionFailureCode.InvalidTransition
+            or WorkItemActionFailureCode.TerminalState
+            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            _ => StatusCodes.Status400BadRequest,
+        };
+
+        var extensions =
+            result.FailureCode == WorkItemActionFailureCode.UnknownAction
+                ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
+                : null;
+
+        return TypedResults.Problem(
+            title: ChangePaymentDateProblemTitle,
             detail: result.Message,
             statusCode: status,
             extensions: extensions

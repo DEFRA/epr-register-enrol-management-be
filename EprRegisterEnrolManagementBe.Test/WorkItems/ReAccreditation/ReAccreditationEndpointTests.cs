@@ -2925,6 +2925,168 @@ public class ReAccreditationEndpointTests
         Assert.Equal("payment-date-required", problem.GetProperty("errorCode").GetString());
     }
 
+    // -------------------- RA-576: change payment date --------------------
+
+    private static WorkItem BuildChangePaymentDateCandidate(
+        Guid id,
+        string submittedBy,
+        string stateId = "duly-made",
+        string? paymentDate = "2026-07-15"
+    )
+    {
+        var item = BuildDulyMakeCandidate(id, submittedBy);
+        item.StateId = stateId;
+        item.SlaClock = new WorkItemSlaClock
+        {
+            StartedAt = new DateTime(2026, 7, 15, 0, 0, 0, DateTimeKind.Utc),
+        };
+        if (paymentDate is not null)
+        {
+            item.Payload!["paymentDate"] = paymentDate;
+        }
+        return item;
+    }
+
+    [Fact]
+    public async Task ChangePaymentDate_updates_the_date_and_leaves_state_and_sla_alone()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildChangePaymentDateCandidate(id, TenantClientId),
+            cancellationToken
+        );
+        var newDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-3).ToString("yyyy-MM-dd");
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/change-payment-date",
+            new { paymentDate = newDate, reason = "Typo at duly making." },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("duly-made", persisted!.StateId);
+        Assert.Equal(
+            new DateTime(2026, 7, 15, 0, 0, 0, DateTimeKind.Utc),
+            persisted.SlaClock!.StartedAt
+        );
+        Assert.Equal(newDate, persisted.Payload!["paymentDate"].AsString);
+        var entry = Assert.Single(persisted.AuditLog);
+        Assert.Equal("change-payment-date", entry.Details["actionId"]);
+        Assert.Equal("Typo at duly making.", entry.Details["reason"]);
+    }
+
+    [Theory]
+    [InlineData("2026-07-20", null, "payment-date-reason-required", "reason")]
+    [InlineData("2026-07-20", "  ", "payment-date-reason-required", "reason")]
+    [InlineData(null, "Reason", "payment-date-required", "paymentDate")]
+    [InlineData("2099-01-01", "Reason", "payment-date-in-future", "paymentDate")]
+    public async Task ChangePaymentDate_rejects_bad_input_with_a_bindable_error_code(
+        string? paymentDate,
+        string? reason,
+        string expectedErrorCode,
+        string expectedField
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildChangePaymentDateCandidate(id, TenantClientId),
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/change-payment-date",
+            new { paymentDate, reason },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal(expectedErrorCode, problem.GetProperty("errorCode").GetString());
+        Assert.Equal(expectedField, problem.GetProperty("field").GetString());
+        Assert.Equal("Could not change payment date", problem.GetProperty("title").GetString());
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("2026-07-15", persisted!.Payload!["paymentDate"].AsString);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Theory]
+    [InlineData("approved", "2026-07-15")]
+    [InlineData("withdrawn", "2026-07-15")]
+    [InlineData("duly-made", null)]
+    public async Task ChangePaymentDate_returns_conflict_for_closed_items_and_items_without_a_date(
+        string stateId,
+        string? existingPaymentDate
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildChangePaymentDateCandidate(id, TenantClientId, stateId, existingPaymentDate),
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/change-payment-date",
+            new { paymentDate = "2026-07-20", reason = "Reason" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Empty(persisted!.AuditLog);
+    }
+
+    [Fact]
+    public async Task ChangePaymentDate_returns_not_found_for_an_unknown_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/change-payment-date",
+            new { paymentDate = "2026-07-20", reason = "Reason" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task ChangePaymentDate_returns_unauthorized_without_a_forwarded_user_id()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildChangePaymentDateCandidate(id, TenantClientId),
+            cancellationToken
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/change-payment-date",
+            new { paymentDate = "2026-07-20", reason = "Reason" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     // -------------------- LogDecision: remaining failure-code branches --------------------
 
     [Fact]
