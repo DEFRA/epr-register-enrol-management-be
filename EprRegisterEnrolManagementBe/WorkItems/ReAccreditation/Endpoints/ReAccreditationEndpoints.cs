@@ -58,9 +58,10 @@ internal static class ReAccreditationEndpoints
     // rejected resubmits of larger applications (many overseas sites with
     // interim sites, BES evidence, long business plan text) with a 413 even
     // though the very same sections had been accepted on initial submit, so
-    // those operators could never answer a query. The sections a resume can
-    // carry are a subset of what a submit carries, so it must never be
-    // smaller than the submit limit.
+    // those operators could never answer a query. A resume carries the same
+    // section data as a submit, plus a second copy of the overseas-site list
+    // in the BES evidence section, so it must never be smaller than the
+    // submit limit.
     public const long MaxResumeBodyBytes = WorkItems.Core.WorkItemEndpoints.MaxSubmitBodyBytes;
 
     // RA-294/RA-297: same rationale as MaxQueryBodyBytes — a legitimate
