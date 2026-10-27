@@ -85,7 +85,6 @@ internal sealed class ReAccreditationApprovalService(
 
         return await ResolveAccreditationNumberForWorkItemAsync(
             workItem,
-            _accreditationConfig.CurrentYear,
             correlationId,
             cancellationToken
         );
@@ -238,7 +237,6 @@ internal sealed class ReAccreditationApprovalService(
                 workItem.Id,
                 user.FindFirstValue("user:id")
             );
-            WarnOnYearMismatch(workItem.Id, payload.AccreditationId, accreditationYear);
 
             await EnqueuePublishingAuditAsync(workItem, user, cancellationToken);
             await InvokeActionAppliedHooksAsync(
@@ -481,38 +479,12 @@ internal sealed class ReAccreditationApprovalService(
     }
 
     /// <summary>
-    /// RA-527 task 007 edge case. The number is minted at step 1 with the
-    /// year configured then, and the year is stamped at step 2 with the year
-    /// configured now. If the configured year changed in between, the two
-    /// disagree. Kept deliberately simple: the approval still lands with the
-    /// configured year, and the mismatch — visible in the number's own
-    /// two-digit year segment — is logged for investigation.
-    /// </summary>
-    private void WarnOnYearMismatch(Guid workItemId, string? accreditationId, int accreditationYear)
-    {
-        var encodedYear = ReAccreditationAccreditationNumber.EncodedYear(accreditationId);
-        if (encodedYear is { } year && year != accreditationYear)
-        {
-            logger.LogWarning(
-                "Work item {WorkItemId} was approved with accreditation year {AccreditationYear}, but its "
-                    + "accreditation number {AccreditationId} was minted for {EncodedYear}: the configured "
-                    + "accreditation year changed between the determination and confirming applicant contact.",
-                workItemId,
-                accreditationYear,
-                accreditationId,
-                year
-            );
-        }
-    }
-
-    /// <summary>
     /// epr-r9oy: the number-resolution step behind
     /// <see cref="ResolveAccreditationNumberAsync"/>. Never throws — every
     /// failure mode is a failed <see cref="AccreditationNumberResult"/>.
     /// </summary>
     private async Task<AccreditationNumberResult> ResolveAccreditationNumberForWorkItemAsync(
         WorkItem workItem,
-        int accreditationYear,
         Guid correlationId,
         CancellationToken cancellationToken
     )
@@ -539,45 +511,24 @@ internal sealed class ReAccreditationApprovalService(
             );
         }
 
+        // RA-690: nation is no longer needed here. The backend derives the
+        // reference from the application's own registration reference and
+        // year, so the two ids are all this call carries.
         if (
-            freshPayload.Nation is not { } nation
-            || string.IsNullOrWhiteSpace(freshPayload.OperatorOrganisationId)
+            string.IsNullOrWhiteSpace(freshPayload.OperatorOrganisationId)
             || string.IsNullOrWhiteSpace(freshPayload.OperatorApplicationId)
         )
         {
             logger.LogError(
                 "Work item {WorkItemId} is missing data required to request an accreditation number "
-                    + "(nation, operatorOrganisationId, or operatorApplicationId).",
+                    + "(operatorOrganisationId or operatorApplicationId).",
                 workItem.Id
             );
             return AccreditationNumberResult.Failure(
                 "Work item is missing data required to request an accreditation number "
-                    + "(nation, operatorOrganisationId, or operatorApplicationId)."
+                    + "(operatorOrganisationId or operatorApplicationId)."
             );
         }
-
-        // RA-475: a numeric operatorOrganisationId is a BONUS, never a
-        // requirement. `operatorOrganisationId` is the ReEx organisation id
-        // and is a UUID on every genuinely-submitted application; only the
-        // seeded fixtures carry numeric ones. Requiring it to parse — which
-        // is what RA-448 phase 2 did — refused approval on every real
-        // application, and because the refusal was an InvalidTransition it
-        // reached the caseworker as management-fe's "this application has
-        // changed since you opened it, refresh and try again" on a
-        // determination no refresh could ever fix.
-        //
-        // The number's {OrgId:D6} segment is resolved by the backend from
-        // ReEx's own organisation document, so null here is correct and
-        // expected; a parsed value is passed through only as the backend's
-        // fallback for organisations ReEx has no record of.
-        var orgId = int.TryParse(
-            freshPayload.OperatorOrganisationId,
-            NumberStyles.Integer,
-            CultureInfo.InvariantCulture,
-            out var parsedOrgId
-        )
-            ? parsedOrgId
-            : (int?)null;
 
         // RA-448 phase 2 review: OperatorApplicationId is the backend's
         // {applicationId} route segment — confirmed (not assumed) against
@@ -589,26 +540,14 @@ internal sealed class ReAccreditationApprovalService(
         // other route on that backend's accreditation-applications group keys
         // on the document id, not the registration id.
         //
-        // Regenerate=false, not true: a number is minted at most once per
-        // application (step 1 of an approval; step 2 reuses it), so
-        // the only time this call runs twice for the SAME application is a
-        // retry after a transient failure — attempt 1 may have already
-        // committed a number the caller never saw acknowledged. Regenerate=true
-        // would ask the backend to bump/reissue on that retry, silently
-        // changing an externally-quoted number; Regenerate=false returns the
-        // already-issued one unchanged when the backend already has one, and
-        // still generates on a genuine first call (see
-        // IAccreditationNumberAdapter's contract) when it doesn't.
+        // A retry after a transient failure is safe: the backend returns an
+        // already-issued reference unchanged, never a new one.
         var numberResult =
             await accreditationNumberAdapter.GenerateOrUpdateAccreditationNumberAsync(
                 new AccreditationNumberRequest(
                     freshPayload.OperatorOrganisationId,
                     freshPayload.OperatorApplicationId,
-                    nation,
-                    orgId,
-                    accreditationYear,
-                    Regenerate: false,
-                    CorrelationId: correlationId
+                    correlationId
                 ),
                 cancellationToken
             );

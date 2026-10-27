@@ -342,40 +342,6 @@ public class ReAccreditationApprovalServiceTests
     }
 
     /// <summary>
-    /// RA-527 task 007 edge case: the number was minted at step 1 with the
-    /// year configured then; if the configured year has changed by step 2 the
-    /// stamped year differs from the one encoded in the number. Kept simple:
-    /// the approval still lands with the configured year, and a warning is
-    /// logged so the mismatch can be investigated.
-    /// </summary>
-    [Theory]
-    [InlineData(2026, true)]
-    [InlineData(2025, false)]
-    public async Task ApproveAsync_warns_when_the_configured_year_differs_from_the_numbers_year(
-        int currentYear,
-        bool expectWarning
-    )
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var logger = new ListLogger<ReAccreditationApprovalService>();
-        var sut = Build(currentYear: currentYear, logger: logger);
-        var workItem = BuildPendingContact();
-        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
-
-        var result = await sut.Service.ApproveAsync(workItem.Id, DecisionMaker(), s_appliedAt, ct);
-
-        Assert.True(result.IsSuccess, result.Message);
-        Assert.Equal(currentYear, BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload).AccreditationYear);
-        Assert.Equal(
-            expectWarning,
-            logger.Records.Any(r =>
-                r.Level == LogLevel.Warning
-                && r.Message.Contains(StepOneNumber, StringComparison.Ordinal)
-            )
-        );
-    }
-
-    /// <summary>
     /// RA-346: a legacy work item with no stored snapshot falls back to the
     /// live registered type, exactly as the engine does.
     /// </summary>
@@ -925,72 +891,69 @@ public class ReAccreditationApprovalServiceTests
 
     // ──────────────── epr-r9oy / RA-448 phase 2: resolving the number ────────────────
 
-    [Fact]
-    public async Task ResolveAccreditationNumberAsync_requests_the_number_from_organisation_application_nation_and_year()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var sut = Build(currentYear: 2028);
-        var workItem = BuildWorkItem(
-            payload: new BsonDocument
-            {
-                ["organisationName"] = "Acme Ltd",
-                ["operatorOrganisationId"] = "500099",
-                ["operatorApplicationId"] = "APP-500099",
-                ["nation"] = "Scotland",
-            }
-        );
-        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
-
-        await sut.Service.ResolveAccreditationNumberAsync(workItem.Id, Guid.NewGuid(), ct);
-
-        await sut
-            .NumberAdapter.Received(1)
-            .GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Is<AccreditationNumberRequest>(r =>
-                    r.OrganisationId == "500099"
-                    && r.ApplicationId == "APP-500099"
-                    && r.Nation == Nation.Scotland
-                    && r.OrgId == 500099
-                    && r.Year == 2028
-                    // RA-448 phase 2 review: false, not true — a retried mint
-                    // must idempotently return the already-issued number rather
-                    // than asking the backend to bump it.
-                    && !r.Regenerate
-                ),
-                Arg.Any<CancellationToken>()
-            );
-    }
-
     /// <summary>
-    /// RA-475: a ReEx organisation UUID is normal. The adapter is called,
-    /// OrgId is sent as null, and the backend resolves the real numeric org
-    /// id from ReEx. (Refusing it once stopped every real application being
-    /// determined.)
+    /// RA-690: the backend derives the reference from the application's own
+    /// registration reference and year, so the request carries only the two
+    /// ids (and the correlation id). The organisation id is passed through as
+    /// held, whether a ReEx UUID or a numeric seeded id — it is never parsed.
     /// </summary>
-    [Fact]
-    public async Task ResolveAccreditationNumberAsync_sends_a_null_org_id_when_the_organisation_id_is_a_reex_guid()
+    [Theory]
+    [InlineData("500099")]
+    [InlineData("c14854d9-e20a-41b3-87d5-a1fd4bbe2153")]
+    public async Task ResolveAccreditationNumberAsync_requests_the_number_from_the_organisation_and_application_ids(
+        string organisationId
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
         var workItem = BuildWorkItem(
             payload: new BsonDocument
             {
-                ["operatorOrganisationId"] = "c14854d9-e20a-41b3-87d5-a1fd4bbe2153",
+                ["organisationName"] = "Acme Ltd",
+                ["operatorOrganisationId"] = organisationId,
+                ["operatorApplicationId"] = "APP-500099",
+                ["nation"] = "Scotland",
+            }
+        );
+        sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
+        var correlationId = Guid.NewGuid();
+
+        var result = await sut.Service.ResolveAccreditationNumberAsync(workItem.Id, correlationId, ct);
+
+        Assert.True(result.IsSuccess);
+        await sut
+            .NumberAdapter.Received(1)
+            .GenerateOrUpdateAccreditationNumberAsync(
+                new AccreditationNumberRequest(organisationId, "APP-500099", correlationId),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    /// <summary>
+    /// RA-690: nation is no longer sent, so an item without one can still
+    /// have its number resolved.
+    /// </summary>
+    [Fact]
+    public async Task ResolveAccreditationNumberAsync_does_not_need_a_nation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sut = Build();
+        var workItem = BuildWorkItem(
+            payload: new BsonDocument
+            {
+                ["operatorOrganisationId"] = "500027",
                 ["operatorApplicationId"] = "APP-500027",
-                ["nation"] = "England",
             }
         );
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
         var result = await sut.Service.ResolveAccreditationNumberAsync(workItem.Id, Guid.NewGuid(), ct);
 
-        Assert.True(result.IsSuccess);
+        Assert.True(result.IsSuccess, result.ErrorMessage);
         await sut
             .NumberAdapter.Received(1)
             .GenerateOrUpdateAccreditationNumberAsync(
-                Arg.Is<AccreditationNumberRequest>(r =>
-                    r.OrganisationId == "c14854d9-e20a-41b3-87d5-a1fd4bbe2153" && r.OrgId == null
-                ),
+                Arg.Any<AccreditationNumberRequest>(),
                 Arg.Any<CancellationToken>()
             );
     }
@@ -998,14 +961,6 @@ public class ReAccreditationApprovalServiceTests
     public static TheoryData<string, BsonDocument?> UnusablePayloads =>
         new()
         {
-            {
-                "nation missing",
-                new BsonDocument
-                {
-                    ["operatorOrganisationId"] = "500027",
-                    ["operatorApplicationId"] = "APP-500027",
-                }
-            },
             {
                 "organisation id blank",
                 new BsonDocument
@@ -1118,14 +1073,28 @@ public class ReAccreditationApprovalServiceTests
         Assert.Equal("backend unreachable", result.ErrorMessage);
     }
 
-    [Fact]
-    public async Task ResolveAccreditationNumberAsync_returns_failure_when_required_payload_fields_are_missing()
+    /// <summary>
+    /// RA-690: with nation no longer needed, the two ids are the only
+    /// required fields, and the failure names exactly those.
+    /// </summary>
+    [Theory]
+    [InlineData("operatorOrganisationId")]
+    [InlineData("operatorApplicationId")]
+    public async Task ResolveAccreditationNumberAsync_returns_a_clear_failure_when_a_required_id_is_missing(
+        string missingField
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var sut = Build();
-        var workItem = BuildWorkItem(
-            payload: new BsonDocument { ["organisationName"] = "Acme Ltd" }
-        );
+        var payload = new BsonDocument
+        {
+            ["organisationName"] = "Acme Ltd",
+            ["operatorOrganisationId"] = "500027",
+            ["operatorApplicationId"] = "APP-500027",
+            ["nation"] = "England",
+        };
+        payload.Remove(missingField);
+        var workItem = BuildWorkItem(payload: payload);
         sut.Persistence.GetByIdAsync(workItem.Id, Arg.Any<CancellationToken>()).Returns(workItem);
 
         var result = await sut.Service.ResolveAccreditationNumberAsync(
@@ -1135,6 +1104,11 @@ public class ReAccreditationApprovalServiceTests
         );
 
         Assert.False(result.IsSuccess);
+        Assert.Equal(
+            "Work item is missing data required to request an accreditation number "
+                + "(operatorOrganisationId or operatorApplicationId).",
+            result.ErrorMessage
+        );
         await sut
             .NumberAdapter.DidNotReceiveWithAnyArgs()
             .GenerateOrUpdateAccreditationNumberAsync(default!, ct);

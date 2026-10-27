@@ -75,6 +75,24 @@ public class ReAccreditationTestOrganisationFixturesTests
         );
     }
 
+    /// <summary>
+    /// RA-690: both fixtures show a valid registration reference, whatever
+    /// the year (the legacy fixture's previous accreditation year follows the
+    /// clock).
+    /// </summary>
+    [Theory]
+    [InlineData("2026-10-15T09:00:00Z")]
+    [InlineData("2031-01-01T00:00:00Z")]
+    public void Both_fixtures_show_valid_registration_references(string now)
+    {
+        var documents = BuildFixtures(new FakeTimeProvider(DateTimeOffset.Parse(now)));
+
+        Assert.All(
+            documents,
+            d => RegistrationReferenceAssert.IsValidFor(d["payload"].AsBsonDocument)
+        );
+    }
+
     [Fact]
     public void The_legacy_fixture_carries_snapshot_elements_the_model_no_longer_declares()
     {

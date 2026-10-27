@@ -7,6 +7,7 @@ using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Background;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -20,6 +21,8 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 using NSubstitute;
@@ -3730,6 +3733,89 @@ public class ReAccreditationEndpointTests
                 default,
                 cancellationToken
             );
+    }
+
+    /// <summary>
+    /// RA-690: the backend now answers 422 for an invalid source registration
+    /// reference and 409 for a clashing accreditation reference. Through the
+    /// real HTTP adapter and its real retry pipeline, each is called once (a
+    /// 4xx is never retried), reaches the caseworker as the existing
+    /// accreditation-number-unavailable 500, and leaves the item untouched.
+    /// </summary>
+    [Theory]
+    [InlineData(HttpStatusCode.UnprocessableEntity)]
+    [InlineData(HttpStatusCode.Conflict)]
+    public async Task Decision_returns_internal_server_error_without_retrying_when_the_backend_refuses_the_reference(
+        HttpStatusCode backendStatus
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var backend = new CountingBackendHandler(backendStatus);
+        var httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory
+            .CreateClient("DefaultClient")
+            .Returns(_ => new HttpClient(backend, disposeHandler: false));
+        var numberAdapter = new HttpAccreditationNumberAdapter(
+            httpClientFactory,
+            Options.Create(
+                new OperatorBackendApiConfig
+                {
+                    Enabled = true,
+                    Url = "https://operator-backend.example.test",
+                    ClientId = "epr-register-enrol-management-be",
+                }
+            ),
+            NullLogger<HttpAccreditationNumberAdapter>.Instance,
+            Substitute.For<IStructuredLogger<HttpAccreditationNumberAdapter>>()
+        );
+        var pushAdapter = DecisionPushAdapterReturning(OperatorBackendPushResult.Success());
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            pushAdapter: pushAdapter,
+            numberAdapter: numberAdapter
+        );
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildAssessmentInProgress(id, TenantClientId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(1, backend.CallCount);
+        Assert.Equal(
+            "/api/v1/accreditation-applications/500027/APP-500027/accreditation-number",
+            backend.LastPath
+        );
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.False(persisted.Payload.Contains("accreditationId"));
+    }
+
+    /// <summary>Answers every call with one fixed status, counting the calls.</summary>
+    private sealed class CountingBackendHandler(HttpStatusCode status) : HttpMessageHandler
+    {
+        private int _callCount;
+
+        public int CallCount => _callCount;
+
+        public string? LastPath { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            Interlocked.Increment(ref _callCount);
+            LastPath = request.RequestUri?.AbsolutePath;
+            return Task.FromResult(
+                new HttpResponseMessage(status) { Content = new StringContent("refused") }
+            );
+        }
     }
 
     // --------------------------- RA-410: single-call decision ---------------------------

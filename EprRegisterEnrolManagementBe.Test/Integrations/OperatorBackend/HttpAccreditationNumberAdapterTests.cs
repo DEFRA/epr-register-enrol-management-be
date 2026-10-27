@@ -3,7 +3,6 @@ using System.Net.Http;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Logging;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -17,8 +16,8 @@ namespace EprRegisterEnrolManagementBe.Test.Integrations.OperatorBackend;
 /// RA-448 phase 2: the real outbound adapter that resolves accreditation
 /// numbers from the backend, replacing the retired local
 /// AccreditationIdGenerator. Posts to the backend's confirmed phase 1
-/// contract (organisationId/applicationId in the route,
-/// { Nation, OrgId, Year, Regenerate } in the body), signs with the shared
+/// contract (organisationId/applicationId in the route; RA-690: no body,
+/// because the backend derives the reference itself), signs with the shared
 /// v3 HMAC canonical payload when a secret is configured, retries transient
 /// (5xx / transport) failures only, and never throws its way out of
 /// <see cref="IAccreditationNumberAdapter.GenerateOrUpdateAccreditationNumberAsync"/>.
@@ -85,22 +84,10 @@ public class HttpAccreditationNumberAdapterTests
         CancellationToken ct,
         string organisationId = "500027",
         string applicationId = "app-1",
-        Nation nation = Nation.England,
-        int orgId = 500027,
-        int year = 2025,
-        bool regenerate = true,
         Guid correlationId = default
     ) =>
         adapter.GenerateOrUpdateAccreditationNumberAsync(
-            new AccreditationNumberRequest(
-                organisationId,
-                applicationId,
-                nation,
-                orgId,
-                year,
-                regenerate,
-                correlationId
-            ),
+            new AccreditationNumberRequest(organisationId, applicationId, correlationId),
             ct
         );
 
@@ -198,29 +185,21 @@ public class HttpAccreditationNumberAdapterTests
         Assert.NotNull(result.ErrorMessage);
     }
 
+    /// <summary>
+    /// RA-690: the backend derives the reference from the application's own
+    /// registration reference and year, so nation, OrgId, year and
+    /// regenerate are no longer sent. There is nothing left for a body.
+    /// </summary>
     [Fact]
-    public async Task Body_contains_nation_orgId_year_and_regenerate()
+    public async Task Sends_no_body()
     {
         var ct = TestContext.Current.CancellationToken;
         var (adapter, handler) = BuildSut();
         handler.Respond(HttpStatusCode.OK, SuccessBody("A25ER5000270036WO"));
 
-        await Call(
-            adapter,
-            ct,
-            nation: Nation.Scotland,
-            orgId: 500099,
-            year: 2028,
-            regenerate: true
-        );
+        await Call(adapter, ct);
 
-        using var body = JsonDocument.Parse(handler.LastRequestBody!);
-        var root = body.RootElement;
-
-        Assert.Equal("Scotland", root.GetProperty("nation").GetString());
-        Assert.Equal(500099, root.GetProperty("orgId").GetInt32());
-        Assert.Equal(2028, root.GetProperty("year").GetInt32());
-        Assert.True(root.GetProperty("regenerate").GetBoolean());
+        Assert.True(string.IsNullOrEmpty(handler.LastRequestBody));
     }
 
     [Fact]
@@ -378,12 +357,19 @@ public class HttpAccreditationNumberAdapterTests
         Assert.Equal(2, handler.CallCount);
     }
 
-    [Fact]
-    public async Task Does_not_retry_a_4xx_response()
+    /// <summary>
+    /// RA-690: the backend answers 422 for an invalid source registration
+    /// reference and 409 for a clashing accreditation reference (or no
+    /// registration yet). Neither is transient, so neither is retried.
+    /// </summary>
+    [Theory]
+    [InlineData(HttpStatusCode.Conflict)]
+    [InlineData(HttpStatusCode.UnprocessableEntity)]
+    public async Task Does_not_retry_a_4xx_response(HttpStatusCode status)
     {
         var ct = TestContext.Current.CancellationToken;
         var (adapter, handler) = BuildSut();
-        handler.Respond(HttpStatusCode.Conflict, "no registration number yet");
+        handler.Respond(status, "registration reference is not valid");
 
         var result = await Call(adapter, ct);
 
