@@ -22,6 +22,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 internal static class ReAccreditationEndpoints
 {
     private const string ErrorCodeKey = "errorCode";
+    private const string FieldKey = "field";
     private const string WrongWorkItemTypeTitle = "Wrong work item type";
 
     private static readonly JsonSerializerOptions s_payloadJsonOptions = new()
@@ -441,7 +442,7 @@ internal static class ReAccreditationEndpoints
                 extensions: new Dictionary<string, object?>
                 {
                     [ErrorCodeKey] = validation.ErrorCode,
-                    ["field"] = ReAccreditationDulyMakingValidator.Field,
+                    [FieldKey] = ReAccreditationDulyMakingValidator.Field,
                 }
             );
         }
@@ -502,7 +503,7 @@ internal static class ReAccreditationEndpoints
                 extensions: new Dictionary<string, object?>
                 {
                     [ErrorCodeKey] = validation.ErrorCode,
-                    ["field"] = validation.Field,
+                    [FieldKey] = validation.Field,
                 }
             );
         }
@@ -681,7 +682,7 @@ internal static class ReAccreditationEndpoints
                 extensions: new Dictionary<string, object?>
                 {
                     [ErrorCodeKey] = "invalid-outcome",
-                    ["field"] = "outcome",
+                    [FieldKey] = "outcome",
                 }
             );
         }
@@ -1342,7 +1343,7 @@ internal static class ReAccreditationEndpoints
                 extensions: new Dictionary<string, object?>
                 {
                     [ErrorCodeKey] = result.ErrorCode,
-                    ["field"] = result.Field,
+                    [FieldKey] = result.Field,
                 }
             ),
             OverseasSiteRecyclingOperationsOutcome.Conflict => TypedResults.Problem(

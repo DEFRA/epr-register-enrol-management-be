@@ -54,7 +54,7 @@ internal sealed class ReAccreditationChangePaymentDateService(
             );
         }
 
-        for (var attempt = 1; ; attempt++)
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
 
@@ -88,9 +88,10 @@ internal sealed class ReAccreditationChangePaymentDateService(
             {
                 continue;
             }
-            catch (WorkItemConcurrencyException)
+            catch (WorkItemConcurrencyException ex)
             {
                 logger.LogError(
+                    ex,
                     "Payment date change on work item {WorkItemId} abandoned after "
                         + "{Attempts} attempts due to repeated concurrency conflicts.",
                     workItemId,
@@ -113,6 +114,9 @@ internal sealed class ReAccreditationChangePaymentDateService(
             );
             return WorkItemActionResult.Success(workItem!);
         }
+
+        // Unreachable: the final attempt either returns or fails with a conflict.
+        throw new InvalidOperationException("Payment date change loop exited unexpectedly.");
     }
 
     /// <summary>
