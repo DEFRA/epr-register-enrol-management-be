@@ -53,7 +53,15 @@ internal static class ReAccreditationEndpoints
     // because a legitimate resume-from-query body additionally carries
     // opaque current-section JSON for up to six sections plus a file
     // reference list, not just section ids and a short reason.
-    public const long MaxResumeBodyBytes = 64 * 1024;
+    //
+    // RA-696: 1 MiB, the same as MaxSubmitBodyBytes. It was 64 KiB, which
+    // rejected resubmits of larger applications (many overseas sites with
+    // interim sites, BES evidence, long business plan text) with a 413 even
+    // though the very same sections had been accepted on initial submit, so
+    // those operators could never answer a query. The sections a resume can
+    // carry are a subset of what a submit carries, so it must never be
+    // smaller than the submit limit.
+    public const long MaxResumeBodyBytes = WorkItems.Core.WorkItemEndpoints.MaxSubmitBodyBytes;
 
     // RA-294/RA-297: same rationale as MaxQueryBodyBytes — a legitimate
     // site-added notification body is a handful of short string fields plus

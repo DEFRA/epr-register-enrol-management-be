@@ -34,7 +34,8 @@ public class WorkItemRequestSizeLimitTests
         new("SubmitWorkItem",                          WorkItemEndpoints.MaxSubmitBodyBytes)             { TestDisplayName = "Submit"                },
         new("AssignWorkItem",                          WorkItemEndpoints.MaxAssignBodyBytes)             { TestDisplayName = "Assign"                },
         new("AddWorkItemNote",                         WorkItemEndpoints.MaxNoteBodyBytes)               { TestDisplayName = "AddNote"               },
-        new("RecordReAccreditationDecisionRationale",  ReAccreditationEndpoints.MaxRationaleBodyBytes)   { TestDisplayName = "RecordDecisionRationale" }
+        new("RecordReAccreditationDecisionRationale",  ReAccreditationEndpoints.MaxRationaleBodyBytes)   { TestDisplayName = "RecordDecisionRationale" },
+        new("ResumeReAccreditationFromQuery",          ReAccreditationEndpoints.MaxResumeBodyBytes)      { TestDisplayName = "ResumeFromQuery"       }
     };
 
     [Theory]
@@ -58,6 +59,20 @@ public class WorkItemRequestSizeLimitTests
             .FirstOrDefault();
         Assert.NotNull(sizeLimit);
         Assert.Equal(expectedBytes, sizeLimit!.MaxRequestBodySize);
+    }
+
+    /// <summary>
+    /// RA-696: a resubmit carries the current JSON of sections that were
+    /// already accepted on the original submit, so its limit can never be
+    /// smaller than the submit limit. At 64 KiB (against 1 MiB on submit),
+    /// operators of larger applications got a 413 and could not resubmit.
+    /// </summary>
+    [Fact]
+    public void Resume_from_query_accepts_at_least_as_much_as_submit()
+    {
+        Assert.True(
+            ReAccreditationEndpoints.MaxResumeBodyBytes >= WorkItemEndpoints.MaxSubmitBodyBytes,
+            "resume-from-query must accept any body that fits on submit");
     }
 
     /// <summary>
