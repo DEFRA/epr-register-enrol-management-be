@@ -463,32 +463,7 @@ internal static class ReAccreditationEndpoints
             return TypedResults.NotFound();
         }
 
-        var status = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            // All three are conflicts with the resource's current state rather
-            // than malformed requests: the frontend's correct response is "this
-            // application has changed, reload it", never a field-level error.
-            WorkItemActionFailureCode.InvalidTransition
-            or WorkItemActionFailureCode.TerminalState
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        // The only 400 the service itself can produce is a type mismatch. Give
-        // it an errorCode too so the frontend never has to parse prose to work
-        // out whether a 400 belongs against the date input.
-        var extensions =
-            result.FailureCode == WorkItemActionFailureCode.UnknownAction
-                ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
-                : null;
-
-        return TypedResults.Problem(
-            title: DulyMakeProblemTitle,
-            detail: result.Message,
-            statusCode: status,
-            extensions: extensions
-        );
+        return ToServiceFailureProblem(result, DulyMakeProblemTitle);
     }
 
     /// <summary>
@@ -550,6 +525,25 @@ internal static class ReAccreditationEndpoints
             return TypedResults.NotFound();
         }
 
+        return ToServiceFailureProblem(result, ChangePaymentDateProblemTitle);
+    }
+
+    /// <summary>
+    /// Map a failed duly-make / change-payment-date service result to its
+    /// ProblemDetails. Shared because both endpoints speak the same failure
+    /// vocabulary to the frontend.
+    ///
+    /// 401 for a missing actor; 409 for the three conflicts with the resource's
+    /// current state (the frontend's answer is "this application has changed,
+    /// reload it", never a field error); 400 otherwise. The only 400 a service
+    /// itself produces is a type mismatch, which gets an <c>errorCode</c> so the
+    /// frontend never parses prose to decide whether it belongs against a field.
+    /// </summary>
+    private static ProblemHttpResult ToServiceFailureProblem(
+        WorkItemActionResult result,
+        string title
+    )
+    {
         var status = result.FailureCode switch
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
@@ -565,7 +559,7 @@ internal static class ReAccreditationEndpoints
                 : null;
 
         return TypedResults.Problem(
-            title: ChangePaymentDateProblemTitle,
+            title: title,
             detail: result.Message,
             statusCode: status,
             extensions: extensions
