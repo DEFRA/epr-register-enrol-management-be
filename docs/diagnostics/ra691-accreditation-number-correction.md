@@ -1,14 +1,15 @@
-# RA-691: correct two incorrectly sequenced accreditation numbers
+# RA-691: correct three incorrectly sequenced accreditation numbers
 
-Two approved 2027 renewals were issued accreditation numbers with a new
+Three approved 2027 renewals were issued accreditation numbers with a new
 sequence segment instead of keeping the one from their 2026 number (root cause
 RA-690, fixed separately). `ReAccreditationAccreditationNumberCorrectionMigration`
-rewrites `payload.accreditationId` on exactly these two work items:
+rewrites `payload.accreditationId` on exactly these three work items:
 
 | Organisation | Org ID | Previous (2026) | Current (incorrect) | Corrected |
 | --- | --- | --- | --- | --- |
 | Infinity Plastic Solutions Ltd | 500527 | A26ER5005270246PL | A27ER5005270322PL | A27ER5005270246PL |
 | PLASGRAN LIMITED | 500105 | A26ER5001050197PL | A27ER5001050321PL | A27ER5001050197PL |
+| Kronospan Limited | 500108 | A26WR5001080008WO | A27WR5001080075WO | A27WR5001080008WO |
 
 Each correction appends an `accreditation-number-corrected` ("Accreditation
 number corrected") audit entry with details `{ from, to, reason: "RA-691" }`,
@@ -21,8 +22,9 @@ rewritten.
 
 The numeric organisation id exists in management-be only inside the number's
 `{OrgId:D6}` segment (`payload.operatorOrganisationId` is the ReEx UUID), so
-each target is located by its number's identity segments, e.g.
-`^A27ER500527\d{4}PL$`, through an anchored-prefix query on the
+each target is located by its number's identity segments (year, agency,
+organisation and material), e.g. `^A27ER500527\d{4}PL$` or
+`^A27WR500108\d{4}WO$`, through an anchored-prefix query on the
 `payload.accreditationId` index. Exactly one work item must match. Its current
 value decides the outcome:
 
@@ -47,12 +49,12 @@ value decides the outcome:
 # 1. Dry run. Writes nothing; logs "RA-691 DRY RUN would correct ..." per target.
 Diagnostics__Ra691CorrectAccreditationNumbers=true
 
-# 2. Only when the dry run shows exactly the two changes above:
+# 2. Only when the dry run shows exactly the three changes above:
 Diagnostics__Ra691CorrectAccreditationNumbersApply=true
 Diagnostics__Ra691SpotCheckConfirmedBy=your.name
 
 # 3. Turn all three back off. (Leaving them on is harmless: a re-run skips
-#    both items, but the keys serve no further purpose.)
+#    all three items, but the keys serve no further purpose.)
 ```
 
 An `RA-691 ABORTED, nothing written` error names the organisation and what was

@@ -5,27 +5,28 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-691 remediation: two approved 2027 renewals were issued accreditation
+/// RA-691 remediation: three approved 2027 renewals were issued accreditation
 /// numbers with a NEW sequence segment instead of keeping the one from their
 /// 2026 number (root cause RA-690, fixed separately). This one-off migration
-/// rewrites <c>payload.accreditationId</c> on exactly those two work items and
+/// rewrites <c>payload.accreditationId</c> on exactly those three work items and
 /// records the correction in each item's audit log (Application history). It
 /// touches nothing else.
 ///
 /// <para><strong>Matching rule.</strong> The numeric organisation id the
-/// ticket names (500527, 500105) exists in management-be only inside the
+/// ticket names (500527, 500105, 500108) exists in management-be only inside the
 /// accreditation number's <c>{OrgId:D6}</c> segment —
 /// <c>payload.operatorOrganisationId</c> is the ReEx organisation UUID on real
 /// submissions. So each target is located by the identity segments of its
 /// number: year, agency, organisation and material
-/// (<c>^A27ER500527\d{4}PL$</c>) with any sequence. Exactly one work item must
-/// carry that identity; then its current value decides the outcome:</para>
+/// (<c>^A27ER500527\d{4}PL$</c>, <c>^A27WR500108\d{4}WO$</c>) with any
+/// sequence. Exactly one work item must carry that identity; then its current
+/// value decides the outcome:</para>
 /// <list type="bullet">
 ///   <item>the incorrect number → correct it;</item>
 ///   <item>the corrected number → already done, skip (no write, no entry);</item>
 ///   <item>anything else, or zero / more than one candidate → ABORT the whole
-///   run before writing anything. A second candidate (say, a second plastic
-///   site for the same organisation) means the data is not what the ticket
+///   run before writing anything. A second candidate (say, a second site
+///   for the same organisation and material) means the data is not what the ticket
 ///   describes, so a human decides rather than this guessing.</item>
 /// </list>
 ///
@@ -100,11 +101,12 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             );
     }
 
-    /// <summary>The two numbers RA-691 corrects. Nothing else is ever touched.</summary>
+    /// <summary>The three numbers RA-691 corrects. Nothing else is ever touched.</summary>
     internal static readonly IReadOnlyList<Target> Targets =
     [
         new("Infinity Plastic Solutions Ltd", "500527", "A27ER5005270322PL", "A27ER5005270246PL"),
         new("PLASGRAN LIMITED", "500105", "A27ER5001050321PL", "A27ER5001050197PL"),
+        new("Kronospan Limited", "500108", "A27WR5001080075WO", "A27WR5001080008WO"),
     ];
 
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;

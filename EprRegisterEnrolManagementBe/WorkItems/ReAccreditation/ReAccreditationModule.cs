@@ -199,7 +199,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // leaves its own distinct audit entry. Runs unconditionally, relying on its
         // own idempotency, same as every other backfill migration in this file.
         services.AddSingleton<IWorkItemMigration, ReAccreditationNationRepresentationMigration>();
-        // RA-691: one-off correction of two incorrectly sequenced 2027
+        // RA-691: one-off correction of three incorrectly sequenced 2027
         // accreditation numbers. Gated like the epr-2uxy migration above (off
         // by default, spot-check required, dry run unless apply is set), so
         // it is safe to register unconditionally. Writes only

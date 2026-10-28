@@ -20,6 +20,8 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     private const string InfinityCorrected = "A27ER5005270246PL";
     private const string PlasgranIncorrect = "A27ER5001050321PL";
     private const string PlasgranCorrected = "A27ER5001050197PL";
+    private const string KronospanIncorrect = "A27WR5001080075WO";
+    private const string KronospanCorrected = "A27WR5001080008WO";
 
     private static readonly DateTimeOffset s_now = new(2026, 10, 26, 9, 0, 0, TimeSpan.Zero);
 
@@ -70,10 +72,11 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
         return item;
     }
 
-    private async Task<(WorkItem Infinity, WorkItem Plasgran)> SeedBothIncorrectAsync() =>
+    private async Task<(WorkItem Infinity, WorkItem Plasgran, WorkItem Kronospan)> SeedAllIncorrectAsync() =>
         (
             await SeedAsync(InfinityIncorrect, "Infinity Plastic Solutions Ltd"),
-            await SeedAsync(PlasgranIncorrect, "PLASGRAN LIMITED")
+            await SeedAsync(PlasgranIncorrect, "PLASGRAN LIMITED"),
+            await SeedAsync(KronospanIncorrect, "Kronospan Limited")
         );
 
     private ReAccreditationAccreditationNumberCorrectionMigration BuildSut(
@@ -119,12 +122,13 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     [Fact]
     public async Task Disabled_by_default_writes_nothing()
     {
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
+        var (infinity, plasgran, kronospan) = await SeedAllIncorrectAsync();
 
         await RunAsync(BuildSut(enabled: false));
 
         await AssertUntouchedAsync(infinity);
         await AssertUntouchedAsync(plasgran);
+        await AssertUntouchedAsync(kronospan);
         Assert.Empty(_logger.Records);
     }
 
@@ -133,19 +137,20 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     [InlineData("  ")]
     public async Task Apply_without_a_spot_check_logs_an_error_and_runs_as_a_dry_run(string? confirmedBy)
     {
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
+        var (infinity, plasgran, kronospan) = await SeedAllIncorrectAsync();
 
         await RunAsync(BuildSut(confirmedBy: confirmedBy));
 
         await AssertUntouchedAsync(infinity);
         await AssertUntouchedAsync(plasgran);
+        await AssertUntouchedAsync(kronospan);
         var error = Assert.Single(_logger.Records, r => r.Level == LogLevel.Error);
         Assert.Contains(
             ReAccreditationAccreditationNumberCorrectionMigration.SpotCheckConfirmedByConfigKey,
             error.Message
         );
         Assert.Equal(
-            2,
+            3,
             _logger.Records.Count(r => r.Message.Contains("DRY RUN would correct", StringComparison.Ordinal))
         );
     }
@@ -153,34 +158,36 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     [Fact]
     public async Task Dry_run_does_not_need_a_spot_check()
     {
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
+        var (infinity, plasgran, kronospan) = await SeedAllIncorrectAsync();
 
         await RunAsync(BuildSut(confirmedBy: null, apply: false));
 
         await AssertUntouchedAsync(infinity);
         await AssertUntouchedAsync(plasgran);
+        await AssertUntouchedAsync(kronospan);
         Assert.DoesNotContain(_logger.Records, r => r.Level == LogLevel.Error);
         Assert.Equal(
-            2,
+            3,
             _logger.Records.Count(r => r.Message.Contains("DRY RUN would correct", StringComparison.Ordinal))
         );
     }
 
     // AC1
     [Fact]
-    public async Task Dry_run_logs_exactly_the_two_changes_and_writes_nothing()
+    public async Task Dry_run_logs_exactly_the_three_changes_and_writes_nothing()
     {
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
+        var (infinity, plasgran, kronospan) = await SeedAllIncorrectAsync();
 
         await RunAsync(BuildSut(apply: false));
 
         await AssertUntouchedAsync(infinity);
         await AssertUntouchedAsync(plasgran);
+        await AssertUntouchedAsync(kronospan);
         var wouldCorrect = _logger
             .Records.Where(r => r.Message.Contains("DRY RUN would correct", StringComparison.Ordinal))
             .Select(r => r.Message)
             .ToList();
-        Assert.Equal(2, wouldCorrect.Count);
+        Assert.Equal(3, wouldCorrect.Count);
         Assert.Contains(
             wouldCorrect,
             m => m.EndsWith(
@@ -195,15 +202,22 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
                 StringComparison.Ordinal
             )
         );
+        Assert.Contains(
+            wouldCorrect,
+            m => m.EndsWith(
+                $"Kronospan Limited (500108) work item {kronospan.Id}: {KronospanIncorrect} → {KronospanCorrected}",
+                StringComparison.Ordinal
+            )
+        );
     }
 
     // ------------------------------- apply -------------------------------
 
     // AC2 + AC3
     [Fact]
-    public async Task Apply_corrects_both_numbers_and_appends_one_audit_entry_each_without_a_state_change()
+    public async Task Apply_corrects_all_three_numbers_and_appends_one_audit_entry_each_without_a_state_change()
     {
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
+        var (infinity, plasgran, kronospan) = await SeedAllIncorrectAsync();
 
         await RunAsync(BuildSut());
 
@@ -211,6 +225,7 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
         {
             (infinity, InfinityIncorrect, InfinityCorrected),
             (plasgran, PlasgranIncorrect, PlasgranCorrected),
+            (kronospan, KronospanIncorrect, KronospanCorrected),
         })
         {
             var reloaded = await ReloadAsync(seeded);
@@ -239,16 +254,21 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     [Fact]
     public async Task Apply_changes_no_other_work_item()
     {
-        await SeedBothIncorrectAsync();
+        await SeedAllIncorrectAsync();
         var bystanders = new[]
         {
             // The 2026 numbers the corrections restore the sequence from.
             await SeedAsync("A26ER5005270246PL"),
             await SeedAsync("A26ER5001050197PL"),
+            await SeedAsync("A26WR5001080008WO"),
             // Same organisation, different material: a different identity.
             await SeedAsync("A27ER5005270322GL"),
+            await SeedAsync("A27WR5001080075PL"),
             // Same organisation as an exporter: a different identity.
             await SeedAsync("A27EX5005270322PL"),
+            await SeedAsync("A27WX5001080075WO"),
+            // Same organisation and material, different nation: a different identity.
+            await SeedAsync("A27ER5001080075WO"),
             // Unrelated organisation.
             await SeedAsync("A27ER5009990322PL"),
         };
@@ -265,9 +285,14 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     [Fact]
     public async Task A_second_run_changes_nothing_and_adds_no_second_entry()
     {
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
+        var (infinity, plasgran, kronospan) = await SeedAllIncorrectAsync();
         await RunAsync(BuildSut());
-        var afterFirst = new[] { await ReloadAsync(infinity), await ReloadAsync(plasgran) };
+        var afterFirst = new[]
+        {
+            await ReloadAsync(infinity),
+            await ReloadAsync(plasgran),
+            await ReloadAsync(kronospan),
+        };
 
         await RunAsync(BuildSut());
 
@@ -276,21 +301,23 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             await AssertUntouchedAsync(first);
         }
         Assert.Equal(
-            2,
+            3,
             _logger.Records.Count(r => r.Message.Contains("already carries", StringComparison.Ordinal))
         );
     }
 
     [Fact]
-    public async Task An_already_corrected_target_is_skipped_while_the_other_is_corrected()
+    public async Task An_already_corrected_target_is_skipped_while_the_others_are_corrected()
     {
         var infinity = await SeedAsync(InfinityCorrected);
         var plasgran = await SeedAsync(PlasgranIncorrect);
+        var kronospan = await SeedAsync(KronospanIncorrect);
 
         await RunAsync(BuildSut());
 
         await AssertUntouchedAsync(infinity);
         Assert.Equal(PlasgranCorrected, (await ReloadAsync(plasgran)).Payload["accreditationId"].AsString);
+        Assert.Equal(KronospanCorrected, (await ReloadAsync(kronospan)).Payload["accreditationId"].AsString);
     }
 
     // ------------------------------- abort -------------------------------
@@ -298,29 +325,38 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     [Fact]
     public async Task A_target_matching_neither_value_aborts_the_whole_run_before_any_write()
     {
-        // Infinity (planned first) is correctable; PLASGRAN carries a third
-        // sequence. Nothing may be written, including Infinity's correction.
+        // Infinity and PLASGRAN (planned first) are correctable; Kronospan
+        // (planned last) carries an unexpected sequence. Nothing may be
+        // written, including the two earlier corrections.
         var infinity = await SeedAsync(InfinityIncorrect);
-        var plasgran = await SeedAsync("A27ER5001050999PL");
+        var plasgran = await SeedAsync(PlasgranIncorrect);
+        var kronospan = await SeedAsync("A27WR5001080999WO");
+
+        await RunAsync(BuildSut());
+
+        await AssertUntouchedAsync(infinity);
+        await AssertUntouchedAsync(plasgran);
+        await AssertUntouchedAsync(kronospan);
+        var error = Assert.Single(_logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Contains("ABORTED", error.Message);
+        Assert.Contains("Kronospan Limited (500108)", error.Message);
+        Assert.Contains("A27WR5001080999WO", error.Message);
+    }
+
+    [Fact]
+    public async Task A_missing_target_aborts_the_whole_run_before_any_write()
+    {
+        // Kronospan (planned last) is missing; the two earlier, correctable
+        // targets must not be written.
+        var infinity = await SeedAsync(InfinityIncorrect);
+        var plasgran = await SeedAsync(PlasgranIncorrect);
 
         await RunAsync(BuildSut());
 
         await AssertUntouchedAsync(infinity);
         await AssertUntouchedAsync(plasgran);
         var error = Assert.Single(_logger.Records, r => r.Level == LogLevel.Error);
-        Assert.Contains("ABORTED", error.Message);
-        Assert.Contains("A27ER5001050999PL", error.Message);
-    }
-
-    [Fact]
-    public async Task A_missing_target_aborts_the_whole_run_before_any_write()
-    {
-        var infinity = await SeedAsync(InfinityIncorrect);
-
-        await RunAsync(BuildSut());
-
-        await AssertUntouchedAsync(infinity);
-        var error = Assert.Single(_logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Contains("Kronospan Limited (500108)", error.Message);
         Assert.Contains("found 0", error.Message);
     }
 
@@ -328,13 +364,14 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     public async Task More_than_one_candidate_aborts_rather_than_guessing()
     {
         // E.g. a second plastic site for the same organisation.
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
+        var (infinity, plasgran, kronospan) = await SeedAllIncorrectAsync();
         var secondSite = await SeedAsync("A27ER5005270500PL");
 
         await RunAsync(BuildSut());
 
         await AssertUntouchedAsync(infinity);
         await AssertUntouchedAsync(plasgran);
+        await AssertUntouchedAsync(kronospan);
         await AssertUntouchedAsync(secondSite);
         var error = Assert.Single(_logger.Records, r => r.Level == LogLevel.Error);
         Assert.Contains("found 2", error.Message);
@@ -346,7 +383,7 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
         // The atomic update is filtered on the incorrect value, so a number
         // that changed between planning and writing is left as it is and gets
         // no audit entry.
-        var (infinity, _) = await SeedBothIncorrectAsync();
+        var (infinity, _, _) = await SeedAllIncorrectAsync();
         var racing = new RacingPersistence(_persistence, infinity.Id, "A27ER5005270777PL");
 
         await BuildSut().ApplyAsync(racing, TestContext.Current.CancellationToken);
