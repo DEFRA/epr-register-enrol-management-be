@@ -1717,6 +1717,56 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
+    public async Task ResumeFromQuery_accepts_a_body_larger_than_64_KiB()
+    {
+        // RA-696: a resubmit of a large application (many overseas sites with
+        // interim sites, BES evidence) is far bigger than 64 KiB but well within
+        // the 1 MiB that initial submit already allows. The in-memory test
+        // server does not enforce the Kestrel request size cap (see
+        // WorkItemRequestSizeLimitTests), which that class pins separately;
+        // this proves the endpoint itself handles a body of that size.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildQueried(id, TenantClientId, "query-during-assessment"),
+            cancellationToken
+        );
+
+        var sites = string.Join(
+            ",",
+            Enumerable
+                .Range(1, 120)
+                .Select(i =>
+                    $$"""{"siteId":{{i}},"orsId":"{{i:D3}}","siteName":"{{new string('x', 1000)}}"}"""
+                )
+        );
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["overseas-reprocessing-sites"],
+            new Dictionary<string, JsonElement>
+            {
+                ["OverseasSites"] = JsonDocument.Parse($$"""{"sites":[{{sites}}]}""").RootElement,
+            },
+            FileReferences: []
+        );
+        var size = JsonSerializer.SerializeToUtf8Bytes(request).Length;
+        Assert.InRange(size, (64 * 1024) + 1, 1024 * 1024);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query",
+            request,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(120, persisted!.Payload!["overseasSites"]["sites"].AsBsonArray.Count);
+    }
+
+    [Fact]
     public async Task ResumeFromQuery_updates_the_canonical_overseas_sites_field_when_a_site_is_removed()
     {
         // RA-557 regression: a resubmitted "OverseasSites" section (the
