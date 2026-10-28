@@ -37,19 +37,19 @@ value decides the outcome:
 
 | # | Config key (env var) | Effect |
 | --- | --- | --- |
-| 1 | `Diagnostics:Ra691CorrectAccreditationNumbers` (`Diagnostics__Ra691CorrectAccreditationNumbers`) | Off by default; a no-op in every environment until set `true` |
-| 2 | `Diagnostics:Ra691SpotCheckConfirmedBy` (`Diagnostics__Ra691SpotCheckConfirmedBy`) | Must name whoever checked the corrected numbers against the 2026 numbers. Logged on every run |
-| 3 | `Diagnostics:Ra691CorrectAccreditationNumbersApply` (`Diagnostics__Ra691CorrectAccreditationNumbersApply`) | **Dry run unless `true`**: logs `org (id) work item <id>: old → new` per target and writes nothing |
+| 1 | `Diagnostics:Ra691CorrectAccreditationNumbers` (`Diagnostics__Ra691CorrectAccreditationNumbers`) | Off by default; a no-op in every environment until set `true`. On its own it is a **dry run**: logs `org (id) work item <id>: old → new` per target and writes nothing |
+| 2 | `Diagnostics:Ra691CorrectAccreditationNumbersApply` (`Diagnostics__Ra691CorrectAccreditationNumbersApply`) | With 1, writes the corrections — but only when 3 is also set |
+| 3 | `Diagnostics:Ra691SpotCheckConfirmedBy` (`Diagnostics__Ra691SpotCheckConfirmedBy`) | Names whoever reviewed the dry-run output against the live records. Not needed for a dry run; Apply without it logs an error and stays a dry run. Logged with the applied run |
 
 ## Running it
 
 ```bash
 # 1. Dry run. Writes nothing; logs "RA-691 DRY RUN would correct ..." per target.
 Diagnostics__Ra691CorrectAccreditationNumbers=true
-Diagnostics__Ra691SpotCheckConfirmedBy="your.name"
 
 # 2. Only when the dry run shows exactly the two changes above:
 Diagnostics__Ra691CorrectAccreditationNumbersApply=true
+Diagnostics__Ra691SpotCheckConfirmedBy=your.name
 
 # 3. Turn all three back off. (Leaving them on is harmless: a re-run skips
 #    both items, but the keys serve no further purpose.)

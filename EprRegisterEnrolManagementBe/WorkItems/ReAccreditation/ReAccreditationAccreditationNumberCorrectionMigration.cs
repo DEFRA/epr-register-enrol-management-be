@@ -34,14 +34,15 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// before a single write:</para>
 /// <list type="number">
 ///   <item><see cref="EnabledConfigKey"/> — off by default; a no-op in every
-///   environment until deliberately switched on.</item>
+///   environment until deliberately switched on. On its own it runs the dry
+///   run, which logs <c>org: old → new</c> per target and writes nothing.</item>
+///   <item><see cref="ApplyConfigKey"/> — writes the corrections.</item>
 ///   <item><see cref="SpotCheckConfirmedByConfigKey"/> — must name whoever
-///   checked the corrected numbers against the organisations' 2026 numbers.
-///   Logged with every run; the audit entry's details are fixed by the
+///   reviewed the dry-run output against the live records before Apply takes
+///   effect; without it an Apply run logs an error and stays a dry run. Logged
+///   with the applied run; the audit entry's details are fixed by the
 ///   management-fe/mgmt-tests contract (<c>from</c>, <c>to</c>,
 ///   <c>reason</c>), so it is not repeated there.</item>
-///   <item><see cref="ApplyConfigKey"/> — DRY RUN unless explicitly true. The
-///   dry run logs <c>org: old → new</c> per target and writes nothing.</item>
 /// </list>
 ///
 /// <para>Each write is a single atomic update filtered on the item's id AND
@@ -140,24 +141,33 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             return;
         }
 
+        var apply = configuration.GetValue(ApplyConfigKey, false);
         var confirmedBy = configuration.GetValue<string?>(SpotCheckConfirmedByConfigKey);
-        if (string.IsNullOrWhiteSpace(confirmedBy))
+        if (apply && string.IsNullOrWhiteSpace(confirmedBy))
         {
             logger.LogError(
-                "RA-691 accreditation number correction is enabled but {SpotCheckKey} is not set, "
-                    + "so it will not run. Set it to the name of whoever checked the corrected "
-                    + "numbers against the organisations' 2026 accreditation numbers.",
+                "RA-691 accreditation number correction: {ApplyKey} is set but {SpotCheckKey} is not, "
+                    + "so running as a DRY RUN. Set it to the name of whoever reviewed the dry-run "
+                    + "output against the live records.",
+                ApplyConfigKey,
                 SpotCheckConfirmedByConfigKey
             );
-            return;
+            apply = false;
         }
 
-        var apply = configuration.GetValue(ApplyConfigKey, false);
-        logger.LogInformation(
-            "RA-691 accreditation number correction starting. Mode={Mode}. Spot-check confirmed by {ConfirmedBy}.",
-            apply ? "APPLY" : "DRY RUN (nothing will be written)",
-            confirmedBy
-        );
+        if (apply)
+        {
+            logger.LogInformation(
+                "RA-691 accreditation number correction starting. Mode=APPLY. Spot-check confirmed by {ConfirmedBy}.",
+                confirmedBy
+            );
+        }
+        else
+        {
+            logger.LogInformation(
+                "RA-691 accreditation number correction starting. Mode=DRY RUN (nothing will be written)."
+            );
+        }
 
         // Plan every target before writing any: an abort on the second
         // target must not leave the first one corrected.

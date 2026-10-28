@@ -131,7 +131,7 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     [Theory]
     [InlineData(null)]
     [InlineData("  ")]
-    public async Task Enabled_without_a_spot_check_writes_nothing_and_logs_an_error(string? confirmedBy)
+    public async Task Apply_without_a_spot_check_logs_an_error_and_runs_as_a_dry_run(string? confirmedBy)
     {
         var (infinity, plasgran) = await SeedBothIncorrectAsync();
 
@@ -143,6 +143,26 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
         Assert.Contains(
             ReAccreditationAccreditationNumberCorrectionMigration.SpotCheckConfirmedByConfigKey,
             error.Message
+        );
+        Assert.Equal(
+            2,
+            _logger.Records.Count(r => r.Message.Contains("DRY RUN would correct", StringComparison.Ordinal))
+        );
+    }
+
+    [Fact]
+    public async Task Dry_run_does_not_need_a_spot_check()
+    {
+        var (infinity, plasgran) = await SeedBothIncorrectAsync();
+
+        await RunAsync(BuildSut(confirmedBy: null, apply: false));
+
+        await AssertUntouchedAsync(infinity);
+        await AssertUntouchedAsync(plasgran);
+        Assert.DoesNotContain(_logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Equal(
+            2,
+            _logger.Records.Count(r => r.Message.Contains("DRY RUN would correct", StringComparison.Ordinal))
         );
     }
 
