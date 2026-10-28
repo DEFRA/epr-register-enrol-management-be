@@ -21,8 +21,9 @@ public interface IAccreditationNumberAdapter
     /// on the backend. RA-690: the backend derives the reference from the
     /// application's own registration reference and year (or inherits the
     /// latest previous accreditation reference), so the call carries nothing
-    /// but the two ids. It is idempotent: an application that already has a
-    /// reference gets it back unchanged, never a new one.
+    /// but the two ids. It is idempotent while the application is still open:
+    /// one that already has a reference gets it back unchanged, never a new
+    /// one. Once the backend holds it as Approved, a repeat call gets 409.
     /// </summary>
     Task<AccreditationNumberResult> GenerateOrUpdateAccreditationNumberAsync(
         AccreditationNumberRequest request,
