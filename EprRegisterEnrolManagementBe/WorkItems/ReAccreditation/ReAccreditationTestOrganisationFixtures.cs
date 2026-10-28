@@ -82,6 +82,16 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         new(now.Year - 1, 11, 14, 0, 0, 0, DateTimeKind.Utc);
 
     /// <summary>
+    /// RA-690: a valid registration reference for an English plastic
+    /// reprocessor registered in the previous accreditation year (both
+    /// fixtures' own shape), so it never trips the backend's source-reference
+    /// check. <paramref name="orgIdAndSequence"/> is the six-digit org id and
+    /// four-digit sequence.
+    /// </summary>
+    private static string RegistrationReference(DateTime now, string orgIdAndSequence) =>
+        $"R{(now.Year - 1) % 100:D2}ER{orgIdAndSequence}PL";
+
+    /// <summary>
     /// RA-342: a <c>submitted</c> item whose frozen snapshot carries elements
     /// the model no longer declares: a top-level <c>retiredSnapshotField</c>,
     /// a state <c>colour</c>, a transition's <c>requiredRoles</c> (the field
@@ -106,7 +116,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 ["applicationReference"] = "AP342LEGACY01",
                 ["organisationName"] = LegacySnapshotOrganisationName,
                 ["operatorOrganisationId"] = LegacySnapshotOrganisationId,
-                ["registrationNumber"] = "EPR-342000",
+                ["registrationNumber"] = RegistrationReference(now, "9003420342"),
                 ["operatorRegistrationId"] = "reg-342",
                 ["material"] = "plastic",
                 ["previousAccreditationYear"] = now.Year - 1,
@@ -191,7 +201,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 ["organisationName"] = PreYearStartOrganisationName,
                 ["operatorOrganisationId"] = PreYearStartOrganisationId,
                 ["operatorApplicationId"] = "e2e-app-ra611-pre-year-start",
-                ["registrationNumber"] = "EPR-E2E611",
+                ["registrationNumber"] = RegistrationReference(now, "9006110611"),
                 ["material"] = "plastic",
                 ["accreditationYear"] = now.Year,
                 ["previousAccreditationYear"] = now.Year - 1,

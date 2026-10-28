@@ -19,9 +19,13 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 ///
 /// Posts to the backend's confirmed phase 1 contract:
 /// <c>POST api/v1/accreditation-applications/{organisationId}/{applicationId}/accreditation-number</c>
-/// with <c>{ Nation, OrgId, Year, Regenerate }</c> as the body, matching
-/// <c>AccreditationApplicationEndpoints.GenerateOrUpdateRegulatoryNumberRequest</c>'s
-/// exact shape. Reads <c>accreditationReference</c> back off the response
+/// with no body. RA-690: the backend derives the reference from the
+/// application's registration reference and year, so nation, OrgId, year
+/// and regenerate are no longer sent (the backend ignores them if an older
+/// build still does). A 422 (invalid source registration reference) or 409
+/// (clashing reference, or no registration yet) is logged with its body and
+/// correlation id and becomes a plain failure, never retried.
+/// Reads <c>accreditationReference</c> back off the response
 /// body (the backend returns the full, camelCase-serialised
 /// AccreditationApplicationModel).
 ///
@@ -91,22 +95,11 @@ internal sealed class HttpAccreditationNumberAdapter(
 
         logger.LogInformation(
             "Requesting accreditation number for organisation {OrganisationId} application "
-                + "{ApplicationId} from {Endpoint} (nation {Nation}, year {Year}, regenerate {Regenerate}, "
-                + "correlation {CorrelationId})",
+                + "{ApplicationId} from {Endpoint} (correlation {CorrelationId})",
             request.OrganisationId,
             request.ApplicationId,
             endpoint,
-            request.Nation,
-            request.Year,
-            request.Regenerate,
             request.CorrelationId
-        );
-
-        var body = new BackendRequestBody(
-            request.Nation.ToString(),
-            request.OrgId,
-            request.Year,
-            request.Regenerate
         );
 
         try
@@ -114,10 +107,11 @@ internal sealed class HttpAccreditationNumberAdapter(
             var response = await _retryPipeline.ExecuteAsync(
                 async ct =>
                 {
-                    // Rebuilt on every attempt (retry included): request content
-                    // can only be sent once, and a fresh timestamp/nonce per
-                    // attempt is correct anyway (signature window).
-                    using var httpRequest = BuildRequest(endpoint, request.CorrelationId, body);
+                    // Rebuilt on every attempt (retry included): a request
+                    // message can only be sent once, and a fresh
+                    // timestamp/nonce per attempt is correct anyway
+                    // (signature window).
+                    using var httpRequest = BuildRequest(endpoint, request.CorrelationId);
                     var client = httpClientFactory.CreateClient("DefaultClient");
                     return await client.SendAsync(httpRequest, ct);
                 },
@@ -199,12 +193,9 @@ internal sealed class HttpAccreditationNumberAdapter(
         }
     }
 
-    private HttpRequestMessage BuildRequest<TBody>(string endpoint, Guid correlationId, TBody body)
+    private HttpRequestMessage BuildRequest(string endpoint, Guid correlationId)
     {
-        var request = new HttpRequestMessage(HttpMethod.Post, endpoint)
-        {
-            Content = JsonContent.Create(body, options: OperatorBackendJson.Options),
-        };
+        var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
 
         request.Headers.Add("X-Correlation-Id", correlationId.ToString());
         OperatorBackendSigning.AddHeaders(request, _config);
@@ -230,13 +221,6 @@ internal sealed class HttpAccreditationNumberAdapter(
             PerAttemptTimeoutSeconds,
             s_maxBackoff
         );
-
-    private sealed record BackendRequestBody(
-        string? Nation,
-        int? OrgId,
-        int? Year,
-        bool Regenerate
-    );
 
     private sealed record AccreditationApplicationResponse(string? AccreditationReference);
 }

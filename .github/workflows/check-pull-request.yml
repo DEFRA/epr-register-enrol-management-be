@@ -120,11 +120,51 @@ jobs:
           docker build -t defradigital/epr-register-enrol-management-fe:$SHA .
           echo "tag=$SHA" >> "$GITHUB_OUTPUT"
 
+      # The stack also runs the operator backend. A cross-repo change to it
+      # must be tested here too, not the last published image.
+      - name: Check for matching epr-register-enrol-backend branch
+        id: operator-be-branch
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          BRANCH="$HEAD_REF"
+          if git ls-remote --heads https://github.com/DEFRA/epr-register-enrol-backend.git "$BRANCH" | grep -q .; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout and build matching epr-register-enrol-backend
+        if: steps.operator-be-branch.outputs.exists == 'true'
+        id: build-operator-be
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          git clone --branch "$HEAD_REF" --depth 1 https://github.com/DEFRA/epr-register-enrol-backend.git _operator_be
+          cd _operator_be
+          SHA=$(git rev-parse --short HEAD)
+          docker build -t defradigital/epr-register-enrol-backend:$SHA .
+          echo "tag=$SHA" >> "$GITHUB_OUTPUT"
+
+      # Diagnostic only: say which build each service came from, because an
+      # unmatched sibling silently runs on its published 'latest' image.
+      - name: Report resolved e2e stack
+        env:
+          FE_TAG: ${{ steps.build-fe.outputs.tag }}
+          OPERATOR_BE_TAG: ${{ steps.build-operator-be.outputs.tag }}
+          E2E_REF: ${{ steps.e2e-branch.outputs.ref }}
+        run: |
+          echo "management-be : ${{ github.sha }} (this PR)"
+          echo "mgmt-tests    : $E2E_REF"
+          echo "management-fe : ${FE_TAG:-latest (published image)}"
+          echo "operator-be   : ${OPERATOR_BE_TAG:-latest (published image)}"
+
       - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
         uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@1252714c544ffd8f820a7fd0ab168d4c3dd5a1b5 # main
         with:
           management-be: ${{ github.sha }}
           management-fe: ${{ steps.build-fe.outputs.tag }}
+          operator-be: ${{ steps.build-operator-be.outputs.tag }}
           branch: ${{ steps.e2e-branch.outputs.ref }}
 
   sonarcloud-scan:
