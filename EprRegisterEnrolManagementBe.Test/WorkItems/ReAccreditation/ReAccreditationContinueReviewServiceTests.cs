@@ -64,6 +64,32 @@ public class ReAccreditationContinueReviewServiceTests
             harness.WorkItem.Id, "continue-review-during-assessment", harness.User, ct);
     }
 
+    [Fact]
+    public async Task ContinueReviewAsync_ignores_a_payment_date_change_made_while_updated()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("resume-during-assessment");
+        harness.WorkItem.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "payment-date-changed",
+            ActionDisplayName = "Payment date changed",
+            CreatedAt = DateTime.UtcNow,
+            StateId = "updated",
+            Details = new Dictionary<string, string?>
+            {
+                ["previousPaymentDate"] = "2026-07-15",
+                ["paymentDate"] = "2026-07-20",
+                ["reason"] = "Corrected.",
+            },
+        });
+
+        var result = await harness.Service.ContinueReviewAsync(harness.WorkItem.Id, harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.Engine.Received(1).ApplyActionAsync(
+            harness.WorkItem.Id, "continue-review-during-assessment", harness.User, ct);
+    }
+
     // ------------------------------- idempotency -------------------------------
 
     [Fact]

@@ -247,6 +247,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IReAccreditationDulyMakingService,
             ReAccreditationDulyMakingService
         >();
+        // RA-576: corrects the payment date recorded at duly making without
+        // touching state or the SLA clock.
+        services.AddSingleton<
+            IReAccreditationChangePaymentDateService,
+            ReAccreditationChangePaymentDateService
+        >();
         // RA-291: bespoke query workflow (state-derived query-during-* action
         // + query-detail audit entry).
         services.AddSingleton<IReAccreditationQueryService, ReAccreditationQueryService>();
