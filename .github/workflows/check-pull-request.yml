@@ -120,9 +120,8 @@ jobs:
           docker build -t defradigital/epr-register-enrol-management-fe:$SHA .
           echo "tag=$SHA" >> "$GITHUB_OUTPUT"
 
-      # The stack also runs the operator backend (approval asks it for the
-      # accreditation number). A cross-repo story's backend change must be
-      # tested here too, not the last published image.
+      # The stack also runs the operator backend. A cross-repo change to it
+      # must be tested here too, not the last published image.
       - name: Check for matching epr-register-enrol-backend branch
         id: operator-be-branch
         env:
