@@ -6161,6 +6161,30 @@ public class ReAccreditationEndpointTests
             CancellationToken cancellationToken = default
         ) => inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
 
+        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
+            string typeId,
+            string fieldName,
+            string prefix,
+            CancellationToken cancellationToken = default
+        ) => inner.FindByPayloadFieldPrefixAsync(typeId, fieldName, prefix, cancellationToken);
+
+        public Task<bool> CorrectPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue expectedValue,
+            BsonValue newValue,
+            WorkItemAuditEntry auditEntry,
+            CancellationToken cancellationToken = default
+        ) =>
+            inner.CorrectPayloadFieldAsync(
+                workItemId,
+                fieldName,
+                expectedValue,
+                newValue,
+                auditEntry,
+                cancellationToken
+            );
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
@@ -6224,6 +6248,30 @@ public class ReAccreditationEndpointTests
             workItemId == throwId
                 ? throw new InvalidOperationException("Simulated snapshot-refresh failure.")
                 : inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
+
+        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
+            string typeId,
+            string fieldName,
+            string prefix,
+            CancellationToken cancellationToken = default
+        ) => inner.FindByPayloadFieldPrefixAsync(typeId, fieldName, prefix, cancellationToken);
+
+        public Task<bool> CorrectPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue expectedValue,
+            BsonValue newValue,
+            WorkItemAuditEntry auditEntry,
+            CancellationToken cancellationToken = default
+        ) =>
+            inner.CorrectPayloadFieldAsync(
+                workItemId,
+                fieldName,
+                expectedValue,
+                newValue,
+                auditEntry,
+                cancellationToken
+            );
 
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);

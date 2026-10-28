@@ -96,6 +96,55 @@ public interface IWorkItemPersistence
     );
 
     /// <summary>
+    /// Every work item of <paramref name="typeId"/> (archived included) whose
+    /// string <c>payload.{fieldName}</c> starts with <paramref name="prefix"/>,
+    /// returned in full (notes and audit log included). The prefix is matched
+    /// literally (regex-escaped and anchored), so an indexed payload field is
+    /// searched by index range rather than by collection scan.
+    ///
+    /// <para>
+    /// RA-691: lets a one-off correction locate its targets by a stable
+    /// identity instead of scanning the collection.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
+        string typeId,
+        string fieldName,
+        string prefix,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Atomically replace <c>payload.{fieldName}</c> with
+    /// <paramref name="newValue"/> AND append <paramref name="auditEntry"/>,
+    /// but only while the field still holds <paramref name="expectedValue"/>.
+    /// Returns <c>true</c> when the document was updated and <c>false</c>
+    /// when no work item with that id still holds the expected value (it
+    /// was never there, or something else changed it first) — in which
+    /// case nothing at all is written, so the audit entry can never
+    /// describe a change that did not happen.
+    ///
+    /// <para>
+    /// Unlike <see cref="SetPayloadFieldAsync"/> this DOES bump
+    /// <see cref="WorkItem.Version"/>: it appends to the audit log, and a
+    /// concurrent load → mutate → <see cref="ReplaceAsync"/> holding the old
+    /// version would otherwise silently overwrite both the corrected field
+    /// and the new entry. With the bump that writer gets a
+    /// <see cref="WorkItemConcurrencyException"/> and retries on fresh data.
+    /// <see cref="WorkItem.StateId"/> and <see cref="WorkItem.LastModifiedAt"/>
+    /// are left untouched: a correction is not a workflow event.
+    /// </para>
+    /// </summary>
+    Task<bool> CorrectPayloadFieldAsync(
+        Guid workItemId,
+        string fieldName,
+        BsonValue expectedValue,
+        BsonValue newValue,
+        WorkItemAuditEntry auditEntry,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// RA-311/MBE-3: find an existing work item of <paramref name="typeId"/>
     /// whose <c>payload.operatorApplicationId</c> matches
     /// <paramref name="operatorApplicationId"/>, or <c>null</c> if none
@@ -574,19 +623,7 @@ public sealed class WorkItemPersistence
         // A C# null would be written as an explicit BSON null; callers must
         // pass BsonNull.Value deliberately if that is what they mean.
         ArgumentNullException.ThrowIfNull(value);
-
-        // Guard the dotted-path injection: a caller passing "a.b" or a "$"
-        // operator would target a nested document or rewrite a different part
-        // of the envelope entirely. This method's contract is one field
-        // directly under `payload`.
-        if (fieldName.Contains('.', StringComparison.Ordinal) || fieldName.StartsWith('$'))
-        {
-            throw new ArgumentException(
-                "Payload field name must be a single field directly under 'payload' "
-                    + "(no dotted paths, no update operators).",
-                nameof(fieldName)
-            );
-        }
+        EnsureTopLevelPayloadField(fieldName);
 
         var result = await Collection.UpdateOneAsync(
             Builders<WorkItem>.Filter.Eq(w => w.Id, workItemId),
@@ -595,6 +632,76 @@ public sealed class WorkItemPersistence
         );
 
         return result.MatchedCount > 0;
+    }
+
+    public async Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
+        string typeId,
+        string fieldName,
+        string prefix,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(typeId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(prefix);
+        EnsureTopLevelPayloadField(fieldName);
+
+        // Anchored + escaped: a literal prefix, never a caller-supplied
+        // pattern, and an index-range scan on an indexed field.
+        var pattern = new BsonRegularExpression(
+            "^" + System.Text.RegularExpressions.Regex.Escape(prefix)
+        );
+        var filter = Builders<WorkItem>.Filter.And(
+            Builders<WorkItem>.Filter.Eq(w => w.TypeId, typeId),
+            Builders<WorkItem>.Filter.Regex($"payload.{fieldName}", pattern)
+        );
+
+        return await Collection.Find(filter).ToListAsync(cancellationToken);
+    }
+
+    public async Task<bool> CorrectPayloadFieldAsync(
+        Guid workItemId,
+        string fieldName,
+        BsonValue expectedValue,
+        BsonValue newValue,
+        WorkItemAuditEntry auditEntry,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(expectedValue);
+        ArgumentNullException.ThrowIfNull(newValue);
+        ArgumentNullException.ThrowIfNull(auditEntry);
+        EnsureTopLevelPayloadField(fieldName);
+
+        var result = await Collection.UpdateOneAsync(
+            Builders<WorkItem>.Filter.And(
+                Builders<WorkItem>.Filter.Eq(w => w.Id, workItemId),
+                Builders<WorkItem>.Filter.Eq($"payload.{fieldName}", expectedValue)
+            ),
+            Builders<WorkItem>.Update
+                .Set($"payload.{fieldName}", newValue)
+                .Push(w => w.AuditLog, auditEntry)
+                .Inc(w => w.Version, 1),
+            cancellationToken: cancellationToken
+        );
+
+        return result.ModifiedCount > 0;
+    }
+
+    // Guard the dotted-path injection: a caller passing "a.b" or a "$"
+    // operator would target a nested document or rewrite a different part
+    // of the envelope entirely. The payload-field methods' contract is one
+    // field directly under `payload`.
+    private static void EnsureTopLevelPayloadField(string fieldName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldName);
+        if (fieldName.Contains('.', StringComparison.Ordinal) || fieldName.StartsWith('$'))
+        {
+            throw new ArgumentException(
+                "Payload field name must be a single field directly under 'payload' "
+                    + "(no dotted paths, no update operators).",
+                nameof(fieldName)
+            );
+        }
     }
 
     [ExcludeFromCodeCoverage]

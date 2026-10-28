@@ -12,7 +12,7 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-000: the two e2e- fixtures, built and then reset through the real
+/// RA-000: the e2e- fixtures, built and then reset through the real
 /// startup path (TestOrganisationFixtureHostedService over real ephemeral
 /// Mongo).
 /// </summary>
@@ -23,6 +23,9 @@ public class ReAccreditationTestOrganisationFixturesTests
     );
     private static readonly Guid s_preYearStartId = Guid.Parse(
         ReAccreditationTestOrganisationFixtures.PreYearStartId
+    );
+    private static readonly Guid s_accreditationNumberCorrectedId = Guid.Parse(
+        ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedId
     );
 
     private readonly MongoIntegrationFixture _fixture;
@@ -56,12 +59,16 @@ public class ReAccreditationTestOrganisationFixturesTests
     }
 
     [Fact]
-    public void Both_fixtures_are_on_e2e_test_organisations_with_fixed_ids()
+    public void Every_fixture_is_on_an_e2e_test_organisation_with_a_fixed_id()
     {
         var documents = BuildFixtures(new FakeTimeProvider(DateTimeOffset.Parse("2026-10-15T09:00:00Z")));
 
         Assert.Equal(
-            [ReAccreditationTestOrganisationFixtures.LegacySnapshotId, ReAccreditationTestOrganisationFixtures.PreYearStartId],
+            [
+                ReAccreditationTestOrganisationFixtures.LegacySnapshotId,
+                ReAccreditationTestOrganisationFixtures.PreYearStartId,
+                ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedId,
+            ],
             documents.Select(d => d["_id"].AsString)
         );
         Assert.All(
@@ -151,6 +158,54 @@ public class ReAccreditationTestOrganisationFixturesTests
             ReAccreditationTestOrganisationFixtures.PreYearStartClockStart(now),
             item.SlaClock!.StartedAt
         );
+    }
+
+    /// <summary>
+    /// RA-691: the fixture carries the corrected number and exactly the audit
+    /// entry the migration writes, and the API serves it as the Application
+    /// history tab reads it.
+    /// </summary>
+    [Fact]
+    public async Task The_accreditation_number_corrected_fixture_carries_the_migrations_audit_entry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var factory = NewFactory();
+        var persistence = factory.Services.GetRequiredService<IWorkItemPersistence>();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "frontend");
+
+        var item = await persistence.GetByIdAsync(s_accreditationNumberCorrectedId, ct);
+        var byId = await client.GetAsync($"/work-items/{s_accreditationNumberCorrectedId}", ct);
+
+        Assert.NotNull(item);
+        Assert.Equal(ReAccreditationType.ApprovedStateId, item!.StateId);
+        Assert.Equal(new ReAccreditationType().TemplateVersion, item.TemplateVersion);
+        Assert.Equal(
+            ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedTo,
+            item.Payload["accreditationId"].AsString
+        );
+        var entry = Assert.Single(item.AuditLog);
+        Assert.Equal(ReAccreditationAccreditationNumberCorrectionMigration.AuditAction, entry.Action);
+        Assert.Equal(
+            ReAccreditationAccreditationNumberCorrectionMigration.AuditActionDisplayName,
+            entry.ActionDisplayName
+        );
+        Assert.Equal(
+            new Dictionary<string, string?>
+            {
+                ["from"] = ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedFrom,
+                ["to"] = ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedTo,
+                ["reason"] = "RA-691",
+            },
+            entry.Details
+        );
+
+        Assert.Equal(HttpStatusCode.OK, byId.StatusCode);
+        var body = await byId.Content.ReadAsStringAsync(ct);
+        Assert.Contains("\"action\":\"accreditation-number-corrected\"", body);
+        Assert.Contains("\"from\":\"A27ER9006910322PL\"", body);
+        Assert.Contains("\"to\":\"A27ER9006910246PL\"", body);
+        Assert.Contains("\"reason\":\"RA-691\"", body);
     }
 
     /// <summary>

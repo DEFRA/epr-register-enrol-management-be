@@ -4,7 +4,7 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-000: the two re-accreditation fixtures the mgmt-tests journey suite
+/// RA-000: the re-accreditation fixtures the mgmt-tests journey suite
 /// cannot create through the API. Both sit on <c>e2e-</c> test organisations
 /// and have fixed ids. <see cref="TestOrganisationFixtureHostedService"/>
 /// resets them to the documents built here on every boot, on compose
@@ -38,6 +38,26 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     /// </summary>
     public const string PreYearStartOrganisationName = "E2E RA-611 Pre Year Start Ltd";
 
+    /// <summary>RA-691 accreditation-number-corrected fixture id.</summary>
+    public const string AccreditationNumberCorrectedId = "00000691-0000-4000-8000-000000000691";
+
+    /// <summary>Organisation id of the RA-691 fixture.</summary>
+    public const string AccreditationNumberCorrectedOrganisationId = "e2e-ra691-accreditation-corrected";
+
+    /// <summary>Organisation name of the RA-691 fixture.</summary>
+    public const string AccreditationNumberCorrectedOrganisationName =
+        "E2E RA-691 Accreditation Corrected Ltd";
+
+    /// <summary>
+    /// RA-691 fixture's number before correction. Real format, on the
+    /// fictitious organisation 900691, so it cannot collide with a real
+    /// number on the unique <c>payload.accreditationId</c> index.
+    /// </summary>
+    public const string AccreditationNumberCorrectedFrom = "A27ER9006910322PL";
+
+    /// <summary>RA-691 fixture's number after correction (the stored value).</summary>
+    public const string AccreditationNumberCorrectedTo = "A27ER9006910246PL";
+
     private const string SimulatedDeliveredEmail = "simulate-delivered@notifications.service.gov.uk";
 
     public string TypeId => ReAccreditationType.Id;
@@ -47,6 +67,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         var now = time.GetUtcNow().UtcDateTime;
         yield return BuildLegacySnapshot(now);
         yield return BuildPreYearStart(type, now);
+        yield return BuildAccreditationNumberCorrected(type, now);
     }
 
     /// <summary>
@@ -191,6 +212,64 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 ["nation"] = "England",
                 ["chargeAmountPence"] = 218400,
             },
+        };
+        return item.ToBsonDocument();
+    }
+
+    /// <summary>
+    /// RA-691: an <c>approved</c> 2027 item already corrected by
+    /// <see cref="ReAccreditationAccreditationNumberCorrectionMigration"/>:
+    /// <c>payload.accreditationId</c> holds the corrected number and the audit
+    /// log holds the correction entry, built by the migration's own
+    /// <see cref="ReAccreditationAccreditationNumberCorrectionMigration.BuildAuditEntry"/>
+    /// so the Application history the e2e suite asserts is exactly what the
+    /// migration writes. The migration itself is off by default and keyed to
+    /// two production numbers, so it never produces this item on a test stack.
+    /// </summary>
+    private static BsonDocument BuildAccreditationNumberCorrected(IWorkItemType type, DateTime now)
+    {
+        var submittedAt = now.AddDays(-30);
+        var snapshot = WorkItemTemplateSnapshot.Capture(type);
+        var item = new WorkItem
+        {
+            Id = Guid.Parse(AccreditationNumberCorrectedId),
+            TypeId = ReAccreditationType.Id,
+            StateId = ReAccreditationType.ApprovedStateId,
+            SubmittedAt = submittedAt,
+            LastModifiedAt = now.AddDays(-1),
+            SubmittedBy = "e2e-fixture",
+            TemplateSnapshot = snapshot,
+            TemplateVersion = snapshot.TemplateVersion,
+            Payload = new BsonDocument
+            {
+                ["applicationReference"] = "RA-900000691",
+                ["organisationName"] = AccreditationNumberCorrectedOrganisationName,
+                ["operatorOrganisationId"] = AccreditationNumberCorrectedOrganisationId,
+                ["operatorApplicationId"] = "e2e-app-ra691-accreditation-corrected",
+                // RA-690: a valid registration reference for this fixture's fixed
+                // 2026 previous accreditation year, sharing the corrected number's
+                // org id and sequence.
+                ["registrationNumber"] = "R26ER9006910246PL",
+                ["material"] = "plastic",
+                ["accreditationYear"] = 2027,
+                ["previousAccreditationYear"] = 2026,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = SimulatedDeliveredEmail,
+                ["siteAddress"] = "1 Corrected Reference Road, Leeds",
+                ["siteAddressPostcode"] = "LS1 4AP",
+                ["nation"] = "England",
+                ["chargeAmountPence"] = 218400,
+                [ReAccreditationAccreditationNumber.PayloadKey] = AccreditationNumberCorrectedTo,
+                ["accreditationStartDate"] = "2027-01-01",
+            },
+            AuditLog =
+            [
+                ReAccreditationAccreditationNumberCorrectionMigration.BuildAuditEntry(
+                    AccreditationNumberCorrectedFrom,
+                    AccreditationNumberCorrectedTo,
+                    now.AddDays(-1)
+                ),
+            ],
         };
         return item.ToBsonDocument();
     }

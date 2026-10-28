@@ -1216,4 +1216,149 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         };
         await _persistence.CreateAsync(item, TestContext.Current.CancellationToken);
     }
+
+    // ----------------- RA-691 FindByPayloadFieldPrefixAsync / CorrectPayloadFieldAsync -----------------
+
+    private async Task<WorkItem> CreateWithAccreditationIdAsync(
+        string accreditationId,
+        string typeId = "re-accreditation",
+        CancellationToken ct = default
+    )
+    {
+        var now = s_seedNow.UtcDateTime;
+        var workItem = new WorkItem
+        {
+            TypeId = typeId,
+            StateId = "approved",
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            SubmittedBy = "client-1",
+        };
+        workItem.ReplacePayload(new BsonDocument { ["accreditationId"] = accreditationId });
+        workItem.AuditLog.Add(
+            new WorkItemAuditEntry
+            {
+                Action = "accreditation-issued",
+                ActionDisplayName = "Accreditation issued",
+                CreatedAt = now,
+            }
+        );
+        await _persistence.CreateAsync(workItem, ct);
+        return workItem;
+    }
+
+    [Fact]
+    public async Task FindByPayloadFieldPrefixAsync_matches_the_literal_prefix_only_within_the_type()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var match = await CreateWithAccreditationIdAsync("A27ER5005270322PL", ct: ct);
+        await CreateWithAccreditationIdAsync("A26ER5005270246PL", ct: ct);
+        await CreateWithAccreditationIdAsync("XA27ER5005270999PL", ct: ct);
+        await CreateWithAccreditationIdAsync("A27ER5005270111PL", typeId: "other-type", ct: ct);
+
+        var found = await _persistence.FindByPayloadFieldPrefixAsync(
+            "re-accreditation",
+            "accreditationId",
+            "A27ER500527",
+            ct
+        );
+
+        var item = Assert.Single(found);
+        Assert.Equal(match.Id, item.Id);
+        // Returned in full, unlike QueryAsync.
+        Assert.Single(item.AuditLog);
+    }
+
+    [Fact]
+    public async Task FindByPayloadFieldPrefixAsync_treats_regex_metacharacters_literally()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await CreateWithAccreditationIdAsync("A27ER5005270322PL", ct: ct);
+
+        var found = await _persistence.FindByPayloadFieldPrefixAsync(
+            "re-accreditation",
+            "accreditationId",
+            "A27.*",
+            ct
+        );
+
+        Assert.Empty(found);
+    }
+
+    [Fact]
+    public async Task CorrectPayloadFieldAsync_sets_the_field_appends_the_entry_and_bumps_the_version()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = await CreateWithAccreditationIdAsync("A27ER5005270322PL", ct: ct);
+        var versionBefore = workItem.Version;
+        var entry = new WorkItemAuditEntry
+        {
+            Action = "accreditation-number-corrected",
+            ActionDisplayName = "Accreditation number corrected",
+            CreatedAt = s_seedNow.UtcDateTime,
+            Details = new Dictionary<string, string?> { ["from"] = "A27ER5005270322PL" },
+        };
+
+        var written = await _persistence.CorrectPayloadFieldAsync(
+            workItem.Id,
+            "accreditationId",
+            "A27ER5005270322PL",
+            "A27ER5005270246PL",
+            entry,
+            ct
+        );
+
+        Assert.True(written);
+        var fetched = (await _persistence.GetByIdAsync(workItem.Id, ct))!;
+        Assert.Equal("A27ER5005270246PL", fetched.Payload["accreditationId"].AsString);
+        Assert.Equal(
+            ["accreditation-issued", "accreditation-number-corrected"],
+            fetched.AuditLog.Select(e => e.Action)
+        );
+        Assert.Equal(entry.Id, fetched.AuditLog[1].Id);
+        Assert.Equal(versionBefore + 1, fetched.Version);
+        Assert.Equal("approved", fetched.StateId);
+        Assert.Equal(workItem.LastModifiedAt, fetched.LastModifiedAt);
+    }
+
+    [Fact]
+    public async Task CorrectPayloadFieldAsync_writes_nothing_when_the_field_no_longer_holds_the_expected_value()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var workItem = await CreateWithAccreditationIdAsync("A27ER5005270999PL", ct: ct);
+
+        var written = await _persistence.CorrectPayloadFieldAsync(
+            workItem.Id,
+            "accreditationId",
+            "A27ER5005270322PL",
+            "A27ER5005270246PL",
+            new WorkItemAuditEntry { Action = "x", ActionDisplayName = "x" },
+            ct
+        );
+
+        Assert.False(written);
+        var fetched = (await _persistence.GetByIdAsync(workItem.Id, ct))!;
+        Assert.Equal("A27ER5005270999PL", fetched.Payload["accreditationId"].AsString);
+        Assert.Single(fetched.AuditLog);
+        Assert.Equal(workItem.Version, fetched.Version);
+    }
+
+    [Theory]
+    [InlineData("a.b")]
+    [InlineData("$set")]
+    public async Task CorrectPayloadFieldAsync_rejects_field_names_that_escape_the_payload(
+        string fieldName
+    )
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _persistence.CorrectPayloadFieldAsync(
+                Guid.NewGuid(),
+                fieldName,
+                "a",
+                "b",
+                new WorkItemAuditEntry { Action = "x", ActionDisplayName = "x" },
+                TestContext.Current.CancellationToken
+            )
+        );
+    }
 }

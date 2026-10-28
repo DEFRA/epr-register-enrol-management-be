@@ -64,7 +64,10 @@ public class WorkItemAvailableActionsWireContractTests
 
         var workItemId = await SeedAsync(factory, cancellationToken);
 
-        var response = await client.GetAsync("/work-items", cancellationToken);
+        // pageSize=100: the seeded item has no SubmittedAt so it sorts last,
+        // behind the demo items and test-organisation fixtures, which together
+        // outnumber the default page of 20.
+        var response = await client.GetAsync("/work-items?pageSize=100", cancellationToken);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
