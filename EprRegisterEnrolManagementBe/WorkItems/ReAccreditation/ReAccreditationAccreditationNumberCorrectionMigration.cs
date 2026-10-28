@@ -29,19 +29,21 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   describes, so a human decides rather than this guessing.</item>
 /// </list>
 ///
-/// <para><strong>Gates</strong> (mirroring
-/// <see cref="ReAccreditationIsNewSiteCorrectionMigration"/>), all required
-/// before a single write:</para>
+/// <para><strong>Gates</strong> (the same shape as the backend's RA-691
+/// correction, so both services behave alike):</para>
 /// <list type="number">
 ///   <item><see cref="EnabledConfigKey"/> — off by default; a no-op in every
 ///   environment until deliberately switched on.</item>
-///   <item><see cref="SpotCheckConfirmedByConfigKey"/> — must name whoever
+///   <item><see cref="DryRunConfigKey"/> — defaults to <c>true</c>. A dry run
+///   logs <c>org: old → new</c> per target and writes nothing. It needs no
+///   spot-check name, so the dry run can be read before anyone signs off.</item>
+///   <item><see cref="SpotCheckConfirmedByConfigKey"/> — required only to
+///   apply (<see cref="DryRunConfigKey"/> = <c>false</c>): the name of whoever
 ///   checked the corrected numbers against the organisations' 2026 numbers.
-///   Logged with every run; the audit entry's details are fixed by the
+///   Without it the run logs an error and falls back to a dry run. The name is
+///   logged, not added to the audit entry, whose details are fixed by the
 ///   management-fe/mgmt-tests contract (<c>from</c>, <c>to</c>,
-///   <c>reason</c>), so it is not repeated there.</item>
-///   <item><see cref="ApplyConfigKey"/> — DRY RUN unless explicitly true. The
-///   dry run logs <c>org: old → new</c> per target and writes nothing.</item>
+///   <c>reason</c>).</item>
 /// </list>
 ///
 /// <para>Each write is a single atomic update filtered on the item's id AND
@@ -59,7 +61,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
 {
     public const string EnabledConfigKey = "Diagnostics:Ra691CorrectAccreditationNumbers";
     public const string SpotCheckConfirmedByConfigKey = "Diagnostics:Ra691SpotCheckConfirmedBy";
-    public const string ApplyConfigKey = "Diagnostics:Ra691CorrectAccreditationNumbersApply";
+    public const string DryRunConfigKey = "Diagnostics:Ra691CorrectAccreditationNumbersDryRun";
 
     // Contract with management-fe (renders the details rows) and mgmt-tests
     // (asserts them on the Application history tab). Do not change one side.
@@ -140,23 +142,25 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             return;
         }
 
+        var apply = !configuration.GetValue(DryRunConfigKey, true);
         var confirmedBy = configuration.GetValue<string?>(SpotCheckConfirmedByConfigKey);
-        if (string.IsNullOrWhiteSpace(confirmedBy))
+        if (apply && string.IsNullOrWhiteSpace(confirmedBy))
         {
             logger.LogError(
-                "RA-691 accreditation number correction is enabled but {SpotCheckKey} is not set, "
-                    + "so it will not run. Set it to the name of whoever checked the corrected "
-                    + "numbers against the organisations' 2026 accreditation numbers.",
+                "RA-691 accreditation number correction has {DryRunKey}=false but {SpotCheckKey} "
+                    + "is not set, so it runs as a DRY RUN instead. To apply, set it to the name "
+                    + "of whoever checked the corrected numbers against the organisations' 2026 "
+                    + "accreditation numbers.",
+                DryRunConfigKey,
                 SpotCheckConfirmedByConfigKey
             );
-            return;
+            apply = false;
         }
 
-        var apply = configuration.GetValue(ApplyConfigKey, false);
         logger.LogInformation(
             "RA-691 accreditation number correction starting. Mode={Mode}. Spot-check confirmed by {ConfirmedBy}.",
             apply ? "APPLY" : "DRY RUN (nothing will be written)",
-            confirmedBy
+            string.IsNullOrWhiteSpace(confirmedBy) ? "(not set)" : confirmedBy
         );
 
         // Plan every target before writing any: an abort on the second
