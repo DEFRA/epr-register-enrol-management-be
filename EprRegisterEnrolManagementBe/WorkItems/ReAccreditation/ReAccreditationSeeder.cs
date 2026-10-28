@@ -236,7 +236,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             payload: new BsonDocument
             {
                 ["organisationName"] = "Full Payload Verification Ltd",
-                ["registrationNumber"] = "EPR-100999",
+                ["registrationNumber"] = "R25EX5000090999PL",
                 ["operatorApplicationId"] = "app-full-payload-001",
                 // RA-412: this item carries overseasSites/BES evidence below, so
                 // it must declare the real discriminator management-fe's
@@ -440,8 +440,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // value from the "500009" above so mgmt-tests' RA-503 e2e coverage can prove the case
         // header/audit-log/list card prefer this field over operatorOrganisationId, rather than
         // the two happening to coincide. operatorOrganisationId itself stays untouched at
-        // "500009" — IAccreditationNumberAdapter's numeric fallback parse for seeded/stub
-        // organisations with no real ReEx document behind them depends on it staying numeric.
+        // "500009", the org id segment of this item's registrationNumber.
         fullPayloadVerificationItem.Payload["operatorOrgNumber"] = 500010;
         yield return fullPayloadVerificationItem;
 
@@ -489,7 +488,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             payload: new BsonDocument
             {
                 ["organisationName"] = OrsInterimAuthorityOrganisationName,
-                ["registrationNumber"] = "EPR-100292",
+                ["registrationNumber"] = "R25EX5000100292PL",
                 ["operatorApplicationId"] = "app-ors-interim-authority-001",
                 // RA-412: see the same field on the full-payload-verification
                 // item above — this item's overseasSites/ORS sites need it too.
@@ -765,7 +764,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // available on restart even when the original fixture is already stored.
         var duplicateOrsNamesPayload = orsInterimAuthorityItem.Payload.DeepClone().AsBsonDocument;
         duplicateOrsNamesPayload["organisationName"] = "Duplicate ORS Names Verification Ltd";
-        duplicateOrsNamesPayload["registrationNumber"] = "EPR-100604";
+        duplicateOrsNamesPayload["registrationNumber"] = "R25EX5000160604PL";
         duplicateOrsNamesPayload["operatorApplicationId"] = "app-duplicate-ors-names-001";
         duplicateOrsNamesPayload["operatorEmail"] = "duplicate.ors.names@example.com";
         var duplicateOrsSites = duplicateOrsNamesPayload["overseasSites"]["sites"].AsBsonArray;
@@ -805,7 +804,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             payload: new BsonDocument
             {
                 ["organisationName"] = GlobalGlassExportsOrganisationName,
-                ["registrationNumber"] = "EPR-100506",
+                ["registrationNumber"] = "R25EX5000110506GR",
                 ["operatorApplicationId"] = "app-global-glass-exports-001",
                 ["wasteProcessingType"] = "exporter",
                 // RA-412 (self-review): see the same field on
@@ -847,7 +846,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             payload: new BsonDocument
             {
                 ["organisationName"] = AdditionalInformationExporterOrganisationName,
-                ["registrationNumber"] = "EPR-100434",
+                ["registrationNumber"] = "R25EX5000120434PL",
                 ["operatorApplicationId"] = "app-additional-info-exporter-001",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
@@ -902,7 +901,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             payload: new BsonDocument
             {
                 ["organisationName"] = AdditionalInformationReprocessorOrganisationName,
-                ["registrationNumber"] = "EPR-100435",
+                ["registrationNumber"] = "R25ER5000130435PL",
                 ["operatorApplicationId"] = "app-additional-info-reprocessor-001",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2026,
@@ -951,7 +950,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             payload: new BsonDocument
             {
                 ["organisationName"] = Ra557OverseasSitesResubmitOrganisationName,
-                ["registrationNumber"] = "EPR-100557",
+                ["registrationNumber"] = "R25EX5000140557PL",
                 ["operatorApplicationId"] = "app-ra557-ors-resubmit-001",
                 ["wasteProcessingType"] = "exporter",
                 ["companyRegisterAddressPostcode"] = "BS1 4ST",
@@ -988,7 +987,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             payload: new BsonDocument
             {
                 ["organisationName"] = MultipleInterimSitesOrganisationName,
-                ["registrationNumber"] = "EPR-100603",
+                ["registrationNumber"] = "R25WX5000160603FB",
                 ["operatorApplicationId"] = "app-multiple-interim-sites-001",
                 ["wasteProcessingType"] = "exporter",
                 ["companyRegisterAddressPostcode"] = "CF10 1EP",
@@ -1124,7 +1123,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             payload: new BsonDocument
             {
                 ["organisationName"] = Ra611PreYearStartOrganisationName,
-                ["registrationNumber"] = "EPR-100611",
+                ["registrationNumber"] = "R25ER5000150611PL",
                 ["operatorApplicationId"] = "app-ra611-pre-year-start-001",
                 ["material"] = "plastic",
                 // Ordinary payload realism, matching every other fixture — the
@@ -1420,7 +1419,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             1,
             "submitted",
             "Acme Recycling Ltd",
-            "EPR-100023",
+            "R25ER5000010023PL",
             "app-acme-recycling-001",
             "reg-001",
             "500001",
@@ -1441,7 +1440,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             3,
             "submitted",
             "Northern Plastics Co-op",
-            "EPR-100087",
+            "R25SR5000020087PL",
             "app-northern-plastics-001",
             "reg-002",
             "500002",
@@ -1463,7 +1462,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             9,
             "assessment-in-progress",
             "Riverside Glass Recovery",
-            "EPR-099812",
+            "R24WR5000039812GR",
             "app-riverside-glass-001",
             "reg-003",
             "500003",
@@ -1488,7 +1487,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             15,
             "awaiting-decision",
             "Coastal Materials Group",
-            "EPR-098774",
+            "R24NR5000048774PL",
             "app-coastal-materials-001",
             "reg-004",
             "500004",
@@ -1511,7 +1510,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             32,
             "approved",
             "Heritage Paper Mills",
-            "EPR-097215",
+            "R24ER5000057215PA",
             "app-heritage-paper-001",
             "reg-005",
             "500005",
@@ -1533,7 +1532,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             5,
             "submitted",
             "Clyde Composites Ltd",
-            "EPR-100134",
+            "R25SR5000060134PL",
             "app-clyde-composites-001",
             "reg-006",
             "500006",
@@ -1553,7 +1552,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             11,
             "assessment-in-progress",
             "Swansea Textiles Recovery",
-            "EPR-099441",
+            "R24WR5000079441GO",
             "app-swansea-textiles-001",
             "reg-007",
             "500007",
@@ -1576,7 +1575,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             2,
             "submitted",
             "Belfast Fibres Co",
-            "EPR-100198",
+            "R25NR5000080198PA",
             "app-belfast-fibres-001",
             "reg-008",
             "500008",
@@ -1614,9 +1613,9 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             // realistic value too so they can be approved end-to-end.
             ["operatorApplicationId"] = spec.OperatorApplicationId,
             ["operatorRegistrationId"] = spec.OperatorRegistrationId,
-            // RA-448 phase 2: real submissions always carry a numeric Org ID
-            // (IAccreditationNumberAdapter parses it as int); seed fixtures
-            // need a realistic value too so they can be approved end-to-end.
+            // The organisation id the accreditation-number route is keyed on.
+            // RA-690: it is the six-digit org id segment of this item's
+            // registrationNumber too, so the two agree.
             ["operatorOrganisationId"] = spec.OperatorOrganisationId,
             ["material"] = spec.Material,
         };

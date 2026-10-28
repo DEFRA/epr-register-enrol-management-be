@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Time.Testing;
@@ -58,6 +59,22 @@ public class ReAccreditationSeederTests
 
         Assert.NotEmpty(references);
         Assert.All(references, reference => Assert.Matches(@"^RA-[1-9][0-9]{8}$", reference));
+        Assert.Equal(references.Count, references.Distinct(StringComparer.Ordinal).Count());
+    }
+
+    /// <summary>
+    /// RA-690: the backend derives an accreditation reference from the
+    /// registration reference and rejects an invalid one, so seeded items
+    /// show valid, distinct registration references, never <c>EPR-…</c>.
+    /// </summary>
+    [Fact]
+    public void Build_registration_numbers_are_valid_registration_references_and_unique()
+    {
+        var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
+
+        Assert.NotEmpty(items);
+        Assert.All(items, item => RegistrationReferenceAssert.IsValidFor(item.Payload));
+        var references = items.Select(i => i.Payload["registrationNumber"].AsString).ToList();
         Assert.Equal(references.Count, references.Distinct(StringComparer.Ordinal).Count());
     }
 

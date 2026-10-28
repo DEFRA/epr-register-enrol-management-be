@@ -1,5 +1,3 @@
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
-
 namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 
 /// <summary>
@@ -20,13 +18,12 @@ public interface IAccreditationNumberAdapter
 {
     /// <summary>
     /// Calls <c>POST {organisationId}/{applicationId}/accreditation-number</c>
-    /// on the backend. The backend itself decides generate-vs-reapply based
-    /// on whether it already has a stored accreditation number for this
-    /// application — <see cref="AccreditationNumberRequest.Regenerate"/> only
-    /// controls what happens when one already exists (reapply/YY+1 when
-    /// true, unchanged idempotent return when false); a first-ever generate
-    /// always happens regardless of this flag when the backend has no
-    /// number yet.
+    /// on the backend. RA-690: the backend derives the reference from the
+    /// application's own registration reference and year (or inherits the
+    /// latest previous accreditation reference), so the call carries nothing
+    /// but the two ids. It is idempotent while the application is still open:
+    /// one that already has a reference gets it back unchanged, never a new
+    /// one. Once the backend holds it as Approved, a repeat call gets 409.
     /// </summary>
     Task<AccreditationNumberResult> GenerateOrUpdateAccreditationNumberAsync(
         AccreditationNumberRequest request,
@@ -48,19 +45,6 @@ public interface IAccreditationNumberAdapter
 /// should source this from the work item payload's <c>operatorApplicationId</c>,
 /// not <c>operatorRegistrationId</c> (a different value — the seed-time ReEx
 /// registration id).</param>
-/// <param name="Nation">Regulator nation; becomes the number's agency
-/// letter.</param>
-/// <param name="OrgId">The organisation's real numeric Org ID, or null when
-/// this service does not have one. RA-475: null is the NORMAL case for a
-/// genuinely-submitted application — the only organisation id this service
-/// holds is <c>operatorOrganisationId</c>, which is the ReEx organisation id
-/// and is a UUID. The backend resolves the numeric id from ReEx itself (see
-/// <c>AccreditationApplicationEndpoints.ResolveOrgIdAsync</c>) and only falls
-/// back to this value, which is why passing a parsed one is still worth doing
-/// for the numeric seeded/stub organisations that have no ReEx document
-/// behind them.</param>
-/// <param name="Year">Four-digit accreditation year.</param>
-/// <param name="Regenerate">See the interface method's doc comment.</param>
 /// <param name="CorrelationId">One id per logical call, forwarded as the
 /// <c>X-Correlation-Id</c> header, so this service's logs and the backend's
 /// logs for the same request can be joined on one value — same cross-repo
@@ -69,10 +53,6 @@ public interface IAccreditationNumberAdapter
 public sealed record AccreditationNumberRequest(
     string OrganisationId,
     string ApplicationId,
-    Nation Nation,
-    int? OrgId,
-    int Year,
-    bool Regenerate,
     Guid CorrelationId
 );
 

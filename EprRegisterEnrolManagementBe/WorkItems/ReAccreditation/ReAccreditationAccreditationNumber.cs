@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Text.RegularExpressions;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using MongoDB.Bson;
@@ -48,22 +47,6 @@ internal static class ReAccreditationAccreditationNumber
     /// <summary>True when <paramref name="accreditationId"/> is a real, backend-issued number.</summary>
     public static bool IsRealFormat(string? accreditationId) =>
         !string.IsNullOrWhiteSpace(accreditationId) && s_realFormat.IsMatch(accreditationId);
-
-    /// <summary>
-    /// The four-digit year encoded in a real-format number (its two-digit
-    /// <c>yy</c> segment, read as 20yy), or null for any other shape.
-    /// </summary>
-    public static int? EncodedYear(string? accreditationId)
-    {
-        if (string.IsNullOrWhiteSpace(accreditationId))
-        {
-            return null;
-        }
-        var match = s_realFormat.Match(accreditationId);
-        return match.Success
-            ? 2000 + int.Parse(match.Groups["yy"].Value, CultureInfo.InvariantCulture)
-            : null;
-    }
 
     /// <summary>
     /// Step 1's guard, restored from the single-step approve on <c>main</c>:
