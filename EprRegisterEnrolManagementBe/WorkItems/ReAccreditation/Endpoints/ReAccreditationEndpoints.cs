@@ -22,6 +22,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 internal static class ReAccreditationEndpoints
 {
     private const string ErrorCodeKey = "errorCode";
+    private const string FieldKey = "field";
     private const string WrongWorkItemTypeTitle = "Wrong work item type";
 
     private static readonly JsonSerializerOptions s_payloadJsonOptions = new()
@@ -77,6 +78,11 @@ internal static class ReAccreditationEndpoints
     // yyyy-MM-dd string, so 4 KiB is already absurdly generous.
     public const long MaxDulyMakeBodyBytes = 4 * 1024;
 
+    // RA-576: the change-payment-date endpoint also calls .DisableValidation(),
+    // so it carries its own size guard. A legitimate body is a date plus a
+    // reason of at most 200 words (~1.5 KiB); 16 KiB leaves ample headroom.
+    public const long MaxChangePaymentDateBodyBytes = 16 * 1024;
+
     // RA-410: same rationale as MaxDulyMakeBodyBytes — the decision endpoint
     // calls .DisableValidation() (it owns its own outcome validation so it can
     // attach a machine-readable errorCode the frontend switches on), so it must
@@ -103,6 +109,12 @@ internal static class ReAccreditationEndpoints
     /// title or the human-readable detail.
     /// </summary>
     public const string DulyMakeProblemTitle = "Could not complete duly making";
+
+    /// <summary>
+    /// RA-576: ProblemDetails title for every change-payment-date failure.
+    /// Constant for the same reason as <see cref="DulyMakeProblemTitle"/>.
+    /// </summary>
+    public const string ChangePaymentDateProblemTitle = "Could not change payment date";
 
     /// <summary>
     /// ProblemDetails title for every recycling-operations update failure.
@@ -140,6 +152,16 @@ internal static class ReAccreditationEndpoints
             .WithName("DulyMakeReAccreditation")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxDulyMakeBodyBytes))
+            .RequireAuthorization();
+
+        // RA-576: correct the payment date entered at duly making. Edits the
+        // payload and appends an audit entry only; state and SLA clock are
+        // untouched. No role restriction, like duly-make.
+        group
+            .MapPost("/{id:guid}/change-payment-date", ChangePaymentDate)
+            .WithName("ChangePaymentDateReAccreditation")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxChangePaymentDateBodyBytes))
             .RequireAuthorization();
 
         // RA-410: bespoke log-decision endpoint. Both hops of a determination
@@ -429,7 +451,7 @@ internal static class ReAccreditationEndpoints
                 extensions: new Dictionary<string, object?>
                 {
                     [ErrorCodeKey] = validation.ErrorCode,
-                    ["field"] = ReAccreditationDulyMakingValidator.Field,
+                    [FieldKey] = ReAccreditationDulyMakingValidator.Field,
                 }
             );
         }
@@ -451,28 +473,103 @@ internal static class ReAccreditationEndpoints
             return TypedResults.NotFound();
         }
 
+        return ToServiceFailureProblem(result, DulyMakeProblemTitle);
+    }
+
+    /// <summary>
+    /// RA-576: change the payment date of a re-accreditation work item.
+    ///
+    /// Validation happens here, like <see cref="DulyMake"/>, so a 400 can carry
+    /// the stable <c>errorCode</c> and the <c>field</c> (<c>paymentDate</c> or
+    /// <c>reason</c>) the frontend binds to a GOV.UK error summary. Refusals
+    /// from the service (terminal state, no payment date, concurrency) are 409s.
+    /// </summary>
+    public static async Task<
+        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
+    > ChangePaymentDate(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromBody] ChangePaymentDateRequest? request,
+        [FromServices] IReAccreditationChangePaymentDateService changePaymentDateService,
+        [FromServices] IWorkItemService engine,
+        [FromServices] TimeProvider timeProvider,
+        CancellationToken cancellationToken
+    )
+    {
+        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        var validation = ReAccreditationChangePaymentDateValidator.Validate(
+            request?.PaymentDate,
+            request?.Reason,
+            today
+        );
+
+        if (!validation.IsValid)
+        {
+            return TypedResults.Problem(
+                title: ChangePaymentDateProblemTitle,
+                detail: validation.Detail,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    [ErrorCodeKey] = validation.ErrorCode,
+                    [FieldKey] = validation.Field,
+                }
+            );
+        }
+
+        var result = await changePaymentDateService.ChangePaymentDateAsync(
+            id,
+            validation.PaymentDate!.Value,
+            validation.Reason!,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
+        {
+            return TypedResults.NotFound();
+        }
+
+        return ToServiceFailureProblem(result, ChangePaymentDateProblemTitle);
+    }
+
+    /// <summary>
+    /// Map a failed duly-make / change-payment-date service result to its
+    /// ProblemDetails. Shared because both endpoints speak the same failure
+    /// vocabulary to the frontend.
+    ///
+    /// 401 for a missing actor; 409 for the three conflicts with the resource's
+    /// current state (the frontend's answer is "this application has changed,
+    /// reload it", never a field error); 400 otherwise. The only 400 a service
+    /// itself produces is a type mismatch, which gets an <c>errorCode</c> so the
+    /// frontend never parses prose to decide whether it belongs against a field.
+    /// </summary>
+    private static ProblemHttpResult ToServiceFailureProblem(
+        WorkItemActionResult result,
+        string title
+    )
+    {
         var status = result.FailureCode switch
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            // All three are conflicts with the resource's current state rather
-            // than malformed requests: the frontend's correct response is "this
-            // application has changed, reload it", never a field-level error.
             WorkItemActionFailureCode.InvalidTransition
             or WorkItemActionFailureCode.TerminalState
             or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
             _ => StatusCodes.Status400BadRequest,
         };
 
-        // The only 400 the service itself can produce is a type mismatch. Give
-        // it an errorCode too so the frontend never has to parse prose to work
-        // out whether a 400 belongs against the date input.
         var extensions =
             result.FailureCode == WorkItemActionFailureCode.UnknownAction
                 ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
                 : null;
 
         return TypedResults.Problem(
-            title: DulyMakeProblemTitle,
+            title: title,
             detail: result.Message,
             statusCode: status,
             extensions: extensions
@@ -594,7 +691,7 @@ internal static class ReAccreditationEndpoints
                 extensions: new Dictionary<string, object?>
                 {
                     [ErrorCodeKey] = "invalid-outcome",
-                    ["field"] = "outcome",
+                    [FieldKey] = "outcome",
                 }
             );
         }
@@ -1255,7 +1352,7 @@ internal static class ReAccreditationEndpoints
                 extensions: new Dictionary<string, object?>
                 {
                     [ErrorCodeKey] = result.ErrorCode,
-                    ["field"] = result.Field,
+                    [FieldKey] = result.Field,
                 }
             ),
             OverseasSiteRecyclingOperationsOutcome.Conflict => TypedResults.Problem(
