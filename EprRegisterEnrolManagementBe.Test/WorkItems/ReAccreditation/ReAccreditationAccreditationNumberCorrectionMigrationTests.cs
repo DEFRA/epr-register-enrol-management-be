@@ -76,13 +76,10 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             await SeedAsync(PlasgranIncorrect, "PLASGRAN LIMITED")
         );
 
-    /// <param name="dryRun">
-    /// The DryRun key's value; <c>null</c> leaves it unset so its default applies.
-    /// </param>
     private ReAccreditationAccreditationNumberCorrectionMigration BuildSut(
         bool enabled = true,
         string? confirmedBy = "a.checker",
-        bool? dryRun = false
+        bool apply = true
     )
     {
         var settings = new Dictionary<string, string?>
@@ -93,10 +90,9 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
         {
             settings[ReAccreditationAccreditationNumberCorrectionMigration.EnabledConfigKey] = "true";
         }
-        if (dryRun is { } value)
+        if (apply)
         {
-            settings[ReAccreditationAccreditationNumberCorrectionMigration.DryRunConfigKey] =
-                value ? "true" : "false";
+            settings[ReAccreditationAccreditationNumberCorrectionMigration.ApplyConfigKey] = "true";
         }
 
         return new(
@@ -132,44 +128,14 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
         Assert.Empty(_logger.Records);
     }
 
-    [Fact]
-    public async Task DryRun_defaults_to_true_when_only_Enabled_is_set()
-    {
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
-
-        await RunAsync(BuildSut(dryRun: null));
-
-        await AssertUntouchedAsync(infinity);
-        await AssertUntouchedAsync(plasgran);
-        Assert.Equal(2, WouldCorrectLines().Count);
-        Assert.DoesNotContain(_logger.Records, r => r.Level == LogLevel.Error);
-    }
-
     [Theory]
     [InlineData(null)]
     [InlineData("  ")]
-    public async Task Enabled_without_a_spot_check_name_still_dry_runs_and_writes_nothing(string? confirmedBy)
+    public async Task Enabled_without_a_spot_check_writes_nothing_and_logs_an_error(string? confirmedBy)
     {
         var (infinity, plasgran) = await SeedBothIncorrectAsync();
 
-        await RunAsync(BuildSut(confirmedBy: confirmedBy, dryRun: null));
-
-        await AssertUntouchedAsync(infinity);
-        await AssertUntouchedAsync(plasgran);
-        AssertDryRunLinesForBoth(infinity, plasgran);
-        Assert.DoesNotContain(_logger.Records, r => r.Level == LogLevel.Error);
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("  ")]
-    public async Task DryRun_false_without_a_spot_check_name_logs_an_error_and_runs_as_a_dry_run(
-        string? confirmedBy
-    )
-    {
-        var (infinity, plasgran) = await SeedBothIncorrectAsync();
-
-        await RunAsync(BuildSut(confirmedBy: confirmedBy, dryRun: false));
+        await RunAsync(BuildSut(confirmedBy: confirmedBy));
 
         await AssertUntouchedAsync(infinity);
         await AssertUntouchedAsync(plasgran);
@@ -178,7 +144,6 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             ReAccreditationAccreditationNumberCorrectionMigration.SpotCheckConfirmedByConfigKey,
             error.Message
         );
-        AssertDryRunLinesForBoth(infinity, plasgran);
     }
 
     // AC1
@@ -187,22 +152,14 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
     {
         var (infinity, plasgran) = await SeedBothIncorrectAsync();
 
-        await RunAsync(BuildSut(dryRun: true));
+        await RunAsync(BuildSut(apply: false));
 
         await AssertUntouchedAsync(infinity);
         await AssertUntouchedAsync(plasgran);
-        AssertDryRunLinesForBoth(infinity, plasgran);
-    }
-
-    private List<string> WouldCorrectLines() =>
-        _logger
+        var wouldCorrect = _logger
             .Records.Where(r => r.Message.Contains("DRY RUN would correct", StringComparison.Ordinal))
             .Select(r => r.Message)
             .ToList();
-
-    private void AssertDryRunLinesForBoth(WorkItem infinity, WorkItem plasgran)
-    {
-        var wouldCorrect = WouldCorrectLines();
         Assert.Equal(2, wouldCorrect.Count);
         Assert.Contains(
             wouldCorrect,

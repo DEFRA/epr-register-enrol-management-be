@@ -33,28 +33,26 @@ value decides the outcome:
 - anything else, or zero or more than one candidate: the **whole run aborts
   before any write** and logs why.
 
-## Configuration
+## The three gates
 
-The same shape as the backend's RA-691 correction, so both services behave alike.
-
-| Config key (env var) | Default | Effect |
+| # | Config key (env var) | Effect |
 | --- | --- | --- |
-| `Diagnostics:Ra691CorrectAccreditationNumbers` (`Diagnostics__Ra691CorrectAccreditationNumbers`) | `false` | Off: a no-op in every environment |
-| `Diagnostics:Ra691CorrectAccreditationNumbersDryRun` (`Diagnostics__Ra691CorrectAccreditationNumbersDryRun`) | `true` | Dry run: logs `RA-691 DRY RUN would correct <org> (<org id>) work item <id>: old → new` per target and writes nothing. No spot-check name needed |
-| `Diagnostics:Ra691SpotCheckConfirmedBy` (`Diagnostics__Ra691SpotCheckConfirmedBy`) | unset | Required only to apply: the name of whoever checked the corrected numbers against the 2026 numbers. With `DryRun=false` and no name, the run logs an error and runs as a dry run |
+| 1 | `Diagnostics:Ra691CorrectAccreditationNumbers` (`Diagnostics__Ra691CorrectAccreditationNumbers`) | Off by default; a no-op in every environment until set `true` |
+| 2 | `Diagnostics:Ra691SpotCheckConfirmedBy` (`Diagnostics__Ra691SpotCheckConfirmedBy`) | Must name whoever checked the corrected numbers against the 2026 numbers. Logged on every run |
+| 3 | `Diagnostics:Ra691CorrectAccreditationNumbersApply` (`Diagnostics__Ra691CorrectAccreditationNumbersApply`) | **Dry run unless `true`**: logs `org (id) work item <id>: old → new` per target and writes nothing |
 
 ## Running it
 
 ```bash
 # 1. Dry run. Writes nothing; logs "RA-691 DRY RUN would correct ..." per target.
 Diagnostics__Ra691CorrectAccreditationNumbers=true
-
-# 2. Only when the dry run shows exactly the two changes above, apply:
-Diagnostics__Ra691CorrectAccreditationNumbersDryRun=false
 Diagnostics__Ra691SpotCheckConfirmedBy="your.name"
 
-# 3. Unset all three. (Leaving them set is harmless: a re-run skips both
-#    items, but the keys serve no further purpose.)
+# 2. Only when the dry run shows exactly the two changes above:
+Diagnostics__Ra691CorrectAccreditationNumbersApply=true
+
+# 3. Turn all three back off. (Leaving them on is harmless: a re-run skips
+#    both items, but the keys serve no further purpose.)
 ```
 
 An `RA-691 ABORTED, nothing written` error names the organisation and what was
