@@ -246,7 +246,10 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 ["organisationName"] = AccreditationNumberCorrectedOrganisationName,
                 ["operatorOrganisationId"] = AccreditationNumberCorrectedOrganisationId,
                 ["operatorApplicationId"] = "e2e-app-ra691-accreditation-corrected",
-                ["registrationNumber"] = "EPR-E2E691",
+                // RA-690: a valid registration reference for this fixture's fixed
+                // 2026 previous accreditation year, sharing the corrected number's
+                // org id and sequence.
+                ["registrationNumber"] = "R26ER9006910246PL",
                 ["material"] = "plastic",
                 ["accreditationYear"] = 2027,
                 ["previousAccreditationYear"] = 2026,
