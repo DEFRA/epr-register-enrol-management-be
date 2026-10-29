@@ -26,8 +26,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// Idempotent: an item whose snapshot has <c>start-assessment</c> and no
 /// <c>payment-received</c> is skipped, so a repeat boot writes nothing.
 ///
-/// Registered last of the snapshot migrations (straight after the v15 one),
-/// so it is the one that sets the final version.
+/// Registered straight after the v15 one. Later snapshot migrations follow
+/// it; the last one registered sets the final version.
 /// </summary>
 internal sealed class ReAccreditationRemovePaymentReceivedSnapshotMigration(
     ILogger<ReAccreditationRemovePaymentReceivedSnapshotMigration> logger)

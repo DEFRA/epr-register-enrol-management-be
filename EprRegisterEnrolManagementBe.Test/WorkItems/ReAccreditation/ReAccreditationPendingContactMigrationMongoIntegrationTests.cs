@@ -79,8 +79,10 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
     );
 
     /// <summary>
-    /// v16: the live (v17) template without the pending-contact states and
-    /// transitions, and with the single-step reject.
+    /// v16: the live template without the pending-contact states and
+    /// transitions, and with the single-step reject. Built from the live type,
+    /// so it also carries v18's <c>assessment-started</c> state and
+    /// transitions (RA-527 follow-up); the v17 migration leaves those alone.
     /// </summary>
     private static WorkItemTemplateSnapshot BuildV16Snapshot()
     {

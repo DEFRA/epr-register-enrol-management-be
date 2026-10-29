@@ -328,9 +328,10 @@ internal sealed class ReAccreditationStatusPushHook(
     /// Every action id whose declared transition <em>moves</em> a work item
     /// onto one of <see cref="s_excludedTargetStateIds"/> — <c>queried</c>,
     /// <c>withdrawn</c>, a pending-contact state or (RA-527 follow-up)
-    /// <c>assessment-started</c> — i.e. exactly the
-    /// query-during-* and withdraw/withdraw-during-* families, without
-    /// restating their literal ids here. Computed once from a fresh
+    /// <c>assessment-started</c> — i.e. the query-during-*,
+    /// withdraw/withdraw-during-* and make-determination-* families and
+    /// <c>start-assessment</c>, without restating their literal ids here.
+    /// Computed once from a fresh
     /// <see cref="ReAccreditationType"/> instance, the same source of truth
     /// the engine itself validates transitions against.
     ///
