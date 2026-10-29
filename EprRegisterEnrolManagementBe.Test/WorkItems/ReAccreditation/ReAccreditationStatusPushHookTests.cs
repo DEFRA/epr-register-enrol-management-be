@@ -229,6 +229,23 @@ public class ReAccreditationStatusPushHookTests
     }
 
     [Fact]
+    public async Task OnActionAppliedAsync_ignores_a_withdrawal_of_a_started_case()
+    {
+        // RA-527 follow-up: withdrawing a started case reuses
+        // withdraw-during-assessment, so it is still left to the withdraw flow
+        // and never pushed as a generic status change.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = BuildSut();
+        var workItem = BuildWorkItem(
+            "withdrawn", "withdraw-during-assessment", "Withdraw", "assessment-started");
+
+        await sut.Hook.OnActionAppliedAsync(
+            workItem, "withdraw-during-assessment", "assessment-started", s_user, ct);
+
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
+    }
+
+    [Fact]
     public async Task OnActionAppliedAsync_never_pushes_assessment_started()
     {
         // RA-527 follow-up: starting a case keeps it "Duly made" on both

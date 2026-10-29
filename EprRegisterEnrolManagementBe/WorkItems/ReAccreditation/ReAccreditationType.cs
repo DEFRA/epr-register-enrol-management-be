@@ -645,6 +645,16 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_assessmentInProgress.Id,
             s_withdrawn.Id
         ),
+        // RA-527 follow-up (v18): a started case ('assessment-started', "Duly
+        // made") is withdrawn through the same action id. The Withdrawn email
+        // and the status push hook's withdraw exclusion are keyed by action id
+        // (or by the 'withdrawn' to-state), so neither needs to change.
+        new WorkItemTransition(
+            "withdraw-during-assessment",
+            WithdrawActionLabel,
+            s_assessmentStarted.Id,
+            s_withdrawn.Id
+        ),
         new WorkItemTransition(
             "withdraw-during-decision",
             WithdrawActionLabel,

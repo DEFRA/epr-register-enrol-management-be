@@ -234,6 +234,23 @@ public class ReAccreditationTypeTests
     }
 
     [Fact]
+    public void Withdraw_during_assessment_also_leaves_a_started_case_for_withdrawn()
+    {
+        // RA-527 follow-up: an operator can withdraw a started case, as they
+        // could before starting kept it "Duly made". The hop reuses the
+        // withdraw-during-assessment action id, so the Withdrawn email and the
+        // status push exclusion (both keyed by action id) need no change.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "withdraw-during-assessment" && t.FromStateId == "assessment-started"
+        );
+
+        Assert.Equal("withdrawn", transition.ToStateId);
+        Assert.Equal("Withdraw", transition.DisplayName);
+        Assert.True(transition.CallerInvocable);
+    }
+
+    [Fact]
     public void Decisions_and_sla_extend_are_not_widened_to_duly_made()
     {
         // RA-595: the backend keeps refusing decisions and deadline changes on

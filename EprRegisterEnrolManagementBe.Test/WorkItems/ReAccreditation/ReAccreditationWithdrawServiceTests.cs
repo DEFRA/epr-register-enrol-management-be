@@ -23,6 +23,9 @@ public class ReAccreditationWithdrawServiceTests
     [InlineData("submitted", "withdraw")]
     [InlineData("duly-made", "withdraw-during-duly-made")]
     [InlineData("assessment-in-progress", "withdraw-during-assessment")]
+    // RA-527 follow-up: a started case ("Duly made") is withdrawn through the
+    // same action as one under assessment.
+    [InlineData("assessment-started", "withdraw-during-assessment")]
     [InlineData("awaiting-decision", "withdraw-during-decision")]
     [InlineData("queried", "withdraw-during-query")]
     [InlineData("updated", "withdraw-during-updated")]
@@ -53,6 +56,7 @@ public class ReAccreditationWithdrawServiceTests
     [InlineData("submitted", "withdraw")]
     [InlineData("duly-made", "withdraw-during-duly-made")]
     [InlineData("assessment-in-progress", "withdraw-during-assessment")]
+    [InlineData("assessment-started", "withdraw-during-assessment")]
     [InlineData("awaiting-decision", "withdraw-during-decision")]
     [InlineData("queried", "withdraw-during-query")]
     [InlineData("updated", "withdraw-during-updated")]

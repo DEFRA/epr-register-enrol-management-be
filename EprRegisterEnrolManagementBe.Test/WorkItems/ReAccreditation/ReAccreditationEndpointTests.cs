@@ -2649,6 +2649,8 @@ public class ReAccreditationEndpointTests
     [InlineData("submitted")]
     [InlineData("duly-made")]
     [InlineData("assessment-in-progress")]
+    // RA-527 follow-up: a started case ("Duly made") can be withdrawn too.
+    [InlineData("assessment-started")]
     [InlineData("awaiting-decision")]
     [InlineData("queried")]
     [InlineData("updated")]
@@ -4204,6 +4206,39 @@ public class ReAccreditationEndpointTests
                 ("continue-review-during-assessment", "assessment-in-progress"),
             ],
             await WaitForStatusPushesAsync(statusPushes, 2, cancellationToken));
+    }
+
+    // ---------- RA-527 follow-up: withdraw a started case ----------
+
+    [Fact]
+    public async Task An_operator_can_withdraw_a_started_case()
+    {
+        // RA-527 follow-up: starting a case keeps it "Duly made"
+        // ('assessment-started'). The operator can still withdraw it, through
+        // the same withdraw-during-assessment action as before.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMade(id, TenantClientId), cancellationToken);
+
+        var started = await client.PostAsync(
+            $"/work-items/{id}/actions/start-assessment", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+
+        var withdrawn = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/withdraw", WithdrawBody(), cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, withdrawn.StatusCode);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("withdrawn", persisted!.StateId);
+        Assert.Equal(
+            [
+                ("start-assessment", "duly-made", "assessment-started"),
+                ("withdraw-during-assessment", "assessment-started", "withdrawn"),
+            ],
+            AppliedActions(persisted));
     }
 
     private static WorkItem BuildDulyMakeCandidate(Guid id, string submittedBy)
