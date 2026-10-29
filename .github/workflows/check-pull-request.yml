@@ -160,7 +160,7 @@ jobs:
           echo "operator-be   : ${OPERATOR_BE_TAG:-latest (published image)}"
 
       - name: Run e2e tests on ${{ steps.e2e-branch.outputs.ref }}
-        uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@1252714c544ffd8f820a7fd0ab168d4c3dd5a1b5 # main
+        uses: DEFRA/epr-register-enrol-mgmt-tests/run-journey-tests@f906a4044d665eefdef2367828bfbb2bd314ed5f # main
         with:
           management-be: ${{ github.sha }}
           management-fe: ${{ steps.build-fe.outputs.tag }}
