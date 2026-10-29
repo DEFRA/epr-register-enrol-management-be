@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Xml;
 using MongoDB.Bson;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
@@ -22,9 +23,15 @@ public class SlaServiceTests
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
+    // The real registry the host builds: SlaService resolves an item's template
+    // through it (WorkItemEngineRules.ResolveTemplate). The items here are of
+    // type "test", which it does not know, so no extend moves them.
+    private static WorkItemRegistry Registry() => new([new ReAccreditationType()]);
+
     private SlaService BuildService(TimeProvider? timeProvider = null) =>
         new(
             _persistence,
+            Registry(),
             NullLogger<SlaService>.Instance,
             timeProvider ?? _time,
             [_hook]);
@@ -98,7 +105,7 @@ public class SlaServiceTests
         // `postActionHooks?.ToArray() ?? Array.Empty<...>()` branches, which
         // BuildService() above never exercises because it always supplies
         // both explicitly.
-        var service = new SlaService(_persistence, NullLogger<SlaService>.Instance);
+        var service = new SlaService(_persistence, Registry(), NullLogger<SlaService>.Instance);
 
         // This service reads the REAL clock, which RA-611's floor consults for
         // the current year — hence a clock started now and a deadline pushed

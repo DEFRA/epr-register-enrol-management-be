@@ -133,20 +133,30 @@ public sealed class SlaService : ISlaService
     private readonly ILogger<SlaService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
-    private readonly IWorkItemRegistry? _registry;
+    private readonly IWorkItemRegistry _registry;
 
+    /// <param name="persistence">Work item store.</param>
+    /// <param name="registry">
+    /// Required: an extend can move the item (RA-527 follow-up), so its
+    /// template is always resolved as the engine resolves it
+    /// (<see cref="WorkItemEngineRules.ResolveTemplate"/>) — see
+    /// docs/work-items.md on services that change state outside the engine.
+    /// </param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="timeProvider">Clock; defaults to <see cref="TimeProvider.System"/>.</param>
+    /// <param name="postActionHooks">Hooks fanned out to after an extend.</param>
     public SlaService(
         IWorkItemPersistence persistence,
+        IWorkItemRegistry registry,
         ILogger<SlaService> logger,
         TimeProvider? timeProvider = null,
-        IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
-        IWorkItemRegistry? registry = null)
+        IEnumerable<IWorkItemPostActionHook>? postActionHooks = null)
     {
         _persistence = persistence;
+        _registry = registry;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
-        _registry = registry;
     }
 
     public async Task<SlaActionResult> ExtendAsync(
@@ -585,9 +595,7 @@ public sealed class SlaService : ISlaService
     private void ApplyExtendMove(
         WorkItem workItem, string fromStateId, ClaimsPrincipal user, DateTime utcNow)
     {
-        var template = _registry is null
-            ? workItem.TemplateSnapshot
-            : WorkItemEngineRules.ResolveTemplate(workItem, _registry);
+        var template = WorkItemEngineRules.ResolveTemplate(workItem, _registry);
         var move = template?.Transitions.FirstOrDefault(t =>
             string.Equals(t.ActionId, ExtendActionId, StringComparison.OrdinalIgnoreCase)
             && string.Equals(t.FromStateId, fromStateId, StringComparison.OrdinalIgnoreCase)

@@ -417,8 +417,8 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
     private SlaService BuildSlaService() =>
         new(
             _persistence,
+            Registry(),
             NullLogger<SlaService>.Instance,
-            new FakeTimeProvider(s_now),
-            registry: Registry()
+            new FakeTimeProvider(s_now)
         );
 }
