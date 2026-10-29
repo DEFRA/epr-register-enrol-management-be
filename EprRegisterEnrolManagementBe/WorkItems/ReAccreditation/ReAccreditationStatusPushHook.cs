@@ -299,7 +299,8 @@ internal sealed class ReAccreditationStatusPushHook(
 
     /// <summary>
     /// Every action id whose declared transition <em>moves</em> a work item
-    /// onto <c>queried</c> or <c>withdrawn</c> — i.e. exactly the
+    /// onto <c>queried</c>, <c>withdrawn</c>, a pending-contact state or (RA-527
+    /// follow-up) <c>assessment-started</c> — i.e. exactly the
     /// query-during-* and withdraw/withdraw-during-* families, without
     /// restating their literal ids here. Computed once from a fresh
     /// <see cref="ReAccreditationType"/> instance, the same source of truth
@@ -332,6 +333,14 @@ internal sealed class ReAccreditationStatusPushHook(
             // Case Management service only — the operator must not see the
             // outcome before the regulator has contacted them — so a pending
             // state is never pushed.
+            //
+            // RA-527 follow-up: a move onto 'assessment-started' (only
+            // start-assessment) is a regulator starting work. It reads "Duly
+            // made" in the Case Management service and is not a change the
+            // operator needs to see, so it is never pushed and the operator
+            // stays DulyMade. Excluded here, like every other exclusion,
+            // before anything is queued, so no status-push audit entry is
+            // written for it either.
             if (string.Equals(transition.ToStateId, "queried", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(transition.ToStateId, "withdrawn", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(
@@ -341,6 +350,10 @@ internal sealed class ReAccreditationStatusPushHook(
                 || string.Equals(
                     transition.ToStateId,
                     ReAccreditationType.RejectedPendingContactStateId,
+                    StringComparison.OrdinalIgnoreCase)
+                || string.Equals(
+                    transition.ToStateId,
+                    ReAccreditationType.AssessmentStartedStateId,
                     StringComparison.OrdinalIgnoreCase))
             {
                 excluded.Add(transition.ActionId);

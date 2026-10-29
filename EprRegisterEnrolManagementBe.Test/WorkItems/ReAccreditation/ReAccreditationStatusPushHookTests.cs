@@ -137,9 +137,6 @@ public class ReAccreditationStatusPushHookTests
     }
 
     [Theory]
-    // RA-595: "Assessment started" pushes UPDATED, as payment-received did
-    // before v16 removed it.
-    [InlineData("start-assessment", "assessment-in-progress", "duly-made")]
     [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress")]
     // RA-351: the queried sla-extend self-loop is a status change, not a move
     // onto queried, so it is pushed — sharing the action id with the
@@ -224,6 +221,23 @@ public class ReAccreditationStatusPushHookTests
         var workItem = BuildWorkItem("queried", actionId, "Some action", "submitted");
 
         await sut.Hook.OnActionAppliedAsync(workItem, actionId, "submitted", s_user, ct);
+
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_never_pushes_assessment_started()
+    {
+        // RA-527 follow-up: starting a case keeps it "Duly made" on both
+        // sides. The move onto 'assessment-started' is internal to the Case
+        // Management service, so nothing is queued, nothing is pushed and no
+        // status-push audit entry is written — the operator stays DulyMade.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = BuildSut();
+        var workItem = BuildWorkItem(
+            "assessment-started", "start-assessment", "Assessment started", "duly-made");
+
+        await sut.Hook.OnActionAppliedAsync(workItem, "start-assessment", "duly-made", s_user, ct);
 
         await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
     }

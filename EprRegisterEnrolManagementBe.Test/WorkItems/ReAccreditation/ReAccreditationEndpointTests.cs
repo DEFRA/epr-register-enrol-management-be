@@ -3646,12 +3646,15 @@ public class ReAccreditationEndpointTests
     [Theory]
     [InlineData(null)]
     [InlineData("bob-1")]
-    public async Task Start_assessment_moves_a_duly_made_case_into_assessment_and_pushes_updated(
+    public async Task Start_assessment_moves_a_duly_made_case_to_assessment_started_and_pushes_nothing(
         string? assignedToId)
     {
+        // RA-527 follow-up: starting a case keeps it "Duly made" on both sides.
         var cancellationToken = TestContext.Current.CancellationToken;
-        var (adapter, pushed) = CapturingPushAdapter();
-        await using var factory = new ReAccreditationFactory(_fixture, pushAdapter: adapter);
+        var (adapter, _) = CapturingPushAdapter();
+        var backgroundTaskQueue = Substitute.For<IBackgroundTaskQueue>();
+        await using var factory = new ReAccreditationFactory(
+            _fixture, pushAdapter: adapter, backgroundTaskQueue: backgroundTaskQueue);
         using var client = factory.CreateClient();
 
         var id = Guid.NewGuid();
@@ -3665,7 +3668,7 @@ public class ReAccreditationEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.Equal("assessment-started", persisted!.StateId);
         var entry = Assert.Single(persisted.AuditLog, a => a.Action == "action-applied");
         Assert.Equal("start-assessment", entry.Details.GetValueOrDefault("actionId"));
         Assert.Equal("Assessment started", entry.Details.GetValueOrDefault("actionDisplayName"));
@@ -3675,13 +3678,17 @@ public class ReAccreditationEndpointTests
         Assert.Equal("2026-08-20", persisted.Payload["paymentDate"].AsString);
         Assert.Equal(s_dulyMadeClockStart, persisted.SlaClock!.StartedAt);
 
-        // The operator sees UPDATED: the status push for assessment-in-progress.
-        var push = await pushed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
-        Assert.Equal(("start-assessment", "assessment-in-progress", "Assessment started"), push);
+        // The operator stays DULY MADE: nothing is queued or pushed, and no
+        // status-push entry is written.
+        await backgroundTaskQueue.DidNotReceiveWithAnyArgs().QueueAsync(default!, cancellationToken);
+        Assert.Empty(adapter.ReceivedCalls());
+        Assert.DoesNotContain(
+            persisted.AuditLog, a => a.Action.StartsWith("status-push-", StringComparison.Ordinal));
     }
 
     [Theory]
     [InlineData("submitted", HttpStatusCode.BadRequest)]
+    [InlineData("assessment-started", HttpStatusCode.BadRequest)]
     [InlineData("assessment-in-progress", HttpStatusCode.BadRequest)]
     [InlineData("awaiting-decision", HttpStatusCode.BadRequest)]
     [InlineData("queried", HttpStatusCode.BadRequest)]
@@ -3784,7 +3791,7 @@ public class ReAccreditationEndpointTests
 
         Assert.Equal(HttpStatusCode.OK, started.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
-        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.Equal("assessment-started", persisted!.StateId);
         Assert.Equal("bob-1", persisted.AssignedToId);
     }
 
@@ -3808,6 +3815,113 @@ public class ReAccreditationEndpointTests
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("duly-made", persisted!.StateId);
         Assert.Equal("bob-1", persisted.AssignedToId);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    // ------------- RA-527 follow-up: starting a case keeps it "Duly made" -------------
+
+    [Theory]
+    [InlineData("approved", "approved-pending-contact", "make-determination-approved")]
+    [InlineData("rejected", "rejected-pending-contact", "make-determination-rejected")]
+    public async Task A_decision_on_a_started_case_records_step_one_via_awaiting_decision_and_pushes_nothing(
+        string outcome,
+        string expectedStateId,
+        string expectedStepOneActionId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (adapter, _) = CapturingPushAdapter();
+        await using var factory = new ReAccreditationFactory(_fixture, pushAdapter: adapter);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMade(id, TenantClientId, DefaultUserId), cancellationToken);
+        var started = await client.PostAsync(
+            $"/work-items/{id}/actions/start-assessment", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(expectedStateId, persisted!.StateId);
+        var applied = persisted
+            .AuditLog.Where(e => e.Action == "action-applied")
+            .Select(e => (e.Details.GetValueOrDefault("actionId"), e.Details.GetValueOrDefault("toStateId")))
+            .ToList();
+        Assert.Equal(
+            [
+                ("start-assessment", "assessment-started"),
+                ("submit-for-decision", "awaiting-decision"),
+                (expectedStepOneActionId, expectedStateId),
+            ],
+            applied
+        );
+
+        // Neither the start nor step 1 reaches the operator journey: it stays
+        // DULY MADE until step 2 (confirm applicant contact) pushes the outcome.
+        Assert.Empty(adapter.ReceivedCalls());
+        Assert.DoesNotContain(
+            persisted.AuditLog, a => a.Action.StartsWith("status-push-", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task A_decision_that_fails_after_the_start_leaves_the_case_started()
+    {
+        // RA-527 follow-up: management-fe starts the case before submitting
+        // the determination. If the determination then fails, the case stays
+        // "Duly made" (assessment-started) and the identical call can be retried.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var numberAdapter = Substitute.For<IAccreditationNumberAdapter>();
+        numberAdapter
+            .GenerateOrUpdateAccreditationNumberAsync(
+                Arg.Any<AccreditationNumberRequest>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(AccreditationNumberResult.Failure("backend unreachable"));
+        await using var factory = new ReAccreditationFactory(_fixture, numberAdapter: numberAdapter);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMade(id, TenantClientId, DefaultUserId), cancellationToken);
+        var started = await client.PostAsync(
+            $"/work-items/{id}/actions/start-assessment", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/decision",
+            new { outcome = "approved" },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-started", persisted!.StateId);
+        Assert.False(persisted.Payload.Contains("accreditationId"));
+    }
+
+    [Fact]
+    public async Task Submit_for_decision_is_refused_on_a_started_case_through_the_generic_action_route()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "assessment-started", TenantClientId), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/actions/submit-for-decision",
+            content: null,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-started", persisted!.StateId);
         Assert.Empty(persisted.AuditLog);
     }
 

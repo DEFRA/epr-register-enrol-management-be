@@ -58,6 +58,13 @@ internal sealed class ReAccreditationType : IWorkItemType
     /// <summary>RA-527: the terminal "Refused" state a refusal reaches at step 2.</summary>
     public const string RejectedStateId = "rejected";
 
+    /// <summary>
+    /// RA-527 follow-up: the state a Duly made case moves to when a regulator
+    /// starts work on it ("Assessment started"). It reads "Duly made", exactly
+    /// like 'duly-made', and is never pushed to the operator journey.
+    /// </summary>
+    public const string AssessmentStartedStateId = "assessment-started";
+
     /// <summary>The terminal "Withdrawn" state.</summary>
     public const string WithdrawnStateId = "withdrawn";
 
@@ -69,6 +76,18 @@ internal sealed class ReAccreditationType : IWorkItemType
     // accepted, not reconciled.
     private static readonly WorkItemState s_submitted = new("submitted", "Not started");
     private static readonly WorkItemState s_dulyMade = new("duly-made", "Duly made");
+
+    // RA-527 follow-up: a Duly made case a regulator has started work on. It
+    // reads "Duly made", exactly like 'duly-made', because starting a case is
+    // not a response to anything: "Updated" is kept for a query response or a
+    // deadline change. It is internal to the Case Management service —
+    // ReAccreditationStatusPushHook never pushes a move onto it, so the
+    // operator stays DulyMade. Declared straight after 'duly-made' because the
+    // status sort rank is the declaration order (WorkItemSort.StatusRank).
+    private static readonly WorkItemState s_assessmentStarted = new(
+        AssessmentStartedStateId,
+        "Duly made"
+    );
     private static readonly WorkItemState s_assessmentInProgress = new(
         "assessment-in-progress",
         "Updated"
@@ -257,13 +276,23 @@ internal sealed class ReAccreditationType : IWorkItemType
     // Items snapshotted before v17 have none of these until
     // ReAccreditationPendingContactSnapshotMigration patches their frozen
     // snapshot.
-    public string TemplateVersion => "v17";
+    // v18 (RA-527 follow-up, starting a case keeps it "Duly made"): added the
+    // non-terminal 'assessment-started' state ("Duly made") and retargeted
+    // start-assessment to it (duly-made -> assessment-started), so starting
+    // work no longer shows "Updated" to the regulator or the operator. Its
+    // action id, display name and caller-invocability are unchanged. Added
+    // submit-for-decision from 'assessment-started' (reusing the action id,
+    // still CallerInvocable: false) so Make determination works from a
+    // started case. Nothing but start-assessment enters the new state.
+    // ReAccreditationStatusPushHook never pushes a move onto it.
+    public string TemplateVersion => "v18";
     public WorkItemState InitialState => s_submitted;
 
     public IReadOnlyCollection<WorkItemState> States { get; } =
     [
         s_submitted,
         s_dulyMade,
+        s_assessmentStarted,
         s_assessmentInProgress,
         s_awaitingDecision,
         s_queried,
@@ -296,15 +325,18 @@ internal sealed class ReAccreditationType : IWorkItemType
             CallerInvocable: false
         ),
         // RA-595: moves a duly-made case into assessment. Goes through the
-        // generic action path, so the action-applied audit entry and the
-        // UPDATED status push apply; ReAccreditationNotificationHook has no
-        // template for it, so no email is sent. Replaced payment-received (removed
-        // at v16).
+        // generic action path, so the action-applied audit entry applies;
+        // ReAccreditationNotificationHook has no template for it, so no email
+        // is sent. Replaced payment-received (removed at v16).
+        // RA-527 follow-up (v18): lands on 'assessment-started' ("Duly made"),
+        // not 'assessment-in-progress' ("Updated"), and is not pushed to the
+        // operator journey (ReAccreditationStatusPushHook excludes any move
+        // onto 'assessment-started'), so the operator stays DulyMade.
         new WorkItemTransition(
             "start-assessment",
             StartAssessmentActionLabel,
             s_dulyMade.Id,
-            s_assessmentInProgress.Id
+            s_assessmentStarted.Id
         ),
         // SLA extension is a self-loop on assessment-in-progress so an
         // assessor can record an extension at any time during assessment.
@@ -345,6 +377,17 @@ internal sealed class ReAccreditationType : IWorkItemType
             "submit-for-decision",
             "Submit for decision",
             s_assessmentInProgress.Id,
+            s_awaitingDecision.Id,
+            CallerInvocable: false
+        ),
+        // RA-527 follow-up (v18): the same hop from a started case, reusing the
+        // action id (the engine keys transitions per from-state, as sla-extend
+        // does). Still CallerInvocable: false — only
+        // POST /work-items/re-accreditation/{id}/decision reaches it.
+        new WorkItemTransition(
+            "submit-for-decision",
+            "Submit for decision",
+            s_assessmentStarted.Id,
             s_awaitingDecision.Id,
             CallerInvocable: false
         ),

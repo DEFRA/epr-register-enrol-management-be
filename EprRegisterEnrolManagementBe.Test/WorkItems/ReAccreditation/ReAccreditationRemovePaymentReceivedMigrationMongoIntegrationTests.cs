@@ -62,17 +62,25 @@ public sealed class ReAccreditationRemovePaymentReceivedMigrationMongoIntegratio
     private static ReAccreditationRemovePaymentReceivedSnapshotMigration BuildMigration() =>
         new(NullLogger<ReAccreditationRemovePaymentReceivedSnapshotMigration>.Instance);
 
-    /// <summary>v15: the live (v16) template plus payment-received.</summary>
+    /// <summary>
+    /// v15: the live template plus payment-received, minus v18's
+    /// 'assessment-started' (RA-527 follow-up): start-assessment still lands
+    /// on 'assessment-in-progress' and nothing leaves the started state.
+    /// </summary>
     private static WorkItemTemplateSnapshot BuildV15Snapshot()
     {
         var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
-        var transitions = live.Transitions.ToList();
+        var transitions = live
+            .Transitions.Where(t => t.FromStateId != "assessment-started")
+            .Select(t =>
+                t.ActionId == "start-assessment" ? t with { ToStateId = "assessment-in-progress" } : t)
+            .ToList();
         var startAssessment = transitions.FindIndex(t => t.ActionId == "start-assessment");
         transitions.Insert(startAssessment, s_paymentReceived);
         return new WorkItemTemplateSnapshot
         {
             TemplateVersion = "v15",
-            States = live.States,
+            States = live.States.Where(s => s.Id != "assessment-started").ToList(),
             Transitions = transitions,
         };
     }

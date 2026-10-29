@@ -291,8 +291,24 @@ public class SlaBreachBackgroundServiceTests
         Assert.Empty(item.AuditLog);
     }
 
+    // ── RA-527 follow-up: a started case (still "Duly made") is checked ─────
+
     [Fact]
-    public async Task RunOnceAsync_queries_only_duly_made_and_assessment_states()
+    public async Task RunOnceAsync_breaches_an_overdue_started_item()
+    {
+        var item = BreachedItem(stateId: "assessment-started");
+        var sut = Build([item]);
+
+        await sut.Service.RunOnceAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(item.SlaClock!.Breached);
+        var breachEntry = Assert.Single(item.AuditLog, e => e.Action == "sla-breached");
+        Assert.Equal("assessment-started", breachEntry.StateId);
+        await sut.Persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task RunOnceAsync_queries_only_duly_made_started_and_assessment_states()
     {
         var sut = Build();
 
@@ -301,8 +317,9 @@ public class SlaBreachBackgroundServiceTests
         await sut.Persistence.Received(1).QueryAsync(
             Arg.Is<WorkItemQuery>(q =>
                 q.StateIds != null
-                && q.StateIds.Count == 2
+                && q.StateIds.Count == 3
                 && q.StateIds.Contains("duly-made")
+                && q.StateIds.Contains("assessment-started")
                 && q.StateIds.Contains("assessment-in-progress")),
             Arg.Any<CancellationToken>());
     }
