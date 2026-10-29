@@ -201,6 +201,23 @@ public class ReAccreditationTypeTests
     }
 
     [Fact]
+    public void Sla_extend_moves_a_started_case_to_assessment_in_progress_only_through_the_deadline_endpoint()
+    {
+        // RA-527 follow-up: a deadline change on a started case is a real move
+        // to "Updated", not a self-loop. It reuses the sla-extend action id and
+        // is not caller-invocable, so only SlaService (POST .../sla/extend)
+        // applies it, alongside an actual deadline change.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "sla-extend" && t.FromStateId == "assessment-started"
+        );
+
+        Assert.Equal("assessment-in-progress", transition.ToStateId);
+        Assert.Equal("Extend SLA", transition.DisplayName);
+        Assert.False(transition.CallerInvocable);
+    }
+
+    [Fact]
     public void Decisions_and_sla_extend_are_not_widened_to_duly_made()
     {
         // RA-595: the backend keeps refusing decisions and deadline changes on

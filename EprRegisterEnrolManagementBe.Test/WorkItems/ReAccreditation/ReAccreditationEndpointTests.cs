@@ -3955,6 +3955,144 @@ public class ReAccreditationEndpointTests
         Assert.DoesNotContain(projected.AvailableActions, a => a.ActionId == "sla-extend");
     }
 
+    // ---------- RA-527 follow-up: deadline change on a started case ----------
+
+    private static object DeadlineChange(string reason = "More time needed") =>
+        new { additionalDuration = "P14D", reason };
+
+    private static WorkItem BuildDulyMadeMovedTo(Guid id, string stateId)
+    {
+        var item = BuildDulyMade(id, TenantClientId, DefaultUserId);
+        item.StateId = stateId;
+        return item;
+    }
+
+    private static List<(string? ActionId, string? FromStateId, string? ToStateId)> AppliedActions(WorkItem item) =>
+        item.AuditLog
+            .Where(e => e.Action == "action-applied")
+            .Select(e => (
+                e.Details.GetValueOrDefault("actionId"),
+                e.Details.GetValueOrDefault("fromStateId"),
+                e.Details.GetValueOrDefault("toStateId")))
+            .ToList();
+
+    [Fact]
+    public async Task Changing_the_deadline_on_a_started_case_moves_it_to_updated_and_pushes_updated()
+    {
+        // RA-527 follow-up: a started case reads "Duly made". A deadline change
+        // is a change the operator should see, so it moves the case on to
+        // assessment-in-progress ("Updated") and the status push hook tells the
+        // operator journey.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (adapter, pushed) = CapturingPushAdapter();
+        await using var factory = new ReAccreditationFactory(_fixture, pushAdapter: adapter);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMadeMovedTo(id, "assessment-started"), cancellationToken);
+        var dueBefore = (await factory.Persistence.GetByIdAsync(id, cancellationToken))!.SlaClock!.DueAt;
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/sla/extend", DeadlineChange(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.Equal(dueBefore.AddDays(14), persisted.SlaClock!.DueAt);
+        Assert.Equal(
+            [("sla-extend", "assessment-started", "assessment-in-progress")],
+            AppliedActions(persisted));
+        var changed = Assert.Single(persisted.AuditLog, a => a.Action == "sla-extended");
+        Assert.Equal("Determination deadline changed", changed.ActionDisplayName);
+
+        var push = await pushed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+        Assert.Equal(("sla-extend", "assessment-in-progress"), (push.ActionId, push.ToStateId));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("bob-1")]
+    public async Task Start_then_deadline_change_goes_through_assessment_started_to_updated(string? assignedToId)
+    {
+        // RA-527 follow-up: management-fe's deadline submit on an unstarted Duly
+        // made case starts it first (assigning only if unassigned), so the case
+        // passes through assessment-started and ends at Updated.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (adapter, pushed) = CapturingPushAdapter();
+        await using var factory = new ReAccreditationFactory(_fixture, pushAdapter: adapter);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMade(id, TenantClientId, assignedToId), cancellationToken);
+        var started = await client.PostAsync(
+            $"/work-items/{id}/actions/start-assessment", content: null, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/sla/extend", DeadlineChange(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-in-progress", persisted!.StateId);
+        Assert.Equal(assignedToId, persisted.AssignedToId);
+        Assert.Equal(
+            [
+                ("start-assessment", "duly-made", "assessment-started"),
+                ("sla-extend", "assessment-started", "assessment-in-progress"),
+            ],
+            AppliedActions(persisted));
+
+        // Only the deadline change reaches the operator journey.
+        var push = await pushed.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+        Assert.Equal(("sla-extend", "assessment-in-progress"), (push.ActionId, push.ToStateId));
+    }
+
+    [Theory]
+    [InlineData("assessment-in-progress")]
+    [InlineData("queried")]
+    public async Task Changing_the_deadline_on_an_updated_or_queried_case_leaves_its_state_alone(string stateId)
+    {
+        // The existing sla-extend self-loops: an Updated case stays Updated and
+        // a Queried case stays Queried, with no applied-action entry.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMadeMovedTo(id, stateId), cancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/sla/extend", DeadlineChange(), cancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(stateId, persisted!.StateId);
+        Assert.Empty(AppliedActions(persisted));
+        Assert.Single(persisted.AuditLog, a => a.Action == "sla-extended");
+    }
+
+    [Fact]
+    public async Task The_sla_extend_action_on_a_started_case_is_refused_through_the_generic_action_route()
+    {
+        // RA-527 follow-up: the move out of assessment-started only happens
+        // alongside a real deadline change (POST .../sla/extend). The generic
+        // action route must not move a started case to Updated on its own.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildDulyMadeMovedTo(id, "assessment-started"), cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/actions/sla-extend", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("assessment-started", persisted!.StateId);
+        Assert.Empty(persisted.AuditLog);
+    }
+
     private static WorkItem BuildDulyMakeCandidate(Guid id, string submittedBy)
     {
         var type = new ReAccreditationType();

@@ -284,7 +284,10 @@ internal sealed class ReAccreditationType : IWorkItemType
     // submit-for-decision from 'assessment-started' (reusing the action id,
     // still CallerInvocable: false) so Make determination works from a
     // started case. Nothing but start-assessment enters the new state.
-    // ReAccreditationStatusPushHook never pushes a move onto it.
+    // ReAccreditationStatusPushHook never pushes a move onto it. Added
+    // sla-extend from 'assessment-started' to 'assessment-in-progress'
+    // (CallerInvocable: false, applied by SlaService.ExtendAsync), so a
+    // deadline change on a started case still ends at "Updated" on both sides.
     public string TemplateVersion => "v18";
     public WorkItemState InitialState => s_submitted;
 
@@ -361,6 +364,22 @@ internal sealed class ReAccreditationType : IWorkItemType
             "Extend SLA",
             s_queried.Id,
             s_queried.Id
+        ),
+        // RA-527 follow-up (v18): a deadline change on a started case
+        // ('assessment-started', "Duly made") is a real MOVE to
+        // 'assessment-in-progress' ("Updated"), not a self-loop, so both the
+        // regulator and the operator see that something changed. Same action
+        // id as the self-loops above. SlaService.ExtendAsync applies it in the
+        // same write as the deadline change, and ReAccreditationStatusPushHook
+        // then pushes 'assessment-in-progress' (Updated) to the operator.
+        // CallerInvocable is false so the generic action route cannot move a
+        // started case to Updated without a deadline change.
+        new WorkItemTransition(
+            "sla-extend",
+            "Extend SLA",
+            s_assessmentStarted.Id,
+            s_assessmentInProgress.Id,
+            CallerInvocable: false
         ),
         // RA-410: 'awaiting-decision' survives as an internal hop, but no
         // caseworker clicks through it any more. Recording a decision is a

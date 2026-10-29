@@ -313,6 +313,9 @@ internal sealed class ReAccreditationStatusPushHook(
     /// assessment-in-progress <c>sla-extend</c> self-loop pushes. Without the
     /// self-loop guard, sharing the <c>sla-extend</c> action id across both
     /// self-loops would wrongly exclude the whole action from status pushes.
+    /// (RA-527 follow-up: the third <c>sla-extend</c>, from
+    /// <c>assessment-started</c>, moves onto <c>assessment-in-progress</c>,
+    /// so it is not excluded either and the operator is pushed Updated.)
     /// </summary>
     private static HashSet<string> BuildExcludedActionIds()
     {

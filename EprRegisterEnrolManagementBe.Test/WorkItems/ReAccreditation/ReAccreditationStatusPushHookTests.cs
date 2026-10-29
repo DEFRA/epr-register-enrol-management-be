@@ -142,6 +142,9 @@ public class ReAccreditationStatusPushHookTests
     // onto queried, so it is pushed — sharing the action id with the
     // assessment self-loop must not drag it into the excluded set.
     [InlineData("sla-extend", "queried", "queried")]
+    // RA-527 follow-up: a deadline change on a started case is a real move
+    // onto assessment-in-progress, so the operator is told it is Updated.
+    [InlineData("sla-extend", "assessment-in-progress", "assessment-started")]
     [InlineData("resume-during-duly-making", "updated", "queried")]
     [InlineData("continue-review-during-duly-making", "submitted", "updated")]
     public async Task OnActionAppliedAsync_pushes_status_for_non_excluded_actions(
