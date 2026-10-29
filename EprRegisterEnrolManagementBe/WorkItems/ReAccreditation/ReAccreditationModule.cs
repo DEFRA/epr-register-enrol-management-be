@@ -169,10 +169,15 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemMigration, ReAccreditationRemovePaymentReceivedSnapshotMigration>();
         // RA-527: adds the two pending-contact states, both outcomes' step 1
         // (make-determination-*) and step 2 (confirm-contact-*) transitions, and
-        // removes the single-step reject (→ v17). Registered last of the
-        // snapshot migrations so it is the one that sets the final version.
-        // Writes only the stored rules and template version.
+        // removes the single-step reject (→ v17). Writes only the stored rules
+        // and template version.
         services.AddSingleton<IWorkItemMigration, ReAccreditationPendingContactSnapshotMigration>();
+        // RA-527 follow-up: adds the assessment-started ("Duly made") state,
+        // retargets start-assessment to it and adds its four exits (→ v18).
+        // Registered last of the snapshot migrations so it is the one that
+        // sets the final version. Writes only the stored rules and template
+        // version; it never moves a case.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationAssessmentStartedSnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply

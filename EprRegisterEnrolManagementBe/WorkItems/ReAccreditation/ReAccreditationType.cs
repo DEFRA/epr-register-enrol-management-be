@@ -288,6 +288,14 @@ internal sealed class ReAccreditationType : IWorkItemType
     // sla-extend from 'assessment-started' to 'assessment-in-progress'
     // (CallerInvocable: false, applied by SlaService.ExtendAsync), so a
     // deadline change on a started case still ends at "Updated" on both sides.
+    // Added query-during-assessment and withdraw-during-assessment from
+    // 'assessment-started' (reusing the action ids, caller-invocable), so a
+    // started case can be queried and withdrawn. Items snapshotted before v18
+    // have none of these, and start-assessment still lands on
+    // 'assessment-in-progress', until
+    // ReAccreditationAssessmentStartedSnapshotMigration patches their frozen
+    // snapshot. No data migration: cases already in 'assessment-in-progress'
+    // stay there.
     public string TemplateVersion => "v18";
     public WorkItemState InitialState => s_submitted;
 

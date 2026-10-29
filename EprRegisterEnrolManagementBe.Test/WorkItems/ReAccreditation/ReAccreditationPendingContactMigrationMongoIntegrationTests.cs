@@ -459,7 +459,7 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
     }
 
     [Fact]
-    public void It_is_registered_last_so_it_sets_the_final_version()
+    public void It_is_registered_after_v16_and_before_the_v18_migration()
     {
         var services = new ServiceCollection();
         new ReAccreditationModule().RegisterServices(services, new ConfigurationBuilder().Build());
@@ -472,7 +472,9 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
             .Where(t => t is not null && typeof(ReAccreditationSnapshotMigrationBase).IsAssignableFrom(t))
             .ToList();
 
-        Assert.Equal(typeof(ReAccreditationPendingContactSnapshotMigration), snapshotMigrations[^1]);
+        // RA-527 follow-up: the v18 migration now follows it and sets the final version.
+        Assert.Equal(typeof(ReAccreditationPendingContactSnapshotMigration), snapshotMigrations[^2]);
+        Assert.Equal(typeof(ReAccreditationAssessmentStartedSnapshotMigration), snapshotMigrations[^1]);
         Assert.True(
             migrations.IndexOf(typeof(ReAccreditationRemovePaymentReceivedSnapshotMigration))
             < migrations.IndexOf(typeof(ReAccreditationPendingContactSnapshotMigration)));
