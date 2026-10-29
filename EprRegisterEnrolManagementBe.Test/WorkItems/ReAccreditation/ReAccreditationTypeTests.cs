@@ -218,6 +218,22 @@ public class ReAccreditationTypeTests
     }
 
     [Fact]
+    public void Query_during_assessment_also_leaves_a_started_case_for_queried()
+    {
+        // RA-527 follow-up: a started case can be queried. The hop reuses the
+        // query-during-assessment action id, so the resume and Continue review
+        // services (which work back from that id) land it on 'updated' and then
+        // 'assessment-in-progress', exactly as for a case under assessment.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "query-during-assessment" && t.FromStateId == "assessment-started"
+        );
+
+        Assert.Equal("queried", transition.ToStateId);
+        Assert.Equal("Query", transition.DisplayName);
+    }
+
+    [Fact]
     public void Decisions_and_sla_extend_are_not_widened_to_duly_made()
     {
         // RA-595: the backend keeps refusing decisions and deadline changes on

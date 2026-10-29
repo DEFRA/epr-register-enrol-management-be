@@ -483,6 +483,7 @@ public class ReAccreditationLifecycleTests
     [InlineData("submitted", "query-during-duly-making")]
     [InlineData("duly-made", "query-during-duly-made")]
     [InlineData("assessment-in-progress", "query-during-assessment")]
+    [InlineData("assessment-started", "query-during-assessment")]
     [InlineData("awaiting-decision", "query-during-decision")]
     public async Task Query_moves_the_item_to_queried_from_any_pre_decision_state(
         string stateId,

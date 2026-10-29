@@ -504,6 +504,19 @@ internal sealed class ReAccreditationType : IWorkItemType
             s_assessmentInProgress.Id,
             s_queried.Id
         ),
+        // RA-527 follow-up (v18): a started case ('assessment-started', "Duly
+        // made") is queried through the same action id. The resume and
+        // Continue review services work back from this id, so a response
+        // lands on 'updated' (resume-during-assessment) and Continue review on
+        // 'assessment-in-progress' (continue-review-during-assessment), exactly
+        // as for a case under assessment. Neither ever returns the case to
+        // 'assessment-started'.
+        new WorkItemTransition(
+            "query-during-assessment",
+            QueryActionLabel,
+            s_assessmentStarted.Id,
+            s_queried.Id
+        ),
         new WorkItemTransition(
             "query-during-decision",
             QueryActionLabel,
