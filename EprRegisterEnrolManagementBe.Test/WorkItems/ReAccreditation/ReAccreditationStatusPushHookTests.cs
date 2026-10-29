@@ -137,14 +137,14 @@ public class ReAccreditationStatusPushHookTests
     }
 
     [Theory]
-    // RA-595: "Assessment started" pushes UPDATED, as payment-received did
-    // before v16 removed it.
-    [InlineData("start-assessment", "assessment-in-progress", "duly-made")]
     [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress")]
     // RA-351: the queried sla-extend self-loop is a status change, not a move
     // onto queried, so it is pushed — sharing the action id with the
     // assessment self-loop must not drag it into the excluded set.
     [InlineData("sla-extend", "queried", "queried")]
+    // RA-527 follow-up: a deadline change on a started case is a real move
+    // onto assessment-in-progress, so the operator is told it is Updated.
+    [InlineData("sla-extend", "assessment-in-progress", "assessment-started")]
     [InlineData("resume-during-duly-making", "updated", "queried")]
     [InlineData("continue-review-during-duly-making", "submitted", "updated")]
     public async Task OnActionAppliedAsync_pushes_status_for_non_excluded_actions(
@@ -224,6 +224,40 @@ public class ReAccreditationStatusPushHookTests
         var workItem = BuildWorkItem("queried", actionId, "Some action", "submitted");
 
         await sut.Hook.OnActionAppliedAsync(workItem, actionId, "submitted", s_user, ct);
+
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_ignores_a_withdrawal_of_a_started_case()
+    {
+        // RA-527 follow-up: withdrawing a started case reuses
+        // withdraw-during-assessment, so it is still left to the withdraw flow
+        // and never pushed as a generic status change.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = BuildSut();
+        var workItem = BuildWorkItem(
+            "withdrawn", "withdraw-during-assessment", "Withdraw", "assessment-started");
+
+        await sut.Hook.OnActionAppliedAsync(
+            workItem, "withdraw-during-assessment", "assessment-started", s_user, ct);
+
+        await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_never_pushes_assessment_started()
+    {
+        // RA-527 follow-up: starting a case keeps it "Duly made" on both
+        // sides. The move onto 'assessment-started' is internal to the Case
+        // Management service, so nothing is queued, nothing is pushed and no
+        // status-push audit entry is written — the operator stays DulyMade.
+        var ct = TestContext.Current.CancellationToken;
+        var sut = BuildSut();
+        var workItem = BuildWorkItem(
+            "assessment-started", "start-assessment", "Assessment started", "duly-made");
+
+        await sut.Hook.OnActionAppliedAsync(workItem, "start-assessment", "duly-made", s_user, ct);
 
         await sut.Queue.DidNotReceiveWithAnyArgs().QueueAsync(default!, ct);
     }

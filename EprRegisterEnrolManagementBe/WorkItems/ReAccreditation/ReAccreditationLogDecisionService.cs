@@ -49,6 +49,7 @@ internal sealed class ReAccreditationLogDecisionService(
 ) : IReAccreditationLogDecisionService
 {
     private const string AssessmentStateId = "assessment-in-progress";
+    private const string AssessmentStartedStateId = ReAccreditationType.AssessmentStartedStateId;
     private const string AwaitingDecisionStateId = "awaiting-decision";
     private const string SubmitForDecisionActionId = "submit-for-decision";
     private const string ApprovedStateId = ReAccreditationType.ApprovedStateId;
@@ -147,18 +148,23 @@ internal sealed class ReAccreditationLogDecisionService(
             );
         }
 
-        // The two accepted entry states. 'awaiting-decision' is accepted not
-        // for the frontend's benefit — it never sends an application there —
-        // but so that an application stranded mid-hop by an earlier failure,
-        // or left there by the pre-RA-410 two-step flow, is finished by the
-        // identical call rather than needing a bespoke rescue path. Anything
-        // else — including RA-527's pending-contact states, whose
-        // determination is already final — is a conflict.
-        var needsSubmitForDecision = string.Equals(
-            workItem.StateId,
-            AssessmentStateId,
-            StringComparison.OrdinalIgnoreCase
-        );
+        // The accepted entry states. Both start states (RA-527 follow-up:
+        // 'assessment-started', a started case that still reads "Duly made",
+        // and 'assessment-in-progress') take the submit-for-decision hop
+        // first. 'awaiting-decision' is accepted not for the frontend's
+        // benefit — it never sends an application there — but so that an
+        // application stranded mid-hop by an earlier failure, or left there by
+        // the pre-RA-410 two-step flow, is finished by the identical call
+        // rather than needing a bespoke rescue path. Anything else — including
+        // RA-527's pending-contact states, whose determination is already
+        // final — is a conflict.
+        var needsSubmitForDecision =
+            string.Equals(workItem.StateId, AssessmentStateId, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(
+                workItem.StateId,
+                AssessmentStartedStateId,
+                StringComparison.OrdinalIgnoreCase
+            );
 
         if (
             !needsSubmitForDecision
@@ -171,8 +177,9 @@ internal sealed class ReAccreditationLogDecisionService(
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
-                $"A decision can only be recorded for a work item in '{AssessmentStateId}' or "
-                    + $"'{AwaitingDecisionStateId}', but {workItemId} is in '{workItem.StateId}'."
+                $"A decision can only be recorded for a work item in '{AssessmentStartedStateId}', "
+                    + $"'{AssessmentStateId}' or '{AwaitingDecisionStateId}', but {workItemId} is in "
+                    + $"'{workItem.StateId}'."
             );
         }
 

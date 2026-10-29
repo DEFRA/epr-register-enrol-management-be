@@ -15,7 +15,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 internal interface IReAccreditationLogDecisionService
 {
     /// <summary>
-    /// Move a work item from <c>assessment-in-progress</c> through
+    /// Move a work item from <c>assessment-in-progress</c> (or, RA-527
+    /// follow-up, a started case in <c>assessment-started</c>) through
     /// <c>awaiting-decision</c> to its decided state (RA-527: for an approval,
     /// the non-terminal <c>approved-pending-contact</c>), applying both hops
     /// server-side so the caller makes exactly one call.

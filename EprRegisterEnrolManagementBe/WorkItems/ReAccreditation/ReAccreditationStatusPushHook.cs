@@ -92,6 +92,33 @@ internal sealed class ReAccreditationStatusPushHook(
 {
     private static readonly ReAccreditationType s_type = new();
 
+    /// <summary>
+    /// Target states a move onto is never pushed: any action whose declared
+    /// transition moves a work item onto one of these is excluded by
+    /// <see cref="BuildExcludedActionIds"/>. Declared before
+    /// <see cref="s_excludedActionIds"/> so it is initialised first.
+    /// </summary>
+    private static readonly HashSet<string> s_excludedTargetStateIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        // Query and withdraw: the query-during-* and withdraw/withdraw-during-*
+        // families.
+        "queried",
+        ReAccreditationType.WithdrawnStateId,
+        // RA-527: a move onto a pending-contact state (approved or refused) is
+        // step 1 of a determination. It is recorded in the Case Management
+        // service only — the operator must not see the outcome before the
+        // regulator has contacted them — so a pending state is never pushed.
+        ReAccreditationType.ApprovedPendingContactStateId,
+        ReAccreditationType.RejectedPendingContactStateId,
+        // RA-527 follow-up: a move onto 'assessment-started' (only
+        // start-assessment) is a regulator starting work. It reads "Duly made"
+        // in the Case Management service and is not a change the operator
+        // needs to see, so it is never pushed and the operator stays DulyMade.
+        // Excluded, like every other exclusion, before anything is queued, so
+        // no status-push audit entry is written for it either.
+        ReAccreditationType.AssessmentStartedStateId,
+    };
+
     private static readonly HashSet<string> s_excludedActionIds = BuildExcludedActionIds();
 
     public Task OnSubmittedAsync(WorkItem workItem, ClaimsPrincipal user, CancellationToken cancellationToken) =>
@@ -299,9 +326,12 @@ internal sealed class ReAccreditationStatusPushHook(
 
     /// <summary>
     /// Every action id whose declared transition <em>moves</em> a work item
-    /// onto <c>queried</c> or <c>withdrawn</c> — i.e. exactly the
-    /// query-during-* and withdraw/withdraw-during-* families, without
-    /// restating their literal ids here. Computed once from a fresh
+    /// onto one of <see cref="s_excludedTargetStateIds"/> — <c>queried</c>,
+    /// <c>withdrawn</c>, a pending-contact state or (RA-527 follow-up)
+    /// <c>assessment-started</c> — i.e. the query-during-*,
+    /// withdraw/withdraw-during-* and make-determination-* families and
+    /// <c>start-assessment</c>, without restating their literal ids here.
+    /// Computed once from a fresh
     /// <see cref="ReAccreditationType"/> instance, the same source of truth
     /// the engine itself validates transitions against.
     ///
@@ -312,6 +342,9 @@ internal sealed class ReAccreditationStatusPushHook(
     /// assessment-in-progress <c>sla-extend</c> self-loop pushes. Without the
     /// self-loop guard, sharing the <c>sla-extend</c> action id across both
     /// self-loops would wrongly exclude the whole action from status pushes.
+    /// (RA-527 follow-up: the third <c>sla-extend</c>, from
+    /// <c>assessment-started</c>, moves onto <c>assessment-in-progress</c>,
+    /// so it is not excluded either and the operator is pushed Updated.)
     /// </summary>
     private static HashSet<string> BuildExcludedActionIds()
     {
@@ -323,25 +356,12 @@ internal sealed class ReAccreditationStatusPushHook(
                     transition.ToStateId,
                     StringComparison.OrdinalIgnoreCase))
             {
-                // Self-loop: an in-place action, not a move onto queried/withdrawn.
+                // Self-loop: an in-place action, not a move onto an excluded state.
                 continue;
             }
 
-            // RA-527: a move onto a pending-contact state (approved or
-            // refused) is step 1 of a determination. It is recorded in the
-            // Case Management service only — the operator must not see the
-            // outcome before the regulator has contacted them — so a pending
-            // state is never pushed.
-            if (string.Equals(transition.ToStateId, "queried", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(transition.ToStateId, "withdrawn", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(
-                    transition.ToStateId,
-                    ReAccreditationType.ApprovedPendingContactStateId,
-                    StringComparison.OrdinalIgnoreCase)
-                || string.Equals(
-                    transition.ToStateId,
-                    ReAccreditationType.RejectedPendingContactStateId,
-                    StringComparison.OrdinalIgnoreCase))
+            // Each excluded target's reason is on s_excludedTargetStateIds.
+            if (s_excludedTargetStateIds.Contains(transition.ToStateId))
             {
                 excluded.Add(transition.ActionId);
             }

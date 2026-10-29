@@ -32,8 +32,13 @@ public interface ISlaService
     /// supplied reason, and fans out to every registered
     /// <see cref="IWorkItemPostActionHook"/> with an <c>sla-extend</c>
     /// action id. RA-581: no notification hook maps this action any more —
-    /// the operator "Determination deadline changed" email was removed —
-    /// so this fan-out is currently a no-op for every registered hook.
+    /// the operator "Determination deadline changed" email was removed.
+    /// The status push hook does push it.
+    /// RA-527 follow-up: when the item's template declares an
+    /// <c>sla-extend</c> transition that MOVES it from its current state
+    /// (re-accreditation: <c>assessment-started</c> →
+    /// <c>assessment-in-progress</c>), the item moves in the same write, with
+    /// an <c>action-applied</c> entry, and the hooks see that from-state.
     /// </summary>
     Task<SlaActionResult> ExtendAsync(
         Guid workItemId,
@@ -128,14 +133,27 @@ public sealed class SlaService : ISlaService
     private readonly ILogger<SlaService> _logger;
     private readonly TimeProvider _timeProvider;
     private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
+    private readonly IWorkItemRegistry _registry;
 
+    /// <param name="persistence">Work item store.</param>
+    /// <param name="registry">
+    /// Required: an extend can move the item (RA-527 follow-up), so its
+    /// template is always resolved as the engine resolves it
+    /// (<see cref="WorkItemEngineRules.ResolveTemplate"/>) — see
+    /// docs/work-items.md on services that change state outside the engine.
+    /// </param>
+    /// <param name="logger">Logger.</param>
+    /// <param name="timeProvider">Clock; defaults to <see cref="TimeProvider.System"/>.</param>
+    /// <param name="postActionHooks">Hooks fanned out to after an extend.</param>
     public SlaService(
         IWorkItemPersistence persistence,
+        IWorkItemRegistry registry,
         ILogger<SlaService> logger,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null)
     {
         _persistence = persistence;
+        _registry = registry;
         _logger = logger;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
@@ -219,11 +237,14 @@ public sealed class SlaService : ISlaService
         // SlaEndpoints.TryParseDuration.
 
         // RA-595: a change submitted from Duly made runs straight after
-        // start-assessment, whose status-push hook appends an audit entry in
-        // the background. If that write lands between our read and our
-        // replace, the replace conflicts. The caller sends no version, so
-        // re-read and apply the change again, up to MaxAttempts times — the
-        // same pattern as the approval and duly-making services.
+        // start-assessment. Status-push hooks append their audit entries in
+        // the background, so a write from an earlier action can land between
+        // our read and our replace, and the replace conflicts. (Since the
+        // RA-527 follow-up the start itself pushes nothing and writes no push
+        // entry, but an earlier action's — a duly-make, say — still can.) The
+        // caller sends no version, so re-read and apply the change again, up
+        // to MaxAttempts times — the same pattern as the approval and
+        // duly-making services.
         WorkItemConcurrencyException? lastConflict = null;
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
@@ -354,13 +375,21 @@ public sealed class SlaService : ISlaService
                 ["additionalDuration"] = XmlConvert.ToString(additionalDuration)
             });
 
+        // RA-527 follow-up: where the item's template declares an sla-extend
+        // transition from its current state to a DIFFERENT state
+        // (re-accreditation: 'assessment-started' -> 'assessment-in-progress'),
+        // the deadline change moves the item there, in this same write. The
+        // self-loops ('assessment-in-progress', 'queried') leave the state alone.
+        var fromStateId = workItem.StateId;
+        ApplyExtendMove(workItem, fromStateId, user, utcNow);
+
         await _persistence.ReplaceAsync(workItem, cancellationToken);
 
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) SLA extended by {AdditionalDuration} (target now {TargetDuration}) by {User}",
             workItem.Id, workItem.TypeId, additionalDuration, workItem.SlaClock.TargetDuration, DescribeUser(user));
 
-        await InvokeExtendHooksAsync(workItem, user, cancellationToken);
+        await InvokeExtendHooksAsync(workItem, fromStateId, user, cancellationToken);
 
         return SlaActionResult.Success(workItem);
     }
@@ -545,15 +574,60 @@ public sealed class SlaService : ISlaService
             CreatedAt = createdAt,
             CreatedBy = ResolveActorUserId(user),
             CreatedByName = user.FindFirstValue("user:name"),
-            // epr-rr9s: snapshot the state as of this event. SLA actions do
-            // not mutate StateId, so this is the state the item was in when
-            // the deadline was extended or overridden.
+            // epr-rr9s: snapshot the state as of this event: the state the
+            // item was in when the deadline was extended or overridden. (An
+            // extend that moves the item — RA-527 follow-up — appends its
+            // action-applied entry, stamped with the new state, afterwards.)
             StateId = workItem.StateId
+        });
+    }
+
+    /// <summary>
+    /// RA-527 follow-up: apply the <c>sla-extend</c> transition the item's
+    /// frozen template declares from its current state, when that transition
+    /// MOVES the item (from != to). Records an <c>action-applied</c> entry,
+    /// exactly as the generic engine would, so the history shows the move.
+    /// A self-loop, or no matching declaration, changes nothing. The template
+    /// is resolved as the engine resolves it
+    /// (<see cref="WorkItemEngineRules.ResolveTemplate"/>), so an in-flight
+    /// item is judged by the rules it was submitted under.
+    /// </summary>
+    private void ApplyExtendMove(
+        WorkItem workItem, string fromStateId, ClaimsPrincipal user, DateTime utcNow)
+    {
+        var template = WorkItemEngineRules.ResolveTemplate(workItem, _registry);
+        var move = template?.Transitions.FirstOrDefault(t =>
+            string.Equals(t.ActionId, ExtendActionId, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(t.FromStateId, fromStateId, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(t.ToStateId, t.FromStateId, StringComparison.OrdinalIgnoreCase));
+        if (move is null)
+        {
+            return;
+        }
+
+        workItem.StateId = move.ToStateId;
+        workItem.AuditLog.Add(new WorkItemAuditEntry
+        {
+            Action = "action-applied",
+            ActionDisplayName = "Action applied",
+            Details = new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                ["actionId"] = move.ActionId,
+                ["actionDisplayName"] = move.DisplayName,
+                ["fromStateId"] = fromStateId,
+                ["toStateId"] = move.ToStateId
+            },
+            CreatedAt = utcNow,
+            CreatedBy = ResolveActorUserId(user),
+            CreatedByName = user.FindFirstValue("user:name"),
+            // epr-rr9s: the state this entry leaves the item in.
+            StateId = move.ToStateId
         });
     }
 
     private async Task InvokeExtendHooksAsync(
         WorkItem workItem,
+        string fromStateId,
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
@@ -562,7 +636,7 @@ public sealed class SlaService : ISlaService
             try
             {
                 await hook.OnActionAppliedAsync(
-                    workItem, ExtendActionId, workItem.StateId, user, cancellationToken);
+                    workItem, ExtendActionId, fromStateId, user, cancellationToken);
             }
             catch (Exception ex)
             {

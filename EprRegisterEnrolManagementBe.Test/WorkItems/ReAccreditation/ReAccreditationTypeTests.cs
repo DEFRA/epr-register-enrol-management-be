@@ -14,8 +14,9 @@ public class ReAccreditationTypeTests
         Assert.Equal("Re-accreditation", _type.DisplayName);
         // RA-595: v15 added start-assessment ("Assessment started"); v16
         // removed payment-received. RA-527: v17 added the two pending-contact
-        // states and removed reject.
-        Assert.Equal("v17", _type.TemplateVersion);
+        // states and removed reject. RA-527 follow-up: v18 added the
+        // 'assessment-started' state, so starting a case keeps it "Duly made".
+        Assert.Equal("v18", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -28,6 +29,8 @@ public class ReAccreditationTypeTests
     [InlineData("rejected", "Refused")]
     // Untouched labels — proves the rename did not spill over.
     [InlineData("duly-made", "Duly made")]
+    // RA-527 follow-up: a started case looks exactly like a Duly made one.
+    [InlineData("assessment-started", "Duly made")]
     [InlineData("awaiting-decision", "Awaiting decision")]
     [InlineData("queried", "Queried")]
     [InlineData("updated", "Updated")]
@@ -70,7 +73,7 @@ public class ReAccreditationTypeTests
     }
 
     [Theory]
-    [InlineData("start-assessment", "duly-made", "assessment-in-progress")]
+    [InlineData("start-assessment", "duly-made", "assessment-started")]
     [InlineData("sla-extend", "assessment-in-progress", "assessment-in-progress")]
     [InlineData("submit-for-decision", "assessment-in-progress", "awaiting-decision")]
     // RA-132: approve is NOT a generic-engine transition; it is handled
@@ -131,7 +134,8 @@ public class ReAccreditationTypeTests
         );
 
         Assert.Equal("duly-made", startAssessment.FromStateId);
-        Assert.Equal("assessment-in-progress", startAssessment.ToStateId);
+        // RA-527 follow-up: starting keeps the case "Duly made".
+        Assert.Equal("assessment-started", startAssessment.ToStateId);
         Assert.Equal("Assessment started", startAssessment.DisplayName);
         Assert.True(startAssessment.CallerInvocable);
     }
@@ -142,11 +146,108 @@ public class ReAccreditationTypeTests
         // RA-595 rollout: add, switch, remove. v16 is the "remove" step:
         // start-assessment is the only way from duly-made into assessment.
         Assert.DoesNotContain(_type.Transitions, t => t.ActionId == "payment-received");
-        var intoAssessment = Assert.Single(
+        Assert.DoesNotContain(
             _type.Transitions,
             t => t.FromStateId == "duly-made" && t.ToStateId == "assessment-in-progress"
         );
+        var intoAssessment = Assert.Single(
+            _type.Transitions,
+            t => t.FromStateId == "duly-made" && t.ToStateId == "assessment-started"
+        );
         Assert.Equal("start-assessment", intoAssessment.ActionId);
+    }
+
+    [Fact]
+    public void Assessment_started_is_a_non_terminal_state_declared_straight_after_duly_made()
+    {
+        // RA-527 follow-up: the status sort rank comes from declaration order,
+        // so a started case sorts with the Duly made cases.
+        var stateIds = _type.States.Select(s => s.Id).ToList();
+        var dulyMadeIndex = stateIds.IndexOf("duly-made");
+
+        Assert.Equal("assessment-started", stateIds[dulyMadeIndex + 1]);
+        Assert.False(_type.States.Single(s => s.Id == "assessment-started").IsTerminal);
+    }
+
+    [Fact]
+    public void Only_start_assessment_enters_assessment_started()
+    {
+        // RA-527 follow-up: nothing (no Continue review, no resume) may return a
+        // case to the started state, so this change adds no route back to
+        // "Duly made".
+        var intoStarted = Assert.Single(
+            _type.Transitions,
+            t => t.ToStateId == "assessment-started"
+        );
+
+        Assert.Equal("start-assessment", intoStarted.ActionId);
+        Assert.Equal("duly-made", intoStarted.FromStateId);
+    }
+
+    [Fact]
+    public void Submit_for_decision_leaves_assessment_started_only_through_the_decision_endpoint()
+    {
+        // RA-527 follow-up: Make determination works from a started case. The
+        // hop reuses the submit-for-decision action id and stays
+        // non-caller-invocable, so the generic action route still refuses it.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "submit-for-decision" && t.FromStateId == "assessment-started"
+        );
+
+        Assert.Equal("awaiting-decision", transition.ToStateId);
+        Assert.Equal("Submit for decision", transition.DisplayName);
+        Assert.False(transition.CallerInvocable);
+    }
+
+    [Fact]
+    public void Sla_extend_moves_a_started_case_to_assessment_in_progress_only_through_the_deadline_endpoint()
+    {
+        // RA-527 follow-up: a deadline change on a started case is a real move
+        // to "Updated", not a self-loop. It reuses the sla-extend action id and
+        // is not caller-invocable, so only SlaService (POST .../sla/extend)
+        // applies it, alongside an actual deadline change.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "sla-extend" && t.FromStateId == "assessment-started"
+        );
+
+        Assert.Equal("assessment-in-progress", transition.ToStateId);
+        Assert.Equal("Extend SLA", transition.DisplayName);
+        Assert.False(transition.CallerInvocable);
+    }
+
+    [Fact]
+    public void Query_during_assessment_also_leaves_a_started_case_for_queried()
+    {
+        // RA-527 follow-up: a started case can be queried. The hop reuses the
+        // query-during-assessment action id, so the resume and Continue review
+        // services (which work back from that id) land it on 'updated' and then
+        // 'assessment-in-progress', exactly as for a case under assessment.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "query-during-assessment" && t.FromStateId == "assessment-started"
+        );
+
+        Assert.Equal("queried", transition.ToStateId);
+        Assert.Equal("Query", transition.DisplayName);
+    }
+
+    [Fact]
+    public void Withdraw_during_assessment_also_leaves_a_started_case_for_withdrawn()
+    {
+        // RA-527 follow-up: an operator can withdraw a started case, as they
+        // could before starting kept it "Duly made". The hop reuses the
+        // withdraw-during-assessment action id, so the Withdrawn email and the
+        // status push exclusion (both keyed by action id) need no change.
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == "withdraw-during-assessment" && t.FromStateId == "assessment-started"
+        );
+
+        Assert.Equal("withdrawn", transition.ToStateId);
+        Assert.Equal("Withdraw", transition.DisplayName);
+        Assert.True(transition.CallerInvocable);
     }
 
     [Fact]

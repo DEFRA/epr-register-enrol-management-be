@@ -66,6 +66,10 @@ internal sealed class ReAccreditationQueryService(
             ["submitted"] = "query-during-duly-making",
             ["duly-made"] = "query-during-duly-made",
             ["assessment-in-progress"] = "query-during-assessment",
+            // RA-527 follow-up: a started case ("Duly made") is queried as one
+            // under assessment, so its response and Continue review follow
+            // the assessment route back to 'assessment-in-progress'.
+            ["assessment-started"] = "query-during-assessment",
             ["awaiting-decision"] = "query-during-decision",
         };
 

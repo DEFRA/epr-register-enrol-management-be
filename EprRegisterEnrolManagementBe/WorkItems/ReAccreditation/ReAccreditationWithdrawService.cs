@@ -46,6 +46,9 @@ internal sealed class ReAccreditationWithdrawService(
         ["submitted"] = "withdraw",
         ["duly-made"] = "withdraw-during-duly-made",
         ["assessment-in-progress"] = "withdraw-during-assessment",
+        // RA-527 follow-up: a started case ("Duly made") is withdrawn as one
+        // under assessment.
+        ["assessment-started"] = "withdraw-during-assessment",
         ["awaiting-decision"] = "withdraw-during-decision",
         ["queried"] = "withdraw-during-query",
         ["updated"] = "withdraw-during-updated",

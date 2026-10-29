@@ -466,7 +466,11 @@ public class ReAccreditationNotificationHookTests
     // replaced payment-received, which v16 no longer declares.)
     [InlineData("start-assessment")]
     [InlineData("sla-extend")]
-    public async Task OnActionAppliedAsync_removed_templates_do_not_call_notify_client(string actionId)
+    // RA-527 follow-up: a deadline change on a started case moves it to
+    // Updated, still with no email.
+    [InlineData("sla-extend", "assessment-started")]
+    public async Task OnActionAppliedAsync_removed_templates_do_not_call_notify_client(
+        string actionId, string fromStateId = "assessment-in-progress")
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
@@ -475,7 +479,7 @@ public class ReAccreditationNotificationHookTests
         var workItem = BuildWorkItem();
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId: "assessment-in-progress", s_user, ct);
+        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId, s_user, ct);
 
         await notifyClient
             .DidNotReceiveWithAnyArgs()

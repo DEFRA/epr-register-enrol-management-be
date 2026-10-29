@@ -13,7 +13,8 @@ internal sealed class SlaBreachBackgroundService(
     ILogger<SlaBreachBackgroundService> logger,
     IConfiguration configuration) : BackgroundService
 {
-    private static readonly string[] s_breachCheckedStateIds = ["duly-made", "assessment-in-progress"];
+    private static readonly string[] s_breachCheckedStateIds =
+        ["duly-made", "assessment-started", "assessment-in-progress"];
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -52,6 +53,8 @@ internal sealed class SlaBreachBackgroundService(
         // Query the states a case is worked in while its SLA clock runs. The clock
         // starts at duly making, and RA-595 lets regulators assess straight from
         // duly-made, so duly-made cases are checked as well as assessment-in-progress.
+        // RA-527 follow-up: a started case (assessment-started, still "Duly made")
+        // is checked too.
         // Queried cases are not checked.
         // Each run processes up to MaxPageSize items. In practice the active
         // queue is small; if it ever exceeds MaxPageSize the job will catch remaining

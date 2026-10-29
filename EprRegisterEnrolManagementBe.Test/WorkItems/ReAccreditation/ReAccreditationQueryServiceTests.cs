@@ -28,6 +28,7 @@ public class ReAccreditationQueryServiceTests
     [InlineData("submitted", "query-during-duly-making")]
     [InlineData("duly-made", "query-during-duly-made")]
     [InlineData("assessment-in-progress", "query-during-assessment")]
+    [InlineData("assessment-started", "query-during-assessment")]
     [InlineData("awaiting-decision", "query-during-decision")]
     // Case-insensitive: state ids are compared the same way the engine does.
     [InlineData("SUBMITTED", "query-during-duly-making")]
@@ -54,6 +55,7 @@ public class ReAccreditationQueryServiceTests
     [InlineData("submitted", "query-during-duly-making")]
     [InlineData("duly-made", "query-during-duly-made")]
     [InlineData("assessment-in-progress", "query-during-assessment")]
+    [InlineData("assessment-started", "query-during-assessment")]
     [InlineData("awaiting-decision", "query-during-decision")]
     public async Task QueryAsync_applies_the_action_for_the_current_state(
         string stateId,
