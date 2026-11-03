@@ -217,14 +217,14 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     }
 
     /// <summary>
-    /// RA-691: an <c>approved</c> 2027 item already corrected by
-    /// <see cref="ReAccreditationAccreditationNumberCorrectionMigration"/>:
-    /// <c>payload.accreditationId</c> holds the corrected number and the audit
-    /// log holds the correction entry, built by the migration's own
-    /// <see cref="ReAccreditationAccreditationNumberCorrectionMigration.BuildAuditEntry"/>
-    /// so the Application history the e2e suite asserts is exactly what the
-    /// migration writes. The migration itself is off by default and keyed to
-    /// two production numbers, so it never produces this item on a test stack.
+    /// RA-691: an <c>approved</c> 2027 item whose accreditation number has
+    /// been corrected: <c>payload.accreditationId</c> holds the corrected
+    /// number and the audit log holds one <c>accreditation-number-corrected</c>
+    /// entry. Three production work items carry that entry permanently (the
+    /// RA-691 one-off correction wrote them), and management-fe still renders
+    /// it on the Application history tab, so this fixture pins that rendering
+    /// for the e2e suite. The entry's fields are exactly what the correction
+    /// wrote; do not change them without changing management-fe and mgmt-tests.
     /// </summary>
     private static BsonDocument BuildAccreditationNumberCorrected(IWorkItemType type, DateTime now)
     {
@@ -264,11 +264,20 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             },
             AuditLog =
             [
-                ReAccreditationAccreditationNumberCorrectionMigration.BuildAuditEntry(
-                    AccreditationNumberCorrectedFrom,
-                    AccreditationNumberCorrectedTo,
-                    now.AddDays(-1)
-                ),
+                new WorkItemAuditEntry
+                {
+                    Action = "accreditation-number-corrected",
+                    ActionDisplayName = "Accreditation number corrected",
+                    CreatedAt = now.AddDays(-1),
+                    CreatedBy = "migration",
+                    CreatedByName = "Migration: RA-691 accreditation number correction",
+                    Details = new Dictionary<string, string?>
+                    {
+                        ["from"] = AccreditationNumberCorrectedFrom,
+                        ["to"] = AccreditationNumberCorrectedTo,
+                        ["reason"] = "RA-691",
+                    },
+                },
             ],
         };
         return item.ToBsonDocument();

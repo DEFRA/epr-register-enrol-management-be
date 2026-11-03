@@ -162,11 +162,11 @@ public class ReAccreditationTestOrganisationFixturesTests
 
     /// <summary>
     /// RA-691: the fixture carries the corrected number and exactly the audit
-    /// entry the migration writes, and the API serves it as the Application
-    /// history tab reads it.
+    /// entry the RA-691 correction wrote on production, and the API serves it
+    /// as the Application history tab reads it.
     /// </summary>
     [Fact]
-    public async Task The_accreditation_number_corrected_fixture_carries_the_migrations_audit_entry()
+    public async Task The_accreditation_number_corrected_fixture_carries_the_correction_audit_entry()
     {
         var ct = TestContext.Current.CancellationToken;
         using var factory = NewFactory();
@@ -185,11 +185,10 @@ public class ReAccreditationTestOrganisationFixturesTests
             item.Payload["accreditationId"].AsString
         );
         var entry = Assert.Single(item.AuditLog);
-        Assert.Equal(ReAccreditationAccreditationNumberCorrectionMigration.AuditAction, entry.Action);
-        Assert.Equal(
-            ReAccreditationAccreditationNumberCorrectionMigration.AuditActionDisplayName,
-            entry.ActionDisplayName
-        );
+        Assert.Equal("accreditation-number-corrected", entry.Action);
+        Assert.Equal("Accreditation number corrected", entry.ActionDisplayName);
+        Assert.Equal("migration", entry.CreatedBy);
+        Assert.Equal("Migration: RA-691 accreditation number correction", entry.CreatedByName);
         Assert.Equal(
             new Dictionary<string, string?>
             {
