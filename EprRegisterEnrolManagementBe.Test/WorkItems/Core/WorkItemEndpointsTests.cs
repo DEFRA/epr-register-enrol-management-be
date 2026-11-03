@@ -2015,7 +2015,6 @@ public class WorkItemEndpointsTests
             CancellationToken cancellationToken = default) =>
             Inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
 
-
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             Inner.CreateAsync(workItem, cancellationToken);
 

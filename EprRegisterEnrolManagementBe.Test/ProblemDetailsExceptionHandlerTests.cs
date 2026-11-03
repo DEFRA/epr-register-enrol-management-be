@@ -88,7 +88,6 @@ public class ProblemDetailsExceptionHandlerTests
             CancellationToken cancellationToken = default) =>
             inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
 
-
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 

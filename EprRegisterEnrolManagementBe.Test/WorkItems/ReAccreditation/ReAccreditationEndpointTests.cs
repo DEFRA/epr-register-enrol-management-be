@@ -6561,7 +6561,6 @@ public class ReAccreditationEndpointTests
             CancellationToken cancellationToken = default
         ) => inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
 
-
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
@@ -6625,7 +6624,6 @@ public class ReAccreditationEndpointTests
             workItemId == throwId
                 ? throw new InvalidOperationException("Simulated snapshot-refresh failure.")
                 : inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
-
 
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
