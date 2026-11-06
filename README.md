@@ -17,6 +17,8 @@ service.
 - [Configuration](#configuration)
 - [Testing](#testing)
 - [Frontend integration](#frontend-integration)
+- [SonarCloud](#sonarcloud)
+  - [Running the SonarCloud scan locally](#running-the-sonarcloud-scan-locally)
 - [Licence](#licence)
 
 ## Requirements
@@ -357,6 +359,53 @@ what it needs from the scoped `services` (e.g. `IMongoDbClientFactory`).
 delete it (and its registration) but leave the harness in place for the next
 one. Confirm it ran from the `Running startup migration {Migration}` /
 `Startup migration {Migration} complete` log lines before removing it.
+
+## SonarCloud
+
+### Running the SonarCloud scan locally
+
+`scripts/sonar.sh` runs the same SonarCloud pull-request analysis CI runs, from your machine,
+so you can see the quality gate result without waiting for CI. The analysis runs on SonarCloud
+itself, so it uses the same quality profiles and quality gate as CI. It scans your working tree,
+uncommitted changes included, and prints the gate, the PR's issues, security hotspots, and the
+files with uncovered or duplicated new lines.
+
+```bash
+scripts/sonar.sh                 # scan as this branch's open PR
+scripts/sonar.sh --pr 123        # scan as a specific PR
+scripts/sonar.sh --report-only   # print the PR's latest result: no scan, no token
+scripts/sonar.sh --check-token   # check your token is set up
+```
+
+It runs `dotnet build --no-incremental` and then `dotnet test` under `dotnet-coverage` first, as CI does. Exit code: 0 if the gate passed, 1 if it failed, 2 if the scan could not run
+(the message says why).
+
+Before your first scan:
+
+1. **Get a token.** Sign in at <https://sonarcloud.io> with GitHub, then generate a token at
+   <https://sonarcloud.io/account/security>. Your account must be a member of the `defra`
+   organisation; if `--check-token` says it isn't, ask a DEFRA SonarCloud org admin to add you.
+   Don't use CI's token secret.
+2. **Save it** to `~/.config/sonarcloud/token`, readable only by you. This reads it without
+   echoing it or putting it in your shell history:
+
+   ```bash
+   mkdir -p ~/.config/sonarcloud && (umask 077 && read -rsp 'Token: ' t && echo "$t" > ~/.config/sonarcloud/token); echo
+   ```
+
+   The file is outside every repo, so it can't be committed, and every repo, worktree and shell
+   on the machine finds it — AI agents' shells included. An exported `SONAR_TOKEN` takes
+   precedence over the file, for containers and CI-like setups.
+3. **Check it:** `scripts/sonar.sh --check-token` should print `token OK`.
+4. **Open a PR** for your branch (a draft is fine). SonarCloud judges new code against the PR's
+   base branch, so the scan needs one.
+
+It needs `git`, `gh` (signed in), `curl`, `jq` and the .NET 10 SDK. The scanner downloads its own Java
+runtime. A local scan replaces the PR's SonarCloud result, and its `SonarCloud Code Analysis`
+check on GitHub, until CI scans again. Tokens expire on the date set when you created them;
+`--check-token` then says the token is not valid — generate a new one and save it the same way.
+
+The scanner settings (project key, exclusions) are read from `.github/workflows/sonarcloud.yml`, so local scans follow any change made there.
 
 ## Licence
 
