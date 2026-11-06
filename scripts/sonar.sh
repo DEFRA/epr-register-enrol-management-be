@@ -61,9 +61,9 @@ no_token() {
 }
 
 api() {
-  local auth=()
+  local path=$1 auth=()
   [[ -n $SONAR_TOKEN ]] && auth=(-u "$SONAR_TOKEN:")
-  curl -sSf "${auth[@]}" "$SONAR_URL/api/$1"
+  curl -sSf "${auth[@]}" "$SONAR_URL/api/$path"
 }
 
 # The .NET repos keep their scanner settings inline in sonarcloud.yml; reuse
@@ -139,7 +139,7 @@ use_nvmrc_node() {
 
 scan_js() {
   use_nvmrc_node
-  [[ -d node_modules ]] || npm ci
+  [[ -d node_modules ]] || die "no node_modules — run npm ci first"
   npm test
   npx --yes "@sonar/scan@$SONAR_SCAN_JS_VERSION" \
     "-Dsonar.host.url=$SONAR_URL" "${pr_params[@]/#/-D}"
@@ -174,6 +174,7 @@ wait_for_analysis() {
     case $status in
       SUCCESS) return 0 ;;
       FAILED|CANCELED) die "SonarCloud analysis $status: $SONAR_URL/project/background_tasks?id=$project" ;;
+      *) ;; # PENDING or IN_PROGRESS: keep waiting
     esac
     sleep 5
   done
