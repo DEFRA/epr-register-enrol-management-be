@@ -151,6 +151,10 @@ scan_dotnet() {
   command -v dotnet >/dev/null || PATH=$HOME/.dotnet:$PATH
   command -v dotnet >/dev/null || die "dotnet not found"
   export DOTNET_ROOT=${DOTNET_ROOT:-$(dirname "$(readlink -f "$(command -v dotnet)")")}
+  # The scanner unpacks its analyzers under $TMPDIR/.sonarqube; two scans
+  # sharing that (say backend and management-be at once) corrupt each other.
+  scan_tmp=$(mktemp -d)
+  export TMPDIR=$scan_tmp
   mkdir -p "$TOOLS_DIR"
   [[ -x $TOOLS_DIR/dotnet-sonarscanner ]] || dotnet tool update dotnet-sonarscanner --tool-path "$TOOLS_DIR"
   [[ -x $TOOLS_DIR/dotnet-coverage ]] || dotnet tool update dotnet-coverage --tool-path "$TOOLS_DIR"
@@ -177,7 +181,8 @@ wait_for_analysis() {
 }
 
 if ! $report_only; then
-  trap 'rm -rf "$REPO_DIR/.scannerwork" "$REPO_DIR/.sonarqube" "$REPO_DIR/coverage.xml"' EXIT
+  scan_tmp=
+  trap 'rm -rf "$REPO_DIR/.scannerwork" "$REPO_DIR/.sonarqube" "$REPO_DIR/coverage.xml" ${scan_tmp:+"$scan_tmp"}' EXIT
   "scan_$kind"
   wait_for_analysis
 fi
