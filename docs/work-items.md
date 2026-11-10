@@ -124,8 +124,19 @@ and `WorkItemReferenceGenerator` picks one from the type's
   reach the insert. The loser collides on that key's index and returns the
   winner as a replay.
 
-  The operator backend locks a timed-out change request, so only an
-  unchanged resubmit replays.
+  **What a replay does with a different payload:** the lookup matches on the
+  type id and the key value only (`FindBySubmissionKeyAsync`). The resubmitted
+  payload is not compared with the stored one, not merged into it and not
+  stored. Both the up-front path and the concurrent-insert path return the
+  stored work item unchanged.
+
+  **Known, deferred to the case-management in-year change story:** after a
+  case-management timeout the operator backend reopens the change request.
+  If the operator then edits the sites and resubmits with the same
+  `operatorRequestId`, management-be replays the original work item, which
+  still holds the old sites, and the edits are silently dropped. Locking the
+  request after a timeout (on the operator side) is deferred to that story,
+  and replay behaviour is deliberately unchanged here.
 - **Collisions.** On an `applicationReference` unique-index collision the
   engine regenerates, up to `MaxApplicationReferenceAttempts`. An IYC retry
   takes the next number. An AP retry appends a disambiguator character.
