@@ -223,8 +223,10 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     /// log holds the correction entry, built by the migration's own
     /// <see cref="ReAccreditationAccreditationNumberCorrectionMigration.BuildAuditEntry"/>
     /// so the Application history the e2e suite asserts is exactly what the
-    /// migration writes. The migration itself is off by default and keyed to
-    /// two production numbers, so it never produces this item on a test stack.
+    /// migration writes for an RA-691 target, so it passes that target's
+    /// <c>"RA-691"</c> reason. The migration itself is off by default and keyed
+    /// to four production numbers, so it never produces this item on a test
+    /// stack.
     /// </summary>
     private static BsonDocument BuildAccreditationNumberCorrected(IWorkItemType type, DateTime now)
     {
@@ -267,6 +269,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 ReAccreditationAccreditationNumberCorrectionMigration.BuildAuditEntry(
                     AccreditationNumberCorrectedFrom,
                     AccreditationNumberCorrectedTo,
+                    "RA-691",
                     now.AddDays(-1)
                 ),
             ],
