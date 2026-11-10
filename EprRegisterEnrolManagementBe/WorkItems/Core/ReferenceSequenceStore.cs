@@ -7,8 +7,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <summary>
 /// Allocates monotonically increasing, never-reused sequence numbers for
 /// server-generated case references (RA-492). Each <c>sequenceKey</c> (for
-/// example <c>IYC-ORS-2026</c>) has its own independent counter that starts
-/// at 1.
+/// example <c>IYC-ORS-2026</c>) has its own independent counter. The first
+/// number allocated for a key is 0.
 /// </summary>
 public interface IReferenceSequenceStore
 {
@@ -24,7 +24,9 @@ public interface IReferenceSequenceStore
 /// <summary>
 /// MongoDB-backed <see cref="IReferenceSequenceStore"/>. One document per
 /// sequence key in the <see cref="CollectionName"/> collection, shaped
-/// <c>{ _id: "IYC-ORS-2026", seq: NumberLong(21) }</c>. Allocation is a single
+/// <c>{ _id: "IYC-ORS-2026", seq: NumberLong(22) }</c>, where <c>seq</c> is
+/// how many numbers have been allocated (so the last one handed out is
+/// <c>seq - 1</c>). Allocation is a single
 /// <c>findAndModify</c> (<c>$inc</c> with upsert, returning the post-image),
 /// which MongoDB applies atomically per document. Only the implicit unique
 /// <c>_id</c> index is needed, because every read and write is by key.
@@ -80,7 +82,8 @@ public sealed class MongoReferenceSequenceStore : MongoService<BsonDocument>, IR
                     s_allocateOptions,
                     cancellationToken
                 );
-                return counter[SequenceField].ToInt64();
+                // seq counts allocations, so the first allocation (seq 1) is number 0.
+                return counter[SequenceField].ToInt64() - 1;
             }
             // Two first-ever allocations for the same key can both miss the
             // filter and both try to insert the counter. The loser gets a

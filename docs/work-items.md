@@ -80,18 +80,27 @@ and `WorkItemReferenceGenerator` picks one from the type's
 - **What regulators agreed (Jira comment, 10 Nov 2026):** the shape
   `IYC-<type code>-<year>-<5-digit sequence>`, with one sequence per change
   type per year.
-- **Implementation choices, still to be confirmed with the PO:**
-  - The year is `payload.accreditationYear` when it is a whole number from
-    1000 to 9999. Otherwise the current UTC year from `TimeProvider` is used.
-  - Each counter starts at `00001`.
-  - Past `99999` the number widens to 6 digits instead of failing.
+- **Tom's decisions (10 Nov 2026):**
+  - **The year is mandatory.** It is `payload.accreditationYear`, a whole
+    number from 1000 to 9999. An in-year change submitted without one is
+    rejected with `400` ProblemDetails (`WorkItemActionFailureCode.InvalidSubmissionPayload`).
+    The check runs before any number is allocated, so a rejected submission
+    uses up no number.
+  - **Each counter starts at `00000`.**
+  - **The sequence wraps after `99999`** back to `00000`. The stored counter
+    only grows; the reference shows it modulo 100000.
+- **Wrap hazard (accepted, not fixed).** After a wrap, an earlier reference
+  with the same number already exists. The `applicationReference` unique
+  index makes the retry loop take the next number, so in a year with more
+  than 100,000 changes of one type, submissions start failing with `503`
+  once the retry budget (`MaxApplicationReferenceAttempts`) is used up.
 - **Sequence storage.** Counters live in the `referenceSequences` collection
-  as `{ _id: "IYC-ORS-2026", seq: <long> }`, allocated atomically by
-  `MongoReferenceSequenceStore` (`$inc` with upsert). A number can be
-  skipped but is never reused. For example, concurrent submits with one
-  `operatorApplicationId` each allocate a number before all but one return
-  the winner as a replay, and an insert failure after allocation also
-  leaves a gap.
+  as `{ _id: "IYC-ORS-2026", seq: <long> }`, where `seq` counts the numbers
+  allocated. They are allocated atomically by `MongoReferenceSequenceStore`
+  (`$inc` with upsert). A number can be skipped but is never reused:
+  - Concurrent submits with one `operatorApplicationId` each allocate a
+    number before all but one return the winner as a replay.
+  - An insert failure after allocation also leaves a gap.
 - **Replays and collisions.** The idempotent-replay check
   (`operatorApplicationId`) runs before generation, so a sequential replay
   allocates no number. On an `applicationReference` unique-index collision

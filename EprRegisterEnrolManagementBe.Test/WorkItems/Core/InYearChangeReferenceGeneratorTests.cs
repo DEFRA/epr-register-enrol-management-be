@@ -1,5 +1,4 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
-using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
 using NSubstitute;
 
@@ -8,20 +7,18 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <summary>
 /// RA-492: the in-year change reference format. The Jira comment of 10 Nov 2026
 /// fixes <c>IYC-{code}-{year}-{5-digit sequence}</c> with one sequence per change
-/// type per year. The year fallback, the 00001 start and widening past 99999 are
-/// implementation choices.
+/// type per year. Tom decided the same day that the year is mandatory, each
+/// counter starts at 00000, and the sequence wraps to 00000 after 99999.
 /// </summary>
 public sealed class InYearChangeReferenceGeneratorTests
 {
-    private static readonly DateTimeOffset s_now = new(2027, 3, 1, 9, 0, 0, TimeSpan.Zero);
-
     private readonly IReferenceSequenceStore _store = Substitute.For<IReferenceSequenceStore>();
     private readonly InYearChangeReferenceGenerator _generator;
 
     public InYearChangeReferenceGeneratorTests()
     {
-        _store.NextAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(1L);
-        _generator = new InYearChangeReferenceGenerator(_store, new FakeTimeProvider(s_now));
+        _store.NextAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(0L);
+        _generator = new InYearChangeReferenceGenerator(_store);
     }
 
     [Fact]
@@ -51,76 +48,24 @@ public sealed class InYearChangeReferenceGeneratorTests
             new BsonDocument { ["accreditationYear"] = 2026 },
             TestContext.Current.CancellationToken
         );
+        await _generator.GenerateAsync(
+            "ORS",
+            new BsonDocument { ["accreditationYear"] = 2027 },
+            TestContext.Current.CancellationToken
+        );
 
         await _store.Received(1).NextAsync("IYC-ORS-2026", Arg.Any<CancellationToken>());
         await _store.Received(1).NextAsync("IYC-SIP-2026", Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public async Task GenerateAsync_uses_the_current_utc_year_when_accreditationYear_is_absent()
-    {
-        var reference = await _generator.GenerateAsync(
-            "ORS",
-            new BsonDocument(),
-            TestContext.Current.CancellationToken
-        );
-
-        Assert.Equal("IYC-ORS-2027-00001", reference);
         await _store.Received(1).NextAsync("IYC-ORS-2027", Arg.Any<CancellationToken>());
     }
 
-    public static TheoryData<BsonValue> UnusableYears =>
-        new()
-        {
-            new BsonString("2026"),
-            BsonNull.Value,
-            new BsonInt32(26),
-            new BsonInt32(20260),
-            new BsonInt32(-2026),
-            new BsonDouble(2026.5),
-            new BsonDouble(double.NaN),
-            new BsonInt64(long.MaxValue),
-            new BsonDecimal128(Decimal128.MaxValue),
-        };
-
     [Theory]
-    [MemberData(nameof(UnusableYears))]
-    public async Task GenerateAsync_falls_back_to_the_utc_year_for_an_unusable_accreditationYear(
-        BsonValue year
-    )
-    {
-        var reference = await _generator.GenerateAsync(
-            "ORS",
-            new BsonDocument { ["accreditationYear"] = year },
-            TestContext.Current.CancellationToken
-        );
-
-        Assert.Equal("IYC-ORS-2027-00001", reference);
-    }
-
-    public static TheoryData<BsonValue> NumericYearRepresentations =>
-        new() { new BsonInt32(2026), new BsonInt64(2026L), new BsonDouble(2026.0) };
-
-    [Theory]
-    [MemberData(nameof(NumericYearRepresentations))]
-    public async Task GenerateAsync_accepts_any_whole_numeric_four_digit_accreditationYear(
-        BsonValue year
-    )
-    {
-        var reference = await _generator.GenerateAsync(
-            "ORS",
-            new BsonDocument { ["accreditationYear"] = year },
-            TestContext.Current.CancellationToken
-        );
-
-        Assert.Equal("IYC-ORS-2026-00001", reference);
-    }
-
-    [Theory]
+    [InlineData(0L, "IYC-ORS-2026-00000")]
     [InlineData(1L, "IYC-ORS-2026-00001")]
     [InlineData(99999L, "IYC-ORS-2026-99999")]
-    [InlineData(100000L, "IYC-ORS-2026-100000")]
-    public async Task GenerateAsync_zero_pads_to_five_digits_and_widens_past_99999(
+    [InlineData(100000L, "IYC-ORS-2026-00000")]
+    [InlineData(100001L, "IYC-ORS-2026-00001")]
+    public async Task GenerateAsync_starts_at_00000_and_wraps_to_00000_after_99999(
         long sequence,
         string expected
     )
@@ -136,11 +81,73 @@ public sealed class InYearChangeReferenceGeneratorTests
         Assert.Equal(expected, reference);
     }
 
+    public static TheoryData<BsonValue> NumericYearRepresentations =>
+        new() { new BsonInt32(2026), new BsonInt64(2026L), new BsonDouble(2026.0) };
+
+    [Theory]
+    [MemberData(nameof(NumericYearRepresentations))]
+    public void TryGetAccreditationYear_accepts_any_whole_numeric_four_digit_year(BsonValue year)
+    {
+        Assert.True(
+            InYearChangeReferenceGenerator.TryGetAccreditationYear(
+                new BsonDocument { ["accreditationYear"] = year },
+                out var resolved
+            )
+        );
+        Assert.Equal(2026, resolved);
+    }
+
+    public static TheoryData<BsonValue> UnusableYears =>
+        new()
+        {
+            new BsonString("2026"),
+            BsonNull.Value,
+            new BsonInt32(26),
+            new BsonInt32(999),
+            new BsonInt32(10000),
+            new BsonInt32(-2026),
+            new BsonDouble(2026.5),
+            new BsonDouble(double.NaN),
+            new BsonInt64(long.MaxValue),
+            new BsonDecimal128(Decimal128.MaxValue),
+        };
+
+    [Theory]
+    [MemberData(nameof(UnusableYears))]
+    public void TryGetAccreditationYear_rejects_an_unusable_year(BsonValue year)
+    {
+        Assert.False(
+            InYearChangeReferenceGenerator.TryGetAccreditationYear(
+                new BsonDocument { ["accreditationYear"] = year },
+                out _
+            )
+        );
+    }
+
+    [Fact]
+    public void TryGetAccreditationYear_rejects_a_payload_without_the_field()
+    {
+        Assert.False(InYearChangeReferenceGenerator.TryGetAccreditationYear(new BsonDocument(), out _));
+    }
+
+    [Fact]
+    public async Task GenerateAsync_rejects_a_payload_without_a_usable_year_without_allocating()
+    {
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            _generator.GenerateAsync("ORS", new BsonDocument(), TestContext.Current.CancellationToken)
+        );
+        await _store.DidNotReceive().NextAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
     [Fact]
     public async Task GenerateAsync_rejects_a_blank_change_type_code_without_allocating()
     {
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            _generator.GenerateAsync(" ", new BsonDocument(), TestContext.Current.CancellationToken)
+            _generator.GenerateAsync(
+                " ",
+                new BsonDocument { ["accreditationYear"] = 2026 },
+                TestContext.Current.CancellationToken
+            )
         );
         await _store.DidNotReceive().NextAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }

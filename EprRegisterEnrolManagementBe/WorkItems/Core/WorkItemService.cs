@@ -234,6 +234,17 @@ public sealed class WorkItemService : IWorkItemService
             }
         }
 
+        // RA-492: reject a payload the reference format cannot use (an in-year
+        // change without a 4-digit accreditationYear) before any sequence number
+        // is allocated or anything is persisted.
+        if (_referenceGenerator.ValidatePayload(type, payload) is { } payloadError)
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidSubmissionPayload,
+                payloadError
+            );
+        }
+
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
 
         // RA-503: the operator backend now sends the operator's real, nation-specific bank

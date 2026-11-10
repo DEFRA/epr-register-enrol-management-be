@@ -54,6 +54,14 @@ public enum WorkItemActionFailureCode
     ApplicationReferenceExhausted,
 
     /// <summary>
+    /// RA-492: the submitted payload lacks a field the type's
+    /// <c>applicationReference</c> format needs (an in-year change type's
+    /// 4-digit <c>accreditationYear</c>). Nothing was allocated or persisted.
+    /// A client error, so the submit endpoint maps it to a 400.
+    /// </summary>
+    InvalidSubmissionPayload,
+
+    /// <summary>
     /// A mandatory upstream notification a mutation is gated on could not be
     /// delivered within its retry budget, so the mutation was abandoned before
     /// anything was persisted (epr-p86e / RA-410: the operator-journey status

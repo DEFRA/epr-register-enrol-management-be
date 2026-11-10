@@ -14,6 +14,16 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 public interface IWorkItemReferenceGenerator
 {
     /// <summary>
+    /// The reason <paramref name="payload"/> cannot be given a reference for
+    /// <paramref name="type"/>, or <c>null</c> when it can.
+    /// <see cref="WorkItemService"/> calls this before allocating anything and
+    /// rejects the submission with a 400 when it returns a message. An in-year
+    /// change type needs a 4-digit <c>accreditationYear</c>; the AP format
+    /// accepts any payload.
+    /// </summary>
+    string? ValidatePayload(IWorkItemType type, BsonDocument payload);
+
+    /// <summary>
     /// Generate the reference for a submission of <paramref name="type"/>.
     /// <paramref name="attempt"/> is the 1-based retry count from the
     /// caller's collision-retry loop. The AP format uses it to choose a
@@ -34,6 +44,17 @@ public sealed class WorkItemReferenceGenerator(
     IInYearChangeReferenceGenerator inYearChangeReferenceGenerator
 ) : IWorkItemReferenceGenerator
 {
+    public string? ValidatePayload(IWorkItemType type, BsonDocument payload)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+
+        return type.InYearChangeCode is not null
+            && !InYearChangeReferenceGenerator.TryGetAccreditationYear(payload, out _)
+            ? $"payload.{InYearChangeReferenceGenerator.AccreditationYearField} must be a "
+                + $"4-digit year for work item type '{type.TypeId}'."
+            : null;
+    }
+
     public async Task<string> GenerateAsync(
         IWorkItemType type,
         BsonDocument payload,

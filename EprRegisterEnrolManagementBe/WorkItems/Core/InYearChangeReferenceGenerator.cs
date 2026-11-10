@@ -1,50 +1,55 @@
 using System.Globalization;
-using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
 /// Produces the <c>applicationReference</c> for in-year change work items
-/// (RA-492). The Jira comment of 10 Nov 2026 (regulators agreed) fixes
-/// <c>IYC-{changeTypeCode}-{year}-{5-digit sequence}</c>, with one sequence per
-/// change type per year, for example <c>IYC-ORS-2026-00021</c>. That lets
-/// regulators tell an in-year change apart from an application (<c>AP…</c>,
-/// see <see cref="ApplicationReferenceGenerator"/>).
+/// (RA-492). The format is <c>IYC-{changeTypeCode}-{yyyy}-{sequence}</c>, for
+/// example <c>IYC-ORS-2026-00021</c>, so regulators can tell an in-year change
+/// apart from an application (<c>AP…</c>, see
+/// <see cref="ApplicationReferenceGenerator"/>).
 /// <list type="bullet">
 ///   <item><c>IYC</c>: In-Year Change, the literal <see cref="Prefix"/>.</item>
 ///   <item><c>{changeTypeCode}</c>: the type's own
 ///   <see cref="IWorkItemType.InYearChangeCode"/>.</item>
-///   <item><c>{year}</c>: see the implementation choices below.</item>
-///   <item><c>{sequence}</c>: allocated from <see cref="IReferenceSequenceStore"/>,
-///   keyed <c>IYC-{code}-{yyyy}</c>.</item>
+///   <item><c>{yyyy}</c>: the payload's 4-digit <c>accreditationYear</c>, which
+///   is mandatory. <see cref="TryGetAccreditationYear"/> checks it, and
+///   <see cref="WorkItemService"/> rejects a submission without a usable year
+///   before any number is allocated.</item>
+///   <item><c>{sequence}</c>: 5 digits, from a counter in
+///   <see cref="IReferenceSequenceStore"/> keyed <c>IYC-{code}-{yyyy}</c>, so
+///   there is one sequence per change type per year. The first reference for a
+///   key is <c>00000</c>. The stored counter only grows, and the reference shows
+///   it modulo <see cref="SequenceModulus"/>, so <c>99999</c> is followed by
+///   <c>00000</c>.</item>
 /// </list>
-/// Implementation choices, not fixed by the Jira comment and still to be
-/// confirmed with the PO:
-/// <list type="bullet">
-///   <item>The year is the 4-digit <c>payload.accreditationYear</c>. If it is
-///   absent or unusable, the current UTC year from the injected
-///   <see cref="TimeProvider"/> is used instead.</item>
-///   <item>Each counter starts at <c>00001</c>.</item>
-///   <item>Past <c>99999</c> the sequence widens (<c>IYC-ORS-2026-100000</c>)
-///   instead of failing. Five digits is a minimum width, so the reference
-///   stays unique and keeps its <c>IYC-ORS-yyyy-</c> prefix. Failing would
-///   block every later change request of that type until the next year.</item>
-/// </list>
+/// The shape and the per-type, per-year sequence were agreed with regulators
+/// (Jira comment, 10 Nov 2026). The mandatory year, the <c>00000</c> start and
+/// the wrap after <c>99999</c> are Tom's decisions of the same date.
+/// <para>
+/// Wrap hazard (accepted): after a wrap, an earlier reference with the same
+/// number already exists. The <c>applicationReference</c> unique index makes
+/// the retry loop take the next number, so in a year with more than 100,000
+/// changes of one type, submissions start failing once the retry budget is
+/// used up.
+/// </para>
 /// <para>
 /// Unlike the deterministic AP format, every call allocates a fresh number.
 /// <see cref="WorkItemService"/> therefore calls this, through
-/// <see cref="IWorkItemReferenceGenerator"/>, only after its
-/// idempotent-replay check, and calls it again on an
-/// <c>applicationReference</c> unique-index collision. The retry takes the
-/// next number and never gets a disambiguator character appended.
+/// <see cref="IWorkItemReferenceGenerator"/>, only after its idempotent-replay
+/// check and payload validation. It calls it again on an
+/// <c>applicationReference</c> unique-index collision. The retry takes the next
+/// number and never gets a disambiguator character appended.
 /// </para>
 /// </summary>
 public interface IInYearChangeReferenceGenerator
 {
     /// <summary>
-    /// Allocate the next reference for <paramref name="changeTypeCode"/>
-    /// (a type's <see cref="IWorkItemType.InYearChangeCode"/>).
+    /// Allocate the next reference for <paramref name="changeTypeCode"/> (a
+    /// type's <see cref="IWorkItemType.InYearChangeCode"/>). The caller must
+    /// first check the payload with
+    /// <see cref="InYearChangeReferenceGenerator.TryGetAccreditationYear"/>.
     /// </summary>
     Task<string> GenerateAsync(
         string changeTypeCode,
@@ -54,29 +59,31 @@ public interface IInYearChangeReferenceGenerator
 }
 
 /// <inheritdoc />
-public sealed class InYearChangeReferenceGenerator : IInYearChangeReferenceGenerator
+public sealed class InYearChangeReferenceGenerator(IReferenceSequenceStore sequenceStore)
+    : IInYearChangeReferenceGenerator
 {
     /// <summary>Literal prefix every in-year change reference carries.</summary>
     public const string Prefix = "IYC";
 
-    /// <summary>Minimum width the sequence segment is zero-padded to.</summary>
-    public const int SequenceMinimumDigits = 5;
+    /// <summary>Payload field holding the mandatory 4-digit accreditation year.</summary>
+    public const string AccreditationYearField = "accreditationYear";
 
-    private const string AccreditationYearField = "accreditationYear";
+    /// <summary>
+    /// The sequence segment shows the counter modulo this value, zero-padded to
+    /// 5 digits, so it wraps from <c>99999</c> to <c>00000</c>.
+    /// </summary>
+    public const long SequenceModulus = 100_000;
 
-    private readonly IReferenceSequenceStore _sequenceStore;
-    private readonly TimeProvider _timeProvider;
-    private readonly ILogger<InYearChangeReferenceGenerator> _logger;
-
-    public InYearChangeReferenceGenerator(
-        IReferenceSequenceStore sequenceStore,
-        TimeProvider? timeProvider = null,
-        ILogger<InYearChangeReferenceGenerator>? logger = null
-    )
+    /// <summary>
+    /// True when <paramref name="payload"/> carries a usable
+    /// <c>accreditationYear</c>: a numeric whole number from 1000 to 9999.
+    /// </summary>
+    public static bool TryGetAccreditationYear(BsonDocument payload, out int year)
     {
-        _sequenceStore = sequenceStore;
-        _timeProvider = timeProvider ?? TimeProvider.System;
-        _logger = logger ?? NullLogger<InYearChangeReferenceGenerator>.Instance;
+        ArgumentNullException.ThrowIfNull(payload);
+        year = 0;
+        return payload.TryGetValue(AccreditationYearField, out var value)
+            && BsonWholeNumber.TryGet(value, 1000, 9999, out year);
     }
 
     public async Task<string> GenerateAsync(
@@ -86,41 +93,25 @@ public sealed class InYearChangeReferenceGenerator : IInYearChangeReferenceGener
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(changeTypeCode);
-        ArgumentNullException.ThrowIfNull(payload);
+        if (!TryGetAccreditationYear(payload, out var year))
+        {
+            // Unreachable from WorkItemService, which rejects the submission
+            // first. Checked here so no number is ever allocated for a bad year.
+            throw new ArgumentException(
+                $"payload.{AccreditationYearField} must be a 4-digit year.",
+                nameof(payload)
+            );
+        }
 
-        var year = ResolveYear(payload);
         var sequenceKey = string.Create(
             CultureInfo.InvariantCulture,
             $"{Prefix}-{changeTypeCode}-{year:D4}"
         );
-        var sequence = await _sequenceStore.NextAsync(sequenceKey, cancellationToken);
+        var sequence = await sequenceStore.NextAsync(sequenceKey, cancellationToken);
 
         return string.Create(
             CultureInfo.InvariantCulture,
-            $"{sequenceKey}-{sequence.ToString("D" + SequenceMinimumDigits, CultureInfo.InvariantCulture)}"
+            $"{sequenceKey}-{sequence % SequenceModulus:D5}"
         );
-    }
-
-    // The operator backend sends accreditationYear as a 4-digit int. Anything that is not a whole
-    // number from 1000 to 9999 falls back to the UTC year, so a malformed value can never put a
-    // wrong-width or signed year segment into the reference. A value that is present but
-    // unusable is logged, because the fallback hides a data gap.
-    private int ResolveYear(BsonDocument payload)
-    {
-        if (payload.TryGetValue(AccreditationYearField, out var value))
-        {
-            if (BsonWholeNumber.TryGet(value, 1000, 9999, out var year))
-            {
-                return year;
-            }
-
-            _logger.LogWarning(
-                "In-year change payload has an unusable {Field} ({BsonType}); using the current UTC year",
-                AccreditationYearField,
-                value.BsonType
-            );
-        }
-
-        return _timeProvider.GetUtcNow().UtcDateTime.Year;
     }
 }

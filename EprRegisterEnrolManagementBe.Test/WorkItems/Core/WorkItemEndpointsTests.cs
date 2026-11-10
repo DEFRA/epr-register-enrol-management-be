@@ -612,6 +612,54 @@ public class WorkItemEndpointsTests
     }
 
     [Fact]
+    public async Task Submit_maps_an_invalid_submission_payload_to_a_400_problem()
+    {
+        // RA-492: an in-year change submitted without a 4-digit
+        // accreditationYear is a client error, so it surfaces as a 400
+        // ProblemDetails carrying the engine's message.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var type = new TestWorkItemType(TypeId, "Test type", inYearChangeCode: "ORS");
+        var registry = new WorkItemRegistry([type]);
+        var engine = Substitute.For<IWorkItemService>();
+        engine
+            .SubmitAsync(
+                Arg.Any<IWorkItemType>(),
+                Arg.Any<MongoDB.Bson.BsonDocument>(),
+                Arg.Any<string?>(),
+                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
+                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.InvalidSubmissionPayload,
+                    $"payload.accreditationYear must be a 4-digit year for work item type '{TypeId}'."
+                )
+            );
+
+        var body = JsonDocument.Parse($"{{\"typeId\":\"{TypeId}\"}}").RootElement;
+        var httpContext = new Microsoft.AspNetCore.Http.DefaultHttpContext
+        {
+            User = new System.Security.Claims.ClaimsPrincipal(
+                new System.Security.Claims.ClaimsIdentity(authenticationType: "test")
+            ),
+        };
+
+        var result = await WorkItemEndpoints.Submit(
+            body,
+            httpContext,
+            registry,
+            engine,
+            Substitute.For<IStructuredLogger<WorkItemEndpointsLogger>>(),
+            cancellationToken
+        );
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(Microsoft.AspNetCore.Http.StatusCodes.Status400BadRequest, problem.StatusCode);
+        Assert.Contains("accreditationYear", problem.ProblemDetails.Detail);
+    }
+
+    [Fact]
     public async Task Submit_logs_absent_body_when_no_json_body_is_supplied()
     {
         // Covers the `body.ValueKind != JsonValueKind.Undefined` branch's

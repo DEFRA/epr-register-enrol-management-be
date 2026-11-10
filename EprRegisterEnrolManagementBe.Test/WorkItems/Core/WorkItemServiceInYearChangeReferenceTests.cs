@@ -51,7 +51,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             NullLogger<WorkItemService>.Instance,
             new WorkItemReferenceGenerator(
                 new ApplicationReferenceGenerator(_time),
-                new InYearChangeReferenceGenerator(_sequenceStore, _time)
+                new InYearChangeReferenceGenerator(_sequenceStore)
             ),
             _time
         );
@@ -110,12 +110,12 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         Assert.True(second.IsSuccess);
         var firstStored = await GetAsync(first.WorkItem!.Id);
         var secondStored = await GetAsync(second.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2026-00001", firstStored.Payload["applicationReference"].AsString);
-        Assert.Equal("IYC-ORS-2026-00002", secondStored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00000", firstStored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00001", secondStored.Payload["applicationReference"].AsString);
 
         // The birth audit entry records the same server-generated reference.
         Assert.Equal(
-            "IYC-ORS-2026-00001",
+            "IYC-ORS-2026-00000",
             Assert.Single(firstStored.AuditLog).Details["applicationReference"]
         );
     }
@@ -132,7 +132,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         );
 
         var stored = await GetAsync(result.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2026-00001", stored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00000", stored.Payload["applicationReference"].AsString);
         Assert.Equal("PR/PK/REP/500500", stored.Payload["paymentReference"].AsString);
     }
 
@@ -147,19 +147,43 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         var nextYear = await SubmitAsync(service, type, new BsonDocument { ["accreditationYear"] = 2027 });
 
         var stored = await GetAsync(nextYear.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2027-00001", stored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2027-00000", stored.Payload["applicationReference"].AsString);
     }
 
-    [Fact]
-    public async Task Submit_add_overseas_site_without_accreditationYear_uses_the_current_utc_year()
+    public static TheoryData<BsonDocument> PayloadsWithoutAUsableYear =>
+        new()
+        {
+            new BsonDocument(),
+            new BsonDocument { ["accreditationYear"] = "2026" },
+            new BsonDocument { ["accreditationYear"] = 26 },
+            new BsonDocument { ["accreditationYear"] = 20260 },
+            new BsonDocument { ["accreditationYear"] = 2026.5 },
+        };
+
+    [Theory]
+    [MemberData(nameof(PayloadsWithoutAUsableYear))]
+    public async Task Submit_add_overseas_site_without_a_usable_accreditationYear_is_rejected_and_allocates_nothing(
+        BsonDocument payload
+    )
     {
         var type = AddOverseasSiteType();
 
-        var result = await SubmitAsync(BuildService(type), type, new BsonDocument());
+        var result = await SubmitAsync(BuildService(type), type, payload);
 
-        var stored = await GetAsync(result.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2027-00001", stored.Payload["applicationReference"].AsString);
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidSubmissionPayload, result.FailureCode);
+        Assert.Contains("accreditationYear", result.Message);
+        Assert.Equal(0, await CountAsync(MongoReferenceSequenceStore.CollectionName));
+        Assert.Equal(0, await CountAsync("workItems"));
     }
+
+    private async Task<long> CountAsync(string collection) =>
+        await _clientFactory
+            .GetCollection<BsonDocument>(collection)
+            .CountDocumentsAsync(
+                FilterDefinition<BsonDocument>.Empty,
+                cancellationToken: TestContext.Current.CancellationToken
+            );
 
     [Fact]
     public async Task Submit_other_types_keep_the_AP_reference_and_allocate_no_sequence()
@@ -213,7 +237,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         Assert.True(replay.IsIdempotentReplay);
         Assert.Equal(first.WorkItem!.Id, replay.WorkItem!.Id);
         Assert.Equal(
-            "IYC-ORS-2026-00001",
+            "IYC-ORS-2026-00000",
             replay.WorkItem.Payload["applicationReference"].AsString
         );
         Assert.Equal(1L, await CounterAsync("IYC-ORS-2026"));
@@ -286,7 +310,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
                 SubmittedAt = now,
                 LastModifiedAt = now,
                 SubmittedBy = "seed",
-                Payload = new BsonDocument { ["applicationReference"] = "IYC-ORS-2026-00001" },
+                Payload = new BsonDocument { ["applicationReference"] = "IYC-ORS-2026-00000" },
             },
             TestContext.Current.CancellationToken
         );
@@ -299,7 +323,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
 
         Assert.True(result.IsSuccess);
         var stored = await GetAsync(result.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2026-00002", stored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00001", stored.Payload["applicationReference"].AsString);
         Assert.Equal(2L, await CounterAsync("IYC-ORS-2026"));
     }
 
@@ -323,7 +347,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             .ToList();
         Assert.All(references, r => Assert.Matches(IycOrsPattern, r));
         Assert.Equal(
-            Enumerable.Range(1, Submissions).Select(n => $"IYC-ORS-2026-{n:D5}"),
+            Enumerable.Range(0, Submissions).Select(n => $"IYC-ORS-2026-{n:D5}"),
             references.Order(StringComparer.Ordinal)
         );
     }

@@ -175,7 +175,9 @@ spoof or collide a reference.
   (`ApplicationReferenceGenerator`). A type that declares
   `IWorkItemType.InYearChangeCode` (RA-492) gets `IYC-{code}-{yyyy}-{seq:D5}`,
   e.g. `IYC-ORS-2026-00021`, from a per-type, per-year sequence in the
-  `referenceSequences` collection (`InYearChangeReferenceGenerator`). No such
+  `referenceSequences` collection (`InYearChangeReferenceGenerator`). Its
+  4-digit `accreditationYear` is mandatory: without one the submission is
+  rejected with 400 before any number is allocated. No such
   type is registered yet: `add-overseas-site` arrives with the
   case-management story. See `docs/work-items.md` "Application reference".
 - Builds a `WorkItem` document:

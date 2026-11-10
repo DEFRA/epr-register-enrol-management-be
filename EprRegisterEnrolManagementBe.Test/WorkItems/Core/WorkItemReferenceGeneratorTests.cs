@@ -55,6 +55,42 @@ public sealed class WorkItemReferenceGeneratorTests
     }
 
     [Fact]
+    public void ValidatePayload_rejects_an_in_year_change_without_a_four_digit_accreditationYear()
+    {
+        var message = new WorkItemReferenceGenerator(_ap, _iyc).ValidatePayload(
+            new TestWorkItemType("add-overseas-site", "Add overseas site", inYearChangeCode: "ORS"),
+            new BsonDocument { ["accreditationYear"] = "2026" }
+        );
+
+        Assert.Equal(
+            "payload.accreditationYear must be a 4-digit year for work item type 'add-overseas-site'.",
+            message
+        );
+    }
+
+    [Fact]
+    public void ValidatePayload_accepts_an_in_year_change_with_a_four_digit_accreditationYear()
+    {
+        Assert.Null(
+            new WorkItemReferenceGenerator(_ap, _iyc).ValidatePayload(
+                new TestWorkItemType("add-overseas-site", "Add overseas site", inYearChangeCode: "ORS"),
+                new BsonDocument { ["accreditationYear"] = 2026 }
+            )
+        );
+    }
+
+    [Fact]
+    public void ValidatePayload_accepts_any_payload_for_the_AP_format()
+    {
+        Assert.Null(
+            new WorkItemReferenceGenerator(_ap, _iyc).ValidatePayload(
+                new TestWorkItemType("re-accreditation", "Re-accreditation"),
+                new BsonDocument()
+            )
+        );
+    }
+
+    [Fact]
     public void InYearChangeCode_defaults_to_null_for_a_type_that_does_not_declare_one()
     {
         IWorkItemType type = new MinimalType();
