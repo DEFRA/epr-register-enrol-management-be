@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -150,7 +151,7 @@ public class WorkItemTemplateVersioningTests
             StateId = "anything"
         };
 
-        var projection = new WorkItemService(registry, _persistence, NullLogger<WorkItemService>.Instance)
+        var projection = new WorkItemService(registry, _persistence, NullLogger<WorkItemService>.Instance, TestReferenceGenerators.ApplicationOnly())
             .Project(orphan);
 
         Assert.Equal("unknown", projection.TemplateVersion);
@@ -158,7 +159,7 @@ public class WorkItemTemplateVersioningTests
     }
 
     private WorkItemService BuildService(IWorkItemType type) =>
-        new(new WorkItemRegistry([type]), _persistence, NullLogger<WorkItemService>.Instance);
+        new(new WorkItemRegistry([type]), _persistence, NullLogger<WorkItemService>.Instance, TestReferenceGenerators.ApplicationOnly());
 
     /// <summary>
     /// Test fixture exposing TemplateVersion override so we can register

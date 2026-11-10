@@ -453,9 +453,10 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
 
-        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+        public Task<WorkItem?> FindBySubmissionKeyAsync(
             string typeId,
-            string operatorApplicationId,
+            string payloadField,
+            string value,
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
     }

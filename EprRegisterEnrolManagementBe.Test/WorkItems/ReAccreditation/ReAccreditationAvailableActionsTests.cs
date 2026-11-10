@@ -34,6 +34,7 @@ public class ReAccreditationAvailableActionsTests
             new WorkItemRegistry([new ReAccreditationType()]),
             new WorkItemPersistence(_clientFactory, NullLoggerFactory.Instance),
             NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(),
             // Project() is a pure read over the document and template; it never
             // reads the clock, so the real provider is fine here.
             TimeProvider.System

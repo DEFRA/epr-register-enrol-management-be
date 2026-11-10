@@ -19,6 +19,16 @@ public interface IWorkItemType : IWorkItemTemplate
     WorkItemState InitialState { get; }
 
     /// <summary>
+    /// RA-492: the in-year change type code (for example <c>"ORS"</c>) when
+    /// this type is an in-year change. A non-null code gives every submission
+    /// an <c>IYC-{code}-{yyyy}-{sequence}</c> <c>applicationReference</c> (see
+    /// <see cref="InYearChangeReferenceGenerator"/>). Defaults to <c>null</c>,
+    /// which gives the AP format, so existing types need no change. The type
+    /// declares its own code, so Core never lists module type ids.
+    /// </summary>
+    string? InYearChangeCode => null;
+
+    /// <summary>
     /// Stable identifier for the current shape of this type's templates and
     /// Bump this whenever a change to <see cref="States"/> or
     /// <see cref="Transitions"/> would render historical work items

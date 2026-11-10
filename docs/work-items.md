@@ -57,6 +57,97 @@ The persisted envelope is owned by the framework; modules describe the shape
 of their payload via their `IWorkItemType` and operate on it via their own
 service objects.
 
+## Application reference (RA-219, RA-492)
+
+`WorkItemService.SubmitAsync` generates `payload.applicationReference` on
+the server. Any value the caller sends is overwritten. The response also
+returns it as the top-level `applicationReference`. There are two formats,
+and `WorkItemReferenceGenerator` picks one from the type's
+`IWorkItemType.InYearChangeCode`:
+
+| `InYearChangeCode` | Format | Example | Generator |
+| --- | --- | --- | --- |
+| Non-null (an in-year change type) | `IYC-{code}-{yyyy}-{seq:D5}` | `IYC-ORS-2026-00021` | `InYearChangeReferenceGenerator` |
+| `null` (the default; every other type) | `AP` + year + agency + organisation + postcode + material (RA-318, RA-503, RA-526) | `AP26EA5005001ABPL` | `ApplicationReferenceGenerator` |
+
+- **The type declares its code.** `IWorkItemType.InYearChangeCode` is a
+  default interface member that returns `null`. An in-year change type
+  overrides it in its own module folder, so Core never lists module type ids.
+  **Contract for the case-management story:** the `add-overseas-site` type
+  must set `InYearChangeCode => "ORS"`. That type is **not registered yet**,
+  so today `POST /work-items` rejects `typeId: "add-overseas-site"` as an
+  unknown type, and the IYC path has no production caller.
+- **What regulators agreed (Jira comment, 10 Nov 2026):** the shape
+  `IYC-<type code>-<year>-<5-digit sequence>`, with one sequence per change
+  type per year.
+- **Decided on RA-492 (10 Nov 2026):**
+  - **The year is mandatory.** It is `payload.accreditationYear`, a whole
+    number from 1000 to 9999. An in-year change submitted without one is
+    rejected with `400` ProblemDetails (`WorkItemActionFailureCode.InvalidSubmissionPayload`).
+    The check runs before any number is allocated, so a rejected submission
+    uses up no number. A string year such as `"2026"` is rejected too; that is
+    stricter than asked but harmless, because the operator backend sends an int.
+    The AP format reads the year through the same `AccreditationYear` reader,
+    but keeps its fallback to the current year.
+  - **Each counter starts at `00000`.**
+  - **The sequence wraps after `99999`** back to `00000`. The stored counter
+    only grows; the reference shows it modulo 100000.
+- **The wrap acts as a cap (accepted, not fixed).**
+  - A counter is keyed `IYC-{code}-{yyyy}`, so every number in one counter has
+    the same change type and the same year.
+  - After a wrap, the reference for the next number already exists with that
+    same type and year. The `applicationReference` unique index makes each
+    retry take the next number, and every one collides.
+  - So once one type passes 100,000 changes in a year, every later
+    submission of that type fails with `503` (`ApplicationReferenceExhausted`,
+    labelled transient) until the year changes.
+  - RA-492 judged 100,000 changes of one type in one year unrealistic.
+- **Sequence storage.** Counters live in the `referenceSequences` collection
+  as `{ _id: "IYC-ORS-2026", seq: <long> }`, where `seq` is how many numbers
+  have been allocated for the key. They are allocated atomically by
+  `MongoReferenceSequenceStore` (`$inc` with upsert). A number can be skipped
+  but is never reused:
+  - Concurrent submits with one submission key (below) each allocate a number
+    before all but one return the winner as a replay.
+  - An insert failure after allocation also leaves a gap.
+- **Replays.** A submission carrying a key already on file for its type is an
+  idempotent replay. It returns the original work item, and nothing is
+  validated, allocated or written. The keys are:
+  - `payload.operatorApplicationId`, which applications send (RA-311/MBE-3).
+  - `payload.operatorRequestId`, which the operator backend sends for an
+    in-year change request (RA-492).
+
+  Each key has a unique index on `workItems`: `operatorApplicationId` is
+  sparse, and `operatorRequestId` is partial on "is a string". The check runs
+  before payload validation and before any sequence number is allocated, so a
+  sequential replay uses no number. Two concurrent submits with one key both
+  reach the insert. The loser collides on that key's index and returns the
+  winner as a replay.
+
+  **What a replay does with a different payload:** the lookup matches on the
+  type id and the key value only (`FindBySubmissionKeyAsync`). The resubmitted
+  payload is not compared with the stored one, not merged into it and not
+  stored. Both the up-front path and the concurrent-insert path return the
+  stored work item unchanged.
+
+  **Known, deferred to the case-management in-year change story:** after a
+  case-management timeout the operator backend reopens the change request.
+  If the operator then edits the sites and resubmits with the same
+  `operatorRequestId`, management-be replays the original work item, which
+  still holds the old sites, and the edits are silently dropped. Locking the
+  request after a timeout (on the operator side) is deferred to that story,
+  and replay behaviour is deliberately unchanged here.
+- **Collisions.** On an `applicationReference` unique-index collision the
+  engine regenerates, up to `MaxApplicationReferenceAttempts`. An IYC retry
+  takes the next number. An AP retry appends a disambiguator character.
+- **Pinning the code.** Nothing in this repo enforces `ORS` until the
+  case-management story adds the type, so that story must add a test
+  asserting the registered `add-overseas-site` type's
+  `InYearChangeCode == "ORS"`.
+- **Wiring.** `AddWorkItemReferenceGenerators()` (in
+  `WorkItemReferenceGenerator.cs`) registers the chooser, both generators and
+  the sequence store.
+
 ## Adding a new work item type
 
 1. **Create a folder** under `EprRegisterEnrolManagementBe/WorkItems/<TypeName>/` containing:
@@ -92,6 +183,10 @@ service objects.
    `MapWorkItemModules()` is already invoked from `ConfigureEndpoints`.
 
 That is the complete list of changes required outside the new module folder.
+
+An in-year change type sets `InYearChangeCode` on its `IWorkItemType` inside
+the module folder (see [Application reference](#application-reference-ra-219-ra-492)).
+That is still a module-only change.
 
 ## Conventions
 

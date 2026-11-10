@@ -6598,14 +6598,16 @@ public class ReAccreditationEndpointTests
             CancellationToken cancellationToken = default
         ) => inner.GetByIdAsync(id, cancellationToken);
 
-        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+        public Task<WorkItem?> FindBySubmissionKeyAsync(
             string typeId,
-            string operatorApplicationId,
+            string payloadField,
+            string value,
             CancellationToken cancellationToken = default
         ) =>
-            inner.FindByOperatorApplicationIdAsync(
+            inner.FindBySubmissionKeyAsync(
                 typeId,
-                operatorApplicationId,
+                payloadField,
+                value,
                 cancellationToken
             );
 
@@ -6686,14 +6688,16 @@ public class ReAccreditationEndpointTests
             CancellationToken cancellationToken = default
         ) => inner.GetByIdAsync(id, cancellationToken);
 
-        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+        public Task<WorkItem?> FindBySubmissionKeyAsync(
             string typeId,
-            string operatorApplicationId,
+            string payloadField,
+            string value,
             CancellationToken cancellationToken = default
         ) =>
-            inner.FindByOperatorApplicationIdAsync(
+            inner.FindBySubmissionKeyAsync(
                 typeId,
-                operatorApplicationId,
+                payloadField,
+                value,
                 cancellationToken
             );
 

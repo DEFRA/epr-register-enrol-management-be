@@ -143,7 +143,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_nine_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_ten_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -160,7 +160,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(9, keyDocs.Count);
+        Assert.Equal(10, keyDocs.Count);
         Assert.Contains(
             keyDocs,
             k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1")
@@ -193,6 +193,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         // RA-311/MBE-3: ascending index backing the operatorApplicationId
         // idempotent-submit lookup.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorApplicationId\" : 1"));
+        // RA-492: ascending index backing the operatorRequestId replay lookup.
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorRequestId\" : 1"));
         // epr-r9oy: ascending uniqueness index on the accreditation number
         // stamped at approval (RA-448 phase 2: now backend-issued).
         Assert.Contains(keyDocs, k => k.Contains("\"payload.accreditationId\" : 1"));
@@ -214,6 +216,16 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         );
         Assert.True(operatorApplicationIdIndex.GetValue("unique", false).ToBoolean());
         Assert.True(operatorApplicationIdIndex.GetValue("sparse", false).ToBoolean());
+
+        // RA-492: operatorRequestId (the in-year change submission key) is
+        // UNIQUE and PARTIAL on "is a string", like accreditationId below, so
+        // an explicit null never trips it.
+        var operatorRequestIdIndex = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("payload.operatorRequestId")
+        );
+        Assert.True(operatorRequestIdIndex.GetValue("unique", false).ToBoolean());
+        Assert.False(operatorRequestIdIndex.GetValue("sparse", false).ToBoolean());
+        Assert.True(operatorRequestIdIndex.Contains("partialFilterExpression"));
 
         // epr-r9oy: UNIQUE but PARTIAL rather than sparse. Sparse would exclude
         // only documents where the field is absent, and duly making writes an
@@ -794,6 +806,47 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         Assert.Equal(
             "Beta Metals",
             Assert.Single(byOrgId.Items).Payload["organisationName"].AsString
+        );
+    }
+
+    // RA-492: in-year change references (IYC-ORS-2026-00021) contain '-', which the reference
+    // search must treat literally. The OrgId search is a case-insensitive regex on
+    // payload.applicationReference, so a full or partial IYC reference must find the item and must
+    // not match an AP reference or another year's IYC reference.
+    [Theory]
+    [InlineData("IYC-ORS-2026-00021")]
+    [InlineData("IYC-ORS-2026-0002")]
+    [InlineData("iyc-ors-2026")]
+    [InlineData("  IYC-ORS-2026-00021  ")]
+    public async Task QueryAsync_orgId_filter_finds_an_in_year_change_reference(string search)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedWithReferenceAsync("IYC-ORS-2026-00021");
+        await SeedWithReferenceAsync("IYC-ORS-2027-00021");
+        await SeedWithReferenceAsync("AP26EA5005001ABPL");
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(OrgId: search), ct);
+
+        Assert.Equal(
+            "IYC-ORS-2026-00021",
+            Assert.Single(page.Items).Payload["applicationReference"].AsString
+        );
+    }
+
+    private async Task SeedWithReferenceAsync(string applicationReference)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        await _persistence.CreateAsync(
+            new WorkItem
+            {
+                TypeId = "add-overseas-site",
+                StateId = "submitted",
+                SubmittedAt = now,
+                LastModifiedAt = now,
+                SubmittedBy = "client-1",
+                Payload = new BsonDocument { ["applicationReference"] = applicationReference },
+            },
+            TestContext.Current.CancellationToken
         );
     }
 

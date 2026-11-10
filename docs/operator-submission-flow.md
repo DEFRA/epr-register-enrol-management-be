@@ -171,7 +171,19 @@ spoof or collide a reference.
 `WorkItemService.SubmitAsync` (`WorkItems/Core/WorkItemService.cs:219`):
 
 - Generates a server-side `applicationReference` and stamps it onto the BSON
-  payload.
+  payload. Re-accreditation applications get the `AP…` format
+  (`ApplicationReferenceGenerator`). A type that declares
+  `IWorkItemType.InYearChangeCode` (RA-492) gets `IYC-{code}-{yyyy}-{seq:D5}`,
+  e.g. `IYC-ORS-2026-00021`, from a per-type, per-year sequence in the
+  `referenceSequences` collection (`InYearChangeReferenceGenerator`). Its
+  4-digit `accreditationYear` is mandatory: without one the submission is
+  rejected with 400 before any number is allocated. A change request is
+  keyed on `payload.operatorRequestId` (unique index): a resubmit of one
+  already on file, for example the operator backend retrying after a timeout,
+  returns the original work item as an idempotent replay and allocates no
+  number. Applications are keyed the same way on `operatorApplicationId`. No such
+  type is registered yet: `add-overseas-site` arrives with the
+  case-management story. See `docs/work-items.md` "Application reference".
 - Builds a `WorkItem` document:
   - `TypeId = "re-accreditation"`, `StateId = {type's initial state}`
   - `SubmittedAt / LastModifiedAt` from the injected `TimeProvider` (not
@@ -198,7 +210,8 @@ unique index on `applicationReference`.
 
 **Reference collision (rare):** on a `DuplicateKey` error targeting the
 `applicationReference` index the engine regenerates the reference and retries,
-up to 5 attempts. Each attempt fires its own pre-persist log line. Exhaustion
+up to 5 attempts. An AP retry appends a disambiguator character. An IYC retry
+takes the next sequence number. Each attempt fires its own pre-persist log line. Exhaustion
 surfaces as a clean 503 response (not an unhandled 500).
 
 **Other MongoDB failures:** any exception that isn't a reference-collision
@@ -245,12 +258,18 @@ endpoint stores both values on the application model and **now** writes back
 to operator MongoDB:
 
 ```csharp
-application.ApplicationReference      = submissionResult.ApplicationReference
-application.CaseManagementReference   = submissionResult.ApplicationReference
+application.ApplicationReference      = submissionResult.CaseReference
+application.CaseManagementReference   = submissionResult.CaseReference
 application.CaseManagementWorkItemId  = submissionResult.WorkItemId
 
 await persistence.UpdateAsync(application)
 ```
+
+`CaseWorkingSubmissionResult.CaseReference` (introduced by
+DEFRA/epr-register-enrol-backend#247) is the `applicationReference` from
+management BE's response. For an in-year change request (RA-492) the OJ
+backend stores the same value as the change request's
+`caseManagementReference`.
 
 `CaseManagementWorkItemId` is used later: when the operator revisits their
 application the BE calls management BE's `GET /work-items/{workItemId}` to

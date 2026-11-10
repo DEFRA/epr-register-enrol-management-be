@@ -145,19 +145,20 @@ public interface IWorkItemPersistence
     );
 
     /// <summary>
-    /// RA-311/MBE-3: find an existing work item of <paramref name="typeId"/>
-    /// whose <c>payload.operatorApplicationId</c> matches
-    /// <paramref name="operatorApplicationId"/>, or <c>null</c> if none
-    /// exists. Backs the idempotent-submit check in
-    /// <see cref="WorkItemService.SubmitAsync"/>: a caller (the operator
-    /// backend, forwarding an operator's original "submit application" call)
-    /// that retries after a client-side timeout must be handed back the
-    /// work item created by the first attempt rather than creating a
-    /// duplicate.
+    /// The work item of <paramref name="typeId"/> whose
+    /// <c>payload.{payloadField}</c> equals <paramref name="value"/>, or
+    /// <c>null</c> if none exists. Backs the idempotent-submit check in
+    /// <see cref="WorkItemService.SubmitAsync"/>. A caller that retries after a
+    /// client-side timeout must be handed back the work item created by the
+    /// first attempt rather than creating a duplicate. The submission keys are
+    /// <c>operatorApplicationId</c> (RA-311/MBE-3, applications) and
+    /// <c>operatorRequestId</c> (RA-492, in-year change requests); both have a
+    /// unique index (see <see cref="WorkItemPersistence.DefineIndexes"/>).
     /// </summary>
-    Task<WorkItem?> FindByOperatorApplicationIdAsync(
+    Task<WorkItem?> FindBySubmissionKeyAsync(
         string typeId,
-        string operatorApplicationId,
+        string payloadField,
+        string value,
         CancellationToken cancellationToken = default
     );
 }
@@ -223,8 +224,7 @@ public sealed class WorkItemPersistence
             await Collection.InsertOneAsync(workItem, cancellationToken: cancellationToken);
             return true;
         }
-        catch (MongoWriteException ex)
-            when (ex.WriteError?.Category == ServerErrorCategory.DuplicateKey)
+        catch (MongoWriteException ex) when (MongoDuplicateKey.Is(ex))
         {
             // _id already in the collection — another instance won the
             // race or the seeder has already run on this database.
@@ -269,15 +269,16 @@ public sealed class WorkItemPersistence
     }
 
     [ExcludeFromCodeCoverage]
-    public async Task<WorkItem?> FindByOperatorApplicationIdAsync(
+    public async Task<WorkItem?> FindBySubmissionKeyAsync(
         string typeId,
-        string operatorApplicationId,
+        string payloadField,
+        string value,
         CancellationToken cancellationToken = default
     )
     {
         var filter = Builders<WorkItem>.Filter.And(
             Builders<WorkItem>.Filter.Eq(w => w.TypeId, typeId),
-            Builders<WorkItem>.Filter.Eq("payload.operatorApplicationId", operatorApplicationId)
+            Builders<WorkItem>.Filter.Eq($"payload.{payloadField}", value)
         );
 
         return await Collection.Find(filter).FirstOrDefaultAsync(cancellationToken);
@@ -768,6 +769,26 @@ public sealed class WorkItemPersistence
             builder.Ascending("payload.operatorApplicationId"),
             new CreateIndexOptions { Unique = true, Sparse = true }
         );
+        // RA-492: the in-year change counterpart of operatorApplicationId. The
+        // operator backend sends payload.operatorRequestId (its change request
+        // id) on every change-request submission, so a retry after a timeout
+        // must hand back the original work item and allocate no new IYC
+        // number. Unique, so two concurrent submissions of one request can
+        // never both persist; the engine treats the collision as a replay.
+        // PARTIAL on "is a string" rather than sparse, for the reason given on
+        // accreditationId below: a payload round-tripped through a typed model
+        // can carry an explicit null, which sparse would still index.
+        var operatorRequestId = new CreateIndexModel<WorkItem>(
+            builder.Ascending("payload.operatorRequestId"),
+            new CreateIndexOptions<WorkItem>
+            {
+                Unique = true,
+                PartialFilterExpression = Builders<WorkItem>.Filter.Type(
+                    "payload.operatorRequestId",
+                    BsonType.String
+                ),
+            }
+        );
         // epr-r9oy: defined here (not on a dedicated MongoService for
         // payload.accreditationId) because index definitions only take effect
         // when the owning MongoService is constructed, and WorkItemPersistence
@@ -815,6 +836,7 @@ public sealed class WorkItemPersistence
             orgNameText,
             applicationReference,
             operatorApplicationId,
+            operatorRequestId,
             accreditationId,
         ];
     }
