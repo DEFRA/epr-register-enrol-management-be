@@ -69,7 +69,8 @@ public sealed class MongoReferenceSequenceStore : MongoService<BsonDocument>, IR
         var filter = Builders<BsonDocument>.Filter.Eq("_id", sequenceKey);
         var update = Builders<BsonDocument>.Update.Inc(SequenceField, 1L);
 
-        for (var attempt = 1; ; attempt++)
+        var attempt = 1;
+        while (true)
         {
             try
             {
@@ -89,10 +90,12 @@ public sealed class MongoReferenceSequenceStore : MongoService<BsonDocument>, IR
                 when (IsDuplicateKey(ex) && attempt < MaxAllocationAttempts)
             {
                 Logger.LogInformation(
+                    ex,
                     "Reference sequence {SequenceKey} upsert raced on attempt {Attempt}; retrying",
                     sequenceKey,
                     attempt
                 );
+                attempt++;
             }
         }
     }

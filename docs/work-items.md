@@ -61,7 +61,8 @@ service objects.
 
 `WorkItemService.SubmitAsync` generates `payload.applicationReference` on
 the server. Any value the caller sends is overwritten. The response also
-returns it as the top-level `applicationReference`. There are two formats:
+returns it as the top-level `applicationReference`. There are two formats,
+and `WorkItemReferenceGenerator` picks one by type id:
 
 | Work item type | Format | Example | Generator |
 | --- | --- | --- | --- |

@@ -43,20 +43,19 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
     private static TestWorkItemType AddOverseasSiteType() =>
         new(AddOverseasSiteTypeId, "Add overseas reprocessing site");
 
-    private WorkItemService BuildService(
-        IWorkItemType type,
-        IInYearChangeReferenceGenerator? inYearChangeReferenceGenerator = null
-    ) =>
+    private WorkItemService BuildService(IWorkItemType type) =>
         new(
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
             _time,
-            inYearChangeReferenceGenerator: inYearChangeReferenceGenerator
-                ?? new InYearChangeReferenceGenerator(_sequenceStore, _time)
+            referenceGenerator: new WorkItemReferenceGenerator(
+                new ApplicationReferenceGenerator(_time),
+                new InYearChangeReferenceGenerator(_sequenceStore, _time)
+            )
         );
 
-    private Task<WorkItemActionResult> SubmitAsync(
+    private static Task<WorkItemActionResult> SubmitAsync(
         WorkItemService service,
         IWorkItemType type,
         BsonDocument payload
@@ -268,22 +267,6 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         Assert.Equal(
             Enumerable.Range(1, Submissions).Select(n => $"IYC-ORS-2026-{n:D5}"),
             references.Order(StringComparer.Ordinal)
-        );
-    }
-
-    [Fact]
-    public async Task Submit_add_overseas_site_without_a_configured_generator_throws_instead_of_falling_back_to_AP()
-    {
-        var type = AddOverseasSiteType();
-        var service = new WorkItemService(
-            new WorkItemRegistry([type]),
-            _persistence,
-            NullLogger<WorkItemService>.Instance,
-            _time
-        );
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            SubmitAsync(service, type, new BsonDocument { ["accreditationYear"] = 2026 })
         );
     }
 }

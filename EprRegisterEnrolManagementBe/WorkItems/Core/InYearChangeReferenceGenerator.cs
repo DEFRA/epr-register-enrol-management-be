@@ -29,7 +29,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// change request of that type until the next year.
 /// <para>
 /// Unlike the deterministic AP format, every call allocates a fresh number.
-/// <see cref="WorkItemService"/> therefore calls this only after its
+/// <see cref="WorkItemService"/> therefore calls this, through
+/// <see cref="IWorkItemReferenceGenerator"/>, only after its
 /// idempotent-replay check, and calls it again on an
 /// <c>applicationReference</c> unique-index collision. The retry takes the
 /// next number and never gets a disambiguator character appended.

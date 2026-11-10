@@ -160,6 +160,6 @@ public sealed class InYearChangeReferenceGeneratorTests
         await Assert.ThrowsAsync<ArgumentException>(() =>
             _generator.GenerateAsync(" ", new BsonDocument(), TestContext.Current.CancellationToken)
         );
-        await _store.DidNotReceiveWithAnyArgs().NextAsync(default!, default);
+        await _store.DidNotReceive().NextAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }

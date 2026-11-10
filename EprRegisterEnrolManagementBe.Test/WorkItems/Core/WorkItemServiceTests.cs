@@ -2057,7 +2057,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             _time,
-            referenceGenerator: generator
+            referenceGenerator: new WorkItemReferenceGenerator(generator)
         );
 
         var payload = new BsonDocument { ["paymentReference"] = "PR/PK/REP/500500" };
@@ -2120,7 +2120,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             _time,
-            referenceGenerator: generator
+            referenceGenerator: new WorkItemReferenceGenerator(generator)
         );
 
         var result = await service.SubmitAsync(
@@ -2157,7 +2157,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             _time,
-            referenceGenerator: generator
+            referenceGenerator: new WorkItemReferenceGenerator(generator)
         );
 
         var result = await service.SubmitAsync(

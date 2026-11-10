@@ -403,9 +403,10 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 
 /// <summary>
 /// DI helper so the reference generators are registered in exactly one
-/// place, mirroring the framework's other Core service registrations: the AP
-/// generator, plus the RA-492 in-year change generator and the Mongo sequence
-/// store it allocates from.
+/// place, mirroring the framework's other Core service registrations: the
+/// RA-492 <see cref="IWorkItemReferenceGenerator"/> that the engine calls,
+/// the AP generator and the in-year change generator it chooses between, and
+/// the Mongo sequence store the in-year change generator allocates from.
 /// </summary>
 [ExcludeFromCodeCoverage]
 public static class ApplicationReferenceGeneratorExtensions
@@ -414,6 +415,7 @@ public static class ApplicationReferenceGeneratorExtensions
         this IServiceCollection services
     )
     {
+        services.AddSingleton<IWorkItemReferenceGenerator, WorkItemReferenceGenerator>();
         services.AddSingleton<IApplicationReferenceGenerator, ApplicationReferenceGenerator>();
         services.AddSingleton<IReferenceSequenceStore, MongoReferenceSequenceStore>();
         services.AddSingleton<IInYearChangeReferenceGenerator, InYearChangeReferenceGenerator>();

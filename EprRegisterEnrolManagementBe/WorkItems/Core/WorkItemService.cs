@@ -136,9 +136,8 @@ public sealed class WorkItemService : IWorkItemService
     private readonly ILogger<WorkItemService> _logger;
     private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
     private readonly TimeProvider _timeProvider;
-    private readonly IApplicationReferenceGenerator _referenceGenerator;
+    private readonly IWorkItemReferenceGenerator _referenceGenerator;
     private readonly IReadOnlyCollection<IWorkItemOriginStateResolver> _originStateResolvers;
-    private readonly IInYearChangeReferenceGenerator? _inYearChangeReferenceGenerator;
 
     public WorkItemService(
         IWorkItemRegistry registry,
@@ -146,9 +145,8 @@ public sealed class WorkItemService : IWorkItemService
         ILogger<WorkItemService> logger,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
-        IApplicationReferenceGenerator? referenceGenerator = null,
-        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null,
-        IInYearChangeReferenceGenerator? inYearChangeReferenceGenerator = null
+        IWorkItemReferenceGenerator? referenceGenerator = null,
+        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null
     )
     {
         this._registry = registry;
@@ -156,10 +154,10 @@ public sealed class WorkItemService : IWorkItemService
         this._logger = logger;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _referenceGenerator = referenceGenerator ?? new ApplicationReferenceGenerator();
+        _referenceGenerator =
+            referenceGenerator ?? new WorkItemReferenceGenerator(new ApplicationReferenceGenerator());
         _originStateResolvers =
             originStateResolvers?.ToArray() ?? Array.Empty<IWorkItemOriginStateResolver>();
-        _inYearChangeReferenceGenerator = inYearChangeReferenceGenerator;
     }
 
     public async Task<WorkItemActionResult> SubmitAsync(
@@ -265,8 +263,8 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem? workItem = null;
         for (var attempt = 1; ; attempt++)
         {
-            var applicationReference = await GenerateApplicationReferenceAsync(
-                type,
+            var applicationReference = await _referenceGenerator.GenerateAsync(
+                type.TypeId,
                 payload,
                 attempt,
                 cancellationToken
@@ -441,39 +439,6 @@ public sealed class WorkItemService : IWorkItemService
         await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
 
         return WorkItemActionResult.Success(workItem);
-    }
-
-    /// <summary>
-    /// RA-492: in-year change types (mapped by
-    /// <see cref="InYearChangeReferenceGenerator.TryGetChangeTypeCode"/>) get
-    /// an <c>IYC-{code}-{yyyy}-{sequence}</c> reference; every other type
-    /// keeps the AP format from <see cref="IApplicationReferenceGenerator"/>.
-    /// The IYC generator ignores <paramref name="attempt"/>, because each call
-    /// already takes a fresh sequence number.
-    /// </summary>
-    private async Task<string> GenerateApplicationReferenceAsync(
-        IWorkItemType type,
-        BsonDocument payload,
-        int attempt,
-        CancellationToken cancellationToken
-    )
-    {
-        if (!InYearChangeReferenceGenerator.TryGetChangeTypeCode(type.TypeId, out var changeTypeCode))
-        {
-            return _referenceGenerator.Generate(payload, attempt);
-        }
-
-        // A wiring defect, not a caller error. Production DI always registers
-        // the generator (AddApplicationReferenceGenerators). Falling back to
-        // the AP format here would silently give an in-year change the wrong
-        // reference.
-        var generator =
-            _inYearChangeReferenceGenerator
-            ?? throw new InvalidOperationException(
-                $"Work item type '{type.TypeId}' needs an in-year change reference, but no "
-                    + $"{nameof(IInYearChangeReferenceGenerator)} is configured."
-            );
-        return await generator.GenerateAsync(changeTypeCode, payload, cancellationToken);
     }
 
     /// <summary>
