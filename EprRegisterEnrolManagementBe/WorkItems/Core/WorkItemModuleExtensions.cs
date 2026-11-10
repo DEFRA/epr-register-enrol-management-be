@@ -31,7 +31,7 @@ public static class WorkItemModuleExtensions
         // concern (the engine owns the submission birth event), so the
         // generators are registered alongside the engine they back. RA-492
         // adds the in-year change generator and its Mongo sequence store.
-        services.AddApplicationReferenceGenerators();
+        services.AddWorkItemReferenceGenerators();
         services.AddHostedService<WorkItemMigrationHostedService>();
         return services;
     }

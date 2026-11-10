@@ -2100,9 +2100,9 @@ public class WorkItemEndpointsTests
             CancellationToken cancellationToken = default
         ) => Inner.GetByIdAsync(id, cancellationToken);
 
-        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
-            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default
-        ) => Inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
+        public Task<WorkItem?> FindBySubmissionKeyAsync(
+            string typeId, string payloadField, string value, CancellationToken cancellationToken = default
+        ) => Inner.FindBySubmissionKeyAsync(typeId, payloadField, value, cancellationToken);
 
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,

@@ -49,17 +49,6 @@ public static class MongoIndexReconciler
     private static readonly int[] s_conflictCodes = [85, 86];
 
     /// <summary>
-    /// MongoDB server error code raised when building a <c>Unique</c> index
-    /// finds existing documents that already violate it. Left unhandled this
-    /// crash-loops the service on startup (<see cref="MongoService{T}"/> runs
-    /// <c>EnsureIndexes</c> from its constructor) for any environment that
-    /// already carries duplicate values for a field that only just became
-    /// unique — e.g. RA-311/MBE-3 tightening <c>payload.operatorApplicationId</c>
-    /// on top of the very bug that had been writing duplicates of it.
-    /// </summary>
-    private const int DuplicateKeyErrorCode = 11000;
-
-    /// <summary>
     /// Render every desired index model down to its key <see cref="BsonDocument"/>
     /// using the collection's document serializer, so callers do not have to
     /// reimplement the serializer-registry plumbing.
@@ -117,7 +106,14 @@ public static class MongoIndexReconciler
             collection.Indexes.CreateMany(models);
             return dropped;
         }
-        catch (MongoCommandException ex) when (IsDuplicateKeyError(ex))
+        // A duplicate key here means building a Unique index found existing
+        // documents that already violate it. Left unhandled this crash-loops
+        // the service on startup (MongoService<T> runs EnsureIndexes from its
+        // constructor) for any environment that already carries duplicate
+        // values for a field that only just became unique, e.g. RA-311/MBE-3
+        // tightening payload.operatorApplicationId on top of the very bug that
+        // had been writing duplicates of it.
+        catch (MongoCommandException ex) when (MongoDuplicateKey.Is(ex))
         {
             // Building the batch as one command fails all-or-nothing, so a
             // single dirty unique index (existing documents already violate
@@ -162,7 +158,7 @@ public static class MongoIndexReconciler
                 dropped.AddRange(DropConflictingIndexes(collection, single, logger));
                 collection.Indexes.CreateMany(single);
             }
-            catch (MongoCommandException ex) when (IsDuplicateKeyError(ex))
+            catch (MongoCommandException ex) when (MongoDuplicateKey.Is(ex))
             {
                 var key = RenderKeys(collection, single).Single();
                 logger.LogError(
@@ -184,14 +180,6 @@ public static class MongoIndexReconciler
     /// </summary>
     private static bool IsIndexDefinitionConflict(MongoCommandException ex) =>
         s_conflictCodes.Contains(ex.Code);
-
-    /// <summary>
-    /// True when the command failure means a <c>Unique</c> index build
-    /// found existing documents that already collide on the indexed key.
-    /// See <see cref="DuplicateKeyErrorCode"/>.
-    /// </summary>
-    private static bool IsDuplicateKeyError(MongoCommandException ex) =>
-        ex.Code == DuplicateKeyErrorCode;
 
     private static IReadOnlyList<string> DropConflictingIndexes<T>(
         IMongoCollection<T> collection,

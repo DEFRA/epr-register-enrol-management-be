@@ -23,14 +23,18 @@ internal static class TestReferenceGenerators
     private sealed class UnexpectedInYearChangeReferenceGenerator
         : IInYearChangeReferenceGenerator
     {
+        public string? Validate(BsonDocument payload) => throw Unexpected("Validate");
+
         public Task<string> GenerateAsync(
             string changeTypeCode,
             BsonDocument payload,
             CancellationToken cancellationToken = default
-        ) =>
-            throw new InvalidOperationException(
+        ) => throw Unexpected(changeTypeCode);
+
+        private static InvalidOperationException Unexpected(string detail) =>
+            new(
                 $"Test wired {nameof(TestReferenceGenerators)}.{nameof(ApplicationOnly)} "
-                    + $"but submitted an in-year change type ({changeTypeCode})."
+                    + $"but submitted an in-year change type ({detail})."
             );
     }
 }

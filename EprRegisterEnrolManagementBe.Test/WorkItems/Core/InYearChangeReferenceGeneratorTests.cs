@@ -7,8 +7,8 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <summary>
 /// RA-492: the in-year change reference format. The Jira comment of 10 Nov 2026
 /// fixes <c>IYC-{code}-{year}-{5-digit sequence}</c> with one sequence per change
-/// type per year. Tom decided the same day that the year is mandatory, each
-/// counter starts at 00000, and the sequence wraps to 00000 after 99999.
+/// type per year. RA-492 also decided that the year is mandatory, each counter
+/// starts at 00000, and the sequence wraps to 00000 after 99999.
 /// </summary>
 public sealed class InYearChangeReferenceGeneratorTests
 {
@@ -86,14 +86,12 @@ public sealed class InYearChangeReferenceGeneratorTests
 
     [Theory]
     [MemberData(nameof(NumericYearRepresentations))]
-    public void TryGetAccreditationYear_accepts_any_whole_numeric_four_digit_year(BsonValue year)
+    public void Validate_accepts_any_whole_numeric_four_digit_year(BsonValue year)
     {
-        Assert.True(
-            InYearChangeReferenceGenerator.TryGetAccreditationYear(
-                new BsonDocument { ["accreditationYear"] = year },
-                out var resolved
-            )
-        );
+        var payload = new BsonDocument { ["accreditationYear"] = year };
+
+        Assert.Null(_generator.Validate(payload));
+        Assert.True(AccreditationYear.TryRead(payload, out var resolved));
         Assert.Equal(2026, resolved);
     }
 
@@ -114,20 +112,18 @@ public sealed class InYearChangeReferenceGeneratorTests
 
     [Theory]
     [MemberData(nameof(UnusableYears))]
-    public void TryGetAccreditationYear_rejects_an_unusable_year(BsonValue year)
+    public void Validate_rejects_an_unusable_year(BsonValue year)
     {
-        Assert.False(
-            InYearChangeReferenceGenerator.TryGetAccreditationYear(
-                new BsonDocument { ["accreditationYear"] = year },
-                out _
-            )
+        Assert.Equal(
+            "payload.accreditationYear must be a 4-digit year for an in-year change.",
+            _generator.Validate(new BsonDocument { ["accreditationYear"] = year })
         );
     }
 
     [Fact]
-    public void TryGetAccreditationYear_rejects_a_payload_without_the_field()
+    public void Validate_rejects_a_payload_without_the_field()
     {
-        Assert.False(InYearChangeReferenceGenerator.TryGetAccreditationYear(new BsonDocument(), out _));
+        Assert.NotNull(_generator.Validate(new BsonDocument()));
     }
 
     [Fact]

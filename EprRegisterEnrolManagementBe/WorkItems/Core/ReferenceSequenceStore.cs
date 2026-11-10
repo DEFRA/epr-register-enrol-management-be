@@ -36,7 +36,7 @@ public sealed class MongoReferenceSequenceStore : MongoService<BsonDocument>, IR
     /// <summary>Collection holding one counter document per sequence key.</summary>
     public const string CollectionName = "referenceSequences";
 
-    /// <summary>Field on each counter document holding the last allocated number.</summary>
+    /// <summary>Field on each counter document holding how many numbers have been allocated for the key.</summary>
     public const string SequenceField = "seq";
 
     /// <summary>
@@ -46,8 +46,6 @@ public sealed class MongoReferenceSequenceStore : MongoService<BsonDocument>, IR
     /// attempts are enough. The third covers a counter deleted mid-race.
     /// </summary>
     internal const int MaxAllocationAttempts = 3;
-
-    private const int DuplicateKeyErrorCode = 11000;
 
     private static readonly FindOneAndUpdateOptions<BsonDocument> s_allocateOptions = new()
     {
@@ -90,7 +88,7 @@ public sealed class MongoReferenceSequenceStore : MongoService<BsonDocument>, IR
             // duplicate key error on _id. The winner's document now exists, so
             // retrying turns into an atomic $inc and returns the next number.
             catch (Exception ex)
-                when (IsDuplicateKey(ex) && attempt < MaxAllocationAttempts)
+                when (MongoDuplicateKey.Is(ex) && attempt < MaxAllocationAttempts)
             {
                 Logger.LogInformation(
                     ex,
@@ -102,15 +100,6 @@ public sealed class MongoReferenceSequenceStore : MongoService<BsonDocument>, IR
             }
         }
     }
-
-    private static bool IsDuplicateKey(Exception ex) =>
-        ex switch
-        {
-            MongoCommandException command => command.Code == DuplicateKeyErrorCode,
-            MongoWriteException write => write.WriteError?.Category
-                == ServerErrorCategory.DuplicateKey,
-            _ => false,
-        };
 
     protected override List<CreateIndexModel<BsonDocument>> DefineIndexes(
         IndexKeysDefinitionBuilder<BsonDocument> builder

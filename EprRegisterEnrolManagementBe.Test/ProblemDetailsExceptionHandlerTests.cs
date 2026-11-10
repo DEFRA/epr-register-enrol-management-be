@@ -121,9 +121,9 @@ public class ProblemDetailsExceptionHandlerTests
         public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             inner.GetByIdAsync(id, cancellationToken);
 
-        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
-            string typeId, string operatorApplicationId, CancellationToken cancellationToken = default) =>
-            inner.FindByOperatorApplicationIdAsync(typeId, operatorApplicationId, cancellationToken);
+        public Task<WorkItem?> FindBySubmissionKeyAsync(
+            string typeId, string payloadField, string value, CancellationToken cancellationToken = default) =>
+            inner.FindBySubmissionKeyAsync(typeId, payloadField, value, cancellationToken);
 
         public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("boom");

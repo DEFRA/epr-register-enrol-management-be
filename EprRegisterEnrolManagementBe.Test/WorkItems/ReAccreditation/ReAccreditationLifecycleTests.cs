@@ -1,8 +1,8 @@
-using EprRegisterEnrolManagementBe.Test.TestSupport;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -69,7 +69,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
         // RA-448 phase 2: the accreditation number now comes from
         // IAccreditationNumberAdapter (a real backend call), not a local
         // generator.
@@ -205,7 +206,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
 
         var workItem = new WorkItem
         {
@@ -237,7 +239,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
 
         var workItem = new WorkItem
         {
@@ -272,7 +275,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
 
         var workItem = new WorkItem
         {
@@ -302,7 +306,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
 
         var workItem = new WorkItem
         {
@@ -337,7 +342,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
 
         var workItem = new WorkItem
         {
@@ -374,7 +380,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
 
         var workItem = new WorkItem
         {
@@ -410,7 +417,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
 
         var workItem = new WorkItem
         {
@@ -453,7 +461,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
 
         var workItem = new WorkItem
         {
@@ -509,7 +518,8 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-        TestReferenceGenerators.ApplicationOnly());
+            TestReferenceGenerators.ApplicationOnly()
+        );
         // The query stamps the open query with a targeted payload write
         // before transitioning; the substitute must report a match.
         persistence

@@ -215,7 +215,8 @@ public sealed class ReAccreditationStartAssessmentMigrationMongoIntegrationTests
         var engine = new WorkItemService(
             new WorkItemRegistry([new ReAccreditationType()]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly());
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly());
 
         // Positive control: before migrating, the frozen snapshot has no such action.
         Assert.False((await engine.ApplyActionAsync(seeded.Id, "start-assessment", s_user, ct)).IsSuccess);

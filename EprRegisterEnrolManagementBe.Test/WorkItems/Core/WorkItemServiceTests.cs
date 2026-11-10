@@ -39,7 +39,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         new(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(),
             _time
         );
 
@@ -50,7 +51,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         new(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(),
             _time,
             postActionHooks: [hook]
         );
@@ -208,7 +210,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(),
             _time,
             postActionHooks: [slowHook, pushHook]
         );
@@ -1739,7 +1742,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(),
             time
         );
 
@@ -2055,7 +2059,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(generator),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(generator),
             _time
         );
 
@@ -2117,7 +2122,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(generator),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(generator),
             _time
         );
 
@@ -2153,7 +2159,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(generator),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(generator),
             _time
         );
 
@@ -2337,7 +2344,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         return new WorkItemService(
             new WorkItemRegistry([type]),
             racing,
-            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(),
             _time
         );
     }
@@ -2389,14 +2397,16 @@ public class WorkItemServiceTests : IAsyncDisposable
             CancellationToken cancellationToken = default
         ) => inner.GetByIdAsync(id, cancellationToken);
 
-        public Task<WorkItem?> FindByOperatorApplicationIdAsync(
+        public Task<WorkItem?> FindBySubmissionKeyAsync(
             string typeId,
-            string operatorApplicationId,
+            string payloadField,
+            string value,
             CancellationToken cancellationToken = default
         ) =>
-            inner.FindByOperatorApplicationIdAsync(
+            inner.FindBySubmissionKeyAsync(
                 typeId,
-                operatorApplicationId,
+                payloadField,
+                value,
                 cancellationToken
             );
 

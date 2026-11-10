@@ -14,9 +14,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 ///   <item><c>{changeTypeCode}</c>: the type's own
 ///   <see cref="IWorkItemType.InYearChangeCode"/>.</item>
 ///   <item><c>{yyyy}</c>: the payload's 4-digit <c>accreditationYear</c>, which
-///   is mandatory. <see cref="TryGetAccreditationYear"/> checks it, and
-///   <see cref="WorkItemService"/> rejects a submission without a usable year
-///   before any number is allocated.</item>
+///   is mandatory. <see cref="IInYearChangeReferenceGenerator.Validate"/> checks
+///   it, and <see cref="WorkItemService"/> rejects a submission without a usable
+///   year before any number is allocated.</item>
 ///   <item><c>{sequence}</c>: 5 digits, from a counter in
 ///   <see cref="IReferenceSequenceStore"/> keyed <c>IYC-{code}-{yyyy}</c>, so
 ///   there is one sequence per change type per year. The first reference for a
@@ -24,15 +24,16 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 ///   it modulo <see cref="SequenceModulus"/>, so <c>99999</c> is followed by
 ///   <c>00000</c>.</item>
 /// </list>
-/// The shape and the per-type, per-year sequence were agreed with regulators
-/// (Jira comment, 10 Nov 2026). The mandatory year, the <c>00000</c> start and
-/// the wrap after <c>99999</c> are Tom's decisions of the same date.
+/// The format, the mandatory year, the <c>00000</c> start and the wrap after
+/// <c>99999</c> are RA-492 decisions.
 /// <para>
-/// Wrap hazard (accepted): after a wrap, an earlier reference with the same
-/// number already exists. The <c>applicationReference</c> unique index makes
-/// the retry loop take the next number, so in a year with more than 100,000
-/// changes of one type, submissions start failing once the retry budget is
-/// used up.
+/// The wrap acts as a cap. A counter's key fixes both the change type and the
+/// year, so after a wrap every earlier number already exists with the same
+/// type and year. The <c>applicationReference</c> unique index makes each
+/// retry take the next number, and every one collides, so once a type passes
+/// 100,000 changes in a year each later submission of it fails with 503
+/// (<see cref="WorkItemActionFailureCode.ApplicationReferenceExhausted"/>)
+/// until the year changes. RA-492 accepts this as unrealistic.
 /// </para>
 /// <para>
 /// Unlike the deterministic AP format, every call allocates a fresh number.
@@ -46,10 +47,16 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 public interface IInYearChangeReferenceGenerator
 {
     /// <summary>
+    /// Why <paramref name="payload"/> cannot be given an in-year change
+    /// reference, or <c>null</c> when it can. The only requirement is a 4-digit
+    /// <c>accreditationYear</c>.
+    /// </summary>
+    string? Validate(BsonDocument payload);
+
+    /// <summary>
     /// Allocate the next reference for <paramref name="changeTypeCode"/> (a
     /// type's <see cref="IWorkItemType.InYearChangeCode"/>). The caller must
-    /// first check the payload with
-    /// <see cref="InYearChangeReferenceGenerator.TryGetAccreditationYear"/>.
+    /// first check the payload with <see cref="Validate"/>.
     /// </summary>
     Task<string> GenerateAsync(
         string changeTypeCode,
@@ -65,26 +72,16 @@ public sealed class InYearChangeReferenceGenerator(IReferenceSequenceStore seque
     /// <summary>Literal prefix every in-year change reference carries.</summary>
     public const string Prefix = "IYC";
 
-    /// <summary>Payload field holding the mandatory 4-digit accreditation year.</summary>
-    public const string AccreditationYearField = "accreditationYear";
-
     /// <summary>
     /// The sequence segment shows the counter modulo this value, zero-padded to
     /// 5 digits, so it wraps from <c>99999</c> to <c>00000</c>.
     /// </summary>
     public const long SequenceModulus = 100_000;
 
-    /// <summary>
-    /// True when <paramref name="payload"/> carries a usable
-    /// <c>accreditationYear</c>: a numeric whole number from 1000 to 9999.
-    /// </summary>
-    public static bool TryGetAccreditationYear(BsonDocument payload, out int year)
-    {
-        ArgumentNullException.ThrowIfNull(payload);
-        year = 0;
-        return payload.TryGetValue(AccreditationYearField, out var value)
-            && BsonWholeNumber.TryGet(value, 1000, 9999, out year);
-    }
+    public string? Validate(BsonDocument payload) =>
+        AccreditationYear.TryRead(payload, out _)
+            ? null
+            : $"payload.{AccreditationYear.Field} must be a 4-digit year for an in-year change.";
 
     public async Task<string> GenerateAsync(
         string changeTypeCode,
@@ -93,14 +90,11 @@ public sealed class InYearChangeReferenceGenerator(IReferenceSequenceStore seque
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(changeTypeCode);
-        if (!TryGetAccreditationYear(payload, out var year))
+        // Unreachable from WorkItemService, which rejects the submission first
+        // (Validate). Checked here so no number is ever allocated for a bad year.
+        if (!AccreditationYear.TryRead(payload, out var year))
         {
-            // Unreachable from WorkItemService, which rejects the submission
-            // first. Checked here so no number is ever allocated for a bad year.
-            throw new ArgumentException(
-                $"payload.{AccreditationYearField} must be a 4-digit year.",
-                nameof(payload)
-            );
+            throw new ArgumentException(Validate(payload), nameof(payload));
         }
 
         var sequenceKey = string.Create(

@@ -5,9 +5,9 @@ using NSubstitute;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
 /// <summary>
-/// RA-492: <see cref="WorkItemReferenceGenerator"/> sends a type that declares
-/// an <see cref="IWorkItemType.InYearChangeCode"/> to the IYC generator, and
-/// every other type to the AP generator.
+/// RA-492: <see cref="WorkItemReferenceGenerator.ForType"/> chooses the IYC
+/// format for a type that declares an <see cref="IWorkItemType.InYearChangeCode"/>
+/// and the AP format for every other type.
 /// </summary>
 public sealed class WorkItemReferenceGeneratorTests
 {
@@ -16,78 +16,53 @@ public sealed class WorkItemReferenceGeneratorTests
     private readonly IInYearChangeReferenceGenerator _iyc =
         Substitute.For<IInYearChangeReferenceGenerator>();
 
+    private WorkItemReferenceGenerator Generator => new(_ap, _iyc);
+
+    private static TestWorkItemType InYearChangeType() =>
+        new("add-overseas-site", "Add overseas site", inYearChangeCode: "ORS");
+
     [Fact]
-    public async Task GenerateAsync_sends_a_type_declaring_a_change_code_to_the_IYC_generator()
+    public async Task ForType_with_a_change_code_generates_through_the_IYC_generator()
     {
         var payload = new BsonDocument { ["accreditationYear"] = 2026 };
         _iyc.GenerateAsync("ORS", payload, Arg.Any<CancellationToken>())
-            .Returns("IYC-ORS-2026-00001");
+            .Returns("IYC-ORS-2026-00000");
 
-        var reference = await new WorkItemReferenceGenerator(_ap, _iyc).GenerateAsync(
-            new TestWorkItemType("add-overseas-site", "Add overseas site", inYearChangeCode: "ORS"),
-            payload,
-            attempt: 2,
-            TestContext.Current.CancellationToken
-        );
+        var reference = await Generator
+            .ForType(InYearChangeType())
+            .GenerateAsync(payload, attempt: 2, TestContext.Current.CancellationToken);
 
-        Assert.Equal("IYC-ORS-2026-00001", reference);
+        Assert.Equal("IYC-ORS-2026-00000", reference);
         _ap.DidNotReceive().Generate(Arg.Any<BsonDocument>(), Arg.Any<int>());
     }
 
     [Fact]
-    public async Task GenerateAsync_sends_a_type_without_a_change_code_to_the_AP_generator_with_the_attempt()
+    public void ForType_with_a_change_code_validates_through_the_IYC_generator()
+    {
+        var payload = new BsonDocument();
+        _iyc.Validate(payload).Returns("bad year");
+
+        Assert.Equal("bad year", Generator.ForType(InYearChangeType()).ValidatePayload(payload));
+    }
+
+    [Fact]
+    public async Task ForType_without_a_change_code_uses_the_AP_generator_with_the_attempt()
     {
         var payload = new BsonDocument();
         _ap.Generate(payload, 3).Returns("AP26EA3");
 
         // The type id alone never selects IYC: only the declared code does.
-        var reference = await new WorkItemReferenceGenerator(_ap, _iyc).GenerateAsync(
-            new TestWorkItemType("add-overseas-site", "No change code declared"),
-            payload,
-            attempt: 3,
-            TestContext.Current.CancellationToken
-        );
+        var format = Generator.ForType(new TestWorkItemType("add-overseas-site", "No code"));
 
-        Assert.Equal("AP26EA3", reference);
+        Assert.Null(format.ValidatePayload(payload));
+        Assert.Equal(
+            "AP26EA3",
+            await format.GenerateAsync(payload, attempt: 3, TestContext.Current.CancellationToken)
+        );
+        _iyc.DidNotReceive().Validate(Arg.Any<BsonDocument>());
         await _iyc
             .DidNotReceive()
             .GenerateAsync(Arg.Any<string>(), Arg.Any<BsonDocument>(), Arg.Any<CancellationToken>());
-    }
-
-    [Fact]
-    public void ValidatePayload_rejects_an_in_year_change_without_a_four_digit_accreditationYear()
-    {
-        var message = new WorkItemReferenceGenerator(_ap, _iyc).ValidatePayload(
-            new TestWorkItemType("add-overseas-site", "Add overseas site", inYearChangeCode: "ORS"),
-            new BsonDocument { ["accreditationYear"] = "2026" }
-        );
-
-        Assert.Equal(
-            "payload.accreditationYear must be a 4-digit year for work item type 'add-overseas-site'.",
-            message
-        );
-    }
-
-    [Fact]
-    public void ValidatePayload_accepts_an_in_year_change_with_a_four_digit_accreditationYear()
-    {
-        Assert.Null(
-            new WorkItemReferenceGenerator(_ap, _iyc).ValidatePayload(
-                new TestWorkItemType("add-overseas-site", "Add overseas site", inYearChangeCode: "ORS"),
-                new BsonDocument { ["accreditationYear"] = 2026 }
-            )
-        );
-    }
-
-    [Fact]
-    public void ValidatePayload_accepts_any_payload_for_the_AP_format()
-    {
-        Assert.Null(
-            new WorkItemReferenceGenerator(_ap, _iyc).ValidatePayload(
-                new TestWorkItemType("re-accreditation", "Re-accreditation"),
-                new BsonDocument()
-            )
-        );
     }
 
     [Fact]

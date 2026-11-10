@@ -1,4 +1,3 @@
-using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -215,9 +214,12 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 
     private int ResolveYear(BsonDocument payload)
     {
-        if (payload.TryGetValue("accreditationYear", out var value) && value.IsNumeric)
+        // RA-492: read through the shared AccreditationYear reader, so a malformed value
+        // (out-of-range Int64, Decimal128, fractional) can no longer wrap or throw in
+        // ToInt32(). A missing or unusable year still falls back to the current year.
+        if (AccreditationYear.TryRead(payload, out var year))
         {
-            return value.ToInt32() % 100;
+            return year % 100;
         }
 
         return _timeProvider.GetUtcNow().UtcDateTime.Year % 100;
@@ -369,27 +371,5 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         }
 
         return registeredOfficePostcode;
-    }
-}
-
-/// <summary>
-/// DI helper so the reference generators are registered in exactly one
-/// place, mirroring the framework's other Core service registrations: the
-/// RA-492 <see cref="IWorkItemReferenceGenerator"/> that the engine calls,
-/// the AP generator and the in-year change generator it chooses between, and
-/// the Mongo sequence store the in-year change generator allocates from.
-/// </summary>
-[ExcludeFromCodeCoverage]
-public static class ApplicationReferenceGeneratorExtensions
-{
-    public static IServiceCollection AddApplicationReferenceGenerators(
-        this IServiceCollection services
-    )
-    {
-        services.AddSingleton<IWorkItemReferenceGenerator, WorkItemReferenceGenerator>();
-        services.AddSingleton<IApplicationReferenceGenerator, ApplicationReferenceGenerator>();
-        services.AddSingleton<IReferenceSequenceStore, MongoReferenceSequenceStore>();
-        services.AddSingleton<IInYearChangeReferenceGenerator, InYearChangeReferenceGenerator>();
-        return services;
     }
 }

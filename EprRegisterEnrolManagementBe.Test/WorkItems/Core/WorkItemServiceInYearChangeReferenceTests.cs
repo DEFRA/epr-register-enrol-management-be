@@ -293,6 +293,125 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         Assert.InRange(await CounterAsync("IYC-ORS-2026") ?? 0, 1L, Submissions);
     }
 
+    // RA-492: the operator backend keys a change-request submission on
+    // payload.operatorRequestId (it never sends operatorApplicationId for one),
+    // so that is the field a retry after a timeout must replay on.
+    [Fact]
+    public async Task Submit_replay_by_operatorRequestId_returns_the_original_without_allocating()
+    {
+        var type = AddOverseasSiteType();
+        var service = BuildService(type);
+
+        var first = await SubmitAsync(
+            service,
+            type,
+            new BsonDocument { ["accreditationYear"] = 2026, ["operatorRequestId"] = "request-001" }
+        );
+        var replay = await SubmitAsync(
+            service,
+            type,
+            new BsonDocument { ["accreditationYear"] = 2026, ["operatorRequestId"] = "request-001" }
+        );
+
+        Assert.False(first.IsIdempotentReplay);
+        Assert.True(replay.IsIdempotentReplay);
+        Assert.Equal(first.WorkItem!.Id, replay.WorkItem!.Id);
+        Assert.Equal("IYC-ORS-2026-00000", replay.WorkItem.Payload["applicationReference"].AsString);
+        Assert.Equal(1L, await CounterAsync("IYC-ORS-2026"));
+    }
+
+    [Fact]
+    public async Task Submit_replay_by_operatorRequestId_runs_before_payload_validation()
+    {
+        // A replay hands back the original even if the resubmitted payload
+        // would now fail validation, and allocates nothing.
+        var type = AddOverseasSiteType();
+        var service = BuildService(type);
+        var first = await SubmitAsync(
+            service,
+            type,
+            new BsonDocument { ["accreditationYear"] = 2026, ["operatorRequestId"] = "request-002" }
+        );
+
+        var replay = await SubmitAsync(
+            service,
+            type,
+            new BsonDocument { ["operatorRequestId"] = "request-002" }
+        );
+
+        Assert.True(replay.IsIdempotentReplay);
+        Assert.Equal(first.WorkItem!.Id, replay.WorkItem!.Id);
+        Assert.Equal(1L, await CounterAsync("IYC-ORS-2026"));
+    }
+
+    [Fact]
+    public async Task Submit_concurrent_submits_with_one_operatorRequestId_store_one_item_with_one_reference()
+    {
+        const int Submissions = 10;
+        var type = AddOverseasSiteType();
+        var service = BuildService(type);
+
+        var results = await Task.WhenAll(
+            Enumerable
+                .Range(0, Submissions)
+                .Select(_ =>
+                    SubmitAsync(
+                        service,
+                        type,
+                        new BsonDocument
+                        {
+                            ["accreditationYear"] = 2026,
+                            ["operatorRequestId"] = "request-race",
+                        }
+                    )
+                )
+        );
+
+        Assert.All(results, r => Assert.True(r.IsSuccess));
+        var stored = Assert.Single(
+            (
+                await _persistence.QueryAsync(
+                    new WorkItemQuery(TypeIds: [AddOverseasSiteTypeId], Page: 1, PageSize: 50),
+                    TestContext.Current.CancellationToken
+                )
+            ).Items
+        );
+        var reference = stored.Payload["applicationReference"].AsString;
+        Assert.Matches(IycOrsPattern, reference);
+        Assert.All(
+            results,
+            r =>
+            {
+                Assert.Equal(stored.Id, r.WorkItem!.Id);
+                Assert.Equal(reference, r.WorkItem.Payload["applicationReference"].AsString);
+            }
+        );
+        Assert.Single(results, r => !r.IsIdempotentReplay);
+        Assert.InRange(await CounterAsync("IYC-ORS-2026") ?? 0, 1L, Submissions);
+    }
+
+    [Fact]
+    public async Task Submit_different_operatorRequestIds_create_separate_work_items()
+    {
+        var type = AddOverseasSiteType();
+        var service = BuildService(type);
+
+        var first = await SubmitAsync(
+            service,
+            type,
+            new BsonDocument { ["accreditationYear"] = 2026, ["operatorRequestId"] = "request-a" }
+        );
+        var second = await SubmitAsync(
+            service,
+            type,
+            new BsonDocument { ["accreditationYear"] = 2026, ["operatorRequestId"] = "request-b" }
+        );
+
+        Assert.False(second.IsIdempotentReplay);
+        Assert.NotEqual(first.WorkItem!.Id, second.WorkItem!.Id);
+        Assert.Equal("IYC-ORS-2026-00001", second.WorkItem.Payload["applicationReference"].AsString);
+    }
+
     [Fact]
     public async Task Submit_reference_collision_takes_the_next_number_without_a_disambiguator()
     {

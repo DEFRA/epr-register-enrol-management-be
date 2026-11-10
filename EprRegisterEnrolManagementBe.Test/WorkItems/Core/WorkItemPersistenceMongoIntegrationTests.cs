@@ -143,7 +143,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_nine_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_ten_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -160,7 +160,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(9, keyDocs.Count);
+        Assert.Equal(10, keyDocs.Count);
         Assert.Contains(
             keyDocs,
             k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1")
@@ -193,6 +193,8 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         // RA-311/MBE-3: ascending index backing the operatorApplicationId
         // idempotent-submit lookup.
         Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorApplicationId\" : 1"));
+        // RA-492: ascending index backing the operatorRequestId replay lookup.
+        Assert.Contains(keyDocs, k => k.Contains("\"payload.operatorRequestId\" : 1"));
         // epr-r9oy: ascending uniqueness index on the accreditation number
         // stamped at approval (RA-448 phase 2: now backend-issued).
         Assert.Contains(keyDocs, k => k.Contains("\"payload.accreditationId\" : 1"));
@@ -214,6 +216,16 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         );
         Assert.True(operatorApplicationIdIndex.GetValue("unique", false).ToBoolean());
         Assert.True(operatorApplicationIdIndex.GetValue("sparse", false).ToBoolean());
+
+        // RA-492: operatorRequestId (the in-year change submission key) is
+        // UNIQUE and PARTIAL on "is a string", like accreditationId below, so
+        // an explicit null never trips it.
+        var operatorRequestIdIndex = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("payload.operatorRequestId")
+        );
+        Assert.True(operatorRequestIdIndex.GetValue("unique", false).ToBoolean());
+        Assert.False(operatorRequestIdIndex.GetValue("sparse", false).ToBoolean());
+        Assert.True(operatorRequestIdIndex.Contains("partialFilterExpression"));
 
         // epr-r9oy: UNIQUE but PARTIAL rather than sparse. Sparse would exclude
         // only documents where the field is absent, and duly making writes an
