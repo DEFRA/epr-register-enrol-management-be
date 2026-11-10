@@ -13,8 +13,9 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// items an <c>IYC-{code}-{yyyy}-{seq:D5}</c> reference. Runs end to end
 /// against ephemeral MongoDB with the real persistence, generator and
 /// sequence store. No <c>add-overseas-site</c> module is registered in
-/// production yet, so these tests use a test type with that id to prove
-/// the reference format does not depend on the module.
+/// production yet, so these tests use a test type that declares
+/// <see cref="IWorkItemType.InYearChangeCode"/> <c>"ORS"</c>. That is the
+/// contract the case-management story's type must follow.
 /// </summary>
 public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
 {
@@ -41,18 +42,18 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         await _clientFactory.GetClient().DropDatabaseAsync(_databaseName);
 
     private static TestWorkItemType AddOverseasSiteType() =>
-        new(AddOverseasSiteTypeId, "Add overseas reprocessing site");
+        new(AddOverseasSiteTypeId, "Add overseas reprocessing site", inYearChangeCode: "ORS");
 
     private WorkItemService BuildService(IWorkItemType type) =>
         new(
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            _time,
-            referenceGenerator: new WorkItemReferenceGenerator(
+            new WorkItemReferenceGenerator(
                 new ApplicationReferenceGenerator(_time),
                 new InYearChangeReferenceGenerator(_sequenceStore, _time)
-            )
+            ),
+            _time
         );
 
     private static Task<WorkItemActionResult> SubmitAsync(
@@ -168,11 +169,18 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         var result = await SubmitAsync(
             BuildService(type),
             type,
-            new BsonDocument { ["accreditationYear"] = 2026 }
+            new BsonDocument
+            {
+                ["accreditationYear"] = 2026,
+                ["nation"] = "England",
+                ["operatorOrgNumber"] = 500500,
+                ["siteAddressPostcode"] = "SW1A 1AB",
+                ["material"] = "Plastic",
+            }
         );
 
         var stored = await GetAsync(result.WorkItem!.Id);
-        Assert.Matches(@"^AP26EA$", stored.Payload["applicationReference"].AsString);
+        Assert.Equal("AP26EA5005001ABPL", stored.Payload["applicationReference"].AsString);
         Assert.Equal(
             0,
             await _clientFactory
@@ -209,6 +217,56 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             replay.WorkItem.Payload["applicationReference"].AsString
         );
         Assert.Equal(1L, await CounterAsync("IYC-ORS-2026"));
+    }
+
+    [Fact]
+    public async Task Submit_concurrent_replays_store_one_item_with_one_reference_and_may_skip_numbers()
+    {
+        // Concurrent submits with one operatorApplicationId can all miss the
+        // up-front replay lookup. Each one allocates a number before its insert
+        // hits the operatorApplicationId unique index. The losers then return
+        // the winner as a replay, so their numbers are skipped (a documented
+        // gap) but never reused.
+        const int Submissions = 10;
+        var type = AddOverseasSiteType();
+        var service = BuildService(type);
+
+        var results = await Task.WhenAll(
+            Enumerable
+                .Range(0, Submissions)
+                .Select(_ =>
+                    SubmitAsync(
+                        service,
+                        type,
+                        new BsonDocument
+                        {
+                            ["accreditationYear"] = 2026,
+                            ["operatorApplicationId"] = "change-race",
+                        }
+                    )
+                )
+        );
+
+        Assert.All(results, r => Assert.True(r.IsSuccess));
+        var stored = Assert.Single(
+            (
+                await _persistence.QueryAsync(
+                    new WorkItemQuery(TypeIds: [AddOverseasSiteTypeId], Page: 1, PageSize: 50),
+                    TestContext.Current.CancellationToken
+                )
+            ).Items
+        );
+        var reference = stored.Payload["applicationReference"].AsString;
+        Assert.Matches(IycOrsPattern, reference);
+        Assert.All(
+            results,
+            r =>
+            {
+                Assert.Equal(stored.Id, r.WorkItem!.Id);
+                Assert.Equal(reference, r.WorkItem.Payload["applicationReference"].AsString);
+            }
+        );
+        Assert.InRange(await CounterAsync("IYC-ORS-2026") ?? 0, 1L, Submissions);
     }
 
     [Fact]

@@ -9,9 +9,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <summary>
 /// Produces the human-facing work-item <c>applicationReference</c>
 /// (RA-318). The backend owns reference generation so a client can never
-/// supply, spoof or collide a reference. RA-492: in-year change types (see
-/// <see cref="InYearChangeReferenceGenerator.TryGetChangeTypeCode"/>) do not
-/// use this generator. They get an <c>IYC-…</c> reference from
+/// supply, spoof or collide a reference. RA-492: in-year change types (a
+/// non-null <see cref="IWorkItemType.InYearChangeCode"/>) do not use this
+/// generator. They get an <c>IYC-…</c> reference from
 /// <see cref="IInYearChangeReferenceGenerator"/> instead.
 ///
 /// Format (RA-318, org segment revised RA-503): <c>AP</c> + 2-digit
@@ -206,41 +206,12 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         return organisationId.Length > 5 ? organisationId[^5..] : organisationId;
     }
 
-    // RA-503: IsNumeric admits BsonInt64/BsonDouble/BsonDecimal128, none of which BsonValue.ToInt32()
-    // can be trusted to convert safely from - it silently wraps for an out-of-range Int64/Double
-    // (e.g. long.MaxValue narrows to -1) and throws OverflowException for Decimal128. Validate the
-    // value explicitly instead of trusting the BSON type category alone: reject negative (which would
-    // inject a literal '-' into what the format assumes is a clean alphanumeric reference), reject
-    // non-integral, and cap at 999999 so D6's zero-padding (a MINIMUM width, not a maximum) can never
-    // widen the segment past the intended 6 digits.
-    private static bool TryGetOrgNumber(BsonValue value, out int orgNumber)
-    {
-        orgNumber = 0;
-        if (!value.IsNumeric)
-            return false;
-
-        // decimal, not double: SonarCloud S1244 flags exact float/double equality checks (the
-        // classic rounding-error trap), but decimal is an exact fixed-point type - the
-        // integrality check below is precise, not the kind of comparison that rule exists to
-        // catch. This conversion also fails cleanly for NaN/Infinity (a BsonDouble can hold
-        // either), so no separate check is needed for those.
-        decimal asDecimal;
-        try
-        {
-            asDecimal = value.ToDecimal();
-        }
-        catch (Exception ex)
-            when (ex is OverflowException or FormatException or InvalidCastException)
-        {
-            return false;
-        }
-
-        if (asDecimal < 0 || asDecimal > 999999 || asDecimal != Math.Truncate(asDecimal))
-            return false;
-
-        orgNumber = (int)asDecimal;
-        return true;
-    }
+    // RA-503: reject negative (which would inject a literal '-' into what the format assumes is a
+    // clean alphanumeric reference), reject non-integral, and cap at 999999 so D6's zero-padding (a
+    // MINIMUM width, not a maximum) can never widen the segment past the intended 6 digits. See
+    // BsonWholeNumber for why the BSON type category alone cannot be trusted.
+    private static bool TryGetOrgNumber(BsonValue value, out int orgNumber) =>
+        BsonWholeNumber.TryGet(value, 0, 999999, out orgNumber);
 
     private int ResolveYear(BsonDocument payload)
     {

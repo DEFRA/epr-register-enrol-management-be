@@ -381,7 +381,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
     private static WorkItemRegistry Registry() => new([new ReAccreditationType()]);
 
     private WorkItemService BuildEngine() =>
-        new(Registry(), _persistence, NullLogger<WorkItemService>.Instance);
+        new(Registry(), _persistence, NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly());
 
     private ReAccreditationLogDecisionService BuildDecisionService(WorkItemService engine) =>
         new(

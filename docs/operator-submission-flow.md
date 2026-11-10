@@ -172,11 +172,12 @@ spoof or collide a reference.
 
 - Generates a server-side `applicationReference` and stamps it onto the BSON
   payload. Re-accreditation applications get the `AP…` format
-  (`ApplicationReferenceGenerator`). In-year change types (RA-492, currently
-  `add-overseas-site`) get `IYC-{code}-{yyyy}-{seq:D5}`, e.g.
-  `IYC-ORS-2026-00021`, from a per-type, per-year sequence in the
-  `referenceSequences` collection (`InYearChangeReferenceGenerator`). See
-  `docs/work-items.md` "Application reference".
+  (`ApplicationReferenceGenerator`). A type that declares
+  `IWorkItemType.InYearChangeCode` (RA-492) gets `IYC-{code}-{yyyy}-{seq:D5}`,
+  e.g. `IYC-ORS-2026-00021`, from a per-type, per-year sequence in the
+  `referenceSequences` collection (`InYearChangeReferenceGenerator`). No such
+  type is registered yet: `add-overseas-site` arrives with the
+  case-management story. See `docs/work-items.md` "Application reference".
 - Builds a `WorkItem` document:
   - `TypeId = "re-accreditation"`, `StateId = {type's initial state}`
   - `SubmittedAt / LastModifiedAt` from the injected `TimeProvider` (not
@@ -251,12 +252,17 @@ endpoint stores both values on the application model and **now** writes back
 to operator MongoDB:
 
 ```csharp
-application.ApplicationReference      = submissionResult.ApplicationReference
-application.CaseManagementReference   = submissionResult.ApplicationReference
+application.ApplicationReference      = submissionResult.Reference
+application.CaseManagementReference   = submissionResult.Reference
 application.CaseManagementWorkItemId  = submissionResult.WorkItemId
 
 await persistence.UpdateAsync(application)
 ```
+
+`CaseWorkingSubmissionResult.Reference` is the `applicationReference` from
+management BE's response. For an in-year change request (RA-492) the OJ
+backend stores the same value as the change request's
+`caseManagementReference`.
 
 `CaseManagementWorkItemId` is used later: when the operator revisits their
 application the BE calls management BE's `GET /work-items/{workItemId}` to

@@ -5,8 +5,9 @@ using NSubstitute;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
 /// <summary>
-/// RA-492: <see cref="WorkItemReferenceGenerator"/> sends in-year change types
-/// to the IYC generator and every other type to the AP generator.
+/// RA-492: <see cref="WorkItemReferenceGenerator"/> sends a type that declares
+/// an <see cref="IWorkItemType.InYearChangeCode"/> to the IYC generator, and
+/// every other type to the AP generator.
 /// </summary>
 public sealed class WorkItemReferenceGeneratorTests
 {
@@ -16,14 +17,14 @@ public sealed class WorkItemReferenceGeneratorTests
         Substitute.For<IInYearChangeReferenceGenerator>();
 
     [Fact]
-    public async Task GenerateAsync_sends_add_overseas_site_to_the_IYC_generator_with_code_ORS()
+    public async Task GenerateAsync_sends_a_type_declaring_a_change_code_to_the_IYC_generator()
     {
         var payload = new BsonDocument { ["accreditationYear"] = 2026 };
         _iyc.GenerateAsync("ORS", payload, Arg.Any<CancellationToken>())
             .Returns("IYC-ORS-2026-00001");
 
         var reference = await new WorkItemReferenceGenerator(_ap, _iyc).GenerateAsync(
-            "add-overseas-site",
+            new TestWorkItemType("add-overseas-site", "Add overseas site", inYearChangeCode: "ORS"),
             payload,
             attempt: 2,
             TestContext.Current.CancellationToken
@@ -34,13 +35,14 @@ public sealed class WorkItemReferenceGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateAsync_sends_other_types_to_the_AP_generator_with_the_attempt()
+    public async Task GenerateAsync_sends_a_type_without_a_change_code_to_the_AP_generator_with_the_attempt()
     {
         var payload = new BsonDocument();
         _ap.Generate(payload, 3).Returns("AP26EA3");
 
+        // The type id alone never selects IYC: only the declared code does.
         var reference = await new WorkItemReferenceGenerator(_ap, _iyc).GenerateAsync(
-            "re-accreditation",
+            new TestWorkItemType("add-overseas-site", "No change code declared"),
             payload,
             attempt: 3,
             TestContext.Current.CancellationToken
@@ -53,18 +55,18 @@ public sealed class WorkItemReferenceGeneratorTests
     }
 
     [Fact]
-    public async Task GenerateAsync_throws_instead_of_falling_back_to_AP_when_no_IYC_generator_is_configured()
+    public void InYearChangeCode_defaults_to_null_for_a_type_that_does_not_declare_one()
     {
-        var generator = new WorkItemReferenceGenerator(_ap);
+        IWorkItemType type = new MinimalType();
 
-        await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            generator.GenerateAsync(
-                "add-overseas-site",
-                new BsonDocument(),
-                attempt: 1,
-                TestContext.Current.CancellationToken
-            )
-        );
-        _ap.DidNotReceive().Generate(Arg.Any<BsonDocument>(), Arg.Any<int>());
+        Assert.Null(type.InYearChangeCode);
+    }
+
+    private sealed class MinimalType : IWorkItemType
+    {
+        public string TypeId => "minimal";
+        public string DisplayName => "Minimal";
+        public WorkItemState InitialState { get; } = new("submitted", "Submitted");
+        public IReadOnlyCollection<WorkItemState> States => [InitialState];
     }
 }

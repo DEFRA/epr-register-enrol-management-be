@@ -46,7 +46,7 @@ public class WorkItemServiceTimestampTests
         new(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
             _time);
 
     private static TestWorkItemType BuildType() =>

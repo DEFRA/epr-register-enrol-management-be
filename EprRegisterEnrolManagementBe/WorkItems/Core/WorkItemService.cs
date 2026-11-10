@@ -143,9 +143,9 @@ public sealed class WorkItemService : IWorkItemService
         IWorkItemRegistry registry,
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
+        IWorkItemReferenceGenerator referenceGenerator,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
-        IWorkItemReferenceGenerator? referenceGenerator = null,
         IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null
     )
     {
@@ -154,8 +154,7 @@ public sealed class WorkItemService : IWorkItemService
         this._logger = logger;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _referenceGenerator =
-            referenceGenerator ?? new WorkItemReferenceGenerator(new ApplicationReferenceGenerator());
+        _referenceGenerator = referenceGenerator;
         _originStateResolvers =
             originStateResolvers?.ToArray() ?? Array.Empty<IWorkItemOriginStateResolver>();
     }
@@ -264,7 +263,7 @@ public sealed class WorkItemService : IWorkItemService
         for (var attempt = 1; ; attempt++)
         {
             var applicationReference = await _referenceGenerator.GenerateAsync(
-                type.TypeId,
+                type,
                 payload,
                 attempt,
                 cancellationToken

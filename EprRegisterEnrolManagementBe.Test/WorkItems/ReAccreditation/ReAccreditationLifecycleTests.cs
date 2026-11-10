@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
@@ -67,8 +68,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
         // RA-448 phase 2: the accreditation number now comes from
         // IAccreditationNumberAdapter (a real backend call), not a local
         // generator.
@@ -203,8 +204,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
 
         var workItem = new WorkItem
         {
@@ -235,8 +236,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
 
         var workItem = new WorkItem
         {
@@ -270,8 +271,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
 
         var workItem = new WorkItem
         {
@@ -300,8 +301,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
 
         var workItem = new WorkItem
         {
@@ -335,8 +336,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
 
         var workItem = new WorkItem
         {
@@ -372,8 +373,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
 
         var workItem = new WorkItem
         {
@@ -408,8 +409,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
 
         var workItem = new WorkItem
         {
@@ -451,8 +452,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
 
         var workItem = new WorkItem
         {
@@ -507,8 +508,8 @@ public class ReAccreditationLifecycleTests
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),
             persistence,
-            NullLogger<WorkItemService>.Instance
-        );
+            NullLogger<WorkItemService>.Instance,
+        TestReferenceGenerators.ApplicationOnly());
         // The query stamps the open query with a targeted payload write
         // before transitioning; the substitute must report a match.
         persistence

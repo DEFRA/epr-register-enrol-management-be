@@ -6,9 +6,10 @@ using NSubstitute;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
 /// <summary>
-/// RA-492: the in-year change reference format agreed with regulators
-/// (Jira comment, 10 Nov 2026): <c>IYC-{code}-{yyyy}-{seq:D5}</c>, with one
-/// sequence per change type per year.
+/// RA-492: the in-year change reference format. The Jira comment of 10 Nov 2026
+/// fixes <c>IYC-{code}-{year}-{5-digit sequence}</c> with one sequence per change
+/// type per year. The year fallback, the 00001 start and widening past 99999 are
+/// implementation choices.
 /// </summary>
 public sealed class InYearChangeReferenceGeneratorTests
 {
@@ -21,25 +22,6 @@ public sealed class InYearChangeReferenceGeneratorTests
     {
         _store.NextAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(1L);
         _generator = new InYearChangeReferenceGenerator(_store, new FakeTimeProvider(s_now));
-    }
-
-    [Theory]
-    [InlineData("add-overseas-site")]
-    [InlineData("ADD-OVERSEAS-SITE")]
-    public void TryGetChangeTypeCode_maps_add_overseas_site_to_ORS(string typeId)
-    {
-        Assert.True(InYearChangeReferenceGenerator.TryGetChangeTypeCode(typeId, out var code));
-        Assert.Equal("ORS", code);
-    }
-
-    [Theory]
-    [InlineData("re-accreditation")]
-    [InlineData("test-type")]
-    [InlineData("")]
-    public void TryGetChangeTypeCode_returns_false_for_non_in_year_change_types(string typeId)
-    {
-        Assert.False(InYearChangeReferenceGenerator.TryGetChangeTypeCode(typeId, out var code));
-        Assert.Null(code);
     }
 
     [Fact]

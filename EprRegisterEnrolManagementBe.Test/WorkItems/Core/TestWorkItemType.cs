@@ -13,13 +13,15 @@ internal sealed class TestWorkItemType : IWorkItemType
         string displayName,
         WorkItemState? initialState = null,
         IReadOnlyCollection<WorkItemState>? states = null,
-        IReadOnlyCollection<WorkItemTransition>? transitions = null)
+        IReadOnlyCollection<WorkItemTransition>? transitions = null,
+        string? inYearChangeCode = null)
     {
         TypeId = typeId;
         DisplayName = displayName;
         InitialState = initialState ?? new WorkItemState("submitted", "Submitted");
         States = states ?? [InitialState];
         Transitions = transitions ?? Array.Empty<WorkItemTransition>();
+        InYearChangeCode = inYearChangeCode;
     }
 
     public string TypeId { get; }
@@ -27,4 +29,5 @@ internal sealed class TestWorkItemType : IWorkItemType
     public WorkItemState InitialState { get; }
     public IReadOnlyCollection<WorkItemState> States { get; }
     public IReadOnlyCollection<WorkItemTransition> Transitions { get; }
+    public string? InYearChangeCode { get; }
 }

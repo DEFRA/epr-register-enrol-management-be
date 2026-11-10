@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -285,7 +286,7 @@ public class WorkItemSlaCancelledTests
                     ])
             ]),
             Substitute.For<IWorkItemPersistence>(),
-            NullLogger<WorkItemService>.Instance);
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly());
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
     {

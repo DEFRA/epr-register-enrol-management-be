@@ -62,31 +62,42 @@ service objects.
 `WorkItemService.SubmitAsync` generates `payload.applicationReference` on
 the server. Any value the caller sends is overwritten. The response also
 returns it as the top-level `applicationReference`. There are two formats,
-and `WorkItemReferenceGenerator` picks one by type id:
+and `WorkItemReferenceGenerator` picks one from the type's
+`IWorkItemType.InYearChangeCode`:
 
-| Work item type | Format | Example | Generator |
+| `InYearChangeCode` | Format | Example | Generator |
 | --- | --- | --- | --- |
-| In-year change types | `IYC-{code}-{yyyy}-{seq:D5}` | `IYC-ORS-2026-00021` | `InYearChangeReferenceGenerator` |
-| Every other type | `AP` + year + agency + organisation + postcode + material (RA-318, RA-503, RA-526) | `AP26EA5005001ABPL` | `ApplicationReferenceGenerator` |
+| Non-null (an in-year change type) | `IYC-{code}-{yyyy}-{seq:D5}` | `IYC-ORS-2026-00021` | `InYearChangeReferenceGenerator` |
+| `null` (the default; every other type) | `AP` + year + agency + organisation + postcode + material (RA-318, RA-503, RA-526) | `AP26EA5005001ABPL` | `ApplicationReferenceGenerator` |
 
-- **In-year change type map.** `InYearChangeReferenceGenerator.TryGetChangeTypeCode`
-  is the only place a type id maps to a change code. Currently
-  `add-overseas-site` maps to `ORS`. It is a plain string table, so it
-  applies whether or not a module with that type id is registered.
-- **Year.** `payload.accreditationYear` is used when it is a whole number
-  from 1000 to 9999. Otherwise the current UTC year from `TimeProvider` is used.
-- **Sequence.** There is one counter per change code per year. For example,
-  `IYC-ORS-2026` and `IYC-ORS-2027` each start at `00001`. Counters live in
-  the `referenceSequences` collection as `{ _id: "IYC-ORS-2026", seq: <long> }`,
-  allocated atomically by `MongoReferenceSequenceStore` (`$inc` with upsert).
-  Past `99999` the number widens to 6 digits instead of failing. A number
-  can be skipped, for example when an insert fails after allocation, but it
-  is never reused.
+- **The type declares its code.** `IWorkItemType.InYearChangeCode` is a
+  default interface member that returns `null`. An in-year change type
+  overrides it in its own module folder, so Core never lists module type ids.
+  **Contract for the case-management story:** the `add-overseas-site` type
+  must set `InYearChangeCode => "ORS"`. That type is **not registered yet**,
+  so today `POST /work-items` rejects `typeId: "add-overseas-site"` as an
+  unknown type, and the IYC path has no production caller.
+- **What regulators agreed (Jira comment, 10 Nov 2026):** the shape
+  `IYC-<type code>-<year>-<5-digit sequence>`, with one sequence per change
+  type per year.
+- **Implementation choices, still to be confirmed with the PO:**
+  - The year is `payload.accreditationYear` when it is a whole number from
+    1000 to 9999. Otherwise the current UTC year from `TimeProvider` is used.
+  - Each counter starts at `00001`.
+  - Past `99999` the number widens to 6 digits instead of failing.
+- **Sequence storage.** Counters live in the `referenceSequences` collection
+  as `{ _id: "IYC-ORS-2026", seq: <long> }`, allocated atomically by
+  `MongoReferenceSequenceStore` (`$inc` with upsert). A number can be
+  skipped but is never reused. For example, concurrent submits with one
+  `operatorApplicationId` each allocate a number before all but one return
+  the winner as a replay, and an insert failure after allocation also
+  leaves a gap.
 - **Replays and collisions.** The idempotent-replay check
-  (`operatorApplicationId`) runs before generation, so a replay allocates
-  no number. On an `applicationReference` unique-index collision the engine
-  regenerates, up to `MaxApplicationReferenceAttempts`. An IYC retry takes
-  the next number. An AP retry appends a disambiguator character.
+  (`operatorApplicationId`) runs before generation, so a sequential replay
+  allocates no number. On an `applicationReference` unique-index collision
+  the engine regenerates, up to `MaxApplicationReferenceAttempts`. An IYC
+  retry takes the next number. An AP retry appends a disambiguator
+  character.
 
 ## Adding a new work item type
 
@@ -124,10 +135,9 @@ and `WorkItemReferenceGenerator` picks one by type id:
 
 That is the complete list of changes required outside the new module folder.
 
-The one exception is a **new in-year change type**. It also needs one line in
-`InYearChangeReferenceGenerator`'s type map so it gets an `IYC-…` reference
-(see [Application reference](#application-reference-ra-219-ra-492)).
-`add-overseas-site` is already mapped.
+An in-year change type sets `InYearChangeCode` on its `IWorkItemType` inside
+the module folder (see [Application reference](#application-reference-ra-219-ra-492)).
+That is still a module-only change.
 
 ## Conventions
 

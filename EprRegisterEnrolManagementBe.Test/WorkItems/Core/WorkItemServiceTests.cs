@@ -39,7 +39,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         new(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
             _time
         );
 
@@ -50,7 +50,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         new(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
             _time,
             postActionHooks: [hook]
         );
@@ -208,7 +208,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
             _time,
             postActionHooks: [slowHook, pushHook]
         );
@@ -1739,7 +1739,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
             time
         );
 
@@ -2055,9 +2055,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
-            _time,
-            referenceGenerator: new WorkItemReferenceGenerator(generator)
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(generator),
+            _time
         );
 
         var payload = new BsonDocument { ["paymentReference"] = "PR/PK/REP/500500" };
@@ -2118,9 +2117,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
-            _time,
-            referenceGenerator: new WorkItemReferenceGenerator(generator)
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(generator),
+            _time
         );
 
         var result = await service.SubmitAsync(
@@ -2155,9 +2153,8 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = new WorkItemService(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
-            _time,
-            referenceGenerator: new WorkItemReferenceGenerator(generator)
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(generator),
+            _time
         );
 
         var result = await service.SubmitAsync(
@@ -2340,7 +2337,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         return new WorkItemService(
             new WorkItemRegistry([type]),
             racing,
-            NullLogger<WorkItemService>.Instance,
+            NullLogger<WorkItemService>.Instance,TestReferenceGenerators.ApplicationOnly(),
             _time
         );
     }
