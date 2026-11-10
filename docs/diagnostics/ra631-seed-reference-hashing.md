@@ -17,7 +17,8 @@ SHA-256 does not make it a security token or guarantee unique references.
 
 Startup registration requires both a Development host and
 `WorkItems:SeedOnStartup=true` (`AddWorkItemSeeders`). Real
-submissions use `ApplicationReferenceGenerator` through
+submissions use `ApplicationReferenceGenerator`, or
+`InYearChangeReferenceGenerator` for in-year change types (RA-492), through
 `WorkItemService.SubmitAsync`, independently of this helper.
 
 ## Existing data and rollout

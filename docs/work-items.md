@@ -57,6 +57,36 @@ The persisted envelope is owned by the framework; modules describe the shape
 of their payload via their `IWorkItemType` and operate on it via their own
 service objects.
 
+## Application reference (RA-219, RA-492)
+
+`WorkItemService.SubmitAsync` generates `payload.applicationReference` on
+the server. Any value the caller sends is overwritten. The response also
+returns it as the top-level `applicationReference`. There are two formats:
+
+| Work item type | Format | Example | Generator |
+| --- | --- | --- | --- |
+| In-year change types | `IYC-{code}-{yyyy}-{seq:D5}` | `IYC-ORS-2026-00021` | `InYearChangeReferenceGenerator` |
+| Every other type | `AP` + year + agency + organisation + postcode + material (RA-318, RA-503, RA-526) | `AP26EA5005001ABPL` | `ApplicationReferenceGenerator` |
+
+- **In-year change type map.** `InYearChangeReferenceGenerator.TryGetChangeTypeCode`
+  is the only place a type id maps to a change code. Currently
+  `add-overseas-site` maps to `ORS`. It is a plain string table, so it
+  applies whether or not a module with that type id is registered.
+- **Year.** `payload.accreditationYear` is used when it is a whole number
+  from 1000 to 9999. Otherwise the current UTC year from `TimeProvider` is used.
+- **Sequence.** There is one counter per change code per year. For example,
+  `IYC-ORS-2026` and `IYC-ORS-2027` each start at `00001`. Counters live in
+  the `referenceSequences` collection as `{ _id: "IYC-ORS-2026", seq: <long> }`,
+  allocated atomically by `MongoReferenceSequenceStore` (`$inc` with upsert).
+  Past `99999` the number widens to 6 digits instead of failing. A number
+  can be skipped, for example when an insert fails after allocation, but it
+  is never reused.
+- **Replays and collisions.** The idempotent-replay check
+  (`operatorApplicationId`) runs before generation, so a replay allocates
+  no number. On an `applicationReference` unique-index collision the engine
+  regenerates, up to `MaxApplicationReferenceAttempts`. An IYC retry takes
+  the next number. An AP retry appends a disambiguator character.
+
 ## Adding a new work item type
 
 1. **Create a folder** under `EprRegisterEnrolManagementBe/WorkItems/<TypeName>/` containing:
@@ -92,6 +122,11 @@ service objects.
    `MapWorkItemModules()` is already invoked from `ConfigureEndpoints`.
 
 That is the complete list of changes required outside the new module folder.
+
+The one exception is a **new in-year change type**. It also needs one line in
+`InYearChangeReferenceGenerator`'s type map so it gets an `IYC-…` reference
+(see [Application reference](#application-reference-ra-219-ra-492)).
+`add-overseas-site` is already mapped.
 
 ## Conventions
 

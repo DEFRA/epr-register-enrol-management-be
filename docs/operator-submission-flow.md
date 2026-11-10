@@ -171,7 +171,12 @@ spoof or collide a reference.
 `WorkItemService.SubmitAsync` (`WorkItems/Core/WorkItemService.cs:219`):
 
 - Generates a server-side `applicationReference` and stamps it onto the BSON
-  payload.
+  payload. Re-accreditation applications get the `AP…` format
+  (`ApplicationReferenceGenerator`). In-year change types (RA-492, currently
+  `add-overseas-site`) get `IYC-{code}-{yyyy}-{seq:D5}`, e.g.
+  `IYC-ORS-2026-00021`, from a per-type, per-year sequence in the
+  `referenceSequences` collection (`InYearChangeReferenceGenerator`). See
+  `docs/work-items.md` "Application reference".
 - Builds a `WorkItem` document:
   - `TypeId = "re-accreditation"`, `StateId = {type's initial state}`
   - `SubmittedAt / LastModifiedAt` from the injected `TimeProvider` (not
@@ -198,7 +203,8 @@ unique index on `applicationReference`.
 
 **Reference collision (rare):** on a `DuplicateKey` error targeting the
 `applicationReference` index the engine regenerates the reference and retries,
-up to 5 attempts. Each attempt fires its own pre-persist log line. Exhaustion
+up to 5 attempts. An AP retry appends a disambiguator character. An IYC retry
+takes the next sequence number. Each attempt fires its own pre-persist log line. Exhaustion
 surfaces as a clean 503 response (not an unhandled 500).
 
 **Other MongoDB failures:** any exception that isn't a reference-collision

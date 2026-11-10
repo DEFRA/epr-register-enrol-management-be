@@ -123,10 +123,11 @@ public sealed class WorkItemService : IWorkItemService
 
     /// <summary>
     /// Maximum number of <c>applicationReference</c> candidates the engine
-    /// tries before giving up on a submission. The suffix keyspace is 10^9,
-    /// so even with a large backlog a collision is rare; five attempts make
-    /// the probability of a spurious failure negligible while bounding the
-    /// work done per submission (RA-219).
+    /// tries before giving up on a submission (RA-219). An AP reference
+    /// collides only when two payloads share every derived segment, and each
+    /// retry appends a different disambiguator character (RA-503). An
+    /// in-year change reference (RA-492) takes the next sequence number on
+    /// each retry. Five attempts bound the work done per submission.
     /// </summary>
     public const int MaxApplicationReferenceAttempts = 5;
 
@@ -137,6 +138,7 @@ public sealed class WorkItemService : IWorkItemService
     private readonly TimeProvider _timeProvider;
     private readonly IApplicationReferenceGenerator _referenceGenerator;
     private readonly IReadOnlyCollection<IWorkItemOriginStateResolver> _originStateResolvers;
+    private readonly IInYearChangeReferenceGenerator? _inYearChangeReferenceGenerator;
 
     public WorkItemService(
         IWorkItemRegistry registry,
@@ -145,7 +147,8 @@ public sealed class WorkItemService : IWorkItemService
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IApplicationReferenceGenerator? referenceGenerator = null,
-        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null
+        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null,
+        IInYearChangeReferenceGenerator? inYearChangeReferenceGenerator = null
     )
     {
         this._registry = registry;
@@ -156,6 +159,7 @@ public sealed class WorkItemService : IWorkItemService
         _referenceGenerator = referenceGenerator ?? new ApplicationReferenceGenerator();
         _originStateResolvers =
             originStateResolvers?.ToArray() ?? Array.Empty<IWorkItemOriginStateResolver>();
+        _inYearChangeReferenceGenerator = inYearChangeReferenceGenerator;
     }
 
     public async Task<WorkItemActionResult> SubmitAsync(
@@ -252,6 +256,8 @@ public sealed class WorkItemService : IWorkItemService
         // RA-219: the backend owns the applicationReference. Generate one
         // server-side and persist; on the (rare) unique-index collision
         // regenerate and retry up to MaxApplicationReferenceAttempts times.
+        // RA-492: generation stays after the replay check above, because an
+        // in-year change reference allocates a sequence number on every call.
         // The reference is stamped onto both the payload (for consumers /
         // the BFF, at payload.applicationReference) and the birth audit
         // entry on each attempt so a retried reference stays consistent
@@ -259,7 +265,12 @@ public sealed class WorkItemService : IWorkItemService
         WorkItem? workItem = null;
         for (var attempt = 1; ; attempt++)
         {
-            var applicationReference = _referenceGenerator.Generate(payload, attempt);
+            var applicationReference = await GenerateApplicationReferenceAsync(
+                type,
+                payload,
+                attempt,
+                cancellationToken
+            );
             payload[ApplicationReferenceField] = applicationReference;
 
             // RA-503: prefer the operator-supplied payment reference captured above. Fall back
@@ -430,6 +441,39 @@ public sealed class WorkItemService : IWorkItemService
         await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
 
         return WorkItemActionResult.Success(workItem);
+    }
+
+    /// <summary>
+    /// RA-492: in-year change types (mapped by
+    /// <see cref="InYearChangeReferenceGenerator.TryGetChangeTypeCode"/>) get
+    /// an <c>IYC-{code}-{yyyy}-{sequence}</c> reference; every other type
+    /// keeps the AP format from <see cref="IApplicationReferenceGenerator"/>.
+    /// The IYC generator ignores <paramref name="attempt"/>, because each call
+    /// already takes a fresh sequence number.
+    /// </summary>
+    private async Task<string> GenerateApplicationReferenceAsync(
+        IWorkItemType type,
+        BsonDocument payload,
+        int attempt,
+        CancellationToken cancellationToken
+    )
+    {
+        if (!InYearChangeReferenceGenerator.TryGetChangeTypeCode(type.TypeId, out var changeTypeCode))
+        {
+            return _referenceGenerator.Generate(payload, attempt);
+        }
+
+        // A wiring defect, not a caller error. Production DI always registers
+        // the generator (AddApplicationReferenceGenerators). Falling back to
+        // the AP format here would silently give an in-year change the wrong
+        // reference.
+        var generator =
+            _inYearChangeReferenceGenerator
+            ?? throw new InvalidOperationException(
+                $"Work item type '{type.TypeId}' needs an in-year change reference, but no "
+                    + $"{nameof(IInYearChangeReferenceGenerator)} is configured."
+            );
+        return await generator.GenerateAsync(changeTypeCode, payload, cancellationToken);
     }
 
     /// <summary>

@@ -29,8 +29,9 @@ public static class WorkItemModuleExtensions
         services.AddSingleton<IWorkItemAuditAppender, WorkItemAuditAppender>();
         // RA-219: server-side applicationReference generation is a framework
         // concern (the engine owns the submission birth event), so the
-        // generator is registered alongside the engine it backs.
-        services.AddApplicationReferenceGenerator();
+        // generators are registered alongside the engine they back. RA-492
+        // adds the in-year change generator and its Mongo sequence store.
+        services.AddApplicationReferenceGenerators();
         services.AddHostedService<WorkItemMigrationHostedService>();
         return services;
     }

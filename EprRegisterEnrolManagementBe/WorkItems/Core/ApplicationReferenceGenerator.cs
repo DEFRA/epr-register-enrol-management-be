@@ -9,7 +9,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <summary>
 /// Produces the human-facing work-item <c>applicationReference</c>
 /// (RA-318). The backend owns reference generation so a client can never
-/// supply, spoof or collide a reference.
+/// supply, spoof or collide a reference. RA-492: in-year change types (see
+/// <see cref="InYearChangeReferenceGenerator.TryGetChangeTypeCode"/>) do not
+/// use this generator. They get an <c>IYC-…</c> reference from
+/// <see cref="IInYearChangeReferenceGenerator"/> instead.
 ///
 /// Format (RA-318, org segment revised RA-503): <c>AP</c> + 2-digit
 /// accreditation year + 2-char agency code + the organisation segment +
@@ -399,17 +402,21 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 }
 
 /// <summary>
-/// DI helper so the generator is registered in exactly one place, mirroring
-/// the framework's other Core service registrations.
+/// DI helper so the reference generators are registered in exactly one
+/// place, mirroring the framework's other Core service registrations: the AP
+/// generator, plus the RA-492 in-year change generator and the Mongo sequence
+/// store it allocates from.
 /// </summary>
 [ExcludeFromCodeCoverage]
 public static class ApplicationReferenceGeneratorExtensions
 {
-    public static IServiceCollection AddApplicationReferenceGenerator(
+    public static IServiceCollection AddApplicationReferenceGenerators(
         this IServiceCollection services
     )
     {
         services.AddSingleton<IApplicationReferenceGenerator, ApplicationReferenceGenerator>();
+        services.AddSingleton<IReferenceSequenceStore, MongoReferenceSequenceStore>();
+        services.AddSingleton<IInYearChangeReferenceGenerator, InYearChangeReferenceGenerator>();
         return services;
     }
 }

@@ -797,6 +797,47 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         );
     }
 
+    // RA-492: in-year change references (IYC-ORS-2026-00021) contain '-', which the reference
+    // search must treat literally. The OrgId search is a case-insensitive regex on
+    // payload.applicationReference, so a full or partial IYC reference must find the item and must
+    // not match an AP reference or another year's IYC reference.
+    [Theory]
+    [InlineData("IYC-ORS-2026-00021")]
+    [InlineData("IYC-ORS-2026-0002")]
+    [InlineData("iyc-ors-2026")]
+    [InlineData("  IYC-ORS-2026-00021  ")]
+    public async Task QueryAsync_orgId_filter_finds_an_in_year_change_reference(string search)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await SeedWithReferenceAsync("IYC-ORS-2026-00021");
+        await SeedWithReferenceAsync("IYC-ORS-2027-00021");
+        await SeedWithReferenceAsync("AP26EA5005001ABPL");
+
+        var page = await _persistence.QueryAsync(new WorkItemQuery(OrgId: search), ct);
+
+        Assert.Equal(
+            "IYC-ORS-2026-00021",
+            Assert.Single(page.Items).Payload["applicationReference"].AsString
+        );
+    }
+
+    private async Task SeedWithReferenceAsync(string applicationReference)
+    {
+        var now = _time.GetUtcNow().UtcDateTime;
+        await _persistence.CreateAsync(
+            new WorkItem
+            {
+                TypeId = "add-overseas-site",
+                StateId = "submitted",
+                SubmittedAt = now,
+                LastModifiedAt = now,
+                SubmittedBy = "client-1",
+                Payload = new BsonDocument { ["applicationReference"] = applicationReference },
+            },
+            TestContext.Current.CancellationToken
+        );
+    }
+
     [Fact]
     public async Task ReplaceAsync_throws_concurrency_exception_when_version_does_not_match()
     {
