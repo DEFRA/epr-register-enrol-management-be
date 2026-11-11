@@ -393,9 +393,12 @@ public sealed class WorkItemPersistence
         var builder = Builders<WorkItem>.Filter;
         var clauses = new List<FilterDefinition<WorkItem>>();
 
-        if (query.TypeIds is { Count: > 0 } typeIds)
+        // RA-739: a category filter has already been resolved into TypeIds
+        // (see WorkItemQuery.WithCategoriesResolved); apply it even when it
+        // resolved to no types, so it matches nothing rather than everything.
+        if (query.TypeIds is { Count: > 0 } || query.Categories is { Count: > 0 })
         {
-            clauses.Add(builder.In(w => w.TypeId, typeIds));
+            clauses.Add(builder.In(w => w.TypeId, query.TypeIds ?? []));
         }
 
         if (query.StateIds is { Count: > 0 } stateIds)

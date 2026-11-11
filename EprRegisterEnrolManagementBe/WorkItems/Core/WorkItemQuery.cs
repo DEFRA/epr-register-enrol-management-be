@@ -62,6 +62,13 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// user ticks "Show archived"). Background jobs that need to scan approved items
 /// (e.g. <c>ArchiveBackgroundService</c>) must also pass <c>true</c>.
 /// </param>
+/// <param name="Categories">
+/// RA-739: restrict to items whose type is registered with one of these
+/// <see cref="IWorkItemType.Category"/> values, unioned with
+/// <paramref name="TypeIds"/>. Persistence cannot see the registry, so callers
+/// resolve this with <see cref="WithCategoriesResolved"/> first. Once set,
+/// <paramref name="TypeIds"/> is applied even when empty (matching nothing).
+/// </param>
 public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? TypeIds = null,
     IReadOnlyCollection<string>? StateIds = null,
@@ -80,8 +87,35 @@ public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? Materials = null,
     string? Organisation = null,
     string? Sort = null,
-    bool? SortDescending = null)
+    bool? SortDescending = null,
+    IReadOnlyCollection<string>? Categories = null)
 {
+    /// <summary>
+    /// RA-739: expands <see cref="Categories"/> into the typeIds registered
+    /// with those categories and unions them with <see cref="TypeIds"/>, so
+    /// a category filter picks up new case types without code changes.
+    /// <see cref="Categories"/> is kept, so persistence still knows a type
+    /// filter was asked for when the union is empty and matches nothing
+    /// rather than everything.
+    /// </summary>
+    public WorkItemQuery WithCategoriesResolved(IWorkItemRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        if (Categories is not { Count: > 0 } categories)
+        {
+            return this;
+        }
+
+        var categoryTypeIds = registry
+            .Types.Where(t => t.Category is not null && categories.Contains(t.Category))
+            .Select(t => t.TypeId);
+
+        return this with
+        {
+            TypeIds = (TypeIds ?? []).Union(categoryTypeIds, StringComparer.Ordinal).ToList(),
+        };
+    }
+
     public const int DefaultPageSize = 20;
     public const int MinPageSize = 1;
     public const int MaxPageSize = 100;

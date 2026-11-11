@@ -14,7 +14,8 @@ internal sealed class TestWorkItemType : IWorkItemType
         WorkItemState? initialState = null,
         IReadOnlyCollection<WorkItemState>? states = null,
         IReadOnlyCollection<WorkItemTransition>? transitions = null,
-        string? inYearChangeCode = null)
+        string? inYearChangeCode = null,
+        string? category = null)
     {
         TypeId = typeId;
         DisplayName = displayName;
@@ -22,6 +23,7 @@ internal sealed class TestWorkItemType : IWorkItemType
         States = states ?? [InitialState];
         Transitions = transitions ?? Array.Empty<WorkItemTransition>();
         InYearChangeCode = inYearChangeCode;
+        Category = category;
     }
 
     public string TypeId { get; }
@@ -30,4 +32,5 @@ internal sealed class TestWorkItemType : IWorkItemType
     public IReadOnlyCollection<WorkItemState> States { get; }
     public IReadOnlyCollection<WorkItemTransition> Transitions { get; }
     public string? InYearChangeCode { get; }
+    public string? Category { get; }
 }

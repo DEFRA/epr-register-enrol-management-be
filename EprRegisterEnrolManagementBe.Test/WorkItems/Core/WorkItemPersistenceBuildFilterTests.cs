@@ -13,6 +13,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class WorkItemPersistenceBuildFilterTests
 {
+    private static readonly string[] s_categoriesInYearChange = [WorkItemCategories.InYearChange];
     private static readonly string[] s_materialsPlastic = ["plastic"];
     private static readonly string[] s_materialsPlasticAndGlass = ["plastic", "glass"];
     private static readonly string[] s_materialsWithRegexMetacharacter = ["a.b"];
@@ -93,6 +94,18 @@ public class WorkItemPersistenceBuildFilterTests
 
         var expected = new BsonDocument("typeId", new BsonDocument("$in",
             new BsonArray { "re-accreditation", "registration" }));
+        Assert.Equal(expected, doc);
+    }
+
+    [Fact]
+    public void ACategoryFilterThatResolvedToNoTypesMatchesNothing()
+    {
+        // RA-739: callers resolve Categories into TypeIds before querying. A
+        // category with no registered types must match nothing, not
+        // everything, so the empty TypeIds still renders as an $in.
+        var doc = Render(new WorkItemQuery(TypeIds: [], Categories: s_categoriesInYearChange));
+
+        var expected = new BsonDocument("typeId", new BsonDocument("$in", new BsonArray()));
         Assert.Equal(expected, doc);
     }
 

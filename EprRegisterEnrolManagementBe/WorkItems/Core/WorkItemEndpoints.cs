@@ -468,10 +468,13 @@ public static class WorkItemEndpoints
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
         [FromServices] TimeProvider timeProvider,
+        [FromServices] IWorkItemRegistry registry,
         CancellationToken cancellationToken
     )
     {
-        var query = WorkItemQueryBinding.FromQueryString(httpContext.Request.Query);
+        var query = WorkItemQueryBinding
+            .FromQueryString(httpContext.Request.Query)
+            .WithCategoriesResolved(registry);
 
         if (query.ExceedsPageCap)
         {
