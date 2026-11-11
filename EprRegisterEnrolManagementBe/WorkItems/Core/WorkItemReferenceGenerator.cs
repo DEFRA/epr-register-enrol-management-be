@@ -104,6 +104,7 @@ public static class WorkItemReferenceGeneratorExtensions
         services.AddSingleton<IApplicationReferenceGenerator, ApplicationReferenceGenerator>();
         services.AddSingleton<IReferenceSequenceStore, MongoReferenceSequenceStore>();
         services.AddSingleton<IInYearChangeReferenceGenerator, InYearChangeReferenceGenerator>();
+        services.AddSingleton<ISubmissionReferenceGenerator, SubmissionReferenceGenerator>();
         return services;
     }
 }

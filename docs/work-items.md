@@ -52,6 +52,20 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 | `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state; `400` for unknown actions, transitions whose from-state does not match, and transitions declared `CallerInvocable: false`. |
 
+**Split submissions (RA-739).** For a type that declares
+`UsesSubmissionReference` (add-ORS, `add-overseas-site`), `POST /work-items`
+splits the payload's `sites[]` into one work item per site. Each work item's
+payload is the shared request fields plus a single `site`, its own
+`applicationReference` (`IYC-ORS-{yyyy}-{seq:D5}`), the shared
+`submissionReference` (`SUB-{yyyy}-{seq:D4}`, one counter per year in
+`referenceSequences` keyed `SUB-{yyyy}`, starting at `0001` and growing past
+`9999`), `submissionSize` and `paymentReference`. The response is `201` with
+`{ "submissionReference": "SUB-2026-0001", "workItems": [{ "siteId", "id",
+"applicationReference" }] }`. The unique index on `payload.operatorRequestId`
+is now on (`payload.operatorRequestId`, `payload.site.siteId`); startup drops
+the RA-492 single-field index. Re-accreditation's request and response are
+unchanged.
+
 All three endpoints require authentication via the CDP client id
 header (`x-cdp-client-id`) per RA-89/RA-85b.
 
@@ -75,10 +89,9 @@ and `WorkItemReferenceGenerator` picks one from the type's
 - **The type declares its code.** `IWorkItemType.InYearChangeCode` is a
   default interface member that returns `null`. An in-year change type
   overrides it in its own module folder, so Core never lists module type ids.
-  **Contract for the case-management story:** the `add-overseas-site` type
-  must set `InYearChangeCode => "ORS"`. That type is **not registered yet**,
-  so today `POST /work-items` rejects `typeId: "add-overseas-site"` as an
-  unknown type, and the IYC path has no production caller.
+  The `add-overseas-site` type (RA-739, `WorkItems/AddOverseasSite/`) sets
+  `InYearChangeCode => "ORS"`, and each work item a submission is split into
+  gets its own IYC reference (see [Ingestion API](#ingestion-api)).
 - **What regulators agreed (Jira comment, 10 Nov 2026):** the shape
   `IYC-<type code>-<year>-<5-digit sequence>`, with one sequence per change
   type per year.
@@ -150,13 +163,11 @@ and `WorkItemReferenceGenerator` picks one from the type's
 - **Collisions.** On an `applicationReference` unique-index collision the
   engine regenerates, up to `MaxApplicationReferenceAttempts`. An IYC retry
   takes the next number. An AP retry appends a disambiguator character.
-- **Pinning the code.** Nothing in this repo enforces `ORS` until the
-  case-management story adds the type, so that story must add a test
-  asserting the registered `add-overseas-site` type's
-  `InYearChangeCode == "ORS"`.
+- **Pinning the code.** `AddOverseasSiteTypeTests` asserts the
+  `add-overseas-site` type's `InYearChangeCode == "ORS"`.
 - **Wiring.** `AddWorkItemReferenceGenerators()` (in
-  `WorkItemReferenceGenerator.cs`) registers the chooser, both generators and
-  the sequence store.
+  `WorkItemReferenceGenerator.cs`) registers the chooser, both generators,
+  the RA-739 `SubmissionReferenceGenerator` and the sequence store.
 
 ## Adding a new work item type
 
@@ -221,8 +232,9 @@ type is configured. Every setting is code, not runtime data:
   type's workflow can change on its own.
 - **Uses a submission reference** marks types whose submissions get a
   `SUB-{yyyy}-{sequence}` reference shared by every work item one submission
-  creates. Declared now; the submission reference allocation and the list's
-  `category` filter that read these settings arrive in later RA-739 tasks.
+  creates, and whose `sites[]` is split into one work item per site (see
+  [Ingestion API](#ingestion-api)). The list's `category` filter arrives in a
+  later RA-739 task.
 - **Workflow** is a `WorkItemWorkflow`: the states (in status sort order),
   their labels, the transitions and the initial state. `StandardWorkflow`
   (`WorkItems/Workflows/StandardWorkflow.cs`) is re-accreditation's lifecycle

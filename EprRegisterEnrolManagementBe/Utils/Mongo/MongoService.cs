@@ -22,8 +22,17 @@ public abstract class MongoService<T>
 
     protected abstract List<CreateIndexModel<T>> DefineIndexes(IndexKeysDefinitionBuilder<T> builder);
 
+    /// <summary>
+    /// Names of indexes this collection no longer wants (RA-739). They are
+    /// dropped, if present, before the desired indexes are created, so an
+    /// index whose key changed does not linger beside its replacement.
+    /// </summary>
+    protected virtual IReadOnlyCollection<string> ObsoleteIndexNames => [];
+
     protected void EnsureIndexes()
     {
+        MongoIndexReconciler.DropObsoleteIndexes(Collection, ObsoleteIndexNames, Logger);
+
         var builder = Builders<T>.IndexKeys;
         var indexes = DefineIndexes(builder);
         if (indexes.Count == 0) return;

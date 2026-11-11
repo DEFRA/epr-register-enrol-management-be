@@ -133,6 +133,55 @@ public static class MongoIndexReconciler
     }
 
     /// <summary>
+    /// Drop each named index that exists on the collection (RA-739). Used when
+    /// an index's key changes: the old index has a different key from its
+    /// replacement, so <see cref="EnsureIndexes{T}"/> never sees a conflict
+    /// and would otherwise leave it in place. A name that is not present is
+    /// ignored, so this is idempotent.
+    /// </summary>
+    /// <returns>The names of the indexes that were dropped.</returns>
+    public static IReadOnlyList<string> DropObsoleteIndexes<T>(
+        IMongoCollection<T> collection,
+        IReadOnlyCollection<string> indexNames,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(collection);
+        ArgumentNullException.ThrowIfNull(indexNames);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        if (indexNames.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var existing = collection
+            .Indexes.List()
+            .ToList()
+            .Select(index => index.GetValue("name", BsonNull.Value))
+            .Where(name => name.IsString)
+            .Select(name => name.AsString)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var dropped = new List<string>();
+        foreach (var name in indexNames.Where(existing.Contains))
+        {
+            if (string.Equals(name, IdIndexName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            logger.LogWarning(
+                "Dropping obsolete index {IndexName} on {Collection}.",
+                name,
+                collection.CollectionNamespace.CollectionName);
+            collection.Indexes.DropOne(name);
+            dropped.Add(name);
+        }
+
+        return dropped;
+    }
+
+    /// <summary>
     /// Same contract as <see cref="EnsureIndexes{T}"/> but one model at a
     /// time, used once a batched <c>CreateMany</c> has already failed with a
     /// duplicate-key error so the offending index can be isolated: every

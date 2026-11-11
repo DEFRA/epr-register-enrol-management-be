@@ -9,6 +9,7 @@ using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.Utils.Http;
 using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
+using EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
@@ -229,6 +230,7 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
         );
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>(builder.Configuration);
+    services.AddWorkItemModule<AddOverseasSiteModule>(builder.Configuration);
     services.AddHostedService<SlaBreachBackgroundService>();
     services.AddHostedService<ArchiveBackgroundService>();
 

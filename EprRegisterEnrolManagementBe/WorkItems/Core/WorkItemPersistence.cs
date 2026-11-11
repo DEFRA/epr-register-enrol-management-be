@@ -705,6 +705,16 @@ public sealed class WorkItemPersistence
         }
     }
 
+    /// <summary>
+    /// RA-739: the RA-492 unique index on <c>payload.operatorRequestId</c>
+    /// alone, replaced by the (operatorRequestId, site.siteId) index in
+    /// <see cref="DefineIndexes"/>.
+    /// </summary>
+    internal const string LegacyOperatorRequestIdIndexName = "payload.operatorRequestId_1";
+
+    protected override IReadOnlyCollection<string> ObsoleteIndexNames =>
+        [LegacyOperatorRequestIdIndexName];
+
     [ExcludeFromCodeCoverage]
     protected override List<CreateIndexModel<WorkItem>> DefineIndexes(
         IndexKeysDefinitionBuilder<WorkItem> builder
@@ -778,8 +788,18 @@ public sealed class WorkItemPersistence
         // PARTIAL on "is a string" rather than sparse, for the reason given on
         // accreditationId below: a payload round-tripped through a typed model
         // can carry an explicit null, which sparse would still index.
+        //
+        // RA-739: one add-ORS submission becomes one work item per site, all
+        // carrying the same operatorRequestId, so the key is now
+        // (operatorRequestId, site.siteId). A work item without a site (the
+        // RA-492 single-item shape) indexes site.siteId as null, so it stays
+        // unique on operatorRequestId alone. The RA-492 single-field index is
+        // dropped through ObsoleteIndexNames.
         var operatorRequestId = new CreateIndexModel<WorkItem>(
-            builder.Ascending("payload.operatorRequestId"),
+            builder.Combine(
+                builder.Ascending("payload.operatorRequestId"),
+                builder.Ascending("payload.site.siteId")
+            ),
             new CreateIndexOptions<WorkItem>
             {
                 Unique = true,

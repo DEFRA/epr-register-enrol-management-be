@@ -37,6 +37,25 @@ public interface IWorkItemService
         CancellationToken cancellationToken = default
     );
 
+    /// <summary>
+    /// RA-739: submit a request for a type that declares
+    /// <see cref="IWorkItemType.UsesSubmissionReference"/>. The payload's
+    /// <c>sites[]</c> is split into one work item per site, each holding the
+    /// shared request fields, a single <c>site</c>, its own
+    /// <c>applicationReference</c>, the shared <c>submissionReference</c>
+    /// (<see cref="ISubmissionReferenceGenerator"/>) and
+    /// <c>submissionSize</c>. Each work item is created as
+    /// <see cref="SubmitAsync"/> creates one.
+    /// </summary>
+    Task<WorkItemSubmissionResult> SubmitSubmissionAsync(
+        IWorkItemType type,
+        BsonDocument payload,
+        string? submittedBy,
+        ClaimsPrincipal user,
+        IReadOnlyDictionary<string, string?>? submissionMetadata = null,
+        CancellationToken cancellationToken = default
+    );
+
     Task<WorkItemActionResult> ApplyActionAsync(
         Guid workItemId,
         string actionId,
@@ -139,6 +158,7 @@ public sealed class WorkItemService : IWorkItemService
     private readonly TimeProvider _timeProvider;
     private readonly IWorkItemReferenceGenerator _referenceGenerator;
     private readonly IReadOnlyCollection<IWorkItemOriginStateResolver> _originStateResolvers;
+    private readonly ISubmissionReferenceGenerator? _submissionReferenceGenerator;
 
     public WorkItemService(
         IWorkItemRegistry registry,
@@ -147,9 +167,11 @@ public sealed class WorkItemService : IWorkItemService
         IWorkItemReferenceGenerator referenceGenerator,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
-        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null
+        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null,
+        ISubmissionReferenceGenerator? submissionReferenceGenerator = null
     )
     {
+        _submissionReferenceGenerator = submissionReferenceGenerator;
         this._registry = registry;
         this._persistence = persistence;
         this._logger = logger;
@@ -185,15 +207,7 @@ public sealed class WorkItemService : IWorkItemService
         // log. RA-219: 'applicationReference' is NO LONGER caller-supplied —
         // any client-supplied value is ignored; the engine generates it
         // server-side below.
-        if (
-            submissionMetadata != null
-            && submissionMetadata.TryGetValue(SourceKey, out var sourceVal)
-            && sourceVal != null
-            && !payload.Contains(SourceKey)
-        )
-        {
-            payload[SourceKey] = sourceVal;
-        }
+        MirrorSource(payload, submissionMetadata);
 
         // RA-311/MBE-3: idempotent submit. The operator backend forwards the
         // operator's original "submit application" call and may retry it
@@ -245,6 +259,181 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
+        return await PersistNewWorkItemAsync(
+            type,
+            referenceFormat,
+            payload,
+            submittedBy,
+            user,
+            submissionMetadata,
+            submissionKeys,
+            now,
+            cancellationToken
+        );
+    }
+
+    public async Task<WorkItemSubmissionResult> SubmitSubmissionAsync(
+        IWorkItemType type,
+        BsonDocument payload,
+        string? submittedBy,
+        ClaimsPrincipal user,
+        IReadOnlyDictionary<string, string?>? submissionMetadata = null,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentNullException.ThrowIfNull(payload);
+        if (!type.UsesSubmissionReference)
+        {
+            throw new ArgumentException(
+                $"Work item type '{type.TypeId}' does not use a submission reference; submit it with SubmitAsync.",
+                nameof(type)
+            );
+        }
+
+        if (RequireActorIdentity(user) is { } identityFailure)
+        {
+            return WorkItemSubmissionResult.Failure(identityFailure);
+        }
+
+        var now = _timeProvider.GetUtcNow().UtcDateTime;
+        MirrorSource(payload, submissionMetadata);
+
+        // Checked before any number is allocated. RA-739 task 004 adds the
+        // full required-field validation, the replay guard and the
+        // all-or-nothing transaction.
+        var referenceFormat = _referenceGenerator.ForType(type);
+        var hasYear = AccreditationYear.TryRead(payload, out var accreditationYear);
+        var payloadError =
+            referenceFormat.ValidatePayload(payload)
+            ?? (hasYear ? null : $"payload.{AccreditationYear.Field} must be a 4-digit year.")
+            ?? ValidateSites(payload);
+        if (payloadError is not null)
+        {
+            return WorkItemSubmissionResult.Failure(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.InvalidSubmissionPayload,
+                    payloadError
+                )
+            );
+        }
+
+        var sites = payload[SitesField].AsBsonArray.Select(site => site.AsBsonDocument).ToList();
+        var submissionReference = await SubmissionReferenceGenerator.GenerateAsync(
+            accreditationYear,
+            cancellationToken
+        );
+
+        // Each work item holds the shared request fields and exactly one site.
+        var shared = payload.DeepClone().AsBsonDocument;
+        shared.Remove(SitesField);
+
+        var workItems = new List<SubmittedSiteWorkItem>(sites.Count);
+        foreach (var site in sites)
+        {
+            var itemPayload = shared.DeepClone().AsBsonDocument;
+            itemPayload[SiteField] = site.DeepClone();
+            itemPayload[SubmissionReferenceField] = submissionReference;
+            itemPayload[SubmissionSizeField] = sites.Count;
+
+            var result = await PersistNewWorkItemAsync(
+                type,
+                referenceFormat,
+                itemPayload,
+                submittedBy,
+                user,
+                submissionMetadata,
+                [],
+                now,
+                cancellationToken
+            );
+            if (!result.IsSuccess)
+            {
+                return WorkItemSubmissionResult.Failure(result);
+            }
+
+            workItems.Add(
+                new SubmittedSiteWorkItem(
+                    site.TryGetValue(SiteIdField, out var siteId) && siteId.IsString
+                        ? siteId.AsString
+                        : null,
+                    result.WorkItem!,
+                    itemPayload[ApplicationReferenceField].AsString
+                )
+            );
+        }
+
+        _logger.LogInformation(
+            "Submission {SubmissionReference} ({TypeId}) created {Count} work items by {User}",
+            submissionReference,
+            type.TypeId,
+            workItems.Count,
+            DescribeUser(user)
+        );
+
+        return WorkItemSubmissionResult.Success(submissionReference, workItems);
+    }
+
+    private const string SitesField = "sites";
+    private const string SiteField = "site";
+    private const string SiteIdField = "siteId";
+    private const string SubmissionReferenceField = "submissionReference";
+    private const string SubmissionSizeField = "submissionSize";
+
+    private static string? ValidateSites(BsonDocument payload) =>
+        payload.TryGetValue(SitesField, out var sites)
+        && sites.IsBsonArray
+        && sites.AsBsonArray.Count > 0
+        && sites.AsBsonArray.All(site => site.IsBsonDocument)
+            ? null
+            : $"payload.{SitesField} must be a non-empty array of site objects.";
+
+    private ISubmissionReferenceGenerator SubmissionReferenceGenerator =>
+        _submissionReferenceGenerator
+        ?? throw new InvalidOperationException(
+            "No ISubmissionReferenceGenerator was supplied to WorkItemService."
+        );
+
+    /// <summary>
+    /// RA-196: ensure 'source' is in the payload. If the caller provided it in
+    /// the submission metadata (the standard BFF pattern) it is mirrored here
+    /// so consumers can find it without parsing the audit log.
+    /// </summary>
+    private static void MirrorSource(
+        BsonDocument payload,
+        IReadOnlyDictionary<string, string?>? submissionMetadata
+    )
+    {
+        if (
+            submissionMetadata != null
+            && submissionMetadata.TryGetValue(SourceKey, out var sourceVal)
+            && sourceVal != null
+            && !payload.Contains(SourceKey)
+        )
+        {
+            payload[SourceKey] = sourceVal;
+        }
+    }
+
+    /// <summary>
+    /// Generate the <c>applicationReference</c> and persist one new work item
+    /// with its birth audit entry, retrying on a reference collision. Shared by
+    /// <see cref="SubmitAsync"/> and, once per site, by
+    /// <see cref="SubmitSubmissionAsync"/> (RA-739). A duplicate-key collision
+    /// on one of <paramref name="submissionKeys"/> is treated as a replay.
+    /// </summary>
+    private async Task<WorkItemActionResult> PersistNewWorkItemAsync(
+        IWorkItemType type,
+        IWorkItemReferenceFormat referenceFormat,
+        BsonDocument payload,
+        string? submittedBy,
+        ClaimsPrincipal user,
+        IReadOnlyDictionary<string, string?>? submissionMetadata,
+        IReadOnlyList<SubmissionKey> submissionKeys,
+        DateTime now,
+        CancellationToken cancellationToken
+    )
+    {
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
 
         // RA-503: the operator backend now sends the operator's real, nation-specific bank

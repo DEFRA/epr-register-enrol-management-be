@@ -82,7 +82,9 @@ public static class WorkItemEndpoints
         return app;
     }
 
-    internal static async Task<Results<CreatedAtRoute<WorkItemResponse>, ProblemHttpResult>> Submit(
+    internal static async Task<
+        Results<CreatedAtRoute<WorkItemResponse>, Created<WorkItemSubmissionResponse>, ProblemHttpResult>
+    > Submit(
         JsonElement body,
         HttpContext httpContext,
         [FromServices] IWorkItemRegistry registry,
@@ -229,6 +231,23 @@ public static class WorkItemEndpoints
             ] = sourceElement.GetString();
         }
 
+        // RA-739: a type that uses a submission reference (add-ORS) is split
+        // into one work item per site and answered with the shared
+        // submission reference and each site's work item.
+        if (type.UsesSubmissionReference)
+        {
+            return await SubmitSubmissionAsync(
+                type,
+                payloadDocument,
+                submittedBy,
+                httpContext,
+                submissionMetadata,
+                engine,
+                log,
+                cancellationToken
+            );
+        }
+
         // Routed through the engine so the framework owns audit-log
         // composition for the birth event in the same place it owns every
         // other state-changing entry. The engine writes the document and
@@ -276,27 +295,7 @@ public static class WorkItemEndpoints
                     [ErrorMessageField] = result.Message,
                 }
             );
-            return result.FailureCode switch
-            {
-                WorkItemActionFailureCode.MissingActorIdentity => TypedResults.Problem(
-                    title: "Authentication required",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status401Unauthorized
-                ),
-                // RA-219: applicationReference exhaustion is transient and
-                // server-side, so surface a clean 503 (retryable) rather than
-                // letting the engine throw past this handler as a 500.
-                WorkItemActionFailureCode.ApplicationReferenceExhausted => TypedResults.Problem(
-                    title: "Submission temporarily unavailable",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status503ServiceUnavailable
-                ),
-                _ => TypedResults.Problem(
-                    title: InvalidRequestTitle,
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status400BadRequest
-                ),
-            };
+            return SubmitFailure(result);
         }
 
         var workItem = result.WorkItem!;
@@ -321,6 +320,114 @@ public static class WorkItemEndpoints
         }
         var response = ToResponse(engine.Project(workItem));
         return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
+    }
+
+    private static ProblemHttpResult SubmitFailure(WorkItemActionResult result) =>
+        result.FailureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => TypedResults.Problem(
+                title: "Authentication required",
+                detail: result.Message,
+                statusCode: StatusCodes.Status401Unauthorized
+            ),
+            // RA-219: applicationReference exhaustion is transient and
+            // server-side, so surface a clean 503 (retryable) rather than
+            // letting the engine throw past this handler as a 500.
+            WorkItemActionFailureCode.ApplicationReferenceExhausted => TypedResults.Problem(
+                title: "Submission temporarily unavailable",
+                detail: result.Message,
+                statusCode: StatusCodes.Status503ServiceUnavailable
+            ),
+            _ => TypedResults.Problem(
+                title: InvalidRequestTitle,
+                detail: result.Message,
+                statusCode: StatusCodes.Status400BadRequest
+            ),
+        };
+
+    private static async Task<
+        Results<CreatedAtRoute<WorkItemResponse>, Created<WorkItemSubmissionResponse>, ProblemHttpResult>
+    > SubmitSubmissionAsync(
+        IWorkItemType type,
+        MongoDB.Bson.BsonDocument payload,
+        string? submittedBy,
+        HttpContext httpContext,
+        IReadOnlyDictionary<string, string?>? submissionMetadata,
+        IWorkItemService engine,
+        IStructuredLogger<WorkItemEndpointsLogger> log,
+        CancellationToken cancellationToken
+    )
+    {
+        WorkItemSubmissionResult result;
+        try
+        {
+            result = await engine.SubmitSubmissionAsync(
+                type,
+                payload,
+                submittedBy,
+                httpContext.User,
+                submissionMetadata,
+                cancellationToken
+            );
+        }
+        catch (Exception ex)
+        {
+            log.Log(
+                LogLevel.Error,
+                "Work item submission threw an unhandled exception",
+                new Dictionary<string, object?>
+                {
+                    [WorkItemTypeIdField] = type.TypeId,
+                    [CallerClientIdField] = submittedBy ?? "(unknown)",
+                    ["error.type"] = ex.GetType().FullName,
+                    [ErrorMessageField] = ex.Message,
+                },
+                ex
+            );
+            throw;
+        }
+
+        if (result.FailureResult is { } failure)
+        {
+            log.Log(
+                LogLevel.Warning,
+                "Work item submission failed",
+                new Dictionary<string, object?>
+                {
+                    [WorkItemTypeIdField] = type.TypeId,
+                    [CallerClientIdField] = submittedBy ?? "(unknown)",
+                    ["error.code"] = failure.FailureCode.ToString(),
+                    [ErrorMessageField] = failure.Message,
+                }
+            );
+            return SubmitFailure(failure);
+        }
+
+        log.Log(
+            LogLevel.Information,
+            "Work item submission succeeded",
+            new Dictionary<string, object?>
+            {
+                ["submission.reference"] = result.SubmissionReference,
+                ["submission.size"] = result.WorkItems.Count,
+                [WorkItemTypeIdField] = type.TypeId,
+                [CallerClientIdField] = submittedBy ?? "(unknown)",
+            }
+        );
+
+        return TypedResults.Created(
+            (string?)null,
+            new WorkItemSubmissionResponse(
+                result.SubmissionReference!,
+                result
+                    .WorkItems.Select(item => new WorkItemSubmissionItemResponse(
+                        item.SiteId,
+                        item.WorkItem.Id,
+                        item.ApplicationReference
+                    ))
+                    .ToList()
+            )
+        );
     }
 
     private static ProblemHttpResult BadRequest(string title, string detail) =>
