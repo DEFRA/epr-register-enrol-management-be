@@ -91,24 +91,32 @@ and `WorkItemReferenceGenerator` picks one from the type's
     stricter than asked but harmless, because the operator backend sends an int.
     The AP format reads the year through the same `AccreditationYear` reader,
     but keeps its fallback to the current year.
-  - **Each counter starts at `00000`.**
-  - **The sequence wraps after `99999`** back to `00000`. The stored counter
-    only grows; the reference shows it modulo 100000.
+  - **The sequence wraps after `99999`.** The stored counter only grows.
+- **Changed on RA-739:** each counter starts at **`00001`**, not `00000`, and
+  wraps after `99999` back to `00001`, so `00000` is never shown. The store
+  hands out 1, 2, 3, ... and the reference shows `(n - 1) mod 99999 + 1`. No
+  production data used the old start, so nothing was migrated. A counter
+  created before the change simply skips one number.
 - **The wrap acts as a cap (accepted, not fixed).**
   - A counter is keyed `IYC-{code}-{yyyy}`, so every number in one counter has
     the same change type and the same year.
   - After a wrap, the reference for the next number already exists with that
     same type and year. The `applicationReference` unique index makes each
     retry take the next number, and every one collides.
-  - So once one type passes 100,000 changes in a year, every later
+  - So once one type passes 99,999 changes in a year, every later
     submission of that type fails with `503` (`ApplicationReferenceExhausted`,
     labelled transient) until the year changes.
-  - RA-492 judged 100,000 changes of one type in one year unrealistic.
+  - RA-492 judged that many changes of one type in one year unrealistic.
 - **Sequence storage.** Counters live in the `referenceSequences` collection
   as `{ _id: "IYC-ORS-2026", seq: <long> }`, where `seq` is how many numbers
-  have been allocated for the key. They are allocated atomically by
-  `MongoReferenceSequenceStore` (`$inc` with upsert). A number can be skipped
-  but is never reused:
+  have been allocated for the key, which is also the last number handed out.
+  They are allocated atomically by `MongoReferenceSequenceStore` (`$inc` with
+  upsert). A caller can pass its own session (RA-739): inside a transaction
+  the increment commits or aborts with it, so an aborted transaction leaves no
+  gap. Run such a transaction with `WithTransactionAsync`, because two
+  transactions allocating from one key write-conflict and the loser must be
+  retried whole. Outside a transaction a number can be skipped but is never
+  reused:
   - Concurrent submits with one submission key (below) each allocate a number
     before all but one return the winner as a replay.
   - An insert failure after allocation also leaves a gap.

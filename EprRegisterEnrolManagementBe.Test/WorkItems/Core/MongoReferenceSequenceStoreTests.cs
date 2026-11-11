@@ -35,13 +35,13 @@ public sealed class MongoReferenceSequenceStoreTests : IAsyncDisposable
         await _clientFactory.GetClient().DropDatabaseAsync(_databaseName);
 
     [Fact]
-    public async Task NextAsync_starts_at_zero_and_increments_per_key()
+    public async Task NextAsync_starts_at_one_and_increments_per_key()
     {
         var ct = TestContext.Current.CancellationToken;
 
-        Assert.Equal(0, await _store.NextAsync("IYC-ORS-2026", ct));
         Assert.Equal(1, await _store.NextAsync("IYC-ORS-2026", ct));
         Assert.Equal(2, await _store.NextAsync("IYC-ORS-2026", ct));
+        Assert.Equal(3, await _store.NextAsync("IYC-ORS-2026", ct));
 
         var counter = await _clientFactory
             .GetCollection<BsonDocument>(MongoReferenceSequenceStore.CollectionName)
@@ -58,9 +58,9 @@ public sealed class MongoReferenceSequenceStoreTests : IAsyncDisposable
         await _store.NextAsync("IYC-ORS-2026", ct);
         await _store.NextAsync("IYC-ORS-2026", ct);
 
-        Assert.Equal(0, await _store.NextAsync("IYC-ORS-2027", ct));
-        Assert.Equal(0, await _store.NextAsync("IYC-SIP-2026", ct));
-        Assert.Equal(2, await _store.NextAsync("IYC-ORS-2026", ct));
+        Assert.Equal(1, await _store.NextAsync("IYC-ORS-2027", ct));
+        Assert.Equal(1, await _store.NextAsync("IYC-SIP-2026", ct));
+        Assert.Equal(3, await _store.NextAsync("IYC-ORS-2026", ct));
     }
 
     [Fact]
@@ -74,7 +74,68 @@ public sealed class MongoReferenceSequenceStoreTests : IAsyncDisposable
             Enumerable.Range(0, Callers).Select(_ => _store.NextAsync("IYC-ORS-2030", ct))
         );
 
-        Assert.Equal(Enumerable.Range(0, Callers).Select(n => (long)n), numbers.Order());
+        Assert.Equal(Enumerable.Range(1, Callers).Select(n => (long)n), numbers.Order());
+    }
+
+    // ---- RA-739: allocation inside the caller's session or transaction
+
+    [Fact]
+    public async Task NextAsync_in_a_committed_transaction_keeps_the_number()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var session = await _clientFactory.GetClient().StartSessionAsync(cancellationToken: ct);
+
+        var number = await session.WithTransactionAsync(
+            (s, token) => _store.NextAsync(s, "SUB-2026", token),
+            MongoTransactions.Options,
+            ct
+        );
+
+        Assert.Equal(1, number);
+        Assert.Equal(2, await _store.NextAsync("SUB-2026", ct));
+    }
+
+    [Fact]
+    public async Task NextAsync_in_an_aborted_transaction_rolls_the_increment_back()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        Assert.Equal(1, await _store.NextAsync("IYC-ORS-2026", ct));
+
+        using var session = await _clientFactory.GetClient().StartSessionAsync(cancellationToken: ct);
+        session.StartTransaction(MongoTransactions.Options);
+        Assert.Equal(2, await _store.NextAsync(session, "IYC-ORS-2026", ct));
+        Assert.Equal(1, await _store.NextAsync(session, "IYC-ORS-2027", ct));
+        await session.AbortTransactionAsync(ct);
+
+        // Neither the increment nor the first-ever counter survives the abort.
+        Assert.Equal(2, await _store.NextAsync("IYC-ORS-2026", ct));
+        Assert.Equal(1, await _store.NextAsync("IYC-ORS-2027", ct));
+    }
+
+    [Fact]
+    public async Task NextAsync_in_concurrent_transactions_never_hands_out_the_same_number()
+    {
+        const int Callers = 20;
+        var ct = TestContext.Current.CancellationToken;
+
+        // Fresh key, so every transaction also races the first-insert upsert.
+        var numbers = await Task.WhenAll(
+            Enumerable
+                .Range(0, Callers)
+                .Select(async _ =>
+                {
+                    using var session = await _clientFactory
+                        .GetClient()
+                        .StartSessionAsync(cancellationToken: ct);
+                    return await session.WithTransactionAsync(
+                        (s, token) => _store.NextAsync(s, "SUB-2031", token),
+                        MongoTransactions.Options,
+                        ct
+                    );
+                })
+        );
+
+        Assert.Equal(Enumerable.Range(1, Callers).Select(n => (long)n), numbers.Order());
     }
 
     [Fact]
@@ -106,8 +167,8 @@ public sealed class MongoReferenceSequenceStoreTests : IAsyncDisposable
             NullLoggerFactory.Instance
         );
 
-        // The stored seq of 2 means this is the second allocation, number 1.
-        Assert.Equal(1, await store.NextAsync("IYC-ORS-2026", TestContext.Current.CancellationToken));
+        // The stored seq of 2 means this is the second allocation, number 2.
+        Assert.Equal(2, await store.NextAsync("IYC-ORS-2026", TestContext.Current.CancellationToken));
         await collection
             .Received(2)
             .FindOneAndUpdateAsync(

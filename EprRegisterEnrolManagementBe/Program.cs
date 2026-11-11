@@ -467,6 +467,10 @@ static void ConfigureMongo(IServiceCollection services, IConfiguration configura
         .ValidateOnStart();
 
     services.AddSingleton<IMongoDbClientFactory, MongoDbClientFactory>();
+
+    // RA-739: logs once at startup whether this Mongo supports the
+    // multi-document transactions all-or-nothing submissions need.
+    services.AddHostedService<TransactionSmokeTestHostedService>();
 }
 
 /// <summary>

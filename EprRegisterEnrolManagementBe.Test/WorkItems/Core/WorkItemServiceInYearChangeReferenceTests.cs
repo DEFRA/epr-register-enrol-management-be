@@ -110,12 +110,12 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         Assert.True(second.IsSuccess);
         var firstStored = await GetAsync(first.WorkItem!.Id);
         var secondStored = await GetAsync(second.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2026-00000", firstStored.Payload["applicationReference"].AsString);
-        Assert.Equal("IYC-ORS-2026-00001", secondStored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00001", firstStored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00002", secondStored.Payload["applicationReference"].AsString);
 
         // The birth audit entry records the same server-generated reference.
         Assert.Equal(
-            "IYC-ORS-2026-00000",
+            "IYC-ORS-2026-00001",
             Assert.Single(firstStored.AuditLog).Details["applicationReference"]
         );
     }
@@ -132,7 +132,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         );
 
         var stored = await GetAsync(result.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2026-00000", stored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00001", stored.Payload["applicationReference"].AsString);
         Assert.Equal("PR/PK/REP/500500", stored.Payload["paymentReference"].AsString);
     }
 
@@ -147,7 +147,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         var nextYear = await SubmitAsync(service, type, new BsonDocument { ["accreditationYear"] = 2027 });
 
         var stored = await GetAsync(nextYear.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2027-00000", stored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2027-00001", stored.Payload["applicationReference"].AsString);
     }
 
     public static TheoryData<BsonDocument> PayloadsWithoutAUsableYear =>
@@ -237,7 +237,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         Assert.True(replay.IsIdempotentReplay);
         Assert.Equal(first.WorkItem!.Id, replay.WorkItem!.Id);
         Assert.Equal(
-            "IYC-ORS-2026-00000",
+            "IYC-ORS-2026-00001",
             replay.WorkItem.Payload["applicationReference"].AsString
         );
         Assert.Equal(1L, await CounterAsync("IYC-ORS-2026"));
@@ -316,7 +316,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         Assert.False(first.IsIdempotentReplay);
         Assert.True(replay.IsIdempotentReplay);
         Assert.Equal(first.WorkItem!.Id, replay.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2026-00000", replay.WorkItem.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00001", replay.WorkItem.Payload["applicationReference"].AsString);
         Assert.Equal(1L, await CounterAsync("IYC-ORS-2026"));
     }
 
@@ -409,7 +409,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
 
         Assert.False(second.IsIdempotentReplay);
         Assert.NotEqual(first.WorkItem!.Id, second.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2026-00001", second.WorkItem.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00002", second.WorkItem.Payload["applicationReference"].AsString);
     }
 
     [Fact]
@@ -429,7 +429,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
                 SubmittedAt = now,
                 LastModifiedAt = now,
                 SubmittedBy = "seed",
-                Payload = new BsonDocument { ["applicationReference"] = "IYC-ORS-2026-00000" },
+                Payload = new BsonDocument { ["applicationReference"] = "IYC-ORS-2026-00001" },
             },
             TestContext.Current.CancellationToken
         );
@@ -442,7 +442,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
 
         Assert.True(result.IsSuccess);
         var stored = await GetAsync(result.WorkItem!.Id);
-        Assert.Equal("IYC-ORS-2026-00001", stored.Payload["applicationReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00002", stored.Payload["applicationReference"].AsString);
         Assert.Equal(2L, await CounterAsync("IYC-ORS-2026"));
     }
 
@@ -466,7 +466,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             .ToList();
         Assert.All(references, r => Assert.Matches(IycOrsPattern, r));
         Assert.Equal(
-            Enumerable.Range(0, Submissions).Select(n => $"IYC-ORS-2026-{n:D5}"),
+            Enumerable.Range(1, Submissions).Select(n => $"IYC-ORS-2026-{n:D5}"),
             references.Order(StringComparer.Ordinal)
         );
     }
