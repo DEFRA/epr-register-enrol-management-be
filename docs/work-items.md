@@ -23,7 +23,9 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | `WorkItemState` | Identifier + display name for a state. `IsTerminal` marks completion states (e.g. approved/rejected). |
 | `WorkItemTask` | Identifier + display name for a unit of work to be completed in a state. |
 | `WorkItemTransition` | A named action (`approve`, `reject`, `withdraw`) that moves a work item from one state to another. `CallerInvocable` (default `true`) decides whether the generic action endpoint may select it by id, or whether it is reachable only through a module's own service resolving it server-side. |
-| `IWorkItemType` | Declares a type's `TypeId`, `DisplayName`, `InitialState`, `States`, `GetTasksForState(stateId)` and `Transitions`. Pure & side-effect free. |
+| `IWorkItemType` | The case type configuration (RA-739): `TypeId`, display label (`DisplayName`), `Category`, `InYearChangeCode`, `UsesSubmissionReference` and `Workflow`, plus the `InitialState`, `States` and `Transitions` the engine reads (taken from the workflow). Pure & side-effect free. See [Case type configuration](#case-type-configuration-ra-739). |
+| `WorkItemWorkflow` | A reusable state machine (RA-739): `Id`, `InitialState`, `States` and `Transitions`. Its constructor rejects an initial state or transition endpoint it does not declare. Shared definitions live in `WorkItems/Workflows/` (`StandardWorkflow`). |
+| `WorkItemCategories` | The category values a type can declare (RA-739): `in-year-change`. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
 | `IWorkItemOriginStateResolver` | Optional, module-supplied. Lets a type say "this item is in a waypoint and will return to some *other* state" — see [Waypoint origin state](#waypoint-origin-state-ra-410). |
 | `IWorkItemRegistry` | DI-resolvable lookup of every registered type. |
@@ -161,10 +163,13 @@ and `WorkItemReferenceGenerator` picks one from the type's
      Models/              // module-scoped models
    ```
 
-2. **Implement `IWorkItemType`**, declaring states and transitions. Make
-   the static structure obvious from a glance; if transitions depend on data, return
-   a dynamically-built collection from `GetTasksForState` — but keep the
-   declaration co-located with the type.
+2. **Implement `IWorkItemType`** with the type's case type configuration
+   (see [Case type configuration](#case-type-configuration-ra-739)). A type
+   that follows an existing workflow references it rather than redeclaring
+   states and transitions. A type with a lifecycle of its own declares a new
+   `WorkItemWorkflow`. Make the static structure obvious at a glance and keep
+   the declaration co-located with the type (or, if shared, in
+   `WorkItems/Workflows/`).
 
 3. **Implement `IWorkItemModule`** to register the module's services and
    endpoints. Mount endpoints under `/work-items/<type-id>/...` to keep
@@ -187,6 +192,62 @@ That is the complete list of changes required outside the new module folder.
 An in-year change type sets `InYearChangeCode` on its `IWorkItemType` inside
 the module folder (see [Application reference](#application-reference-ra-219-ra-492)).
 That is still a module-only change.
+
+### Case type configuration (RA-739)
+
+The work item type definition (`IWorkItemType`) is the single place a case
+type is configured. Every setting is code, not runtime data:
+
+| Setting | Member | Default | Re-accreditation |
+| --- | --- | --- | --- |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` |
+| Category | `Category` | `null` (the type is its own group) | `null` |
+| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` |
+| Uses a submission reference | `UsesSubmissionReference` | `false` | `false` |
+| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` |
+
+- **Category** groups related types so the list can filter on the group
+  without naming each type. In-year change types (add-ORS now; update ORS and
+  tonnage band upgrade later) declare `WorkItemCategories.InYearChange`
+  (`in-year-change`). Each change type still has its own `TypeId`, so a
+  type's workflow can change on its own.
+- **Uses a submission reference** marks types whose submissions get a
+  `SUB-{yyyy}-{sequence}` reference shared by every work item one submission
+  creates. Declared now; the submission reference allocation and the list's
+  `category` filter that read these settings arrive in later RA-739 tasks.
+- **Workflow** is a `WorkItemWorkflow`: the states (in status sort order),
+  their labels, the transitions and the initial state. `StandardWorkflow`
+  (`WorkItems/Workflows/StandardWorkflow.cs`) is re-accreditation's lifecycle
+  (duly making, assessment, query and response, two-step determination,
+  withdrawal), defined once so any type can reference it. A type that
+  references a workflow takes its states from it:
+
+  ```csharp
+  internal sealed class MyType : IWorkItemType
+  {
+      public string TypeId => "my-type";
+      public string DisplayName => "My type";
+      public string? Category => WorkItemCategories.InYearChange;
+      public string? InYearChangeCode => "XYZ";
+      public bool UsesSubmissionReference => true;
+      public string TemplateVersion => "v1";
+      public WorkItemWorkflow Workflow => StandardWorkflow.Definition;
+      public WorkItemState InitialState => Workflow.InitialState;
+      public IReadOnlyCollection<WorkItemState> States => Workflow.States;
+      public IReadOnlyCollection<WorkItemTransition> Transitions => Workflow.Transitions;
+  }
+  ```
+
+- **Template version stays on the type.** Each work item still freezes its
+  type's states and transitions into its template snapshot at submission (see
+  [Template versioning](#template-versioning-ra-94)). Changing a shared
+  workflow changes every type that references it, so each of those types
+  needs a new `TemplateVersion` and a snapshot migration.
+- A workflow's transitions name its own states, so re-accreditation's bespoke
+  services (duly make, decision, confirm contact, resume, continue review)
+  reach its `CallerInvocable: false` transitions. Another type on the Standard
+  workflow gets the same states and transitions but needs its own endpoints
+  before a caseworker can use those steps (add-ORS: RA-495).
 
 ## Conventions
 
@@ -579,7 +640,7 @@ registration line" promise. All files live under
 
 | File | Role |
 | --- | --- |
-| `ReAccreditationType.cs` | Declares the states (`submitted`, `duly-made`, `assessment-started` (RA-527 follow-up: started, still displayed "Duly made"), `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` / `rejected-pending-contact` (RA-527: determined, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `make-determination-approved` / `-rejected`, `confirm-contact-approved` / `-rejected`, `resume-during-*`, `continue-review-during-*` and the moving `sla-extend` (below) are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. Template version v18 (RA-527 follow-up): `start-assessment` targets `duly-made` → `assessment-started`, the only transition into that state, so starting a case keeps it "Duly made" on both sides. Its four exits reuse existing action ids with a second from-state: `submit-for-decision` → `awaiting-decision` (a second declaration, reached only through `/decision`), `query-during-assessment` → `queried`, `withdraw-during-assessment` → `withdrawn`, and `sla-extend` → `assessment-in-progress` — a real move, unlike the `assessment-in-progress` and `queried` self-loops, which `SlaService` applies in the same write as the deadline change (resolving the template via `WorkItemEngineRules.ResolveTemplate`), so the case becomes "Updated". Only the deadline change (`POST /work-items/{id}/sla/extend`) applies that move: `POST /work-items/{id}/sla/override` (no Case Management UI or caller since RA-572) only rewrites the clock, never changes state and never pushes, so an override on a started case leaves it "Duly made". Deliberately left so while override is retired; if it is ever reinstated, it should apply the same move. |
+| `ReAccreditationType.cs` | Re-accreditation's case type configuration (RA-739): label "Re-accreditation", no category, no submission reference, and the Standard workflow (`WorkItems/Workflows/StandardWorkflow.cs`, shared so other types can reference it). That workflow declares the states (`submitted`, `duly-made`, `assessment-started` (RA-527 follow-up: started, still displayed "Duly made"), `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` / `rejected-pending-contact` (RA-527: determined, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `make-determination-approved` / `-rejected`, `confirm-contact-approved` / `-rejected`, `resume-during-*`, `continue-review-during-*` and the moving `sla-extend` (below) are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. Template version v18 (RA-527 follow-up): `start-assessment` targets `duly-made` → `assessment-started`, the only transition into that state, so starting a case keeps it "Duly made" on both sides. Its four exits reuse existing action ids with a second from-state: `submit-for-decision` → `awaiting-decision` (a second declaration, reached only through `/decision`), `query-during-assessment` → `queried`, `withdraw-during-assessment` → `withdrawn`, and `sla-extend` → `assessment-in-progress` — a real move, unlike the `assessment-in-progress` and `queried` self-loops, which `SlaService` applies in the same write as the deadline change (resolving the template via `WorkItemEngineRules.ResolveTemplate`), so the case becomes "Updated". Only the deadline change (`POST /work-items/{id}/sla/extend`) applies that move: `POST /work-items/{id}/sla/override` (no Case Management UI or caller since RA-572) only rewrites the clock, never changes state and never pushes, so an override on a started case leaves it "Duly made". Deliberately left so while override is retired; if it is ever reinstated, it should apply the same move. |
 | `ReAccreditationStatusPushHook.cs` | Pushes each applied transition's target state to the operator journey, except a *move* (self-loops are never excluded) onto `queried`, `withdrawn`, either pending-contact state or (RA-527 follow-up) `assessment-started`, plus the decision actions whose push is owned by the confirm-contact service. A start therefore pushes nothing and writes no `status-push-*` entry, so the operator stays DulyMade; a deadline change from `assessment-started` pushes `assessment-in-progress` (Updated). |
 | `ReAccreditationAssessmentStartedSnapshotMigration.cs` | v18 snapshot migration, registered last of the snapshot migrations so it sets the final version. Adds `assessment-started` (after `duly-made`) to every re-accreditation case's frozen snapshot, retargets `start-assessment` and adds the four exits. Writes only `TemplateSnapshot` and `TemplateVersion` — it never moves a case, so a case already in `assessment-in-progress` stays "Updated" — and skips an item whose snapshot already matches. |
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |

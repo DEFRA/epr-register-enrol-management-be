@@ -1,5 +1,6 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
@@ -18,6 +19,27 @@ public class ReAccreditationTypeTests
         // 'assessment-started' state, so starting a case keeps it "Duly made".
         Assert.Equal("v18", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
+    }
+
+    // RA-739: the type is the single place its case type is configured.
+    [Fact]
+    public void Declares_its_case_type_configuration()
+    {
+        IWorkItemType type = _type;
+
+        Assert.Equal("Re-accreditation", type.DisplayName);
+        Assert.Null(type.Category);
+        Assert.Null(type.InYearChangeCode);
+        Assert.False(type.UsesSubmissionReference);
+        Assert.Same(StandardWorkflow.Definition, type.Workflow);
+    }
+
+    [Fact]
+    public void Takes_its_states_transitions_and_initial_state_from_the_standard_workflow()
+    {
+        Assert.Same(StandardWorkflow.Definition.States, _type.States);
+        Assert.Same(StandardWorkflow.Definition.Transitions, _type.Transitions);
+        Assert.Same(StandardWorkflow.Definition.InitialState, _type.InitialState);
     }
 
     // RA-324/AC06: state DisplayNames align with the "Applications" design.
