@@ -1,46 +1,50 @@
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
-/// RA-739: one work item created from a submission, with the
-/// <c>siteId</c> of the site it holds and its <c>applicationReference</c>.
-/// </summary>
-public sealed record SubmittedSiteWorkItem(
-    string? SiteId,
-    WorkItem WorkItem,
-    string ApplicationReference
-);
-
-/// <summary>
 /// RA-739: result of <see cref="IWorkItemService.SubmitSubmissionAsync"/>.
-/// Either the shared <see cref="SubmissionReference"/> and the work items it
-/// created, in site order, or the <see cref="WorkItemActionResult"/> failure
-/// that stopped it.
+/// Either the stored <see cref="Submission"/> (newly created, or an earlier
+/// one returned as an idempotent replay), or the
+/// <see cref="WorkItemActionResult"/> failure that stopped it.
 /// </summary>
 public sealed record WorkItemSubmissionResult
 {
     private WorkItemSubmissionResult(
-        string? submissionReference,
-        IReadOnlyList<SubmittedSiteWorkItem> workItems,
+        SubmissionRecord? submission,
+        bool isIdempotentReplay,
         WorkItemActionResult? failure
     )
     {
-        SubmissionReference = submissionReference;
-        WorkItems = workItems;
+        Submission = submission;
+        IsIdempotentReplay = isIdempotentReplay;
         FailureResult = failure;
     }
 
-    public string? SubmissionReference { get; }
-    public IReadOnlyList<SubmittedSiteWorkItem> WorkItems { get; }
+    /// <summary>The submission and its work items, in site order, or <c>null</c> on failure.</summary>
+    public SubmissionRecord? Submission { get; }
+
+    /// <summary>
+    /// True when the <c>operatorRequestId</c> was already on file and
+    /// <see cref="Submission"/> is the earlier submission, so nothing was
+    /// created.
+    /// </summary>
+    public bool IsIdempotentReplay { get; }
 
     /// <summary>The failed <see cref="WorkItemActionResult"/>, or <c>null</c> on success.</summary>
     public WorkItemActionResult? FailureResult { get; }
 
     public bool IsSuccess => FailureResult is null;
 
-    public static WorkItemSubmissionResult Success(
-        string submissionReference,
-        IReadOnlyList<SubmittedSiteWorkItem> workItems
-    ) => new(submissionReference, workItems, failure: null);
+    public static WorkItemSubmissionResult Success(SubmissionRecord submission)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        return new(submission, isIdempotentReplay: false, failure: null);
+    }
+
+    public static WorkItemSubmissionResult IdempotentReplay(SubmissionRecord submission)
+    {
+        ArgumentNullException.ThrowIfNull(submission);
+        return new(submission, isIdempotentReplay: true, failure: null);
+    }
 
     public static WorkItemSubmissionResult Failure(WorkItemActionResult failure)
     {
@@ -49,6 +53,6 @@ public sealed record WorkItemSubmissionResult
         {
             throw new ArgumentException("A failure result is required.", nameof(failure));
         }
-        return new(submissionReference: null, [], failure);
+        return new(submission: null, isIdempotentReplay: false, failure);
     }
 }

@@ -2090,6 +2090,12 @@ public class WorkItemEndpointsTests
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             Inner.CreateAsync(workItem, cancellationToken);
 
+        public Task CreateAsync(
+            MongoDB.Driver.IClientSessionHandle session,
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => Inner.CreateAsync(session, workItem, cancellationToken);
+
         public Task<bool> CreateIfAbsentAsync(
             WorkItem workItem,
             CancellationToken cancellationToken = default

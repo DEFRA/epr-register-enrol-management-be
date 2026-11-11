@@ -1,4 +1,5 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using MongoDB.Driver;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
@@ -17,9 +18,11 @@ public sealed class SubmissionReferenceGeneratorTests
     [InlineData(10000L, "SUB-2026-10000")]
     public async Task GenerateAsync_pads_to_four_digits_and_grows_past_9999(long sequence, string expected)
     {
-        _store.NextAsync("SUB-2026", Arg.Any<CancellationToken>()).Returns(sequence);
+        var session = Substitute.For<IClientSessionHandle>();
+        _store.NextAsync(session, "SUB-2026", Arg.Any<CancellationToken>()).Returns(sequence);
 
         var reference = await new SubmissionReferenceGenerator(_store).GenerateAsync(
+            session,
             2026,
             TestContext.Current.CancellationToken
         );

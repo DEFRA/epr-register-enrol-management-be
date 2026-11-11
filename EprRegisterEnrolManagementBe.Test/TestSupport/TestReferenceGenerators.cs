@@ -31,6 +31,13 @@ internal static class TestReferenceGenerators
             CancellationToken cancellationToken = default
         ) => throw Unexpected(changeTypeCode);
 
+        public Task<string> GenerateAsync(
+            MongoDB.Driver.IClientSessionHandle session,
+            string changeTypeCode,
+            BsonDocument payload,
+            CancellationToken cancellationToken = default
+        ) => throw Unexpected(changeTypeCode);
+
         private static InvalidOperationException Unexpected(string detail) =>
             new(
                 $"Test wired {nameof(TestReferenceGenerators)}.{nameof(ApplicationOnly)} "

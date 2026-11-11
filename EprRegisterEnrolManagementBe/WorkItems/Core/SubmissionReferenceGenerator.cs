@@ -1,4 +1,5 @@
 using System.Globalization;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
@@ -14,12 +15,20 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 ///   one sequence per year shared by every type. It starts at <c>0001</c> and
 ///   past <c>9999</c> grows to 5 or more digits. It never wraps.</item>
 /// </list>
-/// Every call allocates a fresh number.
+/// Every call allocates a fresh number, in the caller's transaction, so an
+/// aborted submission leaves no gap.
 /// </summary>
 public interface ISubmissionReferenceGenerator
 {
-    /// <summary>Allocate the next submission reference for <paramref name="accreditationYear"/>.</summary>
-    Task<string> GenerateAsync(int accreditationYear, CancellationToken cancellationToken = default);
+    /// <summary>
+    /// Allocate the next submission reference for
+    /// <paramref name="accreditationYear"/> in <paramref name="session"/>.
+    /// </summary>
+    Task<string> GenerateAsync(
+        IClientSessionHandle session,
+        int accreditationYear,
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <inheritdoc />
@@ -30,6 +39,7 @@ public sealed class SubmissionReferenceGenerator(IReferenceSequenceStore sequenc
     public const string Prefix = "SUB";
 
     public async Task<string> GenerateAsync(
+        IClientSessionHandle session,
         int accreditationYear,
         CancellationToken cancellationToken = default
     )
@@ -38,7 +48,7 @@ public sealed class SubmissionReferenceGenerator(IReferenceSequenceStore sequenc
             CultureInfo.InvariantCulture,
             $"{Prefix}-{accreditationYear:D4}"
         );
-        var sequence = await sequenceStore.NextAsync(sequenceKey, cancellationToken);
+        var sequence = await sequenceStore.NextAsync(session, sequenceKey, cancellationToken);
 
         return string.Create(CultureInfo.InvariantCulture, $"{sequenceKey}-{sequence:D4}");
     }

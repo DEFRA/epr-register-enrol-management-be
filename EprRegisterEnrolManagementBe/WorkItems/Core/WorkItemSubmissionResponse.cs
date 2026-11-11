@@ -10,9 +10,13 @@ public sealed record WorkItemSubmissionResponse(
     IReadOnlyList<WorkItemSubmissionItemResponse> WorkItems
 );
 
-/// <summary>RA-739: the work item created for one submitted site.</summary>
+/// <summary>
+/// RA-739: the work item created for one submitted site. <see cref="SiteId"/>
+/// echoes the submitted <c>siteId</c> as sent: a number from the operator
+/// backend, or a string.
+/// </summary>
 public sealed record WorkItemSubmissionItemResponse(
-    string? SiteId,
+    object? SiteId,
     Guid Id,
     string ApplicationReference
 );

@@ -2387,6 +2387,12 @@ public class WorkItemServiceTests : IAsyncDisposable
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
+        public Task CreateAsync(
+            MongoDB.Driver.IClientSessionHandle session,
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => inner.CreateAsync(session, workItem, cancellationToken);
+
         public Task<bool> CreateIfAbsentAsync(
             WorkItem workItem,
             CancellationToken cancellationToken = default

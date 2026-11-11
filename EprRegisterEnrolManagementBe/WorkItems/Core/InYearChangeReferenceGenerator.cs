@@ -1,5 +1,6 @@
 using System.Globalization;
 using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
@@ -63,6 +64,18 @@ public interface IInYearChangeReferenceGenerator
         BsonDocument payload,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// As <see cref="GenerateAsync(string, BsonDocument, CancellationToken)"/>,
+    /// but allocates in the caller's <paramref name="session"/> (RA-739), so the
+    /// number is used only if the caller's transaction commits.
+    /// </summary>
+    Task<string> GenerateAsync(
+        IClientSessionHandle session,
+        string changeTypeCode,
+        BsonDocument payload,
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <inheritdoc />
@@ -84,10 +97,36 @@ public sealed class InYearChangeReferenceGenerator(IReferenceSequenceStore seque
             ? null
             : $"payload.{AccreditationYear.Field} must be a 4-digit year for an in-year change.";
 
-    public async Task<string> GenerateAsync(
+    public Task<string> GenerateAsync(
         string changeTypeCode,
         BsonDocument payload,
         CancellationToken cancellationToken = default
+    ) =>
+        GenerateAsync(
+            changeTypeCode,
+            payload,
+            key => sequenceStore.NextAsync(key, cancellationToken)
+        );
+
+    public Task<string> GenerateAsync(
+        IClientSessionHandle session,
+        string changeTypeCode,
+        BsonDocument payload,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        return GenerateAsync(
+            changeTypeCode,
+            payload,
+            key => sequenceStore.NextAsync(session, key, cancellationToken)
+        );
+    }
+
+    private async Task<string> GenerateAsync(
+        string changeTypeCode,
+        BsonDocument payload,
+        Func<string, Task<long>> allocate
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(changeTypeCode);
@@ -102,7 +141,7 @@ public sealed class InYearChangeReferenceGenerator(IReferenceSequenceStore seque
             CultureInfo.InvariantCulture,
             $"{Prefix}-{changeTypeCode}-{year:D4}"
         );
-        var sequence = await sequenceStore.NextAsync(sequenceKey, cancellationToken);
+        var sequence = await allocate(sequenceKey);
 
         return string.Create(
             CultureInfo.InvariantCulture,

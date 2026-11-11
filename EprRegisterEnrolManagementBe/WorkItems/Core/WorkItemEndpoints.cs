@@ -403,26 +403,35 @@ public static class WorkItemEndpoints
             return SubmitFailure(failure);
         }
 
+        var submission = result.Submission!;
         log.Log(
             LogLevel.Information,
-            "Work item submission succeeded",
+            result.IsIdempotentReplay
+                ? "Work item submission was an idempotent replay"
+                : "Work item submission succeeded",
             new Dictionary<string, object?>
             {
-                ["submission.reference"] = result.SubmissionReference,
-                ["submission.size"] = result.WorkItems.Count,
+                ["submission.reference"] = submission.SubmissionReference,
+                ["submission.size"] = submission.WorkItems.Count,
                 [WorkItemTypeIdField] = type.TypeId,
                 [CallerClientIdField] = submittedBy ?? "(unknown)",
             }
         );
+        // RA-739: a repeated operatorRequestId gets the stored submission
+        // back, flagged as for every other idempotent submit.
+        if (result.IsIdempotentReplay)
+        {
+            httpContext.Response.Headers[IdempotentReplayHeader] = "true";
+        }
 
         return TypedResults.Created(
             (string?)null,
             new WorkItemSubmissionResponse(
-                result.SubmissionReference!,
-                result
+                submission.SubmissionReference,
+                submission
                     .WorkItems.Select(item => new WorkItemSubmissionItemResponse(
-                        item.SiteId,
-                        item.WorkItem.Id,
+                        MongoDB.Bson.BsonTypeMapper.MapToDotNetValue(item.SiteId),
+                        item.WorkItemId,
                         item.ApplicationReference
                     ))
                     .ToList()

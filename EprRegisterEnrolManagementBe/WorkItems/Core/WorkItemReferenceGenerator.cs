@@ -1,5 +1,6 @@
 using System.Diagnostics.CodeAnalysis;
 using MongoDB.Bson;
+using MongoDB.Driver;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
@@ -40,6 +41,18 @@ public interface IWorkItemReferenceFormat
         int attempt,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// Generate a reference inside the caller's transaction (RA-739). Any
+    /// sequence number it allocates is used only if the transaction commits.
+    /// There is no retry loop inside a transaction, so this is always the
+    /// first attempt.
+    /// </summary>
+    Task<string> GenerateAsync(
+        IClientSessionHandle session,
+        BsonDocument payload,
+        CancellationToken cancellationToken = default
+    );
 }
 
 /// <inheritdoc />
@@ -69,6 +82,12 @@ public sealed class WorkItemReferenceGenerator(
             int attempt,
             CancellationToken cancellationToken = default
         ) => Task.FromResult(generator.Generate(payload, attempt));
+
+        public Task<string> GenerateAsync(
+            IClientSessionHandle session,
+            BsonDocument payload,
+            CancellationToken cancellationToken = default
+        ) => GenerateAsync(payload, attempt: 1, cancellationToken);
     }
 
     private sealed class InYearChangeFormat(
@@ -83,6 +102,12 @@ public sealed class WorkItemReferenceGenerator(
             int attempt,
             CancellationToken cancellationToken = default
         ) => generator.GenerateAsync(changeTypeCode, payload, cancellationToken);
+
+        public Task<string> GenerateAsync(
+            IClientSessionHandle session,
+            BsonDocument payload,
+            CancellationToken cancellationToken = default
+        ) => generator.GenerateAsync(session, changeTypeCode, payload, cancellationToken);
     }
 }
 

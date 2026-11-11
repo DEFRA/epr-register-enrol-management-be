@@ -46,6 +46,15 @@ public interface IWorkItemService
     /// (<see cref="ISubmissionReferenceGenerator"/>) and
     /// <c>submissionSize</c>. Each work item is created as
     /// <see cref="SubmitAsync"/> creates one.
+    /// <para>
+    /// All or nothing: the <see cref="SubmissionRecord"/>, every work item and
+    /// both sequence increments are written in one transaction. The record is
+    /// keyed on <c>operatorRequestId</c> and is the replay guard: a sequential
+    /// or concurrent repeat returns the stored submission as an idempotent
+    /// replay, writes nothing and allocates nothing. A payload missing a
+    /// required field (<see cref="SubmissionPayload.Validate"/>) fails with
+    /// <see cref="WorkItemActionFailureCode.InvalidSubmissionPayload"/>.
+    /// </para>
     /// </summary>
     Task<WorkItemSubmissionResult> SubmitSubmissionAsync(
         IWorkItemType type,
@@ -159,6 +168,8 @@ public sealed class WorkItemService : IWorkItemService
     private readonly IWorkItemReferenceGenerator _referenceGenerator;
     private readonly IReadOnlyCollection<IWorkItemOriginStateResolver> _originStateResolvers;
     private readonly ISubmissionReferenceGenerator? _submissionReferenceGenerator;
+    private readonly ISubmissionStore? _submissionStore;
+    private readonly IMongoTransactionRunner? _transactions;
 
     public WorkItemService(
         IWorkItemRegistry registry,
@@ -168,10 +179,14 @@ public sealed class WorkItemService : IWorkItemService
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null,
-        ISubmissionReferenceGenerator? submissionReferenceGenerator = null
+        ISubmissionReferenceGenerator? submissionReferenceGenerator = null,
+        ISubmissionStore? submissionStore = null,
+        IMongoTransactionRunner? transactions = null
     )
     {
         _submissionReferenceGenerator = submissionReferenceGenerator;
+        _submissionStore = submissionStore;
+        _transactions = transactions;
         this._registry = registry;
         this._persistence = persistence;
         this._logger = logger;
@@ -296,18 +311,22 @@ public sealed class WorkItemService : IWorkItemService
             return WorkItemSubmissionResult.Failure(identityFailure);
         }
 
+        // The replay guard runs before validation and before any number is
+        // allocated, so a sequential repeat writes and allocates nothing.
+        if (
+            SubmissionPayload.TryReadOperatorRequestId(payload, out var knownRequestId)
+            && await Submissions.FindAsync(knownRequestId, cancellationToken) is { } stored
+        )
+        {
+            return Replay(type, stored);
+        }
+
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         MirrorSource(payload, submissionMetadata);
 
-        // Checked before any number is allocated. RA-739 task 004 adds the
-        // full required-field validation, the replay guard and the
-        // all-or-nothing transaction.
         var referenceFormat = _referenceGenerator.ForType(type);
-        var hasYear = AccreditationYear.TryRead(payload, out var accreditationYear);
         var payloadError =
-            referenceFormat.ValidatePayload(payload)
-            ?? (hasYear ? null : $"payload.{AccreditationYear.Field} must be a 4-digit year.")
-            ?? ValidateSites(payload);
+            SubmissionPayload.Validate(payload) ?? referenceFormat.ValidatePayload(payload);
         if (payloadError is not null)
         {
             return WorkItemSubmissionResult.Failure(
@@ -318,17 +337,149 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        var sites = payload[SitesField].AsBsonArray.Select(site => site.AsBsonDocument).ToList();
+        SubmissionPayload.TryReadOperatorRequestId(payload, out var operatorRequestId);
+        var request = new SubmissionRequest(
+            type,
+            referenceFormat,
+            payload,
+            operatorRequestId,
+            submittedBy,
+            user,
+            submissionMetadata,
+            now
+        );
+
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                var (submission, created) = await Transactions.RunAsync(
+                    (session, token) => CreateSubmissionAsync(session, request, token),
+                    cancellationToken
+                );
+                if (created.Count == 0)
+                {
+                    return Replay(type, submission);
+                }
+
+                _logger.LogInformation(
+                    "Submission {SubmissionReference} ({TypeId}) created {Count} work items by {User}",
+                    submission.SubmissionReference,
+                    type.TypeId,
+                    created.Count,
+                    DescribeUser(user)
+                );
+                // Only once the transaction has committed, so no hook ever
+                // sees a work item that was rolled back.
+                foreach (var workItem in created)
+                {
+                    await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
+                }
+                return WorkItemSubmissionResult.Success(submission);
+            }
+            // A duplicate key is not a transient transaction error, so the
+            // transaction runner does not retry it.
+            catch (MongoException ex) when (MongoDuplicateKey.Is(ex))
+            {
+                // A concurrent submission of the same request committed
+                // first. Its record is now on file: hand that back.
+                if (await Submissions.FindAsync(operatorRequestId, cancellationToken) is { } winner)
+                {
+                    return Replay(type, winner);
+                }
+
+                // An in-year change reference collides only once its yearly
+                // sequence has wrapped. The aborted transaction rolled the
+                // number back, so a retry would collide again.
+                if (ex is MongoWriteException write && IsApplicationReferenceDuplicate(write))
+                {
+                    _logger.LogError(
+                        ex,
+                        "Submission {OperatorRequestId} ({TypeId}) collided on applicationReference",
+                        operatorRequestId,
+                        type.TypeId
+                    );
+                    return WorkItemSubmissionResult.Failure(
+                        WorkItemActionResult.Failure(
+                            WorkItemActionFailureCode.ApplicationReferenceExhausted,
+                            "Failed to generate a unique applicationReference."
+                        )
+                    );
+                }
+
+                // Two first-ever allocations from one sequence raced to insert
+                // its counter. The counter now exists, so a retry succeeds.
+                if (attempt >= MaxSubmissionAttempts)
+                {
+                    throw;
+                }
+                _logger.LogWarning(
+                    ex,
+                    "Submission {OperatorRequestId} ({TypeId}) hit a duplicate key on attempt {Attempt}; retrying",
+                    operatorRequestId,
+                    type.TypeId,
+                    attempt
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    /// Attempts at a submission's transaction when it fails on a duplicate
+    /// key that is neither a replay nor an <c>applicationReference</c>
+    /// collision. As the operator backend's <c>InsertRaceRetry</c>.
+    /// </summary>
+    internal const int MaxSubmissionAttempts = 3;
+
+    /// <summary>One validated submission, as <see cref="CreateSubmissionAsync"/> needs it.</summary>
+    private sealed record SubmissionRequest(
+        IWorkItemType Type,
+        IWorkItemReferenceFormat ReferenceFormat,
+        BsonDocument Payload,
+        string OperatorRequestId,
+        string? SubmittedBy,
+        ClaimsPrincipal User,
+        IReadOnlyDictionary<string, string?>? SubmissionMetadata,
+        DateTime Now
+    );
+
+    /// <summary>
+    /// The body of a submission's transaction. The transaction runner may run
+    /// it more than once, so it builds everything it writes afresh from
+    /// <paramref name="request"/>. Returns the stored submission and the work
+    /// items it created, or a submission committed by a concurrent request
+    /// and no work items.
+    /// </summary>
+    private async Task<(SubmissionRecord Submission, IReadOnlyList<WorkItem> Created)> CreateSubmissionAsync(
+        IClientSessionHandle session,
+        SubmissionRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        if (await Submissions.FindAsync(session, request.OperatorRequestId, cancellationToken) is { } winner)
+        {
+            return (winner, []);
+        }
+
+        var payload = request.Payload;
+        AccreditationYear.TryRead(payload, out var accreditationYear);
         var submissionReference = await SubmissionReferenceGenerator.GenerateAsync(
+            session,
             accreditationYear,
             cancellationToken
         );
 
         // Each work item holds the shared request fields and exactly one site.
+        var sites = payload[SubmissionPayload.SitesField]
+            .AsBsonArray.Select(site => site.AsBsonDocument)
+            .ToList();
         var shared = payload.DeepClone().AsBsonDocument;
-        shared.Remove(SitesField);
+        shared.Remove(SubmissionPayload.SitesField);
+        var operatorPaymentReference = ReadOperatorPaymentReference(payload);
+        var snapshot = WorkItemTemplateSnapshot.Capture(request.Type);
 
-        var workItems = new List<SubmittedSiteWorkItem>(sites.Count);
+        var created = new List<WorkItem>(sites.Count);
+        var items = new List<SubmissionRecordItem>(sites.Count);
         foreach (var site in sites)
         {
             var itemPayload = shared.DeepClone().AsBsonDocument;
@@ -336,62 +487,75 @@ public sealed class WorkItemService : IWorkItemService
             itemPayload[SubmissionReferenceField] = submissionReference;
             itemPayload[SubmissionSizeField] = sites.Count;
 
-            var result = await PersistNewWorkItemAsync(
-                type,
-                referenceFormat,
+            var applicationReference = await request.ReferenceFormat.GenerateAsync(
+                session,
                 itemPayload,
-                submittedBy,
-                user,
-                submissionMetadata,
-                [],
-                now,
                 cancellationToken
             );
-            if (!result.IsSuccess)
-            {
-                return WorkItemSubmissionResult.Failure(result);
-            }
+            var workItem = NewSubmittedWorkItem(
+                request.Type,
+                snapshot,
+                itemPayload,
+                applicationReference,
+                operatorPaymentReference,
+                request.SubmittedBy,
+                request.User,
+                request.SubmissionMetadata,
+                request.Now
+            );
+            await _persistence.CreateAsync(session, workItem, cancellationToken);
 
-            workItems.Add(
-                new SubmittedSiteWorkItem(
-                    site.TryGetValue(SiteIdField, out var siteId) && siteId.IsString
-                        ? siteId.AsString
-                        : null,
-                    result.WorkItem!,
-                    itemPayload[ApplicationReferenceField].AsString
+            created.Add(workItem);
+            items.Add(
+                new SubmissionRecordItem(
+                    site[SubmissionPayload.SiteIdField],
+                    workItem.Id,
+                    applicationReference
                 )
             );
         }
 
-        _logger.LogInformation(
-            "Submission {SubmissionReference} ({TypeId}) created {Count} work items by {User}",
+        var submission = new SubmissionRecord(
+            request.OperatorRequestId,
+            request.Type.TypeId,
             submissionReference,
-            type.TypeId,
-            workItems.Count,
-            DescribeUser(user)
+            items,
+            request.Now
         );
-
-        return WorkItemSubmissionResult.Success(submissionReference, workItems);
+        await Submissions.InsertAsync(session, submission, cancellationToken);
+        return (submission, created);
     }
 
-    private const string SitesField = "sites";
+    private WorkItemSubmissionResult Replay(IWorkItemType type, SubmissionRecord submission)
+    {
+        _logger.LogInformation(
+            "Submission for operatorRequestId {OperatorRequestId} (typeId {TypeId}) is a replay; "
+                + "returning submission {SubmissionReference} instead of creating a duplicate.",
+            submission.OperatorRequestId,
+            type.TypeId,
+            submission.SubmissionReference
+        );
+        return WorkItemSubmissionResult.IdempotentReplay(submission);
+    }
+
     private const string SiteField = "site";
-    private const string SiteIdField = "siteId";
     private const string SubmissionReferenceField = "submissionReference";
     private const string SubmissionSizeField = "submissionSize";
-
-    private static string? ValidateSites(BsonDocument payload) =>
-        payload.TryGetValue(SitesField, out var sites)
-        && sites.IsBsonArray
-        && sites.AsBsonArray.Count > 0
-        && sites.AsBsonArray.All(site => site.IsBsonDocument)
-            ? null
-            : $"payload.{SitesField} must be a non-empty array of site objects.";
 
     private ISubmissionReferenceGenerator SubmissionReferenceGenerator =>
         _submissionReferenceGenerator
         ?? throw new InvalidOperationException(
             "No ISubmissionReferenceGenerator was supplied to WorkItemService."
+        );
+
+    private ISubmissionStore Submissions =>
+        _submissionStore
+        ?? throw new InvalidOperationException("No ISubmissionStore was supplied to WorkItemService.");
+
+    private IMongoTransactionRunner Transactions =>
+        _transactions
+        ?? throw new InvalidOperationException(
+            "No IMongoTransactionRunner was supplied to WorkItemService."
         );
 
     /// <summary>
@@ -443,12 +607,7 @@ public sealed class WorkItemService : IWorkItemService
         // before the retry loop, so a regenerated applicationReference on a later attempt can
         // never overwrite it - unlike applicationReference, this value doesn't depend on attempt
         // and must stay exactly what the operator was told to quote.
-        var operatorPaymentReference =
-            payload.TryGetValue("paymentReference", out var operatorPaymentReferenceValue)
-            && operatorPaymentReferenceValue.IsString
-            && !string.IsNullOrWhiteSpace(operatorPaymentReferenceValue.AsString)
-                ? operatorPaymentReferenceValue.AsString
-                : null;
+        var operatorPaymentReference = ReadOperatorPaymentReference(payload);
 
         // RA-219: the backend owns the applicationReference. Generate one
         // server-side and persist; on the (rare) unique-index collision
@@ -467,59 +626,16 @@ public sealed class WorkItemService : IWorkItemService
                 attempt,
                 cancellationToken
             );
-            payload[ApplicationReferenceField] = applicationReference;
-
-            // RA-503: prefer the operator-supplied payment reference captured above. Fall back
-            // to applicationReference only when the payload never carried one - a submitter that
-            // predates this (RA-447/CM3, RA-316) or a source that doesn't send it, so this is
-            // never left blank rather than because the two are meant to be interchangeable.
-            payload["paymentReference"] = operatorPaymentReference ?? applicationReference;
-
-            workItem = new WorkItem
-            {
-                TypeId = type.TypeId,
-                StateId = type.InitialState.Id,
-                SubmittedAt = now,
-                LastModifiedAt = now,
-                SubmittedBy = submittedBy,
-                TemplateSnapshot = snapshot,
-                TemplateVersion = snapshot.TemplateVersion,
-                Payload = payload,
-            };
-
-            // Birth event: the audit timeline must start at submission rather
-            // than the first state change. Appended to the in-memory list
-            // before the single CreateAsync call so the document and its first
-            // audit entry land in storage together.
-            //
-            // RA-126: enrich the birth entry with the originating BFF /
-            // application context so audit consumers can reconstruct who
-            // submitted from where without joining back to request logs.
-            // 'source' is caller-supplied (BFF / operator FE forward it);
-            // 'clientId' is the caller-asserted, HMAC-verified client id
-            // (see ClientIdAuthenticationHandler); 'userId' is the end-user
-            // identity claim required for any mutation. RA-219:
-            // 'applicationReference' is the server-generated value.
-            AppendAudit(
-                workItem,
-                "work-item-submitted",
-                "Work item submitted",
+            workItem = NewSubmittedWorkItem(
+                type,
+                snapshot,
+                payload,
+                applicationReference,
+                operatorPaymentReference,
+                submittedBy,
                 user,
-                now,
-                new()
-                {
-                    ["typeId"] = type.TypeId,
-                    ["stateId"] = workItem.StateId,
-                    ["templateVersion"] = snapshot.TemplateVersion,
-                    [SourceKey] =
-                        submissionMetadata is not null
-                        && submissionMetadata.TryGetValue(SourceKey, out var src)
-                            ? src
-                            : null,
-                    ["clientId"] = user.FindFirstValue("client_id"),
-                    ["userId"] = ResolveActorUserId(user),
-                    [ApplicationReferenceField] = applicationReference,
-                }
+                submissionMetadata,
+                now
             );
 
             _logger.LogInformation(
@@ -639,6 +755,94 @@ public sealed class WorkItemService : IWorkItemService
         await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
 
         return WorkItemActionResult.Success(workItem);
+    }
+
+    /// <summary>
+    /// RA-503: the operator's own payment reference from the payload, or
+    /// <c>null</c> when it carries none.
+    /// </summary>
+    private static string? ReadOperatorPaymentReference(BsonDocument payload) =>
+        payload.TryGetValue(PaymentReferenceField, out var value)
+        && value.IsString
+        && !string.IsNullOrWhiteSpace(value.AsString)
+            ? value.AsString
+            : null;
+
+    private const string PaymentReferenceField = "paymentReference";
+
+    /// <summary>
+    /// A new work item in its type's initial state, holding
+    /// <paramref name="payload"/> stamped with <paramref name="applicationReference"/>,
+    /// with its birth audit entry. Nothing is persisted.
+    /// </summary>
+    private static WorkItem NewSubmittedWorkItem(
+        IWorkItemType type,
+        WorkItemTemplateSnapshot snapshot,
+        BsonDocument payload,
+        string applicationReference,
+        string? operatorPaymentReference,
+        string? submittedBy,
+        ClaimsPrincipal user,
+        IReadOnlyDictionary<string, string?>? submissionMetadata,
+        DateTime now
+    )
+    {
+        payload[ApplicationReferenceField] = applicationReference;
+
+        // RA-503: prefer the operator-supplied payment reference. Fall back
+        // to applicationReference only when the payload never carried one - a submitter that
+        // predates this (RA-447/CM3, RA-316) or a source that doesn't send it, so this is
+        // never left blank rather than because the two are meant to be interchangeable.
+        payload[PaymentReferenceField] = operatorPaymentReference ?? applicationReference;
+
+        var workItem = new WorkItem
+        {
+            TypeId = type.TypeId,
+            StateId = type.InitialState.Id,
+            SubmittedAt = now,
+            LastModifiedAt = now,
+            SubmittedBy = submittedBy,
+            TemplateSnapshot = snapshot,
+            TemplateVersion = snapshot.TemplateVersion,
+            Payload = payload,
+        };
+
+        // Birth event: the audit timeline must start at submission rather
+        // than the first state change. Appended to the in-memory list
+        // before the single CreateAsync call so the document and its first
+        // audit entry land in storage together.
+        //
+        // RA-126: enrich the birth entry with the originating BFF /
+        // application context so audit consumers can reconstruct who
+        // submitted from where without joining back to request logs.
+        // 'source' is caller-supplied (BFF / operator FE forward it);
+        // 'clientId' is the caller-asserted, HMAC-verified client id
+        // (see ClientIdAuthenticationHandler); 'userId' is the end-user
+        // identity claim required for any mutation. RA-219:
+        // 'applicationReference' is the server-generated value.
+        AppendAudit(
+            workItem,
+            "work-item-submitted",
+            "Work item submitted",
+            user,
+            now,
+            new()
+            {
+                ["typeId"] = type.TypeId,
+                ["stateId"] = workItem.StateId,
+                ["templateVersion"] = snapshot.TemplateVersion,
+                [SourceKey] =
+                    submissionMetadata is not null
+                    && submissionMetadata.TryGetValue(SourceKey, out var src)
+                        ? src
+                        : null,
+                ["clientId"] = user.FindFirstValue("client_id"),
+                ["userId"] = ResolveActorUserId(user),
+                [ApplicationReferenceField] = applicationReference,
+            }
+        );
+
+        return workItem;
     }
 
     /// <summary>

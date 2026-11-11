@@ -17,6 +17,17 @@ public interface IWorkItemPersistence
     Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// As <see cref="CreateAsync(WorkItem, CancellationToken)"/>, but inserts
+    /// in the caller's <paramref name="session"/> (RA-739), so the work item
+    /// exists only if the caller's transaction commits.
+    /// </summary>
+    Task CreateAsync(
+        IClientSessionHandle session,
+        WorkItem workItem,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// Insert <paramref name="workItem"/> only if no document with the
     /// same <see cref="WorkItem.Id"/> exists. Returns <c>true</c> when
     /// the document was inserted and <c>false</c> when an item with
@@ -211,6 +222,13 @@ public sealed class WorkItemPersistence
             workItem.SubmittedBy ?? "unknown"
         );
     }
+
+    [ExcludeFromCodeCoverage]
+    public Task CreateAsync(
+        IClientSessionHandle session,
+        WorkItem workItem,
+        CancellationToken cancellationToken = default
+    ) => Collection.InsertOneAsync(session, workItem, cancellationToken: cancellationToken);
 
     public async Task<bool> CreateIfAbsentAsync(
         WorkItem workItem,

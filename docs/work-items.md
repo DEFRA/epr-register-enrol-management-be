@@ -61,10 +61,40 @@ payload is the shared request fields plus a single `site`, its own
 `referenceSequences` keyed `SUB-{yyyy}`, starting at `0001` and growing past
 `9999`), `submissionSize` and `paymentReference`. The response is `201` with
 `{ "submissionReference": "SUB-2026-0001", "workItems": [{ "siteId", "id",
-"applicationReference" }] }`. The unique index on `payload.operatorRequestId`
+"applicationReference" }] }`. `siteId` is echoed as sent: the operator backend
+sends a number. The unique index on `payload.operatorRequestId`
 is now on (`payload.operatorRequestId`, `payload.site.siteId`); startup drops
 the RA-492 single-field index. Re-accreditation's request and response are
 unchanged.
+
+- **Validation (400, nothing created).** `SubmissionPayload.Validate` requires
+  `operatorRequestId`, `operatorOrganisationId`, `organisationName`,
+  `material` and `paymentReference` (non-blank strings), a 4-digit
+  `accreditationYear`, and at least one site, each with a `siteId` (string or
+  whole number), `orsId` and `siteName`. `siteId`s must be unique within the
+  submission (`7` and `"7"` are different sites, as in a Mongo index). Every
+  other field is optional.
+- **All or nothing.** One transaction (`IMongoTransactionRunner`, the driver's
+  `WithTransactionAsync`, which retries write conflicts) holds both sequence
+  increments, every work item and the submission record. Any failure aborts
+  it: nothing is created, no number is used, and the caller gets an error.
+  Submit hooks run per work item only after the commit.
+- **Replay guard.** The `submissions` collection (`MongoSubmissionStore`)
+  holds one document per POST: `_id` = `operatorRequestId`, `typeId`,
+  `submissionReference`, `workItems: [{ siteId, workItemId,
+  applicationReference }]` and `submittedAt`. A sequential replay finds it
+  before validation or allocation and gets the stored body back with
+  `X-Idempotent-Replay: true`. A concurrent duplicate either sees the
+  winner's record when its transaction retries after a write conflict, or
+  collides on `_id`; either way it returns the winner's response. A replay
+  with a different payload returns the stored submission and ignores the
+  edits, as RA-492 documents below.
+- **Collisions inside the transaction.** A duplicate key aborts the whole
+  transaction. An `applicationReference` collision (only once an IYC
+  sequence has wrapped) fails with `503` (`ApplicationReferenceExhausted`),
+  because the aborted increment means a retry would collide again. Any other
+  duplicate key (two first-ever allocations racing to create a counter) is
+  retried whole, up to `MaxSubmissionAttempts`.
 
 All three endpoints require authentication via the CDP client id
 header (`x-cdp-client-id`) per RA-89/RA-85b.
