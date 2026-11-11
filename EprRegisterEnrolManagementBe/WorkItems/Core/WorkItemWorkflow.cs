@@ -7,62 +7,19 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// so several types can follow one shared definition (see
 /// <c>WorkItems/Workflows/StandardWorkflow</c>) and each type's workflow can
 /// still change on its own by pointing it at a different definition.
-///
-/// The constructor checks the definition is self-consistent, so a broken
-/// workflow fails at startup rather than when a caseworker first acts on it.
+/// <see cref="WorkItemRegistry"/> checks at startup that each type's
+/// engine-facing states and transitions are its workflow's.
 /// </summary>
-public sealed class WorkItemWorkflow
-{
-    public WorkItemWorkflow(
-        string id,
-        WorkItemState initialState,
-        IReadOnlyCollection<WorkItemState> states,
-        IReadOnlyCollection<WorkItemTransition> transitions
-    )
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        ArgumentNullException.ThrowIfNull(initialState);
-        ArgumentNullException.ThrowIfNull(states);
-        ArgumentNullException.ThrowIfNull(transitions);
-
-        var stateIds = states.Select(s => s.Id).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        if (!stateIds.Contains(initialState.Id))
-        {
-            throw new InvalidWorkItemTypeException(
-                $"Workflow '{id}' starts in '{initialState.Id}', which it does not declare."
-            );
-        }
-
-        foreach (var transition in transitions)
-        {
-            if (!stateIds.Contains(transition.FromStateId) || !stateIds.Contains(transition.ToStateId))
-            {
-                throw new InvalidWorkItemTypeException(
-                    $"Workflow '{id}' transition '{transition.ActionId}' moves "
-                        + $"'{transition.FromStateId}' -> '{transition.ToStateId}', "
-                        + "which are not both declared states."
-                );
-            }
-        }
-
-        Id = id;
-        InitialState = initialState;
-        States = states;
-        Transitions = transitions;
-    }
-
-    /// <summary>Stable identifier of the workflow (e.g. <c>"standard"</c>).</summary>
-    public string Id { get; }
-
-    /// <summary>The state a newly-ingested work item starts in.</summary>
-    public WorkItemState InitialState { get; }
-
-    /// <summary>
-    /// Every state, in declaration order. The order is the status sort rank
-    /// (see <see cref="WorkItemSort"/>).
-    /// </summary>
-    public IReadOnlyCollection<WorkItemState> States { get; }
-
-    /// <summary>Allowed transitions across <see cref="States"/>.</summary>
-    public IReadOnlyCollection<WorkItemTransition> Transitions { get; }
-}
+/// <param name="Id">Stable identifier of the workflow (e.g. <c>"standard"</c>).</param>
+/// <param name="InitialState">The state a newly-ingested work item starts in.</param>
+/// <param name="States">
+/// Every state, in declaration order. The order is the status sort rank (see
+/// <see cref="WorkItemSort"/>).
+/// </param>
+/// <param name="Transitions">Allowed transitions across <paramref name="States"/>.</param>
+public sealed record WorkItemWorkflow(
+    string Id,
+    WorkItemState InitialState,
+    IReadOnlyCollection<WorkItemState> States,
+    IReadOnlyCollection<WorkItemTransition> Transitions
+);

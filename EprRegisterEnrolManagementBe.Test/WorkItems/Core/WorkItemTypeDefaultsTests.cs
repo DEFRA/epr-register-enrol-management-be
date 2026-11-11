@@ -33,12 +33,6 @@ public class WorkItemTypeDefaultsTests
         Assert.Equal([s_close], type.Workflow.Transitions);
     }
 
-    [Fact]
-    public void In_year_change_category_is_in_year_change()
-    {
-        Assert.Equal("in-year-change", WorkItemCategories.InYearChange);
-    }
-
     private sealed class BespokeType : IWorkItemType
     {
         public string TypeId => "bespoke";

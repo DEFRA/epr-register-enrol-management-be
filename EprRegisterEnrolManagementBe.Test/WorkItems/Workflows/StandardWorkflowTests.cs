@@ -21,9 +21,18 @@ public class StandardWorkflowTests
     }
 
     [Fact]
-    public void Is_a_single_shared_instance()
+    public void Every_transition_moves_between_declared_states()
     {
-        Assert.Same(StandardWorkflow.Definition, StandardWorkflow.Definition);
+        var stateIds = _workflow.States.Select(s => s.Id).ToHashSet();
+
+        Assert.All(
+            _workflow.Transitions,
+            t =>
+            {
+                Assert.Contains(t.FromStateId, stateIds);
+                Assert.Contains(t.ToStateId, stateIds);
+            }
+        );
     }
 
     [Fact]

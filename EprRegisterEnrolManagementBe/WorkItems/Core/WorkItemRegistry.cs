@@ -25,10 +25,32 @@ public sealed class WorkItemRegistry : IWorkItemRegistry
                 throw new InvalidWorkItemTypeException("Work item type id cannot be empty.");
             }
 
+            EnsureMatchesWorkflow(type);
+
             if (!_types.TryAdd(type.TypeId, type))
             {
                 throw new DuplicateWorkItemTypeException(type.TypeId);
             }
+        }
+    }
+
+    // RA-739: the engine reads a type's InitialState, States and Transitions;
+    // its Workflow is the single place they are configured. Reject a type
+    // whose two views disagree at startup rather than let it behave
+    // inconsistently later.
+    private static void EnsureMatchesWorkflow(IWorkItemType type)
+    {
+        var workflow = type.Workflow;
+        if (
+            type.InitialState != workflow.InitialState
+            || !type.States.SequenceEqual(workflow.States)
+            || !type.Transitions.SequenceEqual(workflow.Transitions)
+        )
+        {
+            throw new InvalidWorkItemTypeException(
+                $"Work item type '{type.TypeId}' must take its initial state, states and "
+                    + $"transitions from its workflow '{workflow.Id}'."
+            );
         }
     }
 

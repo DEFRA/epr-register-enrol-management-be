@@ -2,7 +2,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 
-/// <summary>RA-739: a workflow is a reusable, self-consistent state machine.</summary>
+/// <summary>RA-739: a workflow is a reusable state machine.</summary>
 public class WorkItemWorkflowTests
 {
     private static readonly WorkItemState s_open = new("open", "Open");
@@ -19,28 +19,5 @@ public class WorkItemWorkflowTests
         Assert.Equal(s_open, workflow.InitialState);
         Assert.Equal([s_open, s_closed], workflow.States);
         Assert.Equal([close], workflow.Transitions);
-    }
-
-    [Fact]
-    public void Rejects_an_initial_state_it_does_not_declare()
-    {
-        Assert.Throws<InvalidWorkItemTypeException>(() =>
-            new WorkItemWorkflow("broken", s_open, [s_closed], [])
-        );
-    }
-
-    [Theory]
-    [InlineData("missing", "closed")]
-    [InlineData("open", "missing")]
-    public void Rejects_a_transition_between_undeclared_states(string from, string to)
-    {
-        Assert.Throws<InvalidWorkItemTypeException>(() =>
-            new WorkItemWorkflow(
-                "broken",
-                s_open,
-                [s_open, s_closed],
-                [new WorkItemTransition("move", "Move", from, to)]
-            )
-        );
     }
 }

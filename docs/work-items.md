@@ -24,7 +24,7 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | `WorkItemTask` | Identifier + display name for a unit of work to be completed in a state. |
 | `WorkItemTransition` | A named action (`approve`, `reject`, `withdraw`) that moves a work item from one state to another. `CallerInvocable` (default `true`) decides whether the generic action endpoint may select it by id, or whether it is reachable only through a module's own service resolving it server-side. |
 | `IWorkItemType` | The case type configuration (RA-739): `TypeId`, display label (`DisplayName`), `Category`, `InYearChangeCode`, `UsesSubmissionReference` and `Workflow`, plus the `InitialState`, `States` and `Transitions` the engine reads (taken from the workflow). Pure & side-effect free. See [Case type configuration](#case-type-configuration-ra-739). |
-| `WorkItemWorkflow` | A reusable state machine (RA-739): `Id`, `InitialState`, `States` and `Transitions`. Its constructor rejects an initial state or transition endpoint it does not declare. Shared definitions live in `WorkItems/Workflows/` (`StandardWorkflow`). |
+| `WorkItemWorkflow` | A reusable state machine (RA-739): `Id`, `InitialState`, `States` and `Transitions`. `WorkItemRegistry` rejects, at startup, a type whose `InitialState`, `States` or `Transitions` differ from its `Workflow`'s. Shared definitions live in `WorkItems/Workflows/` (`StandardWorkflow`). |
 | `WorkItemCategories` | The category values a type can declare (RA-739): `in-year-change`. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
 | `IWorkItemOriginStateResolver` | Optional, module-supplied. Lets a type say "this item is in a waypoint and will return to some *other* state" — see [Waypoint origin state](#waypoint-origin-state-ra-410). |
@@ -220,7 +220,7 @@ type is configured. Every setting is code, not runtime data:
   (`WorkItems/Workflows/StandardWorkflow.cs`) is re-accreditation's lifecycle
   (duly making, assessment, query and response, two-step determination,
   withdrawal), defined once so any type can reference it. A type that
-  references a workflow takes its states from it:
+  references a workflow takes its states from it (the registry rejects a type whose states differ from its workflow's at startup):
 
   ```csharp
   internal sealed class MyType : IWorkItemType
