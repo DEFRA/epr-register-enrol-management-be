@@ -58,7 +58,19 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     /// <summary>RA-691 fixture's number after correction (the stored value).</summary>
     public const string AccreditationNumberCorrectedTo = "A27ER9006910246PL";
 
-    private const string SimulatedDeliveredEmail = "simulate-delivered@notifications.service.gov.uk";
+    /// <summary>RA-764 organisation-name-correction fixture id.</summary>
+    public const string OrganisationNameCorrectionId = "00000764-0000-4000-8000-000000000764";
+
+    /// <summary>
+    /// ReEx organisation id of the RA-764 fixture. The fixture otherwise
+    /// carries the real target's identity (org number 500069, registration
+    /// <see cref="ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumber"/>,
+    /// 2027, the old name), because the migration is keyed to it; prod never
+    /// seeds fixtures.
+    /// </summary>
+    public const string OrganisationNameCorrectionOrganisationId = "e2e-ra764-organisation-name";
+
+        private const string SimulatedDeliveredEmail = "simulate-delivered@notifications.service.gov.uk";
 
     public string TypeId => ReAccreditationType.Id;
 
@@ -68,6 +80,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         yield return BuildLegacySnapshot(now);
         yield return BuildPreYearStart(type, now);
         yield return BuildAccreditationNumberCorrected(type, now);
+        yield return BuildOrganisationNameCorrection(type, now);
     }
 
     /// <summary>
@@ -270,6 +283,51 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                     now.AddDays(-1)
                 ),
             ],
+        };
+        return item.ToBsonDocument();
+    }
+
+    /// <summary>
+    /// RA-764: an unassigned, not-started 2027 glass application for
+    /// organisation 500069 carrying its OLD name, exactly what
+    /// <see cref="ReAccreditationOrganisationNameCorrectionMigration"/> renames.
+    /// With the migration's keys set (the mgmt-tests compose stack) it is
+    /// renamed after every reset; without them (CDP test) it keeps the old
+    /// name. No audit entries, so the e2e suite can assert the rename adds
+    /// none.
+    /// </summary>
+    private static BsonDocument BuildOrganisationNameCorrection(IWorkItemType type, DateTime now)
+    {
+        var submittedAt = now.AddDays(-14);
+        var snapshot = WorkItemTemplateSnapshot.Capture(type);
+        var item = new WorkItem
+        {
+            Id = Guid.Parse(OrganisationNameCorrectionId),
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            SubmittedAt = submittedAt,
+            LastModifiedAt = submittedAt,
+            SubmittedBy = "e2e-fixture",
+            TemplateSnapshot = snapshot,
+            TemplateVersion = snapshot.TemplateVersion,
+            Payload = new BsonDocument
+            {
+                ["applicationReference"] = "RA-900000764",
+                ["organisationName"] = ReAccreditationOrganisationNameCorrectionMigration.OldName,
+                ["operatorOrganisationId"] = OrganisationNameCorrectionOrganisationId,
+                ["operatorOrgNumber"] = ReAccreditationOrganisationNameCorrectionMigration.OrganisationNumber,
+                ["operatorApplicationId"] = "e2e-app-ra764-organisation-name",
+                ["registrationNumber"] = ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumber,
+                ["material"] = "glass",
+                ["accreditationYear"] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear,
+                ["previousAccreditationYear"] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear - 1,
+                ["complianceIssuesReported"] = 0,
+                ["operatorEmail"] = SimulatedDeliveredEmail,
+                ["siteAddress"] = "1 Renamed Organisation Road, Belfast",
+                ["siteAddressPostcode"] = "BT1 1AA",
+                ["nation"] = "NorthernIreland",
+                ["chargeAmountPence"] = 218400,
+            },
         };
         return item.ToBsonDocument();
     }
