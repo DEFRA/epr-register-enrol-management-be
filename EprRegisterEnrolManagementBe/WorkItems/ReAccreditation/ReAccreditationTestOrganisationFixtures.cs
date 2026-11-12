@@ -70,13 +70,14 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     /// </summary>
     public const string OrganisationNameCorrectionOrganisationId = "e2e-ra764-organisation-name";
 
-        /// <summary>Payload field names the fixtures share.</summary>
+    /// <summary>
+    /// Payload field names the fixtures share that have no existing constant
+    /// (Sonar S1192; the RA-764 fixture took each to four uses).
+    /// </summary>
     private static class Field
     {
         public const string ApplicationReference = "applicationReference";
-        public const string OrganisationName = "organisationName";
         public const string OperatorOrganisationId = "operatorOrganisationId";
-        public const string RegistrationNumber = "registrationNumber";
         public const string Material = "material";
         public const string PreviousAccreditationYear = "previousAccreditationYear";
         public const string ComplianceIssuesReported = "complianceIssuesReported";
@@ -84,7 +85,6 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         public const string SiteAddressPostcode = "siteAddressPostcode";
         public const string Nation = "nation";
         public const string OperatorApplicationId = "operatorApplicationId";
-        public const string AccreditationYear = "accreditationYear";
         public const string SiteAddress = "siteAddress";
         public const string ChargeAmountPence = "chargeAmountPence";
     }
@@ -146,9 +146,9 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             ["payload"] = new BsonDocument
             {
                 [Field.ApplicationReference] = "AP342LEGACY01",
-                [Field.OrganisationName] = LegacySnapshotOrganisationName,
+                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = LegacySnapshotOrganisationName,
                 [Field.OperatorOrganisationId] = LegacySnapshotOrganisationId,
-                [Field.RegistrationNumber] = RegistrationReference(now, "9003420342"),
+                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = RegistrationReference(now, "9003420342"),
                 ["operatorRegistrationId"] = "reg-342",
                 [Field.Material] = "plastic",
                 [Field.PreviousAccreditationYear] = now.Year - 1,
@@ -230,12 +230,12 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             Payload = new BsonDocument
             {
                 [Field.ApplicationReference] = "RA-900000611",
-                [Field.OrganisationName] = PreYearStartOrganisationName,
+                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = PreYearStartOrganisationName,
                 [Field.OperatorOrganisationId] = PreYearStartOrganisationId,
                 [Field.OperatorApplicationId] = "e2e-app-ra611-pre-year-start",
-                [Field.RegistrationNumber] = RegistrationReference(now, "9006110611"),
+                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = RegistrationReference(now, "9006110611"),
                 [Field.Material] = "plastic",
-                [Field.AccreditationYear] = now.Year,
+                [AccreditationYear.Field] = now.Year,
                 [Field.PreviousAccreditationYear] = now.Year - 1,
                 [Field.ComplianceIssuesReported] = 0,
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,
@@ -275,15 +275,15 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             Payload = new BsonDocument
             {
                 [Field.ApplicationReference] = "RA-900000691",
-                [Field.OrganisationName] = AccreditationNumberCorrectedOrganisationName,
+                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = AccreditationNumberCorrectedOrganisationName,
                 [Field.OperatorOrganisationId] = AccreditationNumberCorrectedOrganisationId,
                 [Field.OperatorApplicationId] = "e2e-app-ra691-accreditation-corrected",
                 // RA-690: a valid registration reference for this fixture's fixed
                 // 2026 previous accreditation year, sharing the corrected number's
                 // org id and sequence.
-                [Field.RegistrationNumber] = "R26ER9006910246PL",
+                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = "R26ER9006910246PL",
                 [Field.Material] = "plastic",
-                [Field.AccreditationYear] = 2027,
+                [AccreditationYear.Field] = 2027,
                 [Field.PreviousAccreditationYear] = 2026,
                 [Field.ComplianceIssuesReported] = 0,
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,
@@ -332,13 +332,13 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             Payload = new BsonDocument
             {
                 [Field.ApplicationReference] = "RA-900000764",
-                [Field.OrganisationName] = ReAccreditationOrganisationNameCorrectionMigration.OldName,
+                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = ReAccreditationOrganisationNameCorrectionMigration.OldName,
                 [Field.OperatorOrganisationId] = OrganisationNameCorrectionOrganisationId,
-                ["operatorOrgNumber"] = ReAccreditationOrganisationNameCorrectionMigration.OrganisationNumber,
+                [ReAccreditationOrganisationNameCorrectionMigration.OperatorOrgNumberField] = ReAccreditationOrganisationNameCorrectionMigration.OrganisationNumber,
                 [Field.OperatorApplicationId] = "e2e-app-ra764-organisation-name",
-                [Field.RegistrationNumber] = ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumber,
+                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumber,
                 [Field.Material] = "glass",
-                [Field.AccreditationYear] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear,
+                [AccreditationYear.Field] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear,
                 [Field.PreviousAccreditationYear] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear - 1,
                 [Field.ComplianceIssuesReported] = 0,
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,

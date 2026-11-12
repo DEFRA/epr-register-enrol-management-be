@@ -152,7 +152,9 @@ public interface IWorkItemPersistence
     /// <para>
     /// RA-764: lets a one-off correction locate its targets by an exact
     /// identity (the registration number) rather than by the value it is about
-    /// to change.
+    /// to change. Temporary: it exists only for
+    /// <c>ReAccreditationOrganisationNameCorrectionMigration</c> and is removed
+    /// with it. Do not use it elsewhere.
     /// </para>
     /// </summary>
     Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
@@ -177,6 +179,14 @@ public interface IWorkItemPersistence
     /// <see cref="ReplaceAsync"/> holding the old version gets a
     /// <see cref="WorkItemConcurrencyException"/> and retries on fresh data
     /// instead of silently writing the old value back.
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>Bypasses the audit log deliberately</strong>: RA-764 requires the
+    /// rename to leave Application history untouched. Temporary: it exists only
+    /// for <c>ReAccreditationOrganisationNameCorrectionMigration</c> and is
+    /// removed with it. It must not be used anywhere else; every other payload
+    /// change goes through the engine or a module service, which audit it.
     /// </para>
     /// </summary>
     Task<bool> CompareAndSetPayloadFieldAsync(
