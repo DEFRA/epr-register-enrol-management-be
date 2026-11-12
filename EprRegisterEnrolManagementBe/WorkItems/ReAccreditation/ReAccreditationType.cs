@@ -186,7 +186,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     public string TemplateVersion => "v18";
 
     public string? Category => null;
-    public bool UsesSubmissionReference => false;
+    public bool SplitsSubmissionPerSite => false;
     public WorkItemWorkflow Workflow => StandardWorkflow.Definition;
     public WorkItemState InitialState => Workflow.InitialState;
     public IReadOnlyCollection<WorkItemState> States => Workflow.States;

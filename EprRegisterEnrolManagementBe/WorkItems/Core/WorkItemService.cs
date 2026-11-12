@@ -35,7 +35,7 @@ public interface IWorkItemService
 
     /// <summary>
     /// RA-739: submit a request for a type that declares
-    /// <see cref="IWorkItemType.UsesSubmissionReference"/>. The payload's
+    /// <see cref="IWorkItemType.SplitsSubmissionPerSite"/>. The payload's
     /// <c>sites[]</c> is split into one work item per site, each holding the
     /// shared request fields, a single <c>site</c>, its own
     /// <c>applicationReference</c>, the shared <c>submissionReference</c>
@@ -298,10 +298,10 @@ public sealed class WorkItemService : IWorkItemService
         var (type, payload, _, user, submissionMetadata) = request;
         ArgumentNullException.ThrowIfNull(type);
         ArgumentNullException.ThrowIfNull(payload);
-        if (!type.UsesSubmissionReference)
+        if (!type.SplitsSubmissionPerSite)
         {
             throw new ArgumentException(
-                $"Work item type '{type.TypeId}' does not use a submission reference; submit it with SubmitAsync.",
+                $"Work item type '{type.TypeId}' does not split a submission per site; submit it with SubmitAsync.",
                 nameof(type)
             );
         }

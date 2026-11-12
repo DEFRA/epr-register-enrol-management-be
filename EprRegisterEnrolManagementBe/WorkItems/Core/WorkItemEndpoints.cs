@@ -239,10 +239,10 @@ public static class WorkItemEndpoints
             submissionMetadata
         );
 
-        // RA-739: a type that uses a submission reference (add-ORS) is split
+        // RA-739: a type that splits a submission per site (add-ORS) is split
         // into one work item per site and answered with the shared
         // submission reference and each site's work item.
-        return type.UsesSubmissionReference
+        return type.SplitsSubmissionPerSite
             ? await SubmitPerSiteAsync(request, httpContext, engine, log, cancellationToken)
             : await SubmitOneAsync(request, httpContext, engine, log, cancellationToken);
     }

@@ -18,7 +18,7 @@ public class WorkItemTypeDefaultsTests
         IWorkItemType type = new BespokeType();
 
         Assert.Null(type.Category);
-        Assert.False(type.UsesSubmissionReference);
+        Assert.False(type.SplitsSubmissionPerSite);
         Assert.Null(type.InYearChangeCode);
     }
 

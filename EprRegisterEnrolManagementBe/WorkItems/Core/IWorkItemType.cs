@@ -9,7 +9,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 ///
 /// RA-739: this is the single place a case type is configured. It declares the
 /// display label (<see cref="DisplayName"/>), <see cref="Category"/>,
-/// <see cref="InYearChangeCode"/>, <see cref="UsesSubmissionReference"/> and
+/// <see cref="InYearChangeCode"/>, <see cref="SplitsSubmissionPerSite"/> and
 /// <see cref="Workflow"/>, so adding a case type that follows an existing
 /// workflow is a configuration change.
 /// </summary>
@@ -34,11 +34,13 @@ public interface IWorkItemType : IWorkItemTemplate
     string? Category => null;
 
     /// <summary>
-    /// RA-739: whether a submission of this type is given a
-    /// <c>SUB-{yyyy}-{sequence}</c> submission reference shared by every work
-    /// item it creates. Defaults to <c>false</c> (re-accreditation).
+    /// RA-739: whether a submission of this type carries a <c>sites[]</c>
+    /// that is split into one work item per site, all sharing the
+    /// submission's <c>SUB-{yyyy}-{sequence}</c> reference. Defaults to
+    /// <c>false</c> (re-accreditation): one work item per submission, which
+    /// still gets a submission reference of its own.
     /// </summary>
-    bool UsesSubmissionReference => false;
+    bool SplitsSubmissionPerSite => false;
 
     /// <summary>
     /// RA-739: the workflow this type follows. A type that follows a shared

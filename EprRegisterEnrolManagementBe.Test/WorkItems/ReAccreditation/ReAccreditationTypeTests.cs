@@ -30,7 +30,7 @@ public class ReAccreditationTypeTests
         Assert.Equal("Re-accreditation", type.DisplayName);
         Assert.Null(type.Category);
         Assert.Null(type.InYearChangeCode);
-        Assert.False(type.UsesSubmissionReference);
+        Assert.False(type.SplitsSubmissionPerSite);
         Assert.Same(StandardWorkflow.Definition, type.Workflow);
     }
 

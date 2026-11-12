@@ -23,7 +23,7 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | `WorkItemState` | Identifier + display name for a state. `IsTerminal` marks completion states (e.g. approved/rejected). |
 | `WorkItemTask` | Identifier + display name for a unit of work to be completed in a state. |
 | `WorkItemTransition` | A named action (`approve`, `reject`, `withdraw`) that moves a work item from one state to another. `CallerInvocable` (default `true`) decides whether the generic action endpoint may select it by id, or whether it is reachable only through a module's own service resolving it server-side. |
-| `IWorkItemType` | The case type configuration (RA-739): `TypeId`, display label (`DisplayName`), `Category`, `InYearChangeCode`, `UsesSubmissionReference` and `Workflow`, plus the `InitialState`, `States` and `Transitions` the engine reads (taken from the workflow). Pure & side-effect free. See [Case type configuration](#case-type-configuration-ra-739). |
+| `IWorkItemType` | The case type configuration (RA-739): `TypeId`, display label (`DisplayName`), `Category`, `InYearChangeCode`, `SplitsSubmissionPerSite` and `Workflow`, plus the `InitialState`, `States` and `Transitions` the engine reads (taken from the workflow). Pure & side-effect free. See [Case type configuration](#case-type-configuration-ra-739). |
 | `WorkItemWorkflow` | A reusable state machine (RA-739): `Id`, `InitialState`, `States` and `Transitions`. `WorkItemRegistry` rejects, at startup, a type whose `InitialState`, `States` or `Transitions` differ from its `Workflow`'s. Shared definitions live in `WorkItems/Workflows/` (`StandardWorkflow`). |
 | `WorkItemCategories` | The category values a type can declare (RA-739): `in-year-change`. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
@@ -53,7 +53,7 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state; `400` for unknown actions, transitions whose from-state does not match, and transitions declared `CallerInvocable: false`. |
 
 **Split submissions (RA-739).** For a type that declares
-`UsesSubmissionReference` (add-ORS, `add-overseas-site`), `POST /work-items`
+`SplitsSubmissionPerSite` (add-ORS, `add-overseas-site`), `POST /work-items`
 splits the payload's `sites[]` into one work item per site. Each work item's
 payload is the shared request fields plus a single `site`, its own
 `applicationReference` (`IYC-ORS-{yyyy}-{seq:D5}`), the shared
@@ -281,7 +281,7 @@ type is configured. Every setting is code, not runtime data:
 | Display label | `DisplayName` | — (required) | `"Re-accreditation"` |
 | Category | `Category` | `null` (the type is its own group) | `null` |
 | In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` |
-| Uses a submission reference | `UsesSubmissionReference` | `false` | `false` |
+| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` |
 | Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` |
 
 - **Category** groups related types so the list can filter on the group
@@ -289,7 +289,7 @@ type is configured. Every setting is code, not runtime data:
   tonnage band upgrade later) declare `WorkItemCategories.InYearChange`
   (`in-year-change`). Each change type still has its own `TypeId`, so a
   type's workflow can change on its own.
-- **Uses a submission reference** marks types whose `sites[]` is split into
+- **Splits a submission per site** marks types whose `sites[]` is split into
   one work item per site, all sharing the submission's
   `SUB-{yyyy}-{sequence}` reference (see
   [Ingestion API](#ingestion-api)). The list's `category` filter arrives in a
@@ -309,7 +309,7 @@ type is configured. Every setting is code, not runtime data:
       public string DisplayName => "My type";
       public string? Category => WorkItemCategories.InYearChange;
       public string? InYearChangeCode => "XYZ";
-      public bool UsesSubmissionReference => true;
+      public bool SplitsSubmissionPerSite => true;
       public string TemplateVersion => "v1";
       public WorkItemWorkflow Workflow => StandardWorkflow.Definition;
       public WorkItemState InitialState => Workflow.InitialState;

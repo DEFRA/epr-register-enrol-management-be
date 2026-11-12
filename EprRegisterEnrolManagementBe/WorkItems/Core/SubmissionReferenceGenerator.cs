@@ -6,7 +6,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <summary>
 /// RA-739: produces the <c>submissionReference</c> shared by every work item
 /// one submission creates: every work item of a type that declares
-/// <see cref="IWorkItemType.UsesSubmissionReference"/> (split per site), and
+/// <see cref="IWorkItemType.SplitsSubmissionPerSite"/>, and
 /// the single work item of any other type (re-accreditation). The format is
 /// <c>SUB-{yyyy}-{sequence}</c>, for example <c>SUB-2026-0001</c>:
 /// <list type="bullet">

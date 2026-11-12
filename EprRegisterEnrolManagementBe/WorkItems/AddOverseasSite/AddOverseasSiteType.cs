@@ -23,7 +23,7 @@ internal sealed class AddOverseasSiteType : IWorkItemType
 
     public string? Category => WorkItemCategories.InYearChange;
     public string? InYearChangeCode => "ORS";
-    public bool UsesSubmissionReference => true;
+    public bool SplitsSubmissionPerSite => true;
     public WorkItemWorkflow Workflow => StandardWorkflow.Definition;
     public WorkItemState InitialState => Workflow.InitialState;
     public IReadOnlyCollection<WorkItemState> States => Workflow.States;

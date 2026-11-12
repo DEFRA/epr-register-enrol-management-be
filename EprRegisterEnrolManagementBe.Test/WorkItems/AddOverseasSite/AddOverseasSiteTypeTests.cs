@@ -16,7 +16,7 @@ public sealed class AddOverseasSiteTypeTests
         Assert.Equal("New ORS accreditation", type.DisplayName);
         Assert.Equal(WorkItemCategories.InYearChange, type.Category);
         Assert.Equal("ORS", type.InYearChangeCode);
-        Assert.True(type.UsesSubmissionReference);
+        Assert.True(type.SplitsSubmissionPerSite);
         Assert.Same(StandardWorkflow.Definition, type.Workflow);
         Assert.Equal("submitted", type.InitialState.Id);
     }
