@@ -25,9 +25,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// template already relies on).
 ///
 /// RA-000: the query-during-* transitions are not caller-invocable, so only
-/// the query service applies them. As defence in depth the hook still proves
-/// the stamp belongs to this transition (<see cref="ReAccreditationFreshQuery"/>)
-/// and, when it cannot, or when the payload cannot be read, pushes nothing,
+/// the query service applies them. As defence in depth the hook still checks
+/// the stamp was written inside this transition's window
+/// (<see cref="ReAccreditationFreshQuery"/>, which names what that does not
+/// rule out) and, when it was not, or when the payload cannot be read, pushes nothing,
 /// logs at Error and records <c>query-push-failed</c> with a <c>reason</c>.
 ///
 /// Never throws — a push failure must not unwind the already-persisted
@@ -79,18 +80,9 @@ internal sealed class ReAccreditationQueryPushHook(
 
         try
         {
-            ReAccreditationPayload payload;
-            try
+            // DeserialisePayload has already logged an unreadable payload at Error.
+            if (DeserialisePayload(workItem, correlationId) is not { } payload)
             {
-                payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(
-                    ex,
-                    "Query push for work item {WorkItemId} (correlation {CorrelationId}) not attempted: "
-                    + "the payload could not be deserialised.",
-                    workItem.Id, correlationId);
                 await RecordNotAttemptedAsync(
                     workItem, actionId, correlationId, "payload could not be deserialised", user, cancellationToken);
                 return;
@@ -181,10 +173,27 @@ internal sealed class ReAccreditationQueryPushHook(
         WorkItem workItem, WorkItemAssignmentChange change, ClaimsPrincipal user, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
+    private ReAccreditationPayload? DeserialisePayload(WorkItem workItem, Guid correlationId)
+    {
+        try
+        {
+            return BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(
+                ex,
+                "Query push for work item {WorkItemId} (correlation {CorrelationId}) not attempted: "
+                + "the payload could not be deserialised.",
+                workItem.Id, correlationId);
+            return null;
+        }
+    }
+
     /// <summary>
     /// Records <c>query-push-failed</c>: a push the operator backend rejected
     /// (details carry <c>errorMessage</c>) or, RA-000, one never attempted
-    /// because the hook could not prove what to send (details carry
+    /// because the hook could not establish what to send (details carry
     /// <c>reason</c>). Either way the operator's record has not caught up.
     /// A failure record that cannot be persisted is lost: nothing else on the
     /// work item says the operator's record has drifted, so that is logged at

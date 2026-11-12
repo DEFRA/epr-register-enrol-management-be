@@ -19,8 +19,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 /// that transition can leave a stamped query on a non-queried item, and it is
 /// deliberately not cleared afterwards — the next query overwrites it, and the
 /// audit log remains the historical record. Readers must therefore not trust
-/// its mere presence: the query-transition hooks verify it was stamped for the
-/// transition they are handling via <c>ReAccreditationFreshQuery</c> (RA-000).
+/// its mere presence: the query-transition hooks check, via
+/// <c>ReAccreditationFreshQuery</c> (RA-000), that it was stamped inside the
+/// time window of the transition they are handling. That rules out a missing
+/// or previous query, not a stamp from an overlapping query request on the
+/// same item, and clock skew between pods can make it reject a genuine one;
+/// see that class for both gaps.
 /// </summary>
 internal sealed record CurrentQuery
 {

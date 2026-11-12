@@ -5865,6 +5865,10 @@ public class ReAccreditationEndpointTests
     /// </summary>
     [Theory]
     [MemberData(nameof(QueryTransitions))]
+    // The engine and the guard both match action ids case-insensitively, so a
+    // re-cased id is the same transition and is rejected the same way; the
+    // ProblemDetails detail echoes the id exactly as the caller sent it.
+    [InlineData("assessment-in-progress", "Query-During-Assessment")]
     public async Task A_query_transition_is_rejected_on_the_generic_action_route(string stateId, string actionId)
     {
         var cancellationToken = TestContext.Current.CancellationToken;

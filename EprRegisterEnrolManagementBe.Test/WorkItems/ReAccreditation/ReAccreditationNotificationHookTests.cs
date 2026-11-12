@@ -398,6 +398,56 @@ public class ReAccreditationNotificationHookTests
         Assert.Contains(expectedReason, (string)error.Properties["Reason"]!);
     }
 
+    // RA-000 review: the Queried branch used to throw ArgumentNullException
+    // on a missing fromStateId, writing no notification-failed. A post-action
+    // hook must never throw, so it is now a not-sent failure like any other.
+    [Fact]
+    public async Task OnActionAppliedAsync_does_not_send_Queried_without_a_from_state_id()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+        var logger = new ListLogger<ReAccreditationNotificationHook>();
+        var workItem = BuildFreshlyQueriedWorkItem("query-during-duly-made");
+        var sut = BuildSut(notifyClient, auditAppender, logger: logger);
+
+        await sut.OnActionAppliedAsync(workItem, "query-during-duly-made", fromStateId: null!, s_user, ct);
+
+        const string ExpectedReason =
+            "the query transition's fromStateId was not supplied, so payload.currentQuery cannot be verified";
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: ct);
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-failed",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "Queried"
+                    && d["reference"] == ApplicationReference
+                    && d["reason"] == ExpectedReason
+                ),
+                s_user,
+                ct
+            );
+        var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Equal(workItem.Id, error.Properties["WorkItemId"]);
+        Assert.Equal("Queried", error.Properties["TemplateKey"]);
+        Assert.Equal(ExpectedReason, error.Properties["Reason"]);
+    }
+
     [Fact]
     public async Task OnActionAppliedAsync_logs_at_error_when_the_not_sent_failure_cannot_be_persisted()
     {

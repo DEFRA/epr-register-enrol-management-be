@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
@@ -471,27 +472,25 @@ internal sealed class ReAccreditationNotificationHook(
         // RA-000: the Queried email carries the date of THIS query. Without a
         // currentQuery the query operation stamped for this transition it
         // would show a blank date (no stamp) or the previous query's date
-        // (stale stamp), so it is not sent.
-        ReAccreditationFreshQuery.VerifiedQuery? verifiedQuery = null;
+        // (stale stamp), so it is not sent. Its personalisation is built only
+        // from the verified query, so no path reaches it without one.
+        Dictionary<string, string> personalisation;
         if (string.Equals(templateKey, QueriedTemplateKey, StringComparison.OrdinalIgnoreCase))
         {
-            // Queried is mapped only from query-during-* actions, which always
-            // arrive with both ids; OnSubmittedAsync never sends it.
-            ArgumentNullException.ThrowIfNull(actionId);
-            ArgumentNullException.ThrowIfNull(fromStateId);
             if (
-                !ReAccreditationFreshQuery.TryVerify(
+                !TryVerifyQuery(
                     workItem,
-                    payload.CurrentQuery,
+                    payload,
                     actionId,
                     fromStateId,
-                    out verifiedQuery,
+                    out var verifiedQuery,
                     out var failureReason
                 )
             )
             {
                 logger.LogError(
-                    "Queried notification for work item {WorkItemId} not sent: {Reason}.",
+                    "{TemplateKey} notification for work item {WorkItemId} not sent: {Reason}.",
+                    templateKey,
                     workItem.Id,
                     failureReason
                 );
@@ -505,6 +504,12 @@ internal sealed class ReAccreditationNotificationHook(
                 );
                 return;
             }
+
+            personalisation = BuildQueriedPersonalisation(payload, reference, verifiedQuery);
+        }
+        else
+        {
+            personalisation = BuildPersonalisation(payload, workItem, templateKey, reference);
         }
 
         if (string.IsNullOrWhiteSpace(recipient))
@@ -538,14 +543,6 @@ internal sealed class ReAccreditationNotificationHook(
 
             return;
         }
-
-        var personalisation = BuildPersonalisation(
-            payload,
-            workItem,
-            templateKey,
-            reference,
-            verifiedQuery
-        );
 
         // Entry log: surfaces in docker / CDP logs the moment the hook
         // hands off to the Notify client. Combined with the
@@ -872,6 +869,45 @@ internal sealed class ReAccreditationNotificationHook(
             ["reason"] = reason,
         };
 
+    /// <summary>
+    /// RA-000: check the payload's <see cref="CurrentQuery"/> was stamped
+    /// inside the window of the query transition being handled
+    /// (<see cref="ReAccreditationFreshQuery"/>). Queried is mapped only from the
+    /// query-during-* actions, which the engine hands over with both ids, so a
+    /// missing one is a wiring defect; it fails the check (and so the send)
+    /// rather than throwing, because a post-action hook must never throw.
+    /// </summary>
+    private static bool TryVerifyQuery(
+        WorkItem workItem,
+        ReAccreditationPayload payload,
+        string? actionId,
+        string? fromStateId,
+        [NotNullWhen(true)] out ReAccreditationFreshQuery.VerifiedQuery? query,
+        [NotNullWhen(false)] out string? failureReason
+    )
+    {
+        if (actionId is null || fromStateId is null)
+        {
+            var missing = string.Join(
+                " and ",
+                new[] { actionId is null ? "actionId" : null, fromStateId is null ? "fromStateId" : null }.OfType<string>()
+            );
+            query = null;
+            failureReason =
+                $"the query transition's {missing} was not supplied, so payload.currentQuery cannot be verified";
+            return false;
+        }
+
+        return ReAccreditationFreshQuery.TryVerify(
+            workItem,
+            payload.CurrentQuery,
+            actionId,
+            fromStateId,
+            out query,
+            out failureReason
+        );
+    }
+
     private ReAccreditationPayload? DeserialisePayload(WorkItem workItem)
     {
         try
@@ -925,6 +961,31 @@ internal sealed class ReAccreditationNotificationHook(
             : string.Empty;
 
     /// <summary>
+    /// RA-291 / RA-581: the Queried template's personalisation. Separate from
+    /// <see cref="BuildPersonalisation"/> because it needs the query
+    /// <see cref="ReAccreditationFreshQuery"/> accepted for this transition
+    /// (RA-000), so it cannot be built without one.
+    /// </summary>
+    private Dictionary<string, string> BuildQueriedPersonalisation(
+        ReAccreditationPayload payload,
+        string reference,
+        ReAccreditationFreshQuery.VerifiedQuery verifiedQuery
+    ) =>
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            [ContactNameKey] = ResolveContactName(payload),
+            ["year"] = payload.AccreditationYear?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            [OrganisationNameKey] = payload.OrganisationName ?? string.Empty,
+            // RA-291: the date the CURRENT query was raised, stamped by
+            // ReAccreditationQueryService immediately before the query
+            // transition — see CurrentQuery.RaisedAt.
+            ["Querieddate"] = FormatOperatorFacingDate(verifiedQuery.RaisedAt),
+            ["reference"] = reference,
+            [RegistrationNumberKey] = payload.RegistrationNumber ?? string.Empty,
+            ["regulatorEmail"] = regulatorMailboxResolver.Resolve(payload.Nation) ?? string.Empty,
+        };
+
+    /// <summary>
     /// RA-581: every operator-facing template's personalisation, built
     /// per-template rather than from a shared base set — Notify 400s on a
     /// surplus key just as readily as a missing one, and the five current
@@ -937,8 +998,7 @@ internal sealed class ReAccreditationNotificationHook(
         ReAccreditationPayload payload,
         WorkItem workItem,
         string templateKey,
-        string reference,
-        ReAccreditationFreshQuery.VerifiedQuery? verifiedQuery
+        string reference
     )
     {
         var contactName = ResolveContactName(payload);
@@ -992,31 +1052,6 @@ internal sealed class ReAccreditationNotificationHook(
                 // "made on" — the original submission date, not the date duly
                 // making itself completed.
                 ["SubmissionDate"] = FormatOperatorFacingDate(workItem.SubmittedAt),
-                ["reference"] = reference,
-                [RegistrationNumberKey] = registrationNumber,
-                ["regulatorEmail"] = regulatorEmail,
-            };
-        }
-
-        if (string.Equals(templateKey, QueriedTemplateKey, StringComparison.OrdinalIgnoreCase))
-        {
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                [ContactNameKey] = contactName,
-                ["year"] = year,
-                [OrganisationNameKey] = organisationName,
-                // RA-291: the date the CURRENT query was raised, stamped by
-                // ReAccreditationQueryService immediately before the query
-                // transition — see CurrentQuery.RaisedAt. RA-000: only the
-                // stamp SendAndRecordAsync proved belongs to this transition.
-                ["Querieddate"] = FormatOperatorFacingDate(
-                    (
-                        verifiedQuery
-                        ?? throw new InvalidOperationException(
-                            "The Queried personalisation needs the verified current query."
-                        )
-                    ).RaisedAt
-                ),
                 ["reference"] = reference,
                 [RegistrationNumberKey] = registrationNumber,
                 ["regulatorEmail"] = regulatorEmail,

@@ -422,14 +422,15 @@ public static class WorkItemEndpoints
         if (
             workItem is not null
             && WorkItemEngineRules.ResolveTemplate(workItem, registry) is { } template
-            && ResolveGuardTransition(template, workItem.StateId, actionId) is { CallerInvocable: false }
+            && WorkItemEngineRules.ResolveTransition(template, workItem.StateId, actionId) is { CallerInvocable: false }
         )
         {
             // RA-000: the shipped clients never offer a non-caller-invocable
             // action here (it is absent from availableActions), so reaching
             // this is a hand-crafted or out-of-date request trying to skip the
-            // module service that owns the transition. Logged at Error so it
-            // is seen.
+            // module service that owns the transition. Deliberately Error, not
+            // Warning: a crafted POST means a client has bypassed the UI, and
+            // that should alert rather than blend into warning noise.
             loggerFactory
                 .CreateLogger(typeof(WorkItemEndpoints).FullName!)
                 .LogError(
@@ -455,30 +456,6 @@ public static class WorkItemEndpoints
             cancellationToken
         );
         return ToHttpResult(result, engine);
-    }
-
-    /// <summary>
-    /// RA-351: an action id can be declared on more than one state (e.g.
-    /// <c>sla-extend</c> self-loops on both <c>assessment-in-progress</c> and
-    /// <c>queried</c>). Resolve the CallerInvocable check against the
-    /// transition for the item's CURRENT state — matching on action id alone
-    /// would test the first-declared transition, which can differ in
-    /// CallerInvocable from the one that actually applies here.
-    /// </summary>
-    private static WorkItemTransition? ResolveGuardTransition(
-        IWorkItemTemplate template,
-        string stateId,
-        string actionId
-    )
-    {
-        var actionTransitions = template
-            .Transitions.Where(t =>
-                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
-            )
-            .ToList();
-        return actionTransitions.FirstOrDefault(t =>
-                string.Equals(t.FromStateId, stateId, StringComparison.OrdinalIgnoreCase)
-            ) ?? actionTransitions.FirstOrDefault();
     }
 
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Assign(

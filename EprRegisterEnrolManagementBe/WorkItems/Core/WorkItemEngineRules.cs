@@ -11,9 +11,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// identical rule instead of reinventing (and drifting from) it.
 ///
 /// RA-410: the task-completeness rules that made up most of this class went
-/// with the rest of the task framework. Template resolution stays here — it
-/// is the one rule every path still has to agree on, and both the engine and
-/// the module services call it.
+/// with the rest of the task framework. Template and transition resolution
+/// stay here — they are the rules every path still has to agree on.
 /// </summary>
 internal static class WorkItemEngineRules
 {
@@ -28,4 +27,36 @@ internal static class WorkItemEngineRules
         WorkItem workItem,
         IWorkItemRegistry registry
     ) => workItem.TemplateSnapshot ?? (IWorkItemTemplate?)registry.Find(workItem.TypeId);
+
+    /// <summary>
+    /// RA-351: the transition <paramref name="actionId"/> resolves to for a
+    /// work item in <paramref name="stateId"/>. An action id can be declared on
+    /// more than one state (e.g. <c>sla-extend</c> self-loops on both
+    /// <c>assessment-in-progress</c> and <c>queried</c>), so the declaration
+    /// whose from-state matches wins; matching on action id alone would pick
+    /// the first declaration and wrongly reject the action from every other
+    /// state it is valid in. Otherwise the first declaration is returned, so a
+    /// caller can still name a valid from-state when rejecting the action.
+    /// <c>null</c> when the template does not declare the action at all. Both
+    /// ids match case-insensitively.
+    ///
+    /// RA-000: shared by the engine (<see cref="WorkItemService"/>) and the
+    /// generic action endpoint's caller-invocable guard, so the guard always
+    /// checks the transition the engine would apply.
+    /// </summary>
+    internal static WorkItemTransition? ResolveTransition(
+        IWorkItemTemplate template,
+        string stateId,
+        string actionId
+    )
+    {
+        var actionTransitions = template
+            .Transitions.Where(t =>
+                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
+            )
+            .ToList();
+        return actionTransitions.FirstOrDefault(t =>
+                string.Equals(t.FromStateId, stateId, StringComparison.OrdinalIgnoreCase)
+            ) ?? actionTransitions.FirstOrDefault();
+    }
 }
