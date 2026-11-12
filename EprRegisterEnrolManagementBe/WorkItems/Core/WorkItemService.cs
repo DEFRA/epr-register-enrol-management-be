@@ -265,6 +265,21 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
+        // RA-739: every submission has a submission reference. This path
+        // creates one work item, so the submission is one request. Allocated
+        // after the replay check, so a replay keeps its first reference and
+        // uses no number. The year is the payload's accreditationYear, or the
+        // submission date's year for a payload without one.
+        var submissionYear = AccreditationYear.TryRead(payload, out var accreditationYear)
+            ? accreditationYear
+            : now.Year;
+        payload[SubmissionReferenceField] = await _submissionReferenceGenerator.GenerateAsync(
+            session: null,
+            submissionYear,
+            cancellationToken
+        );
+        payload[SubmissionSizeField] = 1;
+
         return await PersistNewWorkItemAsync(
             request,
             referenceFormat,

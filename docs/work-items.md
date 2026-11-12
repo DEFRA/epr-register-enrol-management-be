@@ -65,7 +65,10 @@ payload is the shared request fields plus a single `site`, its own
 sends a number. The unique index on `payload.operatorRequestId`
 is now on (`payload.operatorRequestId`, `payload.site.siteId`); startup drops
 the RA-492 single-field index. Re-accreditation's request and response are
-unchanged.
+unchanged, but its single work item also gets a `submissionReference` from the
+same counter, keyed on the payload's `accreditationYear` (or the submission
+date's year without one), with `submissionSize` 1. It is allocated after the
+replay check, outside a transaction, so a failed write skips that number.
 
 **The add-ORS site.** Each `sites[]` entry, and so each work item's `site`, is
 in re-accreditation's overseas site shape (the operator backend shares one
@@ -286,11 +289,12 @@ type is configured. Every setting is code, not runtime data:
   tonnage band upgrade later) declare `WorkItemCategories.InYearChange`
   (`in-year-change`). Each change type still has its own `TypeId`, so a
   type's workflow can change on its own.
-- **Uses a submission reference** marks types whose submissions get a
-  `SUB-{yyyy}-{sequence}` reference shared by every work item one submission
-  creates, and whose `sites[]` is split into one work item per site (see
+- **Uses a submission reference** marks types whose `sites[]` is split into
+  one work item per site, all sharing the submission's
+  `SUB-{yyyy}-{sequence}` reference (see
   [Ingestion API](#ingestion-api)). The list's `category` filter arrives in a
-  later RA-739 task.
+  later RA-739 task. A type without it (re-accreditation) still gets a
+  submission reference, on its single work item.
 - **Workflow** is a `WorkItemWorkflow`: the states (in status sort order),
   their labels, the transitions and the initial state. `StandardWorkflow`
   (`WorkItems/Workflows/StandardWorkflow.cs`) is re-accreditation's lifecycle
@@ -716,7 +720,7 @@ registration line" promise. All files live under
 
 | File | Role |
 | --- | --- |
-| `ReAccreditationType.cs` | Re-accreditation's case type configuration (RA-739): label "Re-accreditation", no category, no submission reference, and the Standard workflow (`WorkItems/Workflows/StandardWorkflow.cs`, shared so other types can reference it). That workflow declares the states (`submitted`, `duly-made`, `assessment-started` (RA-527 follow-up: started, still displayed "Duly made"), `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` / `rejected-pending-contact` (RA-527: determined, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `make-determination-approved` / `-rejected`, `confirm-contact-approved` / `-rejected`, `resume-during-*`, `continue-review-during-*` and the moving `sla-extend` (below) are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. Template version v18 (RA-527 follow-up): `start-assessment` targets `duly-made` → `assessment-started`, the only transition into that state, so starting a case keeps it "Duly made" on both sides. Its four exits reuse existing action ids with a second from-state: `submit-for-decision` → `awaiting-decision` (a second declaration, reached only through `/decision`), `query-during-assessment` → `queried`, `withdraw-during-assessment` → `withdrawn`, and `sla-extend` → `assessment-in-progress` — a real move, unlike the `assessment-in-progress` and `queried` self-loops, which `SlaService` applies in the same write as the deadline change (resolving the template via `WorkItemEngineRules.ResolveTemplate`), so the case becomes "Updated". Only the deadline change (`POST /work-items/{id}/sla/extend`) applies that move: `POST /work-items/{id}/sla/override` (no Case Management UI or caller since RA-572) only rewrites the clock, never changes state and never pushes, so an override on a started case leaves it "Duly made". Deliberately left so while override is retired; if it is ever reinstated, it should apply the same move. |
+| `ReAccreditationType.cs` | Re-accreditation's case type configuration (RA-739): label "Re-accreditation", no category, not split per site (its single work item still gets a submission reference), and the Standard workflow (`WorkItems/Workflows/StandardWorkflow.cs`, shared so other types can reference it). That workflow declares the states (`submitted`, `duly-made`, `assessment-started` (RA-527 follow-up: started, still displayed "Duly made"), `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` / `rejected-pending-contact` (RA-527: determined, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `make-determination-approved` / `-rejected`, `confirm-contact-approved` / `-rejected`, `resume-during-*`, `continue-review-during-*` and the moving `sla-extend` (below) are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. Template version v18 (RA-527 follow-up): `start-assessment` targets `duly-made` → `assessment-started`, the only transition into that state, so starting a case keeps it "Duly made" on both sides. Its four exits reuse existing action ids with a second from-state: `submit-for-decision` → `awaiting-decision` (a second declaration, reached only through `/decision`), `query-during-assessment` → `queried`, `withdraw-during-assessment` → `withdrawn`, and `sla-extend` → `assessment-in-progress` — a real move, unlike the `assessment-in-progress` and `queried` self-loops, which `SlaService` applies in the same write as the deadline change (resolving the template via `WorkItemEngineRules.ResolveTemplate`), so the case becomes "Updated". Only the deadline change (`POST /work-items/{id}/sla/extend`) applies that move: `POST /work-items/{id}/sla/override` (no Case Management UI or caller since RA-572) only rewrites the clock, never changes state and never pushes, so an override on a started case leaves it "Duly made". Deliberately left so while override is retired; if it is ever reinstated, it should apply the same move. |
 | `ReAccreditationStatusPushHook.cs` | Pushes each applied transition's target state to the operator journey, except a *move* (self-loops are never excluded) onto `queried`, `withdrawn`, either pending-contact state or (RA-527 follow-up) `assessment-started`, plus the decision actions whose push is owned by the confirm-contact service. A start therefore pushes nothing and writes no `status-push-*` entry, so the operator stays DulyMade; a deadline change from `assessment-started` pushes `assessment-in-progress` (Updated). |
 | `ReAccreditationAssessmentStartedSnapshotMigration.cs` | v18 snapshot migration, registered last of the snapshot migrations so it sets the final version. Adds `assessment-started` (after `duly-made`) to every re-accreditation case's frozen snapshot, retargets `start-assessment` and adds the four exits. Writes only `TemplateSnapshot` and `TemplateVersion` — it never moves a case, so a case already in `assessment-in-progress` stays "Updated" — and skips an item whose snapshot already matches. |
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |

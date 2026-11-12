@@ -53,7 +53,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
                 new ApplicationReferenceGenerator(_time),
                 new InYearChangeReferenceGenerator(_sequenceStore)
             ),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             _time
         );
 

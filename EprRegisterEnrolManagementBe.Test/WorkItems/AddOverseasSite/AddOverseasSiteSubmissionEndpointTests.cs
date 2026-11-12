@@ -301,7 +301,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
     }
 
     [Fact]
-    public async Task Re_accreditation_submissions_get_no_submission_reference_and_keep_their_response()
+    public async Task Re_accreditation_submissions_get_a_submission_reference_of_one_request_and_keep_their_response()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new AppFactory(fixture);
@@ -331,8 +331,9 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
             body.GetProperty("id").GetGuid(),
             cancellationToken
         );
-        Assert.False(stored!.Payload.Contains("submissionReference"));
-        Assert.Equal(0, await factory.CountSequencesAsync(cancellationToken));
+        Assert.Equal("SUB-2026-0001", stored!.Payload["submissionReference"].AsString);
+        Assert.Equal(1, stored.Payload["submissionSize"].AsInt32);
+        Assert.Equal(1, await factory.CountSequencesAsync(cancellationToken));
     }
 
     [Fact]

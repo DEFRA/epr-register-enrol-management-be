@@ -48,7 +48,7 @@ public class WorkItemServiceTimestampTests
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             _time);
 
     private static TestWorkItemType BuildType() =>

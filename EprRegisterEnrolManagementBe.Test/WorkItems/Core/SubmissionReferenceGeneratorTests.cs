@@ -29,4 +29,18 @@ public sealed class SubmissionReferenceGeneratorTests
 
         Assert.Equal(expected, reference);
     }
+
+    [Fact]
+    public async Task GenerateAsync_without_a_session_allocates_outside_a_transaction()
+    {
+        _store.NextAsync("SUB-2027", Arg.Any<CancellationToken>()).Returns(7L);
+
+        var reference = await new SubmissionReferenceGenerator(_store).GenerateAsync(
+            session: null,
+            2027,
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal("SUB-2027-0007", reference);
+    }
 }

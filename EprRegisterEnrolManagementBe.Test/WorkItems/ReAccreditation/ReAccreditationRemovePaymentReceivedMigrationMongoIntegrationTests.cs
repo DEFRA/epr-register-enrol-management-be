@@ -325,7 +325,7 @@ public sealed class ReAccreditationRemovePaymentReceivedMigrationMongoIntegratio
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.NoSubmissions());
+            TestReferenceGenerators.FixedSubmissionReference());
 
         await BuildMigration().ApplyAsync(_persistence, ct);
         var migrated = (await _persistence.GetByIdAsync(seeded.Id, ct))!;

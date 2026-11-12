@@ -32,6 +32,8 @@ public class WorkItemEndpointsTests
     private static readonly string[] s_expectedCapturedTypeIds = ["re-accreditation", "other-type"];
     private static readonly string[] s_expectedStampedPayloadFields =
     [
+        "submissionReference",
+        "submissionSize",
         "applicationReference",
         "paymentReference",
     ];
@@ -382,7 +384,8 @@ public class WorkItemEndpointsTests
         // RA-219: even with no client payload the engine stamps the
         // server-generated applicationReference, so the payload is no longer
         // empty. RA-447/CM3: it also stamps paymentReference (the same
-        // value) at creation, so exactly those two fields are present.
+        // value) at creation. RA-739: and the submission reference with a
+        // submission size of 1, so exactly those four fields are present.
         Assert.Equal(
             s_expectedStampedPayloadFields,
             persisted!.Payload.Names);

@@ -41,7 +41,9 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.NoSubmissions(),
+            new SubmissionReferenceGenerator(
+                new MongoReferenceSequenceStore(_clientFactory, NullLoggerFactory.Instance)
+            ),
             _time
         );
 
@@ -54,7 +56,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             _time,
             postActionHooks: [hook]
         );
@@ -214,7 +216,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             _time,
             postActionHooks: [slowHook, pushHook]
         );
@@ -1747,7 +1749,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             time
         );
 
@@ -1969,6 +1971,92 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
+    public async Task Submit_stamps_a_submission_reference_for_the_accreditation_year_and_a_size_of_one()
+    {
+        // RA-739: every submission has a submission reference. A type that is
+        // not split per site (re-accreditation) is one request, so its single
+        // work item has submissionSize 1. Each submission takes the next
+        // number in the year's SUB sequence.
+        var type = BuildType();
+        var service = BuildService(type);
+
+        async Task<BsonDocument> SubmitAsync() =>
+            (
+                await GetAsync(
+                    (
+                        await service.SubmitAsync(
+                            new WorkItemSubmissionRequest(
+                                type,
+                                new BsonDocument { ["accreditationYear"] = 2027 },
+                                "test-client",
+                                AuditUser()
+                            ),
+                            cancellationToken: TestContext.Current.CancellationToken
+                        )
+                    ).WorkItem!.Id
+                )
+            ).Payload;
+
+        var first = await SubmitAsync();
+        var second = await SubmitAsync();
+
+        Assert.Equal("SUB-2027-0001", first["submissionReference"].AsString);
+        Assert.Equal(1, first["submissionSize"].AsInt32);
+        Assert.Equal("SUB-2027-0002", second["submissionReference"].AsString);
+    }
+
+    [Fact]
+    public async Task Submit_without_an_accreditation_year_takes_the_submission_reference_year_from_the_submission_date()
+    {
+        var type = BuildType();
+
+        var result = await BuildService(type)
+            .SubmitAsync(
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser()),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        var fetched = await GetAsync(result.WorkItem!.Id);
+        Assert.Equal($"SUB-{TickedNow.Year}-0001", fetched.Payload["submissionReference"].AsString);
+    }
+
+    [Fact]
+    public async Task Submit_replay_keeps_the_first_submission_reference_and_allocates_no_new_number()
+    {
+        var type = BuildType();
+        var service = BuildService(type);
+        WorkItemSubmissionRequest Request() =>
+            new(
+                type,
+                new BsonDocument { ["operatorApplicationId"] = "app-001", ["accreditationYear"] = 2027 },
+                "test-client",
+                AuditUser()
+            );
+
+        var first = await service.SubmitAsync(Request(), TestContext.Current.CancellationToken);
+        var replay = await service.SubmitAsync(Request(), TestContext.Current.CancellationToken);
+        var next = await service.SubmitAsync(
+            new WorkItemSubmissionRequest(
+                type,
+                new BsonDocument { ["accreditationYear"] = 2027 },
+                "test-client",
+                AuditUser()
+            ),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.True(replay.IsIdempotentReplay);
+        Assert.Equal(
+            "SUB-2027-0001",
+            (await GetAsync(first.WorkItem!.Id)).Payload["submissionReference"].AsString
+        );
+        Assert.Equal(
+            "SUB-2027-0002",
+            (await GetAsync(next.WorkItem!.Id)).Payload["submissionReference"].AsString
+        );
+    }
+
+    [Fact]
     public async Task Submit_NoOperatorSuppliedPaymentReference_FallsBackToTheGeneratedApplicationReference()
     {
         // RA-447/CM3: paymentReference used to stay null forever (the operator backend cannot
@@ -2039,7 +2127,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(generator),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             _time
         );
 
@@ -2097,7 +2185,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(generator),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             _time
         );
 
@@ -2132,7 +2220,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(generator),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             _time
         );
 
@@ -2297,7 +2385,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             racing,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.NoSubmissions(),
+            TestReferenceGenerators.FixedSubmissionReference(),
             _time
         );
     }

@@ -21,23 +21,19 @@ internal static class TestReferenceGenerators
         );
 
     /// <summary>
-    /// RA-739: a submission reference generator for engine tests that never
-    /// submit a per-site type. Fails the test if it is ever called.
+    /// RA-739: a submission reference generator for engine tests that need no
+    /// Mongo sequence store. Every submission gets <c>SUB-{yyyy}-0001</c>.
     /// </summary>
-    public static ISubmissionReferenceGenerator NoSubmissions() =>
-        new UnexpectedSubmissionReferenceGenerator();
+    public static ISubmissionReferenceGenerator FixedSubmissionReference() =>
+        new FixedSubmissionReferenceGenerator();
 
-    private sealed class UnexpectedSubmissionReferenceGenerator : ISubmissionReferenceGenerator
+    private sealed class FixedSubmissionReferenceGenerator : ISubmissionReferenceGenerator
     {
         public Task<string> GenerateAsync(
-            MongoDB.Driver.IClientSessionHandle session,
+            MongoDB.Driver.IClientSessionHandle? session,
             int accreditationYear,
             CancellationToken cancellationToken = default
-        ) =>
-            throw new InvalidOperationException(
-                $"Test wired {nameof(TestReferenceGenerators)}.{nameof(NoSubmissions)} "
-                    + "but submitted a per-site type."
-            );
+        ) => Task.FromResult($"SUB-{accreditationYear:D4}-0001");
     }
 
     private sealed class UnexpectedInYearChangeReferenceGenerator

@@ -5,8 +5,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
 /// RA-739: produces the <c>submissionReference</c> shared by every work item
-/// one submission creates, for types that declare
-/// <see cref="IWorkItemType.UsesSubmissionReference"/>. The format is
+/// one submission creates: every work item of a type that declares
+/// <see cref="IWorkItemType.UsesSubmissionReference"/> (split per site), and
+/// the single work item of any other type (re-accreditation). The format is
 /// <c>SUB-{yyyy}-{sequence}</c>, for example <c>SUB-2026-0001</c>:
 /// <list type="bullet">
 ///   <item><c>{yyyy}</c>: the submission's 4-digit <c>accreditationYear</c>.</item>
@@ -15,17 +16,19 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 ///   one sequence per year shared by every type. It starts at <c>0001</c> and
 ///   past <c>9999</c> grows to 5 or more digits. It never wraps.</item>
 /// </list>
-/// Every call allocates a fresh number, in the caller's transaction, so an
-/// aborted submission leaves no gap.
+/// Every call allocates a fresh number. Inside the caller's transaction an
+/// aborted submission leaves no gap; without one (a single work item), a
+/// failed write after allocation skips that number.
 /// </summary>
 public interface ISubmissionReferenceGenerator
 {
     /// <summary>
     /// Allocate the next submission reference for
-    /// <paramref name="accreditationYear"/> in <paramref name="session"/>.
+    /// <paramref name="accreditationYear"/>, in <paramref name="session"/>
+    /// when one is given.
     /// </summary>
     Task<string> GenerateAsync(
-        IClientSessionHandle session,
+        IClientSessionHandle? session,
         int accreditationYear,
         CancellationToken cancellationToken = default
     );
@@ -39,7 +42,7 @@ public sealed class SubmissionReferenceGenerator(IReferenceSequenceStore sequenc
     public const string Prefix = "SUB";
 
     public async Task<string> GenerateAsync(
-        IClientSessionHandle session,
+        IClientSessionHandle? session,
         int accreditationYear,
         CancellationToken cancellationToken = default
     )
@@ -48,7 +51,9 @@ public sealed class SubmissionReferenceGenerator(IReferenceSequenceStore sequenc
             CultureInfo.InvariantCulture,
             $"{Prefix}-{accreditationYear:D4}"
         );
-        var sequence = await sequenceStore.NextAsync(session, sequenceKey, cancellationToken);
+        var sequence = session is null
+            ? await sequenceStore.NextAsync(sequenceKey, cancellationToken)
+            : await sequenceStore.NextAsync(session, sequenceKey, cancellationToken);
 
         return string.Create(CultureInfo.InvariantCulture, $"{sequenceKey}-{sequence:D4}");
     }
