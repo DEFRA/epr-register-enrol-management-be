@@ -14,18 +14,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 // registration with no accreditation, so the operator was registered-only in
 // 2026.
 //
-// The rows are copied as published, including these known register errors.
-// Whatever reads this has to deal with them; PublicRegister2026Tests pins them
-// so a change to the data is a deliberate one:
-// - R26WR5000950025P (org 500095) is missing a character, and has no
-//   accreditation.
-// - R26WR5003020027PL (JP Recycling, org 500302) has accreditation
-//   A26WR5005320025PL, whose org segment is 500532.
-// - R26SR5005410022GO (Comhairle Nan Eilean Siar) has accreditation
-//   A26SR5005410022GL; GL is not a material code.
-// - Three rows' Org ID doesn't match the org in their registration number:
-//   R26ER5002260055GR (Encirc Ltd) lists 500069, and R26WX5002360007ST and
-//   R26WX5002360008AL (Reddy Pai Metals Ltd) list 500263.
+// The rows are copied as published, including six known register errors.
+// Each is marked with a "Register error" comment above its row. Whatever reads
+// this has to deal with them; PublicRegister2026Tests pins them so a change to
+// the data is a deliberate one.
 //
 // A point-in-time snapshot, not a live feed.
 internal static class PublicRegister2026
@@ -102,6 +94,8 @@ internal static class PublicRegister2026
             ["R26ER5002190062WO"] = new(500219, "Arden Wood Shavings Ltd", "A26ER5002190026WO"),
             ["R26ER5002200173PL"] = new(500220, "PP Polymers Ltd", "A26ER5002200131PL"),
             ["R26ER5002210086PL"] = new(500221, "ReNew Wilton Limited", "A26ER5002210042PL"),
+            // Register error: the Org ID column says 500069, but the registration
+            // number's org is 500226. The accreditation number is consistent.
             ["R26ER5002260055GR"] = new(500069, "Encirc Ltd", "A26ER5002260023GR"),
             ["R26ER5002270082PL"] = new(500227, "Chase Plastics Limited", "A26ER5002270061PL"),
             ["R26ER5002280254PL"] = new(500228, "daly plastics ltd", "A26ER5002280222PL"),
@@ -389,6 +383,8 @@ internal static class PublicRegister2026
             ["R26SR5002570007WO"] = new(500257, "West Fraser Europe Limited", "A26SR5002570007WO"),
             ["R26SR5003410003PL"] = new(500341, "british polythene limited", "A26SR5003410003PL"),
             ["R26SR5003410011PL"] = new(500341, "british polythene limited", "A26SR5003410011PL"),
+            // Register error: the accreditation number ends GL, which isn't a material
+            // code. The registration is GO, so derivation would reject it.
             ["R26SR5005410022GO"] = new(500541, "Comhairle Nan Eilean Siar", "A26SR5005410022GL"),
             ["R26SR5005490021PL"] = new(500549, "Marlin Industries Scotland Limited", "A26SR5005490021PL"),
             ["R26SR5005780020GO"] = new(500578, "Brewster Brothers Limited", "A26SR5005780020GO"),
@@ -405,6 +401,8 @@ internal static class PublicRegister2026
             ["R26WR5000770018PL"] = new(500077, "New Horizon Plastics Co Limited", "A26WR5000770020PL"),
             ["R26WR5000780019PL"] = new(500078, "NEW HORIZON BIOFUEL & ANIMAL BEDDINGS CO LTD", "A26WR5000780018PL"),
             ["R26WR5000780020WO"] = new(500078, "NEW HORIZON BIOFUEL & ANIMAL BEDDINGS CO LTD", "A26WR5000780019WO"),
+            // Register error: this registration number is missing a character, so it
+            // will never match a real registration.
             ["R26WR5000950025P"] = new(500095, "J. AND A. YOUNG (LEICESTER) LTD", null),
             ["R26WR5001080010WO"] = new(500108, "Kronospan Limited", "A26WR5001080008WO"),
             ["R26WR5001480003AL"] = new(500148, "SWAN ALLOY UK LTD.", "A26WR5001480005AL"),
@@ -415,6 +413,8 @@ internal static class PublicRegister2026
             ["R26WR5002520013WO"] = new(500252, "South West Wood Products Ltd", "A26WR5002520011WO"),
             ["R26WR5002830017PL"] = new(500283, "Pulse Plastics Ltd", "A26WR5002830015PL"),
             ["R26WR5003020009PL"] = new(500302, "JP RECYCLING LTD", "A26WR5003020007PL"),
+            // Register error: the accreditation number's org segment is 500532, not
+            // 500302. Copying it would put the wrong org into the 2027 number.
             ["R26WR5003020027PL"] = new(500302, "JP RECYCLING LTD", "A26WR5005320025PL"),
             ["R26WR5003720024PL"] = new(500372, "ISSI GREEN ENVIRONMENTAL SOLUTION LIMITED", "A26WR5003720024PL"),
             ["R26WR5003990021PL"] = new(500399, "SW Plastic Solutions Ltd", "A26WR5003990021PL"),
@@ -423,7 +423,11 @@ internal static class PublicRegister2026
             ["R26WX5000560016ST"] = new(500056, "AMG Resources LTD", "A26WX5000560013ST"),
             ["R26WX5000590011PA"] = new(500059, "Shotton Mill Ltd", "A26WX5000590010PA"),
             ["R26WX5001400006PA"] = new(500140, "DS Smith Recycling UK Limited", "A26WX5001400006PA"),
+            // Register error: the Org ID column says 500263, but the registration
+            // number's org is 500236. The accreditation number is consistent.
             ["R26WX5002360007ST"] = new(500263, "REDDY PAI METALS LTD", "A26WX5002360016ST"),
+            // Register error: the Org ID column says 500263, but the registration
+            // number's org is 500236. The accreditation number is consistent.
             ["R26WX5002360008AL"] = new(500263, "REDDY PAI METALS LTD", "A26WX5002360017AL"),
             ["R26WX5003080015PL"] = new(500308, "GAP ALTERNATIVE FUELS LIMITED", "A26WX5003080014PL"),
             ["R26WX5005570023PL"] = new(500557, "Circular Commodities (UK) Ltd", "A26WX5005570023PL"),
