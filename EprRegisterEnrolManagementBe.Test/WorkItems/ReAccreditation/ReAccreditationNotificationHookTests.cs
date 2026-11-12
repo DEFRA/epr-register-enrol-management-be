@@ -4,6 +4,8 @@ using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
@@ -87,13 +89,28 @@ public class ReAccreditationNotificationHookTests
             CreatedAt = createdAt,
         };
 
+    /// <summary>
+    /// RA-000: a work item as the engine hands it to the hook right after
+    /// ReAccreditationQueryService stamped its query and applied
+    /// <paramref name="actionId"/> — the only state in which the Queried email
+    /// is sent.
+    /// </summary>
+    private static WorkItem BuildFreshlyQueriedWorkItem(string actionId, DateTime? raisedAt = null)
+    {
+        var workItem = BuildWorkItem(stateId: "queried", submittedAt: FreshQueryTestData.SubmittedAt);
+        workItem.Payload!["currentQuery"] = FreshQueryTestData.CurrentQuery(raisedAt);
+        FreshQueryTestData.AppendQueryTransition(workItem, actionId, FreshQueryTestData.FromStateFor(actionId));
+        return workItem;
+    }
+
     private static ReAccreditationNotificationHook BuildSut(
         INotifyClient notifyClient,
         IWorkItemAuditAppender auditAppender,
         IRegulatorMailboxResolver? regulatorMailboxResolver = null,
         WorkItem? persistedWorkItem = null,
         NotifyConfig? notifyConfig = null,
-        string? caseManagementBaseUrl = null
+        string? caseManagementBaseUrl = null,
+        ILogger<ReAccreditationNotificationHook>? logger = null
     )
     {
         // Default resolver returns null so the RA-240 regulator send that
@@ -123,7 +140,7 @@ public class ReAccreditationNotificationHookTests
             auditAppender,
             resolver,
             persistence,
-            NullLogger<ReAccreditationNotificationHook>.Instance,
+            logger ?? NullLogger<ReAccreditationNotificationHook>.Instance,
             Options.Create(notifyConfig ?? new NotifyConfig()),
             caseManagementOptions
         );
@@ -289,12 +306,10 @@ public class ReAccreditationNotificationHookTests
             )
             .Returns(NotifySendResult.Success("msg-queried"));
 
-        var workItem = BuildWorkItem(stateId: "queried");
-        workItem.Payload!["currentQuery"] = new BsonDocument
-        {
-            ["reason"] = "Please confirm the tonnage figures.",
-            ["raisedAt"] = new DateTime(2025, 11, 3, 0, 0, 0, DateTimeKind.Utc),
-        };
+        var workItem = BuildFreshlyQueriedWorkItem(
+            "query-during-duly-making",
+            raisedAt: new DateTime(2025, 11, 3, 0, 0, 0, DateTimeKind.Utc)
+        );
         var sut = BuildSut(notifyClient, auditAppender);
 
         await sut.OnActionAppliedAsync(
@@ -309,27 +324,91 @@ public class ReAccreditationNotificationHookTests
         Assert.Equal("3 November 2025", captured!["Querieddate"]);
     }
 
-    [Fact]
-    public async Task OnActionAppliedAsync_sets_empty_Querieddate_when_current_query_absent()
+    // RA-000: a Queried email without THIS query's stamp would carry a blank
+    // date (no stamp) or the previous query's date (stale stamp). It is not
+    // sent; the hook logs at Error and records notification-failed.
+    [Theory]
+    [InlineData("missing", "payload.currentQuery is missing")]
+    [InlineData("stale", "belongs to an earlier query")]
+    [InlineData("no-raised-at", "payload.currentQuery.raisedAt is missing")]
+    public async Task OnActionAppliedAsync_does_not_send_Queried_without_a_fresh_current_query(
+        string problem,
+        string expectedReason
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        notifyClient
-            .SendEmailAsync(
-                "Queried",
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
                 Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
                 Arg.Any<string>(),
-                cancellationToken: Arg.Any<CancellationToken>()
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
             )
-            .Returns(NotifySendResult.Success("msg-queried"));
+            .Returns(true);
+        var logger = new ListLogger<ReAccreditationNotificationHook>();
 
-        // No currentQuery stamped at all — legacy item or a queried
-        // transition applied outside ReAccreditationQueryService.
-        var workItem = BuildWorkItem(stateId: "queried");
-        var sut = BuildSut(notifyClient, auditAppender);
+        var workItem = BuildFreshlyQueriedWorkItem("query-during-duly-made");
+        switch (problem)
+        {
+            case "missing":
+                workItem.Payload!.Remove("currentQuery");
+                break;
+            case "stale":
+                workItem.Payload!["currentQuery"] = FreshQueryTestData.CurrentQuery(
+                    FreshQueryTestData.StaleRaisedAt
+                );
+                break;
+            case "no-raised-at":
+                workItem.Payload!["currentQuery"].AsBsonDocument.Remove("raisedAt");
+                break;
+        }
+        var sut = BuildSut(notifyClient, auditAppender, logger: logger);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-duly-made",
+            fromStateId: "duly-made",
+            s_user,
+            ct
+        );
+
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: ct);
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-failed",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "Queried"
+                    && d["reference"] == ApplicationReference
+                    && d["reason"]!.Contains(expectedReason)
+                ),
+                s_user,
+                ct
+            );
+        var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Equal(workItem.Id, error.Properties["WorkItemId"]);
+        Assert.Contains(expectedReason, (string)error.Properties["Reason"]!);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_records_notification_failed_when_the_payload_cannot_be_read()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        var logger = new ListLogger<ReAccreditationNotificationHook>();
+        var workItem = BuildFreshlyQueriedWorkItem("query-during-duly-making");
+        // A scalar where a document is modelled: deserialisation throws.
+        workItem.Payload!["currentQuery"] = "not-a-document";
+        var sut = BuildSut(notifyClient, auditAppender, logger: logger);
 
         await sut.OnActionAppliedAsync(
             workItem,
@@ -339,9 +418,34 @@ public class ReAccreditationNotificationHookTests
             ct
         );
 
-        Assert.NotNull(captured);
-        Assert.True(captured!.ContainsKey("Querieddate"));
-        Assert.Equal(string.Empty, captured["Querieddate"]);
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: ct);
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-failed",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "Queried" && d["reason"] == "payload could not be deserialised"
+                ),
+                s_user,
+                ct
+            );
+        await auditAppender
+            .DidNotReceive()
+            .AppendAsync(
+                workItem.Id,
+                "notification-skipped",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            );
+        var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
+        Assert.NotNull(error.Exception);
+        Assert.Equal(workItem.Id, error.Properties["WorkItemId"]);
     }
 
     [Fact]
@@ -439,10 +543,16 @@ public class ReAccreditationNotificationHookTests
             )
             .Returns(NotifySendResult.Success("msg-id"));
 
-        var workItem = BuildWorkItem();
+        var workItem = BuildFreshlyQueriedWorkItem(actionId);
         var sut = BuildSut(notifyClient, auditAppender);
 
-        await sut.OnActionAppliedAsync(workItem, actionId, fromStateId: "submitted", s_user, ct);
+        await sut.OnActionAppliedAsync(
+            workItem,
+            actionId,
+            fromStateId: FreshQueryTestData.FromStateFor(actionId),
+            s_user,
+            ct
+        );
 
         await notifyClient
             .Received(1)
@@ -598,13 +708,13 @@ public class ReAccreditationNotificationHookTests
             )
             .Returns(NotifySendResult.Success("msg-queried"));
 
-        var workItem = BuildWorkItem(stateId: "queried");
+        var workItem = BuildFreshlyQueriedWorkItem(actionId);
         var sut = BuildSut(notifyClient, auditAppender);
 
         await sut.OnActionAppliedAsync(
             workItem,
             actionId,
-            fromStateId: "assessment-in-progress",
+            fromStateId: FreshQueryTestData.FromStateFor(actionId),
             s_user,
             ct
         );
@@ -655,7 +765,7 @@ public class ReAccreditationNotificationHookTests
             )
             .Returns(NotifySendResult.Failure("503 Service Unavailable"));
 
-        var workItem = BuildWorkItem(stateId: "queried");
+        var workItem = BuildFreshlyQueriedWorkItem("query-during-decision");
         var sut = BuildSut(notifyClient, auditAppender);
 
         await sut.OnActionAppliedAsync(

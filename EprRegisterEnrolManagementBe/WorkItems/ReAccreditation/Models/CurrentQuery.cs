@@ -16,10 +16,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 ///
 /// Only meaningful while the work item is in the <c>queried</c> state.
 /// Because it is written just before the transition, a subsequent failure of
-/// that transition can leave a stamped query on a non-queried item; readers
-/// must therefore gate on <c>StateId == "queried"</c> rather than on the mere
-/// presence of this record. It is deliberately not cleared afterwards — the
-/// next query overwrites it, and the audit log remains the historical record.
+/// that transition can leave a stamped query on a non-queried item, and it is
+/// deliberately not cleared afterwards — the next query overwrites it, and the
+/// audit log remains the historical record. Readers must therefore not trust
+/// its mere presence: the query-transition hooks verify it was stamped for the
+/// transition they are handling via <c>ReAccreditationFreshQuery</c> (RA-000).
 /// </summary>
 internal sealed record CurrentQuery
 {

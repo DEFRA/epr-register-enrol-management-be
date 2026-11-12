@@ -24,6 +24,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <see cref="ReAccreditationNotificationHook"/>'s own <c>Queried</c>
 /// template already relies on).
 ///
+/// RA-000: the query-during-* transitions are not caller-invocable, so only
+/// the query service applies them. As defence in depth the hook still proves
+/// the stamp belongs to this transition (<see cref="ReAccreditationFreshQuery"/>)
+/// and, when it cannot, or when the payload cannot be read, pushes nothing,
+/// logs at Error and records <c>query-push-failed</c> with a <c>reason</c>.
+///
 /// Never throws — a push failure must not unwind the already-persisted
 /// query transition (the <see cref="IWorkItemPostActionHook"/> contract).
 /// Records the outcome as a <c>query-push-sent</c> / <c>query-push-skipped</c>
@@ -73,9 +79,40 @@ internal sealed class ReAccreditationQueryPushHook(
 
         try
         {
-            var payload = DeserialisePayload(workItem);
-            var queryNote = payload?.CurrentQuery?.Reason ?? string.Empty;
-            var sectionKeys = payload?.CurrentQuery?.Sections ?? [];
+            ReAccreditationPayload payload;
+            try
+            {
+                payload = BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(
+                    ex,
+                    "Query push for work item {WorkItemId} (correlation {CorrelationId}) not attempted: "
+                    + "the payload could not be deserialised.",
+                    workItem.Id, correlationId);
+                await RecordNotAttemptedAsync(
+                    workItem, actionId, correlationId, "payload could not be deserialised", user, cancellationToken);
+                return;
+            }
+
+            // RA-000: never push a query this operation did not stamp. A
+            // missing currentQuery used to push an empty note and no sections
+            // (rejected by the operator backend), and a stale one re-sent the
+            // previous query, which the operator backend accepted.
+            var freshQuery = ReAccreditationFreshQuery.Verify(workItem, payload.CurrentQuery, actionId, fromStateId);
+            if (!freshQuery.IsFresh)
+            {
+                logger.LogError(
+                    "Query push for work item {WorkItemId} (correlation {CorrelationId}) not attempted: {Reason}.",
+                    workItem.Id, correlationId, freshQuery.FailureReason);
+                await RecordNotAttemptedAsync(
+                    workItem, actionId, correlationId, freshQuery.FailureReason!, user, cancellationToken);
+                return;
+            }
+
+            var queryNote = freshQuery.Query!.Reason!;
+            var sectionKeys = freshQuery.Query.Sections!;
 
             var result = await pushAdapter.PushQueryRaisedAsync(
                 workItem.Id, correlationId, queryNote, sectionKeys, cancellationToken);
@@ -151,17 +188,33 @@ internal sealed class ReAccreditationQueryPushHook(
         WorkItem workItem, WorkItemAssignmentChange change, ClaimsPrincipal user, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
-    private ReAccreditationPayload? DeserialisePayload(WorkItem workItem)
+    /// <summary>
+    /// RA-000: records <c>query-push-failed</c> for a push that was never
+    /// attempted because the hook could not prove what to send. Same outcome
+    /// as a push the operator backend rejected (the operator's record has not
+    /// caught up), told apart by <c>reason</c> instead of <c>errorMessage</c>.
+    /// </summary>
+    private async Task RecordNotAttemptedAsync(
+        WorkItem workItem,
+        string actionId,
+        Guid correlationId,
+        string reason,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
     {
-        try
+        var details = new Dictionary<string, string?>
         {
-            return BsonSerializer.Deserialize<ReAccreditationPayload>(workItem.Payload);
-        }
-        catch (Exception ex)
+            ["actionId"] = actionId,
+            ["correlationId"] = correlationId.ToString(),
+            ["reason"] = reason,
+        };
+        var appended = await auditAppender.AppendAsync(
+            workItem.Id, "query-push-failed", "Query push to operator backend failed", details, user, cancellationToken);
+        if (!appended)
         {
-            logger.LogError(
-                ex, "Failed to deserialise payload for work item {WorkItemId}; query push will be skipped.", workItem.Id);
-            return null;
+            logger.LogWarning(
+                "query-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
+                workItem.Id, correlationId);
         }
     }
 }

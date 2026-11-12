@@ -136,17 +136,19 @@ public class ReAccreditationAvailableActionsTests
     }
 
     [Fact]
-    public void Caller_invocable_state_keeps_its_ungated_actions()
+    public void Duly_made_keeps_its_caller_invocable_actions_and_drops_query()
     {
-        // Regression guard for AC6: 'duly-made' declares no non-invocable
-        // transitions, so the RA-364 filter must cost it nothing. Its
-        // always-available actions stay listed even with tasks outstanding.
+        // Regression guard for AC6: the RA-364 filter drops only the
+        // non-invocable transitions. RA-000: query-during-duly-made is one of
+        // them now (only the query service applies it), so it is no longer
+        // listed; withdraw and start-assessment still are.
         var actionIds = ProjectInState("duly-made")
             .AvailableActions.Select(a => a.ActionId)
             .ToArray();
 
-        Assert.Contains("query-during-duly-made", actionIds);
+        Assert.DoesNotContain("query-during-duly-made", actionIds);
         Assert.Contains("withdraw-during-duly-made", actionIds);
+        Assert.Contains("start-assessment", actionIds);
     }
 
     [Fact]

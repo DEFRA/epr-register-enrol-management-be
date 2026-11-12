@@ -474,9 +474,10 @@ public sealed class ReAccreditationPendingContactMigrationMongoIntegrationTests
             .Where(t => t is not null && typeof(ReAccreditationSnapshotMigrationBase).IsAssignableFrom(t))
             .ToList();
 
-        // RA-527 follow-up: the v18 migration now follows it and sets the final version.
-        Assert.Equal(typeof(ReAccreditationPendingContactSnapshotMigration), snapshotMigrations[^2]);
-        Assert.Equal(typeof(ReAccreditationAssessmentStartedSnapshotMigration), snapshotMigrations[^1]);
+        // RA-527 follow-up: the v18 migration follows it; RA-000: the v19
+        // migration follows that and sets the final version.
+        Assert.Equal(typeof(ReAccreditationPendingContactSnapshotMigration), snapshotMigrations[^3]);
+        Assert.Equal(typeof(ReAccreditationAssessmentStartedSnapshotMigration), snapshotMigrations[^2]);
         Assert.True(
             migrations.IndexOf(typeof(ReAccreditationRemovePaymentReceivedSnapshotMigration))
             < migrations.IndexOf(typeof(ReAccreditationPendingContactSnapshotMigration)));

@@ -18,12 +18,12 @@ public class ReAccreditationAssessmentStartedSnapshotMigrationTests
     private const string StartedStateId = "assessment-started";
 
     /// <summary>
-    /// v17: the live (v18) template without 'assessment-started', with
+    /// v17: the v18 template without 'assessment-started', with
     /// start-assessment still landing on 'assessment-in-progress'.
     /// </summary>
     internal static WorkItemTemplateSnapshot BuildV17Snapshot()
     {
-        var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
+        var live = ReAccreditationQueryNotCallerInvocableSnapshotMigrationTests.BuildV18Snapshot();
         return new WorkItemTemplateSnapshot
         {
             TemplateVersion = "v17",
@@ -92,7 +92,7 @@ public class ReAccreditationAssessmentStartedSnapshotMigrationTests
             new WorkItemTransition("start-assessment", "Assessment started", "duly-made", StartedStateId),
             start);
 
-        // The four exits, with the live type's display names and invocability.
+        // The four exits, with the v18 display names and invocability.
         var exits = snapshot.Transitions.Where(t => t.FromStateId == StartedStateId);
         Assert.Equal(
             Sorted(
@@ -112,8 +112,9 @@ public class ReAccreditationAssessmentStartedSnapshotMigrationTests
             Sorted(snapshot.Transitions.Where(t =>
                 t.ActionId != "start-assessment" && t.FromStateId != StartedStateId)));
 
-        // Exactly the live v18 rules.
-        var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
+        // Exactly the v18 rules (RA-000's v19 migration, registered after
+        // this one, then makes the query-during-* declarations non-invocable).
+        var live = ReAccreditationQueryNotCallerInvocableSnapshotMigrationTests.BuildV18Snapshot();
         Assert.Equal(live.States, snapshot.States);
         Assert.Equal(Sorted(live.Transitions), Sorted(snapshot.Transitions));
         await persistence.Received(1).ReplaceAsync(item, ct);
@@ -140,7 +141,7 @@ public class ReAccreditationAssessmentStartedSnapshotMigrationTests
     public async Task ApplyAsync_skips_an_item_already_on_the_v18_rules()
     {
         var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem(WorkItemTemplateSnapshot.Capture(new ReAccreditationType()));
+        var item = BuildItem(ReAccreditationQueryNotCallerInvocableSnapshotMigrationTests.BuildV18Snapshot());
         var persistence = PersistenceReturning(item, ct);
 
         await BuildSut().ApplyAsync(persistence, ct);
@@ -176,7 +177,7 @@ public class ReAccreditationAssessmentStartedSnapshotMigrationTests
     {
         _ = build;
         var ct = TestContext.Current.CancellationToken;
-        var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
+        var live = ReAccreditationQueryNotCallerInvocableSnapshotMigrationTests.BuildV18Snapshot();
         var partial = new WorkItemTemplateSnapshot
         {
             TemplateVersion = "v18",
@@ -207,7 +208,7 @@ public class ReAccreditationAssessmentStartedSnapshotMigrationTests
     public async Task ApplyAsync_replaces_a_differing_declaration_in_place_rather_than_duplicating_it()
     {
         var ct = TestContext.Current.CancellationToken;
-        var live = WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
+        var live = ReAccreditationQueryNotCallerInvocableSnapshotMigrationTests.BuildV18Snapshot();
         // An earlier shape: the state under another label, and a caller-invocable sla-extend.
         var differing = new WorkItemTemplateSnapshot
         {

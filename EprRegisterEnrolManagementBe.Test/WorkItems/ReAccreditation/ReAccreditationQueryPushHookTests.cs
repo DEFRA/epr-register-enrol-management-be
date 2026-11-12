@@ -2,6 +2,8 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using NSubstitute;
@@ -18,29 +20,42 @@ public class ReAccreditationQueryPushHookTests
     private static readonly ClaimsPrincipal s_user = new(
         new ClaimsIdentity([new Claim("user:id", "alice-1")], "test"));
 
+    private const string DefaultActionId = "query-during-duly-making";
+
+    /// <summary>
+    /// A queried work item as the engine hands it to the hook after
+    /// ReAccreditationQueryService stamped its query and applied
+    /// <paramref name="actionId"/>. <paramref name="currentQuery"/> overrides
+    /// the fresh stamp; <paramref name="omitCurrentQuery"/> leaves none.
+    /// </summary>
     private static WorkItem BuildWorkItem(
         string typeId = ReAccreditationType.Id,
-        string? reason = "Tonnage does not reconcile",
-        string[]? sections = null)
+        string actionId = DefaultActionId,
+        BsonDocument? currentQuery = null,
+        bool omitCurrentQuery = false)
     {
         var payload = new BsonDocument
         {
             ["organisationName"] = "Acme Ltd",
         };
-        if (reason is not null)
+        if (!omitCurrentQuery)
         {
-            payload["currentQuery"] = new BsonDocument
-            {
-                ["reason"] = reason,
-                ["sections"] = new BsonArray(sections ?? ["business-plan", "prn-tonnage"]),
-            };
+            payload["currentQuery"] = currentQuery ?? FreshQueryTestData.CurrentQuery();
         }
 
-        return new WorkItem { TypeId = typeId, StateId = "queried", Payload = payload };
+        var workItem = new WorkItem
+        {
+            TypeId = typeId,
+            StateId = "queried",
+            Payload = payload,
+            SubmittedAt = FreshQueryTestData.SubmittedAt,
+        };
+        FreshQueryTestData.AppendQueryTransition(workItem, actionId, FreshQueryTestData.FromStateFor(actionId));
+        return workItem;
     }
 
     private static (ReAccreditationQueryPushHook Hook, IOperatorBackendPushAdapter Adapter, IWorkItemAuditAppender AuditAppender)
-        BuildSut()
+        BuildSut(ILogger<ReAccreditationQueryPushHook>? logger = null)
     {
         var adapter = Substitute.For<IOperatorBackendPushAdapter>();
         adapter
@@ -55,7 +70,7 @@ public class ReAccreditationQueryPushHookTests
             .Returns(true);
 
         var hook = new ReAccreditationQueryPushHook(
-            adapter, auditAppender, NullLogger<ReAccreditationQueryPushHook>.Instance);
+            adapter, auditAppender, logger ?? NullLogger<ReAccreditationQueryPushHook>.Instance);
         return (hook, adapter, auditAppender);
     }
 
@@ -68,9 +83,9 @@ public class ReAccreditationQueryPushHookTests
     {
         var ct = TestContext.Current.CancellationToken;
         var (hook, adapter, _) = BuildSut();
-        var workItem = BuildWorkItem();
+        var workItem = BuildWorkItem(actionId: actionId);
 
-        await hook.OnActionAppliedAsync(workItem, actionId, "submitted", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, actionId, FreshQueryTestData.FromStateFor(actionId), s_user, ct);
 
         var expectedSections = new[] { "business-plan", "prn-tonnage" };
         await adapter.Received(1).PushQueryRaisedAsync(
@@ -257,33 +272,107 @@ public class ReAccreditationQueryPushHookTests
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_never_throws_on_an_unparseable_payload()
+    public async Task OnActionAppliedAsync_does_not_push_an_unparseable_payload_and_records_the_failure()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (hook, _, _) = BuildSut();
-        var workItem = new WorkItem
-        {
-            TypeId = ReAccreditationType.Id,
-            StateId = "queried",
-            // currentQuery modelled as a scalar instead of a document —
-            // BsonSerializer.Deserialize<ReAccreditationPayload> throws.
-            Payload = new BsonDocument { ["currentQuery"] = "not-a-document" },
-        };
+        var logger = new ListLogger<ReAccreditationQueryPushHook>();
+        var (hook, adapter, auditAppender) = BuildSut(logger);
+        var workItem = BuildWorkItem();
+        // currentQuery modelled as a scalar instead of a document —
+        // BsonSerializer.Deserialize<ReAccreditationPayload> throws.
+        workItem.Payload!["currentQuery"] = "not-a-document";
 
-        // Should not throw.
-        await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
+        var exception = await Record.ExceptionAsync(
+            () => hook.OnActionAppliedAsync(workItem, DefaultActionId, "submitted", s_user, ct));
+
+        Assert.Null(exception);
+        await adapter.DidNotReceiveWithAnyArgs()
+            .PushQueryRaisedAsync(default, default, default!, default!, ct);
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id, "query-push-failed", Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["reason"] == "payload could not be deserialised"
+                && d["actionId"] == DefaultActionId
+                && !string.IsNullOrEmpty(d["correlationId"])),
+            s_user, ct);
+        var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
+        Assert.NotNull(error.Exception);
+        Assert.Equal(workItem.Id, error.Properties["WorkItemId"]);
+        Assert.IsType<Guid>(error.Properties["CorrelationId"]);
+        // RA-000: the old text claimed the push "will be skipped" and then
+        // pushed an empty query anyway.
+        Assert.DoesNotContain("will be skipped", error.Message);
+        Assert.Contains("not attempted", error.Message);
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_pushes_an_empty_note_when_there_is_no_current_query()
+    public async Task OnActionAppliedAsync_does_not_push_when_there_is_no_current_query_and_records_the_failure()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (hook, adapter, _) = BuildSut();
-        var workItem = BuildWorkItem(reason: null);
+        var logger = new ListLogger<ReAccreditationQueryPushHook>();
+        var (hook, adapter, auditAppender) = BuildSut(logger);
+        var workItem = BuildWorkItem(omitCurrentQuery: true);
 
-        await hook.OnActionAppliedAsync(workItem, "query-during-duly-making", "submitted", s_user, ct);
+        await hook.OnActionAppliedAsync(workItem, DefaultActionId, "submitted", s_user, ct);
 
-        await adapter.Received(1).PushQueryRaisedAsync(
-            workItem.Id, Arg.Any<Guid>(), string.Empty, Arg.Is<IReadOnlyList<string>>(s => s.Count == 0), ct);
+        await adapter.DidNotReceiveWithAnyArgs()
+            .PushQueryRaisedAsync(default, default, default!, default!, ct);
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id, "query-push-failed", Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d => d["reason"] == "payload.currentQuery is missing"),
+            s_user, ct);
+        var details = (Dictionary<string, string?>)auditAppender.ReceivedCalls().Single().GetArguments()[3]!;
+        var correlationId = Guid.Parse(details["correlationId"]!);
+        var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Equal(workItem.Id, error.Properties["WorkItemId"]);
+        Assert.Equal(correlationId, error.Properties["CorrelationId"]);
+        Assert.Equal("payload.currentQuery is missing", error.Properties["Reason"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_does_not_push_a_stale_current_query_left_by_an_earlier_query()
+    {
+        // The previous query's stamp, raised before the item even entered the
+        // state it is now being queried from. Pushing it would ask the
+        // operator the old question again.
+        var ct = TestContext.Current.CancellationToken;
+        var logger = new ListLogger<ReAccreditationQueryPushHook>();
+        var (hook, adapter, auditAppender) = BuildSut(logger);
+        var workItem = BuildWorkItem(
+            actionId: "query-during-duly-made",
+            currentQuery: FreshQueryTestData.CurrentQuery(FreshQueryTestData.StaleRaisedAt));
+
+        await hook.OnActionAppliedAsync(workItem, "query-during-duly-made", "duly-made", s_user, ct);
+
+        await adapter.DidNotReceiveWithAnyArgs()
+            .PushQueryRaisedAsync(default, default, default!, default!, ct);
+        await auditAppender.Received(1).AppendAsync(
+            workItem.Id, "query-push-failed", Arg.Any<string>(),
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["reason"]!.Contains("belongs to an earlier query")),
+            s_user, ct);
+        var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Equal(workItem.Id, error.Properties["WorkItemId"]);
+        Assert.IsType<Guid>(error.Properties["CorrelationId"]);
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_does_not_push_when_the_audit_failure_cannot_be_persisted_and_still_never_throws()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (hook, adapter, auditAppender) = BuildSut();
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        var workItem = BuildWorkItem(omitCurrentQuery: true);
+
+        var exception = await Record.ExceptionAsync(
+            () => hook.OnActionAppliedAsync(workItem, DefaultActionId, "submitted", s_user, ct));
+
+        Assert.Null(exception);
+        await adapter.DidNotReceiveWithAnyArgs()
+            .PushQueryRaisedAsync(default, default, default!, default!, ct);
     }
 }

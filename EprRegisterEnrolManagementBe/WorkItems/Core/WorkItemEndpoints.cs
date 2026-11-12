@@ -393,6 +393,7 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
@@ -407,7 +408,11 @@ public static class WorkItemEndpoints
         // audit history. Checked against the work item's own frozen
         // TemplateSnapshot (the same source ApplyActionAsync itself
         // resolves the transition from) so this rejects using the exact
-        // rules the item was submitted under.
+        // rules the item was submitted under. The same flag also keeps a
+        // transition whose module service does more than change state (RA-000:
+        // re-accreditation's query-during-*, whose service self-assigns and
+        // stamps the query the post-action hooks send) from being applied
+        // here without those side effects.
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
         // RA-351: an action id can be declared on more than one state (e.g.
         // `sla-extend` self-loops on both `assessment-in-progress` and
@@ -430,6 +435,22 @@ public static class WorkItemEndpoints
             ) ?? actionTransitions?.FirstOrDefault();
         if (transition is { CallerInvocable: false })
         {
+            // RA-000: the shipped clients never offer a non-caller-invocable
+            // action here (it is absent from availableActions), so reaching
+            // this is a hand-crafted or out-of-date request trying to skip the
+            // module service that owns the transition. Logged at Error so it
+            // is seen.
+            loggerFactory
+                .CreateLogger(typeof(WorkItemEndpoints).FullName!)
+                .LogError(
+                    "Rejected generic action {ActionId} on work item {WorkItemId} ({TypeId}) in state {StateId} "
+                        + "by {UserId}: the transition is not caller-invocable and is applied only by its module's own service.",
+                    actionId,
+                    id,
+                    workItem!.TypeId,
+                    workItem.StateId,
+                    httpContext.User.FindFirst("user:id")?.Value
+                );
             return ToHttpResult(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.UnknownAction,
