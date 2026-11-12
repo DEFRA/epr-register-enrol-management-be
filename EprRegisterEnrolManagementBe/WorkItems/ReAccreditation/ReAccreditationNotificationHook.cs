@@ -415,12 +415,11 @@ internal sealed class ReAccreditationNotificationHook(
         // email. DeserialisePayload has already logged it at Error.
         if (payload is null)
         {
-            await AppendNotSentFailureAsync(
+            await AppendNotificationFailedAsync(
                 workItem,
                 templateKey,
                 description,
-                workItem.Id.ToString(),
-                "payload could not be deserialised",
+                NotSentDetails(templateKey, workItem.Id.ToString(), "payload could not be deserialised"),
                 user,
                 cancellationToken
             );
@@ -435,6 +434,19 @@ internal sealed class ReAccreditationNotificationHook(
         var reference = string.IsNullOrWhiteSpace(payload.ApplicationReference)
             ? workItem.Id.ToString()
             : payload.ApplicationReference;
+
+        if (!_notifyConfig.IsTriggerEnabled(templateKey))
+        {
+            await AppendTriggerDisabledSkipAsync(
+                workItem,
+                templateKey,
+                description,
+                reference,
+                user,
+                cancellationToken
+            );
+            return;
+        }
 
         // RA-000: the Queried email carries the date of THIS query. Without a
         // currentQuery the query operation stamped for this transition it
@@ -463,30 +475,16 @@ internal sealed class ReAccreditationNotificationHook(
                     workItem.Id,
                     failureReason
                 );
-                await AppendNotSentFailureAsync(
+                await AppendNotificationFailedAsync(
                     workItem,
                     templateKey,
                     description,
-                    reference,
-                    failureReason,
+                    NotSentDetails(templateKey, reference, failureReason),
                     user,
                     cancellationToken
                 );
                 return;
             }
-        }
-
-        if (!_notifyConfig.IsTriggerEnabled(templateKey))
-        {
-            await AppendTriggerDisabledSkipAsync(
-                workItem,
-                templateKey,
-                description,
-                reference,
-                user,
-                cancellationToken
-            );
-            return;
         }
 
         if (string.IsNullOrWhiteSpace(recipient))
@@ -596,22 +594,14 @@ internal sealed class ReAccreditationNotificationHook(
         else
         {
             details["errorMessage"] = result.ErrorMessage;
-            var appended = await auditAppender.AppendAsync(
-                workItem.Id,
-                action: "notification-failed",
-                actionDisplayName: $"{description} email failed",
+            await AppendNotificationFailedAsync(
+                workItem,
+                templateKey,
+                description,
                 details,
                 user,
                 cancellationToken
             );
-            if (!appended)
-            {
-                logger.LogError(
-                    "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
-                    workItem.Id,
-                    templateKey
-                );
-            }
         }
     }
 
@@ -805,37 +795,29 @@ internal sealed class ReAccreditationNotificationHook(
         else
         {
             details["errorMessage"] = result.ErrorMessage;
-            var appended = await auditAppender.AppendAsync(
-                workItem.Id,
-                action: "notification-failed",
-                actionDisplayName: $"{description} email failed",
+            await AppendNotificationFailedAsync(
+                workItem,
+                templateKey,
+                description,
                 details,
                 user,
                 cancellationToken
             );
-            if (!appended)
-            {
-                logger.LogError(
-                    "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
-                    workItem.Id,
-                    templateKey
-                );
-            }
         }
     }
 
     /// <summary>
-    /// RA-000: records <c>notification-failed</c> for an email that was never
-    /// handed to Notify because a value it needs is missing or wrong, with
-    /// the cause under <c>reason</c> (a Notify rejection uses
-    /// <c>errorMessage</c> instead).
+    /// Records <c>notification-failed</c>: a Notify rejection (details carry
+    /// <c>errorMessage</c>) or, RA-000, an email never handed to Notify
+    /// because a value it needs is missing or wrong (details carry
+    /// <c>reason</c>). A failure record that cannot be persisted is lost, so
+    /// that is logged at Error.
     /// </summary>
-    private async Task AppendNotSentFailureAsync(
+    private async Task AppendNotificationFailedAsync(
         WorkItem workItem,
         string templateKey,
         string description,
-        string reference,
-        string reason,
+        Dictionary<string, string?> details,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     )
@@ -844,12 +826,7 @@ internal sealed class ReAccreditationNotificationHook(
             workItem.Id,
             action: "notification-failed",
             actionDisplayName: $"{description} email failed",
-            details: new Dictionary<string, string?>
-            {
-                ["templateKey"] = templateKey,
-                [ReferenceKey] = reference,
-                ["reason"] = reason,
-            },
+            details,
             user,
             cancellationToken
         );
@@ -862,6 +839,18 @@ internal sealed class ReAccreditationNotificationHook(
             );
         }
     }
+
+    private static Dictionary<string, string?> NotSentDetails(
+        string templateKey,
+        string reference,
+        string reason
+    ) =>
+        new()
+        {
+            ["templateKey"] = templateKey,
+            [ReferenceKey] = reference,
+            ["reason"] = reason,
+        };
 
     private ReAccreditationPayload? DeserialisePayload(WorkItem workItem)
     {

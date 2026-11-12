@@ -163,16 +163,7 @@ internal sealed class ReAccreditationQueryPushHook(
                 logger.LogError(
                     "Push of query-raised for work item {WorkItemId} (correlation {CorrelationId}) failed: {ErrorMessage}",
                     workItem.Id, correlationId, result.ErrorMessage);
-                var appended = await auditAppender.AppendAsync(
-                    workItem.Id, "query-push-failed", "Query push to operator backend failed", details, user, cancellationToken);
-                if (!appended)
-                {
-                    // A lost failure record: nothing else on the work item
-                    // says the operator's record has drifted, so it must be seen.
-                    logger.LogError(
-                        "query-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
-                        workItem.Id, correlationId);
-                }
+                await RecordFailedAsync(workItem, correlationId, details, user, cancellationToken);
             }
         }
         catch (Exception ex)
@@ -191,33 +182,47 @@ internal sealed class ReAccreditationQueryPushHook(
         Task.CompletedTask;
 
     /// <summary>
-    /// RA-000: records <c>query-push-failed</c> for a push that was never
-    /// attempted because the hook could not prove what to send. Same outcome
-    /// as a push the operator backend rejected (the operator's record has not
-    /// caught up), told apart by <c>reason</c> instead of <c>errorMessage</c>.
+    /// Records <c>query-push-failed</c>: a push the operator backend rejected
+    /// (details carry <c>errorMessage</c>) or, RA-000, one never attempted
+    /// because the hook could not prove what to send (details carry
+    /// <c>reason</c>). Either way the operator's record has not caught up.
+    /// A failure record that cannot be persisted is lost: nothing else on the
+    /// work item says the operator's record has drifted, so that is logged at
+    /// Error.
     /// </summary>
-    private async Task RecordNotAttemptedAsync(
+    private async Task RecordFailedAsync(
         WorkItem workItem,
-        string actionId,
         Guid correlationId,
-        string reason,
+        Dictionary<string, string?> details,
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
-        var details = new Dictionary<string, string?>
-        {
-            ["actionId"] = actionId,
-            ["correlationId"] = correlationId.ToString(),
-            ["reason"] = reason,
-        };
         var appended = await auditAppender.AppendAsync(
             workItem.Id, "query-push-failed", "Query push to operator backend failed", details, user, cancellationToken);
         if (!appended)
         {
-            // A lost failure record, logged at Error like the rejected-push path.
             logger.LogError(
                 "query-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
                 workItem.Id, correlationId);
         }
     }
+
+    private Task RecordNotAttemptedAsync(
+        WorkItem workItem,
+        string actionId,
+        Guid correlationId,
+        string reason,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken) =>
+        RecordFailedAsync(
+            workItem,
+            correlationId,
+            new Dictionary<string, string?>
+            {
+                ["actionId"] = actionId,
+                ["correlationId"] = correlationId.ToString(),
+                ["reason"] = reason,
+            },
+            user,
+            cancellationToken);
 }

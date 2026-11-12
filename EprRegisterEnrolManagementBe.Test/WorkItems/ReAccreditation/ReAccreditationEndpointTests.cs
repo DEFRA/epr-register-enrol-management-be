@@ -5912,6 +5912,38 @@ public class ReAccreditationEndpointTests
             factory, client, id, stateId, actionId, pushAdapter, notifyClient, cancellationToken);
     }
 
+    /// <summary>
+    /// RA-000 review: the engine falls back to the live registered type when
+    /// an item has no frozen snapshot, and the v19 migration skips such items.
+    /// The endpoint guard resolves the template the same way, so it rejects
+    /// them too instead of finding no transition and letting the engine apply
+    /// it from the live type.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(QueryTransitions))]
+    public async Task A_query_transition_is_rejected_on_the_generic_action_route_for_an_item_with_no_snapshot(
+        string stateId,
+        string actionId
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (pushAdapter, _) = RecordingPushAdapter();
+        var notifyClient = Substitute.For<INotifyClient>();
+        await using var factory = new ReAccreditationFactory(
+            _fixture, pushAdapter: pushAdapter, notifyClient: notifyClient, captureLogs: true);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var legacy = BuildInState(id, stateId, TenantClientId);
+        legacy.TemplateSnapshot = null;
+        legacy.TemplateVersion = null;
+        await factory.SeedAsync(legacy, cancellationToken);
+        Assert.Null((await factory.Persistence.GetByIdAsync(id, cancellationToken))!.TemplateSnapshot);
+
+        await AssertGenericActionRejectedAsync(
+            factory, client, id, stateId, actionId, pushAdapter, notifyClient, cancellationToken);
+    }
+
     private static async Task AssertGenericActionRejectedAsync(
         ReAccreditationFactory factory,
         HttpClient client,

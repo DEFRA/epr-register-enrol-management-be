@@ -1360,6 +1360,68 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
+    public async Task OnActionAppliedAsync_a_disabled_Queried_trigger_skips_before_checking_the_query()
+    {
+        // RA-000: nobody wanted this email, so an unstamped query is not an
+        // error here — the trigger-disabled skip wins, with no Error log and
+        // no notification-failed.
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+        var logger = new ListLogger<ReAccreditationNotificationHook>();
+        var workItem = BuildFreshlyQueriedWorkItem("query-during-duly-made");
+        workItem.Payload!.Remove("currentQuery");
+        var notifyConfig = new NotifyConfig();
+        notifyConfig.TriggersEnabled["Queried"] = false;
+        var sut = BuildSut(notifyClient, auditAppender, notifyConfig: notifyConfig, logger: logger);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-duly-made",
+            fromStateId: "duly-made",
+            s_user,
+            ct
+        );
+
+        await notifyClient
+            .DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: ct);
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-skipped",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "Queried" && d["reason"] == "trigger-disabled"
+                ),
+                s_user,
+                ct
+            );
+        await auditAppender
+            .DidNotReceive()
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                "notification-failed",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            );
+        Assert.DoesNotContain(logger.Records, r => r.Level == LogLevel.Error);
+    }
+
+    [Fact]
     public async Task OnActionAppliedAsync_skips_regulator_email_when_trigger_disabled()
     {
         var ct = TestContext.Current.CancellationToken;

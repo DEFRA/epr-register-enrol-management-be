@@ -393,6 +393,7 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
+        [FromServices] IWorkItemRegistry registry,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
@@ -414,26 +415,15 @@ public static class WorkItemEndpoints
         // stamps the query the post-action hooks send) from being applied
         // here without those side effects.
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        // RA-351: an action id can be declared on more than one state (e.g.
-        // `sla-extend` self-loops on both `assessment-in-progress` and
-        // `queried`). Resolve the CallerInvocable check against the transition
-        // for the item's CURRENT state — matching on action id alone would
-        // test the first-declared transition, which can differ in
-        // CallerInvocable from the one that actually applies here.
-        var actionTransitions = workItem
-            ?.TemplateSnapshot?.Transitions.Where(t =>
-                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
-            )
-            .ToList();
-        var transition =
-            actionTransitions?.FirstOrDefault(t =>
-                string.Equals(
-                    t.FromStateId,
-                    workItem!.StateId,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            ) ?? actionTransitions?.FirstOrDefault();
-        if (workItem is not null && transition is { CallerInvocable: false })
+        // RA-000: the template is resolved exactly as the engine resolves it
+        // (frozen snapshot, else the live registered type), so an item with no
+        // snapshot is guarded by the same rules ApplyActionAsync would apply
+        // to it rather than slipping past an empty check.
+        if (
+            workItem is not null
+            && WorkItemEngineRules.ResolveTemplate(workItem, registry) is { } template
+            && ResolveGuardTransition(template, workItem.StateId, actionId) is { CallerInvocable: false }
+        )
         {
             // RA-000: the shipped clients never offer a non-caller-invocable
             // action here (it is absent from availableActions), so reaching
@@ -465,6 +455,30 @@ public static class WorkItemEndpoints
             cancellationToken
         );
         return ToHttpResult(result, engine);
+    }
+
+    /// <summary>
+    /// RA-351: an action id can be declared on more than one state (e.g.
+    /// <c>sla-extend</c> self-loops on both <c>assessment-in-progress</c> and
+    /// <c>queried</c>). Resolve the CallerInvocable check against the
+    /// transition for the item's CURRENT state — matching on action id alone
+    /// would test the first-declared transition, which can differ in
+    /// CallerInvocable from the one that actually applies here.
+    /// </summary>
+    private static WorkItemTransition? ResolveGuardTransition(
+        IWorkItemTemplate template,
+        string stateId,
+        string actionId
+    )
+    {
+        var actionTransitions = template
+            .Transitions.Where(t =>
+                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
+            )
+            .ToList();
+        return actionTransitions.FirstOrDefault(t =>
+                string.Equals(t.FromStateId, stateId, StringComparison.OrdinalIgnoreCase)
+            ) ?? actionTransitions.FirstOrDefault();
     }
 
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> Assign(
