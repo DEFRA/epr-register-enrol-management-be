@@ -432,7 +432,7 @@ internal sealed class ReAccreditationNotificationHook(
         // (RA-#########) in the ((reference)) placeholder. Fall back to the
         // internal work-item Guid only for legacy/malformed items missing the
         // reference, so the placeholder is never blank.
-        var reference = string.IsNullOrWhiteSpace(payload?.ApplicationReference)
+        var reference = string.IsNullOrWhiteSpace(payload.ApplicationReference)
             ? workItem.Id.ToString()
             : payload.ApplicationReference;
 
@@ -440,27 +440,35 @@ internal sealed class ReAccreditationNotificationHook(
         // currentQuery the query operation stamped for this transition it
         // would show a blank date (no stamp) or the previous query's date
         // (stale stamp), so it is not sent.
+        ReAccreditationFreshQuery.VerifiedQuery? verifiedQuery = null;
         if (string.Equals(templateKey, QueriedTemplateKey, StringComparison.OrdinalIgnoreCase))
         {
-            var freshQuery = ReAccreditationFreshQuery.Verify(
-                workItem,
-                payload.CurrentQuery,
-                actionId!,
-                fromStateId!
-            );
-            if (!freshQuery.IsFresh)
+            // Queried is mapped only from query-during-* actions, which always
+            // arrive with both ids; OnSubmittedAsync never sends it.
+            ArgumentNullException.ThrowIfNull(actionId);
+            ArgumentNullException.ThrowIfNull(fromStateId);
+            if (
+                !ReAccreditationFreshQuery.TryVerify(
+                    workItem,
+                    payload.CurrentQuery,
+                    actionId,
+                    fromStateId,
+                    out verifiedQuery,
+                    out var failureReason
+                )
+            )
             {
                 logger.LogError(
                     "Queried notification for work item {WorkItemId} not sent: {Reason}.",
                     workItem.Id,
-                    freshQuery.FailureReason
+                    failureReason
                 );
                 await AppendNotSentFailureAsync(
                     workItem,
                     templateKey,
                     description,
                     reference,
-                    freshQuery.FailureReason!,
+                    failureReason,
                     user,
                     cancellationToken
                 );
@@ -518,7 +526,8 @@ internal sealed class ReAccreditationNotificationHook(
             workItem,
             templateKey,
             reference,
-            actionId
+            actionId,
+            verifiedQuery
         );
 
         // Entry log: surfaces in docker / CDP logs the moment the hook
@@ -598,7 +607,7 @@ internal sealed class ReAccreditationNotificationHook(
             );
             if (!appended)
             {
-                logger.LogWarning(
+                logger.LogError(
                     "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
                     workItem.Id,
                     templateKey
@@ -807,7 +816,7 @@ internal sealed class ReAccreditationNotificationHook(
             );
             if (!appended)
             {
-                logger.LogWarning(
+                logger.LogError(
                     "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
                     workItem.Id,
                     templateKey
@@ -847,7 +856,7 @@ internal sealed class ReAccreditationNotificationHook(
         );
         if (!appended)
         {
-            logger.LogWarning(
+            logger.LogError(
                 "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
                 workItem.Id,
                 templateKey
@@ -921,7 +930,8 @@ internal sealed class ReAccreditationNotificationHook(
         WorkItem workItem,
         string templateKey,
         string reference,
-        string? actionId = null
+        string? actionId = null,
+        ReAccreditationFreshQuery.VerifiedQuery? verifiedQuery = null
     )
     {
         var contactName = ResolveContactName(payload);
@@ -990,10 +1000,16 @@ internal sealed class ReAccreditationNotificationHook(
                 [OrganisationNameKey] = organisationName,
                 // RA-291: the date the CURRENT query was raised, stamped by
                 // ReAccreditationQueryService immediately before the query
-                // transition — see CurrentQuery.RaisedAt. RA-000:
-                // SendAndRecordAsync has already proven this stamp belongs to
-                // this transition (ReAccreditationFreshQuery), so it is set.
-                ["Querieddate"] = FormatOperatorFacingDate(payload.CurrentQuery!.RaisedAt!.Value),
+                // transition — see CurrentQuery.RaisedAt. RA-000: only the
+                // stamp SendAndRecordAsync proved belongs to this transition.
+                ["Querieddate"] = FormatOperatorFacingDate(
+                    (
+                        verifiedQuery
+                        ?? throw new InvalidOperationException(
+                            "The Queried personalisation needs the verified current query."
+                        )
+                    ).RaisedAt
+                ),
                 ["reference"] = reference,
                 [RegistrationNumberKey] = registrationNumber,
                 ["regulatorEmail"] = regulatorEmail,

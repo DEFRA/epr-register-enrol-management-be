@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
@@ -34,13 +35,10 @@ internal static class ReAccreditationFreshQuery
     private const string QueriedStateId = "queried";
 
     /// <summary>
-    /// The fresh query, or the reason one could not be proven. Exactly one of
-    /// <see cref="Query"/> and <see cref="FailureReason"/> is set.
+    /// A <see cref="CurrentQuery"/> proven to belong to the transition being
+    /// handled, with every field a consumer reads guaranteed present.
     /// </summary>
-    internal sealed record Result(CurrentQuery? Query, string? FailureReason)
-    {
-        public bool IsFresh => Query is not null;
-    }
+    internal sealed record VerifiedQuery(string Reason, IReadOnlyList<string> Sections, DateTime RaisedAt);
 
     /// <summary>
     /// Verify that <paramref name="currentQuery"/> was stamped for the
@@ -53,32 +51,48 @@ internal static class ReAccreditationFreshQuery
     /// the query service stamps an omitted one as an empty string, so empty is
     /// valid but absent is not).
     /// </summary>
-    public static Result Verify(
+    public static bool TryVerify(
         WorkItem workItem,
         CurrentQuery? currentQuery,
         string actionId,
-        string fromStateId)
+        string fromStateId,
+        [NotNullWhen(true)] out VerifiedQuery? query,
+        [NotNullWhen(false)] out string? failureReason)
     {
         ArgumentNullException.ThrowIfNull(workItem);
 
+        failureReason = Check(workItem, currentQuery, actionId, fromStateId, out query);
+        return failureReason is null;
+    }
+
+    /// <summary>The failure reason, or <c>null</c> with <paramref name="query"/> set.</summary>
+    private static string? Check(
+        WorkItem workItem,
+        CurrentQuery? currentQuery,
+        string actionId,
+        string fromStateId,
+        out VerifiedQuery? query)
+    {
+        query = null;
+
         if (currentQuery is null)
         {
-            return Fail("payload.currentQuery is missing");
+            return "payload.currentQuery is missing";
         }
 
         if (currentQuery.RaisedAt is not { } raisedAt)
         {
-            return Fail("payload.currentQuery.raisedAt is missing");
+            return "payload.currentQuery.raisedAt is missing";
         }
 
-        if (currentQuery.Sections is not { Count: > 0 })
+        if (currentQuery.Sections is not { Count: > 0 } sections)
         {
-            return Fail("payload.currentQuery.sections is missing or empty");
+            return "payload.currentQuery.sections is missing or empty";
         }
 
-        if (currentQuery.Reason is null)
+        if (currentQuery.Reason is not { } reason)
         {
-            return Fail("payload.currentQuery.reason is missing");
+            return "payload.currentQuery.reason is missing";
         }
 
         // The engine appends this transition's action-applied entry before it
@@ -88,8 +102,7 @@ internal static class ReAccreditationFreshQuery
         if (transitionIndex < 0
             || !IsEntryFor(workItem.AuditLog[transitionIndex], actionId, fromStateId))
         {
-            return Fail(
-                $"the audit log has no action-applied entry for {actionId} from '{fromStateId}' to '{QueriedStateId}'");
+            return $"the audit log has no action-applied entry for {actionId} from '{fromStateId}' to '{QueriedStateId}'";
         }
 
         var transitionAt = workItem.AuditLog[transitionIndex].CreatedAt;
@@ -102,22 +115,19 @@ internal static class ReAccreditationFreshQuery
 
         if (raisedAt < enteredFromStateAt)
         {
-            return Fail(
-                $"payload.currentQuery was raised at {Format(raisedAt)}, before the work item entered "
-                + $"'{fromStateId}' at {Format(enteredFromStateAt)}, so it belongs to an earlier query");
+            return $"payload.currentQuery was raised at {Format(raisedAt)}, before the work item entered "
+                + $"'{fromStateId}' at {Format(enteredFromStateAt)}, so it belongs to an earlier query";
         }
 
         if (raisedAt > transitionAt)
         {
-            return Fail(
-                $"payload.currentQuery was raised at {Format(raisedAt)}, after the {actionId} transition "
-                + $"at {Format(transitionAt)}");
+            return $"payload.currentQuery was raised at {Format(raisedAt)}, after the {actionId} transition "
+                + $"at {Format(transitionAt)}";
         }
 
-        return new Result(currentQuery, null);
+        query = new VerifiedQuery(reason, sections, raisedAt);
+        return null;
     }
-
-    private static Result Fail(string reason) => new(null, reason);
 
     private static bool IsActionApplied(WorkItemAuditEntry entry) =>
         string.Equals(entry.Action, ActionAppliedAuditAction, StringComparison.Ordinal);

@@ -399,11 +399,58 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
+    public async Task OnActionAppliedAsync_logs_at_error_when_the_not_sent_failure_cannot_be_persisted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var notifyClient = Substitute.For<INotifyClient>();
+        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(false);
+        var logger = new ListLogger<ReAccreditationNotificationHook>();
+        var workItem = BuildFreshlyQueriedWorkItem("query-during-duly-made");
+        workItem.Payload!.Remove("currentQuery");
+        var sut = BuildSut(notifyClient, auditAppender, logger: logger);
+
+        await sut.OnActionAppliedAsync(
+            workItem,
+            "query-during-duly-made",
+            fromStateId: "duly-made",
+            s_user,
+            ct
+        );
+
+        var lost = Assert.Single(
+            logger.Records,
+            r => r.Message.Contains("notification-failed audit entry could not be persisted")
+        );
+        Assert.Equal(LogLevel.Error, lost.Level);
+        Assert.Equal(workItem.Id, lost.Properties["WorkItemId"]);
+    }
+
+    [Fact]
     public async Task OnActionAppliedAsync_records_notification_failed_when_the_payload_cannot_be_read()
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
         var logger = new ListLogger<ReAccreditationNotificationHook>();
         var workItem = BuildFreshlyQueriedWorkItem("query-during-duly-making");
         // A scalar where a document is modelled: deserialisation throws.

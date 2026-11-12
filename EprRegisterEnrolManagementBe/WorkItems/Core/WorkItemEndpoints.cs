@@ -433,7 +433,7 @@ public static class WorkItemEndpoints
                     StringComparison.OrdinalIgnoreCase
                 )
             ) ?? actionTransitions?.FirstOrDefault();
-        if (transition is { CallerInvocable: false })
+        if (workItem is not null && transition is { CallerInvocable: false })
         {
             // RA-000: the shipped clients never offer a non-caller-invocable
             // action here (it is absent from availableActions), so reaching
@@ -447,14 +447,14 @@ public static class WorkItemEndpoints
                         + "by {UserId}: the transition is not caller-invocable and is applied only by its module's own service.",
                     actionId,
                     id,
-                    workItem!.TypeId,
+                    workItem.TypeId,
                     workItem.StateId,
                     httpContext.User.FindFirst("user:id")?.Value
                 );
             return ToHttpResult(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.UnknownAction,
-                    $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'."),
+                    $"Action '{actionId}' is not declared by work item type '{workItem.TypeId}'."),
                 engine);
         }
 

@@ -39,33 +39,44 @@ public class ReAccreditationFreshQueryTests
         return item;
     }
 
+    private static (bool Fresh, ReAccreditationFreshQuery.VerifiedQuery? Query, string? Reason) Verify(
+        WorkItem workItem,
+        CurrentQuery? currentQuery,
+        string actionId,
+        string fromStateId)
+    {
+        var fresh = ReAccreditationFreshQuery.TryVerify(
+            workItem, currentQuery, actionId, fromStateId, out var query, out var reason);
+        return (fresh, query, reason);
+    }
+
     [Fact]
     public void A_query_stamped_after_the_item_entered_its_state_and_before_the_transition_is_fresh()
     {
-        var query = Query();
+        var result = Verify(QueriedItem(), Query(), ActionId, FromStateId);
 
-        var result = ReAccreditationFreshQuery.Verify(QueriedItem(), query, ActionId, FromStateId);
-
-        Assert.True(result.IsFresh);
-        Assert.Same(query, result.Query);
-        Assert.Null(result.FailureReason);
+        Assert.True(result.Fresh);
+        Assert.Equal(FreshQueryTestData.Reason, result.Query!.Reason);
+        Assert.Equal(FreshQueryTestData.Sections, result.Query.Sections);
+        Assert.Equal(FreshQueryTestData.RaisedAt, result.Query.RaisedAt);
+        Assert.Null(result.Reason);
     }
 
     [Fact]
     public void An_empty_reason_is_fresh_because_RA_534_made_the_reason_optional()
     {
-        var result = ReAccreditationFreshQuery.Verify(QueriedItem(), Query(reason: string.Empty), ActionId, FromStateId);
+        var result = Verify(QueriedItem(), Query(reason: string.Empty), ActionId, FromStateId);
 
-        Assert.True(result.IsFresh);
+        Assert.True(result.Fresh);
     }
 
     [Fact]
     public void A_stamp_in_the_same_instant_as_the_transition_into_the_from_state_is_fresh()
     {
-        var result = ReAccreditationFreshQuery.Verify(
+        var result = Verify(
             QueriedItem(), Query(raisedAt: FreshQueryTestData.EnteredFromStateAt), ActionId, FromStateId);
 
-        Assert.True(result.IsFresh);
+        Assert.True(result.Fresh);
     }
 
     [Fact]
@@ -73,13 +84,13 @@ public class ReAccreditationFreshQueryTests
     {
         var item = QueriedItem("query-during-duly-making", "submitted");
 
-        Assert.True(ReAccreditationFreshQuery.Verify(
-            item, Query(), "query-during-duly-making", "submitted").IsFresh);
+        Assert.True(Verify(
+            item, Query(), "query-during-duly-making", "submitted").Fresh);
 
-        var stale = ReAccreditationFreshQuery.Verify(
+        var stale = Verify(
             item, Query(raisedAt: FreshQueryTestData.SubmittedAt.AddDays(-1)), "query-during-duly-making", "submitted");
-        Assert.False(stale.IsFresh);
-        Assert.Contains("belongs to an earlier query", stale.FailureReason);
+        Assert.False(stale.Fresh);
+        Assert.Contains("belongs to an earlier query", stale.Reason);
     }
 
     [Theory]
@@ -100,22 +111,22 @@ public class ReAccreditationFreshQueryTests
             _ => throw new ArgumentOutOfRangeException(nameof(missing)),
         };
 
-        var result = ReAccreditationFreshQuery.Verify(QueriedItem(), query, ActionId, FromStateId);
+        var result = Verify(QueriedItem(), query, ActionId, FromStateId);
 
-        Assert.False(result.IsFresh);
+        Assert.False(result.Fresh);
         Assert.Null(result.Query);
-        Assert.Equal(expectedReason, result.FailureReason);
+        Assert.Equal(expectedReason, result.Reason);
     }
 
     [Fact]
     public void A_query_raised_before_the_item_entered_its_from_state_is_stale()
     {
-        var result = ReAccreditationFreshQuery.Verify(
+        var result = Verify(
             QueriedItem(), Query(raisedAt: FreshQueryTestData.StaleRaisedAt), ActionId, FromStateId);
 
-        Assert.False(result.IsFresh);
-        Assert.StartsWith("payload.currentQuery was raised at 2025-10-20T10:00:00", result.FailureReason);
-        Assert.Contains($"before the work item entered '{FromStateId}' at 2025-11-02T09:00:00", result.FailureReason);
+        Assert.False(result.Fresh);
+        Assert.StartsWith("payload.currentQuery was raised at 2025-10-20T10:00:00", result.Reason);
+        Assert.Contains($"before the work item entered '{FromStateId}' at 2025-11-02T09:00:00", result.Reason);
     }
 
     [Fact]
@@ -143,20 +154,20 @@ public class ReAccreditationFreshQueryTests
         item.AuditLog.Add(FreshQueryTestData.ActionApplied(ActionId, FromStateId, "queried", t0.AddDays(5)));
 
         var firstQueryStamp = Query(raisedAt: t0.AddDays(2).AddSeconds(-1));
-        var result = ReAccreditationFreshQuery.Verify(item, firstQueryStamp, ActionId, FromStateId);
+        var result = Verify(item, firstQueryStamp, ActionId, FromStateId);
 
-        Assert.False(result.IsFresh);
-        Assert.Contains("belongs to an earlier query", result.FailureReason);
+        Assert.False(result.Fresh);
+        Assert.Contains("belongs to an earlier query", result.Reason);
     }
 
     [Fact]
     public void A_query_raised_after_the_transition_is_not_fresh()
     {
-        var result = ReAccreditationFreshQuery.Verify(
+        var result = Verify(
             QueriedItem(), Query(raisedAt: FreshQueryTestData.TransitionAt.AddSeconds(1)), ActionId, FromStateId);
 
-        Assert.False(result.IsFresh);
-        Assert.Contains($"after the {ActionId} transition", result.FailureReason);
+        Assert.False(result.Fresh);
+        Assert.Contains($"after the {ActionId} transition", result.Reason);
     }
 
     [Fact]
@@ -164,12 +175,12 @@ public class ReAccreditationFreshQueryTests
     {
         var item = new WorkItem { TypeId = ReAccreditationType.Id, StateId = "queried" };
 
-        var result = ReAccreditationFreshQuery.Verify(item, Query(), ActionId, FromStateId);
+        var result = Verify(item, Query(), ActionId, FromStateId);
 
-        Assert.False(result.IsFresh);
+        Assert.False(result.Fresh);
         Assert.Equal(
             $"the audit log has no action-applied entry for {ActionId} from '{FromStateId}' to 'queried'",
-            result.FailureReason);
+            result.Reason);
     }
 
     [Theory]
@@ -179,9 +190,9 @@ public class ReAccreditationFreshQueryTests
         string handledActionId,
         string handledFromStateId)
     {
-        var result = ReAccreditationFreshQuery.Verify(QueriedItem(), Query(), handledActionId, handledFromStateId);
+        var result = Verify(QueriedItem(), Query(), handledActionId, handledFromStateId);
 
-        Assert.False(result.IsFresh);
-        Assert.StartsWith("the audit log has no action-applied entry", result.FailureReason);
+        Assert.False(result.Fresh);
+        Assert.StartsWith("the audit log has no action-applied entry", result.Reason);
     }
 }

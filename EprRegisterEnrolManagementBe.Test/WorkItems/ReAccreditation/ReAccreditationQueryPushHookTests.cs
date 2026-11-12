@@ -357,10 +357,11 @@ public class ReAccreditationQueryPushHookTests
     }
 
     [Fact]
-    public async Task OnActionAppliedAsync_does_not_push_when_the_audit_failure_cannot_be_persisted_and_still_never_throws()
+    public async Task OnActionAppliedAsync_logs_at_error_when_the_not_attempted_failure_cannot_be_persisted()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (hook, adapter, auditAppender) = BuildSut();
+        var logger = new ListLogger<ReAccreditationQueryPushHook>();
+        var (hook, adapter, auditAppender) = BuildSut(logger);
         auditAppender
             .AppendAsync(
                 Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
@@ -374,5 +375,34 @@ public class ReAccreditationQueryPushHookTests
         Assert.Null(exception);
         await adapter.DidNotReceiveWithAnyArgs()
             .PushQueryRaisedAsync(default, default, default!, default!, ct);
+        // Both the not-attempted reason and the lost failure record are errors.
+        Assert.Equal(2, logger.Records.Count(r => r.Level == LogLevel.Error));
+        Assert.Contains(logger.Records, r => r.Level == LogLevel.Error
+            && r.Message.Contains("query-push-failed audit entry could not be persisted"));
+    }
+
+    [Fact]
+    public async Task OnActionAppliedAsync_logs_at_error_when_the_rejected_push_failure_cannot_be_persisted()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var logger = new ListLogger<ReAccreditationQueryPushHook>();
+        var (hook, adapter, auditAppender) = BuildSut(logger);
+        adapter
+            .PushQueryRaisedAsync(
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(OperatorBackendPushResult.Failure("connection refused"));
+        auditAppender
+            .AppendAsync(
+                Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        var workItem = BuildWorkItem();
+
+        await hook.OnActionAppliedAsync(workItem, DefaultActionId, "submitted", s_user, ct);
+
+        var lost = Assert.Single(logger.Records, r =>
+            r.Message.Contains("query-push-failed audit entry could not be persisted"));
+        Assert.Equal(LogLevel.Error, lost.Level);
+        Assert.Equal(workItem.Id, lost.Properties["WorkItemId"]);
     }
 }

@@ -100,19 +100,19 @@ internal sealed class ReAccreditationQueryPushHook(
             // missing currentQuery used to push an empty note and no sections
             // (rejected by the operator backend), and a stale one re-sent the
             // previous query, which the operator backend accepted.
-            var freshQuery = ReAccreditationFreshQuery.Verify(workItem, payload.CurrentQuery, actionId, fromStateId);
-            if (!freshQuery.IsFresh)
+            if (!ReAccreditationFreshQuery.TryVerify(
+                    workItem, payload.CurrentQuery, actionId, fromStateId, out var freshQuery, out var failureReason))
             {
                 logger.LogError(
                     "Query push for work item {WorkItemId} (correlation {CorrelationId}) not attempted: {Reason}.",
-                    workItem.Id, correlationId, freshQuery.FailureReason);
+                    workItem.Id, correlationId, failureReason);
                 await RecordNotAttemptedAsync(
-                    workItem, actionId, correlationId, freshQuery.FailureReason!, user, cancellationToken);
+                    workItem, actionId, correlationId, failureReason, user, cancellationToken);
                 return;
             }
 
-            var queryNote = freshQuery.Query!.Reason!;
-            var sectionKeys = freshQuery.Query.Sections!;
+            var queryNote = freshQuery.Reason;
+            var sectionKeys = freshQuery.Sections;
 
             var result = await pushAdapter.PushQueryRaisedAsync(
                 workItem.Id, correlationId, queryNote, sectionKeys, cancellationToken);
@@ -167,7 +167,9 @@ internal sealed class ReAccreditationQueryPushHook(
                     workItem.Id, "query-push-failed", "Query push to operator backend failed", details, user, cancellationToken);
                 if (!appended)
                 {
-                    logger.LogWarning(
+                    // A lost failure record: nothing else on the work item
+                    // says the operator's record has drifted, so it must be seen.
+                    logger.LogError(
                         "query-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
                         workItem.Id, correlationId);
                 }
@@ -212,7 +214,8 @@ internal sealed class ReAccreditationQueryPushHook(
             workItem.Id, "query-push-failed", "Query push to operator backend failed", details, user, cancellationToken);
         if (!appended)
         {
-            logger.LogWarning(
+            // A lost failure record, logged at Error like the rejected-push path.
+            logger.LogError(
                 "query-push-failed audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
                 workItem.Id, correlationId);
         }
