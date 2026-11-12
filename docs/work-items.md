@@ -67,6 +67,32 @@ is now on (`payload.operatorRequestId`, `payload.site.siteId`); startup drops
 the RA-492 single-field index. Re-accreditation's request and response are
 unchanged.
 
+**The add-ORS site.** Each `sites[]` entry, and so each work item's `site`, is
+in re-accreditation's overseas site shape (the operator backend shares one
+projection between the two), so both case types can use the same site helpers:
+
+- `siteId`, `orsId`, `siteName`
+- `siteAddress`, `addressLine1`, `addressLine2`, `townOrCity`, `country`,
+  `coordinates`
+- `contactName`, `contactEmail`, `contactPhone`
+- `operationCodes`, `code1`–`code3`, `repatriatedLoads`, `conditionsOfExport`
+- `isEu`, `isOecd`
+- `interimSites`: every interim site, withdrawn ones included with `removedAt`
+- `besEvidence: { files: [...] }`, each file with `fileId`, `filename`,
+  `contentType`, `uploadedAt`, `scanStatus`, `besEvidenceValidFromDate`,
+  `besEvidenceExpiryDate`, `s3Key` and `s3Bucket`
+- `suppliedFields`: the fields the operator answered because the ORS had no
+  value. `country`, `coordinates`, `operationCodes` and `conditionsOfExport`
+  are the values in force for the request: the operator's answer where the ORS
+  had none, otherwise the ORS's.
+- `chargePence`: this site's own charge (the per-site in-year ORS fee). The
+  payload's shared `chargePence` stays the submission's total.
+
+Re-accreditation's site adds `selected`, `isNewSite`,
+`registeredNowAccredited` and the `interimSite` mirror; add-ORS sites don't
+carry them. The service validates only `siteId`, `orsId` and `siteName` and
+stores the rest of the site as sent.
+
 - **Validation (400, nothing created).** `SubmissionPayload.Validate` requires
   `operatorRequestId`, `operatorOrganisationId`, `organisationName`,
   `material` and `paymentReference` (non-blank strings), a 4-digit

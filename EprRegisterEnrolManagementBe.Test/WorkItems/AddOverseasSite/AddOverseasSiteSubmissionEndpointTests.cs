@@ -110,6 +110,119 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
         }
     }
 
+    // RA-739: the operator backend sends each site in re-accreditation's site
+    // shape plus its own charge. The Case Management service checks only orsId
+    // and siteName, so the rest of the site, interim sites and BES files
+    // included, is stored as sent.
+    [Fact]
+    public async Task Each_work_item_keeps_its_sites_charge_interim_sites_and_bes_files_as_sent()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new AppFactory(fixture);
+        using var client = factory.CreateClient();
+        var submission = new
+        {
+            typeId = TypeId,
+            source = "operator-fe",
+            payload = new
+            {
+                operatorRequestId = "request-full-site",
+                changeType = "add-overseas-site",
+                operatorOrganisationId = "org-1",
+                organisationName = "Acme Recycling Ltd",
+                operatorOrgNumber = 500500,
+                material = "Plastic",
+                accreditationYear = 2026,
+                chargePence = 65600,
+                paymentReference = "PR/PK/REP/500500",
+                sites = new[] { 901910, 901911 }
+                    .Select(siteId => new
+                    {
+                        siteId,
+                        orsId = $"ORS-{siteId}",
+                        siteName = $"Overseas site {siteId}",
+                        addressLine1 = "1 Rue Example",
+                        townOrCity = "Lyon",
+                        country = "France",
+                        coordinates = "45.7640, 4.8357",
+                        contactName = "Site Manager",
+                        operationCodes = new[] { "R3" },
+                        code1 = "B3011",
+                        conditionsOfExport = false,
+                        isEu = true,
+                        isOecd = true,
+                        interimSites = new object[]
+                        {
+                            new { siteId = 1, siteNumber = "001", siteName = "Marseille Storage" },
+                            new
+                            {
+                                siteId = 2,
+                                siteNumber = "002",
+                                siteName = "Old Depot",
+                                removedAt = "2026-02-01T09:00:00Z",
+                            },
+                        },
+                        besEvidence = new
+                        {
+                            files = new[]
+                            {
+                                new
+                                {
+                                    fileId = $"file-{siteId}",
+                                    filename = "bes.pdf",
+                                    contentType = "application/pdf",
+                                    scanStatus = "Clean",
+                                    besEvidenceValidFromDate = "2026-01-01",
+                                    besEvidenceExpiryDate = "2027-12-31",
+                                    s3Key = $"bes-evidence/file-{siteId}",
+                                    s3Bucket = "bes-bucket",
+                                },
+                            },
+                        },
+                        suppliedFields = new[] { "conditionsOfExport" },
+                        chargePence = 32800,
+                    })
+                    .ToArray(),
+            },
+        };
+
+        var response = await client.PostAsJsonAsync("/work-items", submission, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        var ids = body.GetProperty("workItems")
+            .EnumerateArray()
+            .Select(w => w.GetProperty("id").GetGuid())
+            .ToList();
+        Assert.Equal(2, ids.Count);
+        foreach (var id in ids)
+        {
+            var stored = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+            Assert.NotNull(stored);
+            Assert.Equal(65600, stored!.Payload["chargePence"].ToInt32());
+            var site = stored.Payload["site"].AsBsonDocument;
+            var siteId = site["siteId"].ToInt32();
+            Assert.Equal(32800, site["chargePence"].ToInt32());
+            Assert.Equal("Site Manager", site["contactName"].AsString);
+            Assert.Equal("B3011", site["code1"].AsString);
+            Assert.Equal(["conditionsOfExport"], site["suppliedFields"].AsBsonArray.Select(f => f.AsString));
+
+            var interimSites = site["interimSites"].AsBsonArray.Select(i => i.AsBsonDocument).ToList();
+            Assert.Equal(["Marseille Storage", "Old Depot"], interimSites.Select(i => i["siteName"].AsString));
+            Assert.False(interimSites[0].Contains("removedAt"));
+            Assert.True(interimSites[1].Contains("removedAt"));
+
+            var file = Assert.Single(site["besEvidence"]["files"].AsBsonArray).AsBsonDocument;
+            Assert.Equal($"file-{siteId}", file["fileId"].AsString);
+            Assert.Equal("bes.pdf", file["filename"].AsString);
+            Assert.Equal("Clean", file["scanStatus"].AsString);
+            Assert.Equal("2026-01-01", file["besEvidenceValidFromDate"].AsString);
+            Assert.Equal("2027-12-31", file["besEvidenceExpiryDate"].AsString);
+            Assert.Equal($"bes-evidence/file-{siteId}", file["s3Key"].AsString);
+            Assert.Equal("bes-bucket", file["s3Bucket"].AsString);
+        }
+    }
+
     [Fact]
     public async Task The_submission_reference_is_sequential_per_accreditation_year()
     {
