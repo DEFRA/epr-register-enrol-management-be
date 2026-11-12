@@ -4473,6 +4473,8 @@ public class ReAccreditationEndpointTests
         var id = Guid.NewGuid();
         var seeded = BuildAssessmentInProgress(id, TenantClientId);
         seeded.Payload["operatorEmail"] = "operator@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        seeded.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(seeded, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
@@ -4617,6 +4619,8 @@ public class ReAccreditationEndpointTests
         var id = Guid.NewGuid();
         var seeded = BuildAssessmentInProgress(id, TenantClientId);
         seeded.Payload["operatorEmail"] = "operator@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        seeded.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(seeded, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
@@ -5162,6 +5166,8 @@ public class ReAccreditationEndpointTests
     {
         var seeded = BuildAssessmentInProgress(id, TenantClientId);
         seeded.Payload["operatorEmail"] = "operator@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        seeded.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(seeded, cancellationToken);
 
         var stepOne = await client.PostAsJsonAsync(
@@ -5572,6 +5578,8 @@ public class ReAccreditationEndpointTests
     {
         var seeded = BuildAssessmentInProgress(id, TenantClientId);
         seeded.Payload["operatorEmail"] = "operator@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        seeded.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(seeded, cancellationToken);
 
         var stepOne = await client.PostAsJsonAsync(
@@ -6054,6 +6062,8 @@ public class ReAccreditationEndpointTests
         var id = Guid.NewGuid();
         var item = BuildDulyMade(id, TenantClientId);
         item.Payload["operatorEmail"] = "op@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        item.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(item, cancellationToken);
 
         var first = await client.PostAsJsonAsync(

@@ -190,6 +190,9 @@ public class NotifyTemplateContractTests
             ["organisationName"] = "Acme Recycling Ltd",
             ["registrationNumber"] = "EX-2024-001",
             ["operatorEmail"] = "operator@example.com",
+            // SubmitAsync always stamps it; the operator emails are not sent
+            // without it (RA-000).
+            ["applicationReference"] = "RA-123456789",
             // RA-581: regulatorName/regulatorEmail both need a resolvable
             // nation; England is matched by the RegulatorNames entry and the
             // mailbox resolver the SUT is built with below.

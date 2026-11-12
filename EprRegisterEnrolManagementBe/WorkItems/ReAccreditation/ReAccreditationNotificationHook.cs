@@ -364,7 +364,7 @@ internal sealed class ReAccreditationNotificationHook(
         WorkItem workItem,
         string templateKey,
         string description,
-        string reference,
+        string? reference,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     )
@@ -419,7 +419,7 @@ internal sealed class ReAccreditationNotificationHook(
                 workItem,
                 templateKey,
                 description,
-                NotSentDetails(templateKey, workItem.Id.ToString(), "payload could not be deserialised"),
+                NotSentDetails(templateKey, reference: null, "payload could not be deserialised"),
                 user,
                 cancellationToken
             );
@@ -428,11 +428,10 @@ internal sealed class ReAccreditationNotificationHook(
 
         var recipient = payload.OperatorEmail;
         // RA-248: operators see the human-facing application reference
-        // (RA-#########) in the ((reference)) placeholder. Fall back to the
-        // internal work-item Guid only for legacy/malformed items missing the
-        // reference, so the placeholder is never blank.
+        // (RA-#########) in the ((reference)) placeholder. SubmitAsync always
+        // generates it (docs/work-items.md, "Application reference").
         var reference = string.IsNullOrWhiteSpace(payload.ApplicationReference)
-            ? workItem.Id.ToString()
+            ? null
             : payload.ApplicationReference;
 
         if (!_notifyConfig.IsTriggerEnabled(templateKey))
@@ -442,6 +441,27 @@ internal sealed class ReAccreditationNotificationHook(
                 templateKey,
                 description,
                 reference,
+                user,
+                cancellationToken
+            );
+            return;
+        }
+
+        // RA-000: a blank reference is a data defect. Sending the internal
+        // work-item Guid instead would show the operator an id they cannot
+        // quote back to us, so the email is not sent.
+        if (reference is null)
+        {
+            logger.LogError(
+                "{TemplateKey} notification for work item {WorkItemId} not sent: payload has no applicationReference.",
+                templateKey,
+                workItem.Id
+            );
+            await AppendNotificationFailedAsync(
+                workItem,
+                templateKey,
+                description,
+                NotSentDetails(templateKey, reference: null, "payload has no applicationReference"),
                 user,
                 cancellationToken
             );
@@ -842,7 +862,7 @@ internal sealed class ReAccreditationNotificationHook(
 
     private static Dictionary<string, string?> NotSentDetails(
         string templateKey,
-        string reference,
+        string? reference,
         string reason
     ) =>
         new()
@@ -862,7 +882,7 @@ internal sealed class ReAccreditationNotificationHook(
         {
             logger.LogError(
                 ex,
-                "Failed to deserialise payload for work item {WorkItemId}; notification will be skipped.",
+                "Failed to deserialise payload for work item {WorkItemId}.",
                 workItem.Id
             );
             return null;

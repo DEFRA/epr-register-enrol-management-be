@@ -2696,61 +2696,6 @@ public class ReAccreditationNotificationHookTests
     }
 
     [Fact]
-    public async Task OnSubmittedAsync_falls_back_to_work_item_id_when_application_reference_absent()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var notifyClient = Substitute.For<INotifyClient>();
-        var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string>? captured = null;
-        Dictionary<string, string?>? auditDetails = null;
-        notifyClient
-            .SendEmailAsync(
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string>>(d => captured = d),
-                Arg.Any<string>(),
-                Arg.Any<string?>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(NotifySendResult.Success("msg-id-1"));
-        auditAppender
-            .AppendAsync(
-                Arg.Any<Guid>(),
-                "notification-sent",
-                Arg.Any<string>(),
-                Arg.Do<Dictionary<string, string?>>(d => auditDetails = d),
-                Arg.Any<ClaimsPrincipal>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(true);
-
-        // Legacy item predating RA-219: no applicationReference on the payload,
-        // so the ((reference)) placeholder falls back to the work-item Guid
-        // rather than being left blank.
-        var workItem = BuildWorkItem(applicationReference: null);
-        var sut = BuildSut(notifyClient, auditAppender);
-
-        await sut.OnSubmittedAsync(workItem, s_user, ct);
-
-        Assert.NotNull(captured);
-        Assert.Equal(workItem.Id.ToString(), captured!["reference"]);
-
-        await notifyClient
-            .Received(1)
-            .SendEmailAsync(
-                "SubmissionConfirmation",
-                "op@example.com",
-                Arg.Any<Dictionary<string, string>>(),
-                workItem.Id.ToString(),
-                Arg.Any<string?>(),
-                ct
-            );
-
-        Assert.NotNull(auditDetails);
-        Assert.Equal(workItem.Id.ToString(), auditDetails!["reference"]);
-    }
-
-    [Fact]
     public async Task OnSubmittedAsync_uses_application_reference_in_skipped_audit()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -2789,40 +2734,75 @@ public class ReAccreditationNotificationHookTests
         Assert.Equal(ApplicationReference, auditDetails!["reference"]);
     }
 
-    [Fact]
-    public async Task OnSubmittedAsync_falls_back_to_work_item_id_in_skipped_audit_when_reference_absent()
+    [Theory]
+    [InlineData(null, "op@example.com")]
+    [InlineData("   ", "op@example.com")]
+    // Both missing: the missing reference is the data defect that gets
+    // recorded, not the missing-operator-email skip.
+    [InlineData(null, null)]
+    public async Task OnSubmittedAsync_does_not_send_the_operator_email_without_an_application_reference(
+        string? applicationReference,
+        string? operatorEmail
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var notifyClient = Substitute.For<INotifyClient>();
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
-        Dictionary<string, string?>? auditDetails = null;
         auditAppender
             .AppendAsync(
                 Arg.Any<Guid>(),
-                "notification-skipped",
                 Arg.Any<string>(),
-                // See above: scope the capture to the operator-facing skip.
-                Arg.Do<Dictionary<string, string?>>(d =>
-                {
-                    if (d["templateKey"] == "SubmissionConfirmation")
-                    {
-                        auditDetails = d;
-                    }
-                }),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
                 Arg.Any<ClaimsPrincipal>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(true);
-
-        // Legacy item on the skip path: no operator email (skip) AND no
-        // applicationReference, so the skipped-audit reference falls back to
-        // the work-item Guid rather than being left blank.
-        var workItem = BuildWorkItem(operatorEmail: null, applicationReference: null);
-        var sut = BuildSut(notifyClient, auditAppender);
+        var logger = new ListLogger<ReAccreditationNotificationHook>();
+        // RA-000: SubmitAsync always generates applicationReference
+        // (docs/work-items.md), so a blank one is a data defect. The email is
+        // not sent with the internal work-item Guid in ((reference)).
+        var workItem = BuildWorkItem(operatorEmail: operatorEmail, applicationReference: applicationReference);
+        var sut = BuildSut(notifyClient, auditAppender, logger: logger);
 
         await sut.OnSubmittedAsync(workItem, s_user, ct);
 
-        Assert.NotNull(auditDetails);
-        Assert.Equal(workItem.Id.ToString(), auditDetails!["reference"]);
+        await notifyClient
+            .DidNotReceive()
+            .SendEmailAsync(
+                "SubmissionConfirmation",
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>()
+            );
+        await auditAppender
+            .Received(1)
+            .AppendAsync(
+                workItem.Id,
+                "notification-failed",
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["templateKey"] == "SubmissionConfirmation"
+                    && d["reason"] == "payload has no applicationReference"
+                    && d["reference"] == null
+                ),
+                s_user,
+                ct
+            );
+        await auditAppender
+            .DidNotReceive()
+            .AppendAsync(
+                workItem.Id,
+                Arg.Is<string>(a => a == "notification-sent" || a == "notification-skipped"),
+                Arg.Any<string>(),
+                Arg.Is<Dictionary<string, string?>>(d => d["templateKey"] == "SubmissionConfirmation"),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            );
+        var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Equal(workItem.Id, error.Properties["WorkItemId"]);
+        Assert.Equal("SubmissionConfirmation", error.Properties["TemplateKey"]);
     }
 }
