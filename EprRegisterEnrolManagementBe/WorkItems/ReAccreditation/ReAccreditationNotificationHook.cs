@@ -526,7 +526,6 @@ internal sealed class ReAccreditationNotificationHook(
             workItem,
             templateKey,
             reference,
-            actionId,
             verifiedQuery
         );
 
@@ -930,8 +929,7 @@ internal sealed class ReAccreditationNotificationHook(
         WorkItem workItem,
         string templateKey,
         string reference,
-        string? actionId = null,
-        ReAccreditationFreshQuery.VerifiedQuery? verifiedQuery = null
+        ReAccreditationFreshQuery.VerifiedQuery? verifiedQuery
     )
     {
         var contactName = ResolveContactName(payload);
