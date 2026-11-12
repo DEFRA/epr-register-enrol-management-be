@@ -39,8 +39,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// declaration keyed the same (state id, or action id plus from-state) but
 /// differing from the frozen one is replaced in place.
 ///
-/// Registered last of the snapshot migrations (straight after the v17 one),
-/// so it is the one that sets the final version.
+/// Registered straight after the v17 one and straight before
+/// <see cref="ReAccreditationQueryNotCallerInvocableSnapshotMigration"/> (v19),
+/// which sets the final version.
 /// </summary>
 internal sealed class ReAccreditationAssessmentStartedSnapshotMigration(
     ILogger<ReAccreditationAssessmentStartedSnapshotMigration> logger)
@@ -83,7 +84,20 @@ internal sealed class ReAccreditationAssessmentStartedSnapshotMigration(
         workItem.TemplateSnapshot is { } snapshot
         && (
             !snapshot.States.Contains(s_state)
-            || s_transitions.Any(t => !snapshot.Transitions.Contains(t))
+            || s_transitions.Any(t => !IsDeclared(t, snapshot.Transitions))
+        );
+
+    // RA-000 (v19): ReAccreditationQueryNotCallerInvocableSnapshotMigration,
+    // registered after this one, makes query-during-assessment non-caller-
+    // invocable. That flag is the v19 migration's to own, so its v19 form
+    // counts as declared here too. Comparing on full equality would see every
+    // v19 item as missing the v18 declaration, re-patch it back to v18 and
+    // leave the v19 migration to flip it again on every start-up.
+    private static bool IsDeclared(WorkItemTransition frozen, IEnumerable<WorkItemTransition> transitions) =>
+        transitions.Contains(frozen)
+        || (
+            string.Equals(frozen.ActionId, "query-during-assessment", StringComparison.OrdinalIgnoreCase)
+            && transitions.Contains(frozen with { CallerInvocable = false })
         );
 
     protected override void PatchSnapshot(WorkItem workItem)

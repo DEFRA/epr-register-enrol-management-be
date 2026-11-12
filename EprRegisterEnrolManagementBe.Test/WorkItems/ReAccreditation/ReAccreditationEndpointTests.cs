@@ -4473,6 +4473,8 @@ public class ReAccreditationEndpointTests
         var id = Guid.NewGuid();
         var seeded = BuildAssessmentInProgress(id, TenantClientId);
         seeded.Payload["operatorEmail"] = "operator@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        seeded.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(seeded, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
@@ -4617,6 +4619,8 @@ public class ReAccreditationEndpointTests
         var id = Guid.NewGuid();
         var seeded = BuildAssessmentInProgress(id, TenantClientId);
         seeded.Payload["operatorEmail"] = "operator@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        seeded.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(seeded, cancellationToken);
 
         var response = await client.PostAsJsonAsync(
@@ -5162,6 +5166,8 @@ public class ReAccreditationEndpointTests
     {
         var seeded = BuildAssessmentInProgress(id, TenantClientId);
         seeded.Payload["operatorEmail"] = "operator@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        seeded.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(seeded, cancellationToken);
 
         var stepOne = await client.PostAsJsonAsync(
@@ -5572,6 +5578,8 @@ public class ReAccreditationEndpointTests
     {
         var seeded = BuildAssessmentInProgress(id, TenantClientId);
         seeded.Payload["operatorEmail"] = "operator@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        seeded.Payload["applicationReference"] = "RA-123456789";
         await factory.SeedAsync(seeded, cancellationToken);
 
         var stepOne = await client.PostAsJsonAsync(
@@ -5835,6 +5843,256 @@ public class ReAccreditationEndpointTests
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal(stateId, persisted!.StateId);
         Assert.Empty(persisted.AuditLog);
+    }
+
+    // ---------- RA-000: a query is only ever applied by the query service ----------
+
+    public static TheoryData<string, string> QueryTransitions =>
+        new()
+        {
+            { "submitted", "query-during-duly-making" },
+            { "duly-made", "query-during-duly-made" },
+            { "assessment-in-progress", "query-during-assessment" },
+            { "assessment-started", "query-during-assessment" },
+            { "awaiting-decision", "query-during-decision" },
+        };
+
+    /// <summary>
+    /// RA-000: the generic action route used to apply a query-during-* id
+    /// directly, skipping the query service's self-assign, currentQuery
+    /// stamp and application-queried audit entry, and the query push and
+    /// Queried email then sent no query or the previous one.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(QueryTransitions))]
+    // The engine and the guard both match action ids case-insensitively, so a
+    // re-cased id is the same transition and is rejected the same way; the
+    // ProblemDetails detail echoes the id exactly as the caller sent it.
+    [InlineData("assessment-in-progress", "Query-During-Assessment")]
+    public async Task A_query_transition_is_rejected_on_the_generic_action_route(string stateId, string actionId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (pushAdapter, _) = RecordingPushAdapter();
+        var notifyClient = Substitute.For<INotifyClient>();
+        await using var factory = new ReAccreditationFactory(
+            _fixture, pushAdapter: pushAdapter, notifyClient: notifyClient, captureLogs: true);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, stateId, TenantClientId), cancellationToken);
+
+        await AssertGenericActionRejectedAsync(
+            factory, client, id, stateId, actionId, pushAdapter, notifyClient, cancellationToken);
+    }
+
+    /// <summary>
+    /// RA-000: the endpoint guard reads each item's own frozen snapshot, so an
+    /// item submitted under v18 (query-during-* caller-invocable) is only
+    /// closed once the v19 snapshot migration has run on it.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(QueryTransitions))]
+    public async Task A_query_transition_is_rejected_on_the_generic_action_route_for_an_item_migrated_from_v18(
+        string stateId,
+        string actionId
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (pushAdapter, _) = RecordingPushAdapter();
+        var notifyClient = Substitute.For<INotifyClient>();
+        await using var factory = new ReAccreditationFactory(
+            _fixture, pushAdapter: pushAdapter, notifyClient: notifyClient, captureLogs: true);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var v18 = BuildInState(id, stateId, TenantClientId);
+        v18.TemplateSnapshot = ReAccreditationQueryNotCallerInvocableSnapshotMigrationTests.BuildV18Snapshot();
+        v18.TemplateVersion = "v18";
+        await factory.SeedAsync(v18, cancellationToken);
+
+        await new ReAccreditationQueryNotCallerInvocableSnapshotMigration(
+                NullLogger<ReAccreditationQueryNotCallerInvocableSnapshotMigration>.Instance)
+            .ApplyAsync(factory.Persistence, cancellationToken);
+
+        var migrated = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("v19", migrated!.TemplateVersion);
+        Assert.False(Assert.Single(
+            migrated.TemplateSnapshot!.Transitions,
+            t => t.ActionId == actionId && t.FromStateId == stateId).CallerInvocable);
+
+        await AssertGenericActionRejectedAsync(
+            factory, client, id, stateId, actionId, pushAdapter, notifyClient, cancellationToken);
+    }
+
+    /// <summary>
+    /// RA-000 review: the engine falls back to the live registered type when
+    /// an item has no frozen snapshot, and the v19 migration skips such items.
+    /// The endpoint guard resolves the template the same way, so it rejects
+    /// them too instead of finding no transition and letting the engine apply
+    /// it from the live type.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(QueryTransitions))]
+    public async Task A_query_transition_is_rejected_on_the_generic_action_route_for_an_item_with_no_snapshot(
+        string stateId,
+        string actionId
+    )
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (pushAdapter, _) = RecordingPushAdapter();
+        var notifyClient = Substitute.For<INotifyClient>();
+        await using var factory = new ReAccreditationFactory(
+            _fixture, pushAdapter: pushAdapter, notifyClient: notifyClient, captureLogs: true);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var legacy = BuildInState(id, stateId, TenantClientId);
+        legacy.TemplateSnapshot = null;
+        legacy.TemplateVersion = null;
+        await factory.SeedAsync(legacy, cancellationToken);
+        Assert.Null((await factory.Persistence.GetByIdAsync(id, cancellationToken))!.TemplateSnapshot);
+
+        await AssertGenericActionRejectedAsync(
+            factory, client, id, stateId, actionId, pushAdapter, notifyClient, cancellationToken);
+    }
+
+    private static async Task AssertGenericActionRejectedAsync(
+        ReAccreditationFactory factory,
+        HttpClient client,
+        Guid id,
+        string stateId,
+        string actionId,
+        IOperatorBackendPushAdapter pushAdapter,
+        INotifyClient notifyClient,
+        CancellationToken cancellationToken
+    )
+    {
+        var before = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+
+        var response = await client.PostAsync(
+            $"/work-items/{id}/actions/{actionId}", content: null, cancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.NotNull(problem);
+        Assert.Equal("Invalid action", problem!.Title);
+        Assert.Equal($"Action '{actionId}' is not declared by work item type 're-accreditation'.", problem.Detail);
+
+        // Nothing happened: same state, no audit entry, no stamp, no push, no email.
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(stateId, persisted!.StateId);
+        Assert.Empty(persisted.AuditLog);
+        Assert.Equal(before!.Payload.ToBsonDocument(), persisted.Payload.ToBsonDocument());
+        await pushAdapter.DidNotReceiveWithAnyArgs()
+            .PushQueryRaisedAsync(default, default, default!, default!, default);
+        await notifyClient.DidNotReceiveWithAnyArgs()
+            .SendEmailAsync(default!, default!, default!, default!, cancellationToken: default);
+
+        var error = Assert.Single(
+            factory.Logs!.Records,
+            r => r.Level == LogLevel.Error
+                && r.Category == typeof(WorkItemEndpoints).FullName
+                && Equals(r.Properties.GetValueOrDefault("WorkItemId"), id));
+        Assert.Equal(actionId, error.Properties["ActionId"]);
+        Assert.Equal(ReAccreditationType.Id, error.Properties["TypeId"]);
+        Assert.Equal(stateId, error.Properties["StateId"]);
+        Assert.Equal(DefaultUserId, error.Properties["UserId"]);
+    }
+
+    /// <summary>
+    /// RA-000 check: the resume-during-* transitions have the same bespoke
+    /// service (ReAccreditationResumeService) and have been non-caller-
+    /// invocable since RA-311/MBE-1, so the generic route already rejects
+    /// them. Regression guard so that stays true.
+    /// </summary>
+    [Theory]
+    [InlineData("resume-during-duly-making")]
+    [InlineData("resume-during-duly-made")]
+    [InlineData("resume-during-assessment")]
+    [InlineData("resume-during-decision")]
+    public async Task A_resume_transition_is_rejected_on_the_generic_action_route(string actionId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (pushAdapter, _) = RecordingPushAdapter();
+        var notifyClient = Substitute.For<INotifyClient>();
+        await using var factory = new ReAccreditationFactory(
+            _fixture, pushAdapter: pushAdapter, notifyClient: notifyClient, captureLogs: true);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildInState(id, "queried", TenantClientId), cancellationToken);
+
+        await AssertGenericActionRejectedAsync(
+            factory, client, id, "queried", actionId, pushAdapter, notifyClient, cancellationToken);
+    }
+
+    [Fact]
+    public async Task A_second_query_after_the_operator_responded_pushes_and_emails_the_new_query_not_the_old_one()
+    {
+        // RA-000: currentQuery is never cleared, so the first query's stamp is
+        // still on the payload when the second query is raised. The second
+        // push and email must carry the second query, and nothing may fail.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        var (pushAdapter, _) = RecordingPushAdapter();
+        var queryNotes = new ConcurrentQueue<string>();
+        pushAdapter
+            .PushQueryRaisedAsync(
+                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Do<string>(queryNotes.Enqueue),
+                Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(OperatorBackendPushResult.Success()));
+        var queriedDates = new ConcurrentQueue<string>();
+        var notifyClient = Substitute.For<INotifyClient>();
+        notifyClient
+            .SendEmailAsync(
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string>>(),
+                Arg.Any<string>(),
+                Arg.Any<string?>(),
+                Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                if (call.ArgAt<string>(0) == "Queried")
+                {
+                    queriedDates.Enqueue(call.ArgAt<Dictionary<string, string>>(2)["Querieddate"]);
+                }
+
+                return Task.FromResult(NotifySendResult.Success("msg"));
+            });
+        await using var factory = new ReAccreditationFactory(
+            _fixture, pushAdapter: pushAdapter, notifyClient: notifyClient, captureLogs: true);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildDulyMade(id, TenantClientId);
+        item.Payload["operatorEmail"] = "op@example.com";
+        // SubmitAsync always stamps it; operator emails need it (RA-000).
+        item.Payload["applicationReference"] = "RA-123456789";
+        await factory.SeedAsync(item, cancellationToken);
+
+        var first = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody("First question"), cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var resumed = await ResumeAsOperatorAsync(client, id, cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, resumed.StatusCode);
+        // RA-523: a duly-made-origin response lands in assessment-in-progress.
+        Assert.Equal("assessment-in-progress", (await factory.Persistence.GetByIdAsync(id, cancellationToken))!.StateId);
+
+        var second = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/query", QueryBody("Second question"), cancellationToken);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+
+        Assert.Equal(["First question", "Second question"], queryNotes.ToArray());
+        Assert.Equal(2, queriedDates.Count);
+        Assert.All(queriedDates, d => Assert.False(string.IsNullOrEmpty(d)));
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(2, persisted!.AuditLog.Count(a => a.Action == "query-push-sent"));
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action is "query-push-failed" or "notification-failed");
+        Assert.DoesNotContain(
+            factory.Logs!.Records,
+            r => r.Level == LogLevel.Error
+                && (r.Category == typeof(ReAccreditationQueryPushHook).FullName
+                    || r.Category == typeof(ReAccreditationNotificationHook).FullName));
     }
 
     // -------------------- RA-469: Update recycling operations endpoint --------------------
@@ -6819,6 +7077,13 @@ public class ReAccreditationEndpointTests
         public IReExAccreditationClient ReExClient { get; } =
             Substitute.For<IReExAccreditationClient>();
 
+        /// <summary>
+        /// RA-000: every log event the app wrote, when constructed with
+        /// <c>captureLogs: true</c> (it then replaces the Serilog factory);
+        /// otherwise null.
+        /// </summary>
+        public CapturingLoggerProvider? Logs { get; }
+
         public ReAccreditationFactory(
             MongoIntegrationFixture fixture,
             string clientId = TenantClientId,
@@ -6832,10 +7097,12 @@ public class ReAccreditationEndpointTests
             IAccreditationNumberAdapter? numberAdapter = null,
             IOverseasSiteRecyclingOperationsAdapter? recyclingOperationsAdapter = null,
             INotifyClient? notifyClient = null,
-            IBackgroundTaskQueue? backgroundTaskQueue = null
+            IBackgroundTaskQueue? backgroundTaskQueue = null,
+            bool captureLogs = false
         )
         {
             _fixture = fixture;
+            Logs = captureLogs ? new CapturingLoggerProvider() : null;
             _clientId = clientId;
             _userId = userId;
             _userName = userName;
@@ -6992,6 +7259,14 @@ public class ReAccreditationEndpointTests
 
                 // RA-527: optional, so a test can see whether an email was
                 // sent or a background job (publishing, a status push) queued.
+                if (Logs is not null)
+                {
+                    var logs = Logs;
+                    services.RemoveAll<ILoggerFactory>();
+                    services.AddSingleton<ILoggerFactory>(_ =>
+                        LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(logs)));
+                }
+
                 if (_notifyClient is not null)
                 {
                     services.RemoveAll<INotifyClient>();
