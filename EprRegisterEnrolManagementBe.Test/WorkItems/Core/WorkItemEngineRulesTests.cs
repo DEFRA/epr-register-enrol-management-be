@@ -9,7 +9,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class WorkItemEngineRulesTests
 {
-    private static readonly IWorkItemTemplate s_template =
+    private static readonly WorkItemTemplateSnapshot s_template =
         WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
 
     [Theory]

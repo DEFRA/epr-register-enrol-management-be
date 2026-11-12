@@ -538,11 +538,11 @@ public sealed class WorkItemService : IWorkItemService
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UnknownAction,
-                $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'."
+                $"Action '{actionId}' is not declared by work item type '{workItem.TypeId}'."
             );
         }
 
-        if (TerminalStates.Find(template, workItem!.StateId) is { } currentTerminalState)
+        if (TerminalStates.Find(template!, workItem.StateId) is { } currentTerminalState)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,
