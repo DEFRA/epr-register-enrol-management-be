@@ -346,13 +346,16 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
     [Fact]
     public async Task A_name_changed_between_planning_and_writing_is_not_overwritten()
     {
-        var target = await SeedAsync();
+        // Loaded BEFORE configuring the substitute: an await between the call
+        // and Returns() can resume on another thread, where NSubstitute no
+        // longer sees the call to configure.
+        var planned = await ReloadAsync(await SeedAsync());
         var racing = Substitute.For<IWorkItemPersistence>();
         racing
             .FindByPayloadFieldAsync(ReAccreditationType.Id, "registrationNumber", Migration.RegistrationNumber, Arg.Any<CancellationToken>())
-            .Returns([await ReloadAsync(target)]);
+            .Returns([planned]);
         racing
-            .CompareAndSetPayloadFieldAsync(default, default!, default!, default!, default)
+            .CompareAndSetPayloadFieldAsync(default, default!, default!, default!, Ct)
             .ReturnsForAnyArgs(false);
 
         var result = await NewMigration().ApplyAsync(racing, Ct);

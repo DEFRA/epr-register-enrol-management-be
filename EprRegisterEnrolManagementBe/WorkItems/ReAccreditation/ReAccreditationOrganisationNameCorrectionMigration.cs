@@ -137,6 +137,46 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
             return RunResult.Disabled;
         }
 
+        var apply = ResolveApplyMode();
+
+        var candidates = await persistence.FindByPayloadFieldAsync(
+            ReAccreditationType.Id,
+            RegistrationNumberField,
+            RegistrationNumber,
+            cancellationToken
+        );
+
+        // Plan every candidate before writing any: an abort on the second
+        // must not leave the first renamed.
+        var (toRename, abortReason) = Plan(candidates);
+        if (abortReason is not null)
+        {
+            logger.LogError("RA-764 ABORTED, nothing written: {Reason}", abortReason);
+            return RunResult.Aborted;
+        }
+
+        if (toRename.Count == 0)
+        {
+            logger.LogInformation("RA-764 complete. Nothing to rename.");
+            return RunResult.NothingToDo;
+        }
+
+        if (!apply)
+        {
+            LogDryRun(toRename);
+            return RunResult.DryRun;
+        }
+
+        await RenameAsync(persistence, toRename, cancellationToken);
+        return RunResult.Applied;
+    }
+
+    /// <summary>
+    /// True for an applied run. Apply without a spot-check name falls back to
+    /// a dry run, loudly.
+    /// </summary>
+    private bool ResolveApplyMode()
+    {
         var apply = configuration.GetValue(ApplyConfigKey, false);
         var confirmedBy = configuration.GetValue<string?>(SpotCheckConfirmedByConfigKey);
         if (apply && string.IsNullOrWhiteSpace(confirmedBy))
@@ -165,94 +205,119 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
             );
         }
 
-        var candidates = await persistence.FindByPayloadFieldAsync(
-            ReAccreditationType.Id,
-            RegistrationNumberField,
-            RegistrationNumber,
-            cancellationToken
-        );
+        return apply;
+    }
 
-        // Plan every candidate before writing any: an abort on the second
-        // must not leave the first renamed.
+    private enum Decision
+    {
+        OtherYear,
+        AlreadyRenamed,
+        Rename,
+    }
+
+    /// <summary>
+    /// The work items to rename, or why the whole run must abort. Writes
+    /// nothing.
+    /// </summary>
+    private (List<WorkItem> ToRename, string? AbortReason) Plan(IReadOnlyList<WorkItem> candidates)
+    {
         var toRename = new List<WorkItem>();
         var inScope = 0;
         foreach (var item in candidates)
         {
-            if (!TryReadYear(item.Payload, out var year))
+            var (decision, abortReason) = Decide(item);
+            if (abortReason is not null)
             {
-                return Abort($"work item {item.Id} has no usable accreditationYear.");
+                return (toRename, abortReason);
             }
 
-            if (year != AccreditationYear)
+            if (decision == Decision.OtherYear)
             {
-                logger.LogInformation(
-                    "RA-764 work item {WorkItemId} is a {Year} application; left alone.",
-                    item.Id,
-                    year
-                );
                 continue;
             }
 
             inScope++;
-            var mismatch = IdentityMismatch(item);
-            if (mismatch is not null)
+            if (decision == Decision.Rename)
             {
-                return Abort($"work item {item.Id} {mismatch}");
+                toRename.Add(item);
             }
-
-            var name = ReadString(item.Payload, OrganisationNameField);
-            if (name == NewName)
-            {
-                logger.LogInformation(
-                    "RA-764 work item {WorkItemId} already carries {NewName}; skipping.",
-                    item.Id,
-                    NewName
-                );
-                continue;
-            }
-
-            if (name != OldName)
-            {
-                return Abort(
-                    $"work item {item.Id} carries organisation name '{name}', which is neither "
-                        + $"'{OldName}' (old) nor '{NewName}' (new)."
-                );
-            }
-
-            toRename.Add(item);
         }
 
-        if (inScope == 0)
-        {
-            return Abort(
+        return inScope == 0
+            ? (
+                toRename,
                 $"expected at least one {AccreditationYear} work item with registration number "
                     + $"{RegistrationNumber}, found none ({candidates.Count} of any year)."
+            )
+            : (toRename, null);
+    }
+
+    /// <summary>What to do with one candidate, or why the run must abort.</summary>
+    private (Decision Decision, string? AbortReason) Decide(WorkItem item)
+    {
+        if (!TryReadYear(item.Payload, out var year))
+        {
+            return (default, $"work item {item.Id} has no usable accreditationYear.");
+        }
+
+        if (year != AccreditationYear)
+        {
+            logger.LogInformation(
+                "RA-764 work item {WorkItemId} is a {Year} application; left alone.",
+                item.Id,
+                year
+            );
+            return (Decision.OtherYear, null);
+        }
+
+        var mismatch = IdentityMismatch(item);
+        if (mismatch is not null)
+        {
+            return (default, $"work item {item.Id} {mismatch}");
+        }
+
+        var name = ReadString(item.Payload, OrganisationNameField);
+        if (name == NewName)
+        {
+            logger.LogInformation(
+                "RA-764 work item {WorkItemId} already carries {NewName}; skipping.",
+                item.Id,
+                NewName
+            );
+            return (Decision.AlreadyRenamed, null);
+        }
+
+        return name == OldName
+            ? (Decision.Rename, null)
+            : (
+                default,
+                $"work item {item.Id} carries organisation name '{name}', which is neither "
+                    + $"'{OldName}' (old) nor '{NewName}' (new)."
+            );
+    }
+
+    private void LogDryRun(List<WorkItem> toRename)
+    {
+        foreach (var item in toRename)
+        {
+            logger.LogInformation(
+                "RA-764 DRY RUN would rename work item {WorkItemId} ({ApplicationReference}): "
+                    + "{From} → {To}",
+                item.Id,
+                ReadString(item.Payload, "applicationReference"),
+                OldName,
+                NewName
             );
         }
+        logger.LogInformation("RA-764 DRY RUN complete. Would rename: {Count}.", toRename.Count);
+    }
 
-        if (toRename.Count == 0)
-        {
-            logger.LogInformation("RA-764 complete. Nothing to rename.");
-            return RunResult.NothingToDo;
-        }
-
-        if (!apply)
-        {
-            foreach (var item in toRename)
-            {
-                logger.LogInformation(
-                    "RA-764 DRY RUN would rename work item {WorkItemId} ({ApplicationReference}): "
-                        + "{From} → {To}",
-                    item.Id,
-                    ReadString(item.Payload, "applicationReference"),
-                    OldName,
-                    NewName
-                );
-            }
-            logger.LogInformation("RA-764 DRY RUN complete. Would rename: {Count}.", toRename.Count);
-            return RunResult.DryRun;
-        }
-
+    private async Task RenameAsync(
+        IWorkItemPersistence persistence,
+        List<WorkItem> toRename,
+        CancellationToken cancellationToken
+    )
+    {
         var renamed = 0;
         foreach (var item in toRename)
         {
@@ -287,13 +352,6 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
         }
 
         logger.LogInformation("RA-764 APPLY complete. Renamed: {Count}.", renamed);
-        return RunResult.Applied;
-    }
-
-    private RunResult Abort(string reason)
-    {
-        logger.LogError("RA-764 ABORTED, nothing written: {Reason}", reason);
-        return RunResult.Aborted;
     }
 
     /// <summary>
