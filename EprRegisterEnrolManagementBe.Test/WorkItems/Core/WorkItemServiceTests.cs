@@ -41,6 +41,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.NoSubmissions(),
             _time
         );
 
@@ -53,6 +54,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.NoSubmissions(),
             _time,
             postActionHooks: [hook]
         );
@@ -212,6 +214,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.NoSubmissions(),
             _time,
             postActionHooks: [slowHook, pushHook]
         );
@@ -1744,6 +1747,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.NoSubmissions(),
             time
         );
 
@@ -1810,10 +1814,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                payload,
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, payload, "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -1838,10 +1839,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument(),
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -1872,10 +1870,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument(),
-                "test-client",
-                UserWithoutActorId(),
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", UserWithoutActorId()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -1908,11 +1903,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument(),
-                "test-client",
-                AuditUser(),
-                submissionMetadata: metadata,
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser(), metadata),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -1944,11 +1935,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument(),
-                "test-client",
-                AuditUser(),
-                submissionMetadata: null,
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser(), null),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -1971,10 +1958,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument(),
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -1995,10 +1979,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument(),
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -2023,10 +2004,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                payload,
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, payload, "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -2061,15 +2039,13 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(generator),
+            TestReferenceGenerators.NoSubmissions(),
             _time
         );
 
         var payload = new BsonDocument { ["paymentReference"] = "PR/PK/REP/500500" };
         var result = await service.SubmitAsync(
-            type,
-            payload,
-            "test-client",
-            AuditUser(),
+            new WorkItemSubmissionRequest(type, payload, "test-client", AuditUser()),
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2090,10 +2066,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var result = await BuildService(type)
             .SubmitAsync(
-                type,
-                payload,
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, payload, "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -2124,14 +2097,12 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(generator),
+            TestReferenceGenerators.NoSubmissions(),
             _time
         );
 
         var result = await service.SubmitAsync(
-            type,
-            new BsonDocument(),
-            "test-client",
-            AuditUser(),
+            new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser()),
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2161,14 +2132,12 @@ public class WorkItemServiceTests : IAsyncDisposable
             _persistence,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(generator),
+            TestReferenceGenerators.NoSubmissions(),
             _time
         );
 
         var result = await service.SubmitAsync(
-            type,
-            new BsonDocument(),
-            "test-client",
-            AuditUser(),
+            new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser()),
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2198,10 +2167,7 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var first = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument { ["operatorApplicationId"] = "app-001" },
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, new BsonDocument { ["operatorApplicationId"] = "app-001" }, "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
         Assert.True(first.IsSuccess);
@@ -2212,10 +2178,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         // call's (now server-mutated) BsonDocument.
         var second = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument { ["operatorApplicationId"] = "app-001" },
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, new BsonDocument { ["operatorApplicationId"] = "app-001" }, "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -2242,10 +2205,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         var service = BuildServiceWithHook(type, hook);
 
         await service.SubmitAsync(
-            type,
-            new BsonDocument { ["operatorApplicationId"] = "app-002" },
-            "test-client",
-            AuditUser(),
+            new WorkItemSubmissionRequest(type, new BsonDocument { ["operatorApplicationId"] = "app-002" }, "test-client", AuditUser()),
             cancellationToken: TestContext.Current.CancellationToken
         );
         await hook.Received(1)
@@ -2256,10 +2216,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             );
 
         var second = await service.SubmitAsync(
-            type,
-            new BsonDocument { ["operatorApplicationId"] = "app-002" },
-            "test-client",
-            AuditUser(),
+            new WorkItemSubmissionRequest(type, new BsonDocument { ["operatorApplicationId"] = "app-002" }, "test-client", AuditUser()),
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2285,18 +2242,12 @@ public class WorkItemServiceTests : IAsyncDisposable
 
         var first = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument(),
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
         var second = await BuildService(type)
             .SubmitAsync(
-                type,
-                new BsonDocument(),
-                "test-client",
-                AuditUser(),
+                new WorkItemSubmissionRequest(type, new BsonDocument(), "test-client", AuditUser()),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -2346,6 +2297,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             racing,
             NullLogger<WorkItemService>.Instance,
             TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.NoSubmissions(),
             _time
         );
     }

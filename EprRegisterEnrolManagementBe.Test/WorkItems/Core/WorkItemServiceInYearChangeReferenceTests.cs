@@ -53,6 +53,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
                 new ApplicationReferenceGenerator(_time),
                 new InYearChangeReferenceGenerator(_sequenceStore)
             ),
+            TestReferenceGenerators.NoSubmissions(),
             _time
         );
 
@@ -62,10 +63,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         BsonDocument payload
     ) =>
         service.SubmitAsync(
-            type,
-            payload,
-            "test-client",
-            User(),
+            new WorkItemSubmissionRequest(type, payload, "test-client", User()),
             cancellationToken: TestContext.Current.CancellationToken
         );
 

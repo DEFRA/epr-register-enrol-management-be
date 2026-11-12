@@ -6,7 +6,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <summary>
 /// RA-739: the fields a submission for a type that declares
 /// <see cref="IWorkItemType.UsesSubmissionReference"/> (add-ORS) must carry.
-/// <see cref="WorkItemService.SubmitSubmissionAsync"/> rejects a payload that
+/// <see cref="WorkItemService.SubmitPerSiteAsync"/> rejects a payload that
 /// fails <see cref="Validate"/> with a 400 before anything is allocated or
 /// written. Every other field is optional.
 /// </summary>

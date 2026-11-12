@@ -182,6 +182,9 @@ public sealed class WorkItemPersistence
     // Computed once: state id → workflow rank (RA-324), used by the Status sort.
     private readonly IReadOnlyDictionary<string, int> _statusRank;
 
+    // RA-739: resolves a query's categories to typeIds (df7.16).
+    private readonly IWorkItemRegistry _registry;
+
     public WorkItemPersistence(
         IMongoDbClientFactory connectionFactory,
         ILoggerFactory loggerFactory,
@@ -189,6 +192,7 @@ public sealed class WorkItemPersistence
     )
         : base(connectionFactory, "workItems", loggerFactory)
     {
+        _registry = registry;
         _statusRank = WorkItemSort.StatusRank(registry);
     }
 
@@ -310,7 +314,7 @@ public sealed class WorkItemPersistence
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var filter = BuildFilter(query);
+        var filter = BuildFilter(query, _registry);
 
         var totalCount = await Collection.CountDocumentsAsync(
             filter,
@@ -388,17 +392,20 @@ public sealed class WorkItemPersistence
         return new WorkItemPage(items, totalCount, page, pageSize);
     }
 
-    internal static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
+    internal static FilterDefinition<WorkItem> BuildFilter(
+        WorkItemQuery query,
+        IWorkItemRegistry registry
+    )
     {
         var builder = Builders<WorkItem>.Filter;
         var clauses = new List<FilterDefinition<WorkItem>>();
 
-        // RA-739: a category filter has already been resolved into TypeIds
-        // (see WorkItemQuery.WithCategoriesResolved); apply it even when it
-        // resolved to no types, so it matches nothing rather than everything.
-        if (query.TypeIds is { Count: > 0 } || query.Categories is { Count: > 0 })
+        // RA-739: TypeIds plus any category resolved against the registry.
+        // A category that resolved to no types still applies, so it matches
+        // nothing rather than everything.
+        if (query.ResolveTypeIds(registry) is { } typeIds)
         {
-            clauses.Add(builder.In(w => w.TypeId, query.TypeIds ?? []));
+            clauses.Add(builder.In(w => w.TypeId, typeIds));
         }
 
         if (query.StateIds is { Count: > 0 } stateIds)

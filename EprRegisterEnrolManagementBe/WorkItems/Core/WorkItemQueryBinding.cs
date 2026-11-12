@@ -11,7 +11,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 internal static class WorkItemQueryBinding
 {
     internal const string TypeIdParam = "typeId";
-    // RA-739. Multi-value; expanded to typeIds by WorkItemQuery.WithCategoriesResolved.
+    // RA-739. Multi-value; expanded to typeIds by WorkItemQuery.ResolveTypeIds in persistence.
     internal const string CategoryParam = "category";
     internal const string StateIdParam = "stateId";
     internal const string SearchParam = "search";

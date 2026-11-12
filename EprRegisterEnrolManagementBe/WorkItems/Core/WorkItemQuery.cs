@@ -65,9 +65,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// <param name="Categories">
 /// RA-739: restrict to items whose type is registered with one of these
 /// <see cref="IWorkItemType.Category"/> values, unioned with
-/// <paramref name="TypeIds"/>. Persistence cannot see the registry, so callers
-/// resolve this with <see cref="WithCategoriesResolved"/> first. Once set,
-/// <paramref name="TypeIds"/> is applied even when empty (matching nothing).
+/// <paramref name="TypeIds"/>. Persistence resolves it against the registry
+/// (<see cref="ResolveTypeIds"/>); a category with no registered types matches
+/// nothing.
 /// </param>
 public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? TypeIds = null,
@@ -91,29 +91,27 @@ public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? Categories = null)
 {
     /// <summary>
-    /// RA-739: expands <see cref="Categories"/> into the typeIds registered
-    /// with those categories and unions them with <see cref="TypeIds"/>, so
-    /// a category filter picks up new case types without code changes.
-    /// <see cref="Categories"/> is kept, so persistence still knows a type
-    /// filter was asked for when the union is empty and matches nothing
-    /// rather than everything.
+    /// RA-739: the typeIds this query restricts to, or <c>null</c> for any
+    /// type. <see cref="Categories"/> expands to the typeIds registered with
+    /// those categories, unioned with <see cref="TypeIds"/>, so a category
+    /// filter picks up new case types without code changes. When a category
+    /// was asked for the result is never <c>null</c>: a union that is empty
+    /// matches nothing rather than everything. Persistence calls this while
+    /// building the filter (df7.16), so no caller can forget to resolve it.
     /// </summary>
-    public WorkItemQuery WithCategoriesResolved(IWorkItemRegistry registry)
+    internal IReadOnlyCollection<string>? ResolveTypeIds(IWorkItemRegistry registry)
     {
         ArgumentNullException.ThrowIfNull(registry);
         if (Categories is not { Count: > 0 } categories)
         {
-            return this;
+            return TypeIds is { Count: > 0 } ? TypeIds : null;
         }
 
         var categoryTypeIds = registry
             .Types.Where(t => t.Category is not null && categories.Contains(t.Category))
             .Select(t => t.TypeId);
 
-        return this with
-        {
-            TypeIds = (TypeIds ?? []).Union(categoryTypeIds, StringComparer.Ordinal).ToList(),
-        };
+        return (TypeIds ?? []).Union(categoryTypeIds, StringComparer.Ordinal).ToList();
     }
 
     public const int DefaultPageSize = 20;

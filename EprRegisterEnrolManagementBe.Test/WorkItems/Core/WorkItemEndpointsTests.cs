@@ -571,14 +571,7 @@ public class WorkItemEndpointsTests
         var registry = new WorkItemRegistry([type]);
         var engine = Substitute.For<IWorkItemService>();
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.ApplicationReferenceExhausted,
@@ -622,14 +615,7 @@ public class WorkItemEndpointsTests
         var registry = new WorkItemRegistry([type]);
         var engine = Substitute.For<IWorkItemService>();
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.InvalidSubmissionPayload,
@@ -718,14 +704,7 @@ public class WorkItemEndpointsTests
             SubmittedBy = "test-client",
         };
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(WorkItemActionResult.Success(submittedWorkItem));
         engine
             .Project(Arg.Any<WorkItem>())
@@ -782,14 +761,7 @@ public class WorkItemEndpointsTests
         var registry = new WorkItemRegistry([type]);
         var engine = Substitute.For<IWorkItemService>();
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<WorkItemActionResult>(new InvalidOperationException("boom")));
 
         var body = JsonDocument.Parse($"{{\"typeId\":\"{TypeId}\"}}").RootElement;
@@ -869,14 +841,7 @@ public class WorkItemEndpointsTests
         var registry = new WorkItemRegistry([type]);
         var engine = Substitute.For<IWorkItemService>();
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.UnknownAction,

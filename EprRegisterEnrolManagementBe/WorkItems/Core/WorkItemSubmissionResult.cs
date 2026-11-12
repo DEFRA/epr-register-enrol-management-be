@@ -1,7 +1,7 @@
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
-/// RA-739: result of <see cref="IWorkItemService.SubmitSubmissionAsync"/>.
+/// RA-739: result of <see cref="IWorkItemService.SubmitPerSiteAsync"/>.
 /// Either the stored <see cref="Submission"/> (newly created, or an earlier
 /// one returned as an idempotent replay), or the
 /// <see cref="WorkItemActionResult"/> failure that stopped it.

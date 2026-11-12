@@ -101,12 +101,7 @@ public sealed class InYearChangeReferenceGenerator(IReferenceSequenceStore seque
         string changeTypeCode,
         BsonDocument payload,
         CancellationToken cancellationToken = default
-    ) =>
-        GenerateAsync(
-            changeTypeCode,
-            payload,
-            key => sequenceStore.NextAsync(key, cancellationToken)
-        );
+    ) => AllocateReferenceAsync(session: null, changeTypeCode, payload, cancellationToken);
 
     public Task<string> GenerateAsync(
         IClientSessionHandle session,
@@ -116,17 +111,16 @@ public sealed class InYearChangeReferenceGenerator(IReferenceSequenceStore seque
     )
     {
         ArgumentNullException.ThrowIfNull(session);
-        return GenerateAsync(
-            changeTypeCode,
-            payload,
-            key => sequenceStore.NextAsync(session, key, cancellationToken)
-        );
+        return AllocateReferenceAsync(session, changeTypeCode, payload, cancellationToken);
     }
 
-    private async Task<string> GenerateAsync(
+    // As MongoReferenceSequenceStore.AllocateAsync: a null session allocates
+    // outside any transaction.
+    private async Task<string> AllocateReferenceAsync(
+        IClientSessionHandle? session,
         string changeTypeCode,
         BsonDocument payload,
-        Func<string, Task<long>> allocate
+        CancellationToken cancellationToken
     )
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(changeTypeCode);
@@ -141,7 +135,9 @@ public sealed class InYearChangeReferenceGenerator(IReferenceSequenceStore seque
             CultureInfo.InvariantCulture,
             $"{Prefix}-{changeTypeCode}-{year:D4}"
         );
-        var sequence = await allocate(sequenceKey);
+        var sequence = session is null
+            ? await sequenceStore.NextAsync(sequenceKey, cancellationToken)
+            : await sequenceStore.NextAsync(session, sequenceKey, cancellationToken);
 
         return string.Create(
             CultureInfo.InvariantCulture,

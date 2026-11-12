@@ -29,11 +29,7 @@ public interface IWorkItemService
     /// nothing is persisted.
     /// </summary>
     Task<WorkItemActionResult> SubmitAsync(
-        IWorkItemType type,
-        BsonDocument payload,
-        string? submittedBy,
-        ClaimsPrincipal user,
-        IReadOnlyDictionary<string, string?>? submissionMetadata = null,
+        WorkItemSubmissionRequest request,
         CancellationToken cancellationToken = default
     );
 
@@ -56,12 +52,8 @@ public interface IWorkItemService
     /// <see cref="WorkItemActionFailureCode.InvalidSubmissionPayload"/>.
     /// </para>
     /// </summary>
-    Task<WorkItemSubmissionResult> SubmitSubmissionAsync(
-        IWorkItemType type,
-        BsonDocument payload,
-        string? submittedBy,
-        ClaimsPrincipal user,
-        IReadOnlyDictionary<string, string?>? submissionMetadata = null,
+    Task<WorkItemSubmissionResult> SubmitPerSiteAsync(
+        WorkItemSubmissionRequest request,
         CancellationToken cancellationToken = default
     );
 
@@ -167,7 +159,7 @@ public sealed class WorkItemService : IWorkItemService
     private readonly TimeProvider _timeProvider;
     private readonly IWorkItemReferenceGenerator _referenceGenerator;
     private readonly IReadOnlyCollection<IWorkItemOriginStateResolver> _originStateResolvers;
-    private readonly ISubmissionReferenceGenerator? _submissionReferenceGenerator;
+    private readonly ISubmissionReferenceGenerator _submissionReferenceGenerator;
     private readonly ISubmissionStore? _submissionStore;
     private readonly IMongoTransactionRunner? _transactions;
 
@@ -176,14 +168,15 @@ public sealed class WorkItemService : IWorkItemService
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
         IWorkItemReferenceGenerator referenceGenerator,
+        ISubmissionReferenceGenerator submissionReferenceGenerator,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null,
-        ISubmissionReferenceGenerator? submissionReferenceGenerator = null,
         ISubmissionStore? submissionStore = null,
         IMongoTransactionRunner? transactions = null
     )
     {
+        ArgumentNullException.ThrowIfNull(submissionReferenceGenerator);
         _submissionReferenceGenerator = submissionReferenceGenerator;
         _submissionStore = submissionStore;
         _transactions = transactions;
@@ -198,14 +191,12 @@ public sealed class WorkItemService : IWorkItemService
     }
 
     public async Task<WorkItemActionResult> SubmitAsync(
-        IWorkItemType type,
-        BsonDocument payload,
-        string? submittedBy,
-        ClaimsPrincipal user,
-        IReadOnlyDictionary<string, string?>? submissionMetadata = null,
+        WorkItemSubmissionRequest request,
         CancellationToken cancellationToken = default
     )
     {
+        ArgumentNullException.ThrowIfNull(request);
+        var (type, payload, _, user, submissionMetadata) = request;
         ArgumentNullException.ThrowIfNull(type);
         ArgumentNullException.ThrowIfNull(payload);
 
@@ -275,27 +266,21 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         return await PersistNewWorkItemAsync(
-            type,
+            request,
             referenceFormat,
-            payload,
-            submittedBy,
-            user,
-            submissionMetadata,
             submissionKeys,
             now,
             cancellationToken
         );
     }
 
-    public async Task<WorkItemSubmissionResult> SubmitSubmissionAsync(
-        IWorkItemType type,
-        BsonDocument payload,
-        string? submittedBy,
-        ClaimsPrincipal user,
-        IReadOnlyDictionary<string, string?>? submissionMetadata = null,
+    public async Task<WorkItemSubmissionResult> SubmitPerSiteAsync(
+        WorkItemSubmissionRequest request,
         CancellationToken cancellationToken = default
     )
     {
+        ArgumentNullException.ThrowIfNull(request);
+        var (type, payload, _, user, submissionMetadata) = request;
         ArgumentNullException.ThrowIfNull(type);
         ArgumentNullException.ThrowIfNull(payload);
         if (!type.UsesSubmissionReference)
@@ -338,23 +323,14 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         SubmissionPayload.TryReadOperatorRequestId(payload, out var operatorRequestId);
-        var request = new SubmissionRequest(
-            type,
-            referenceFormat,
-            payload,
-            operatorRequestId,
-            submittedBy,
-            user,
-            submissionMetadata,
-            now
-        );
+        var validated = new ValidatedSubmission(request, referenceFormat, operatorRequestId, now);
 
         for (var attempt = 1; ; attempt++)
         {
             try
             {
                 var (submission, created) = await Transactions.RunAsync(
-                    (session, token) => CreateSubmissionAsync(session, request, token),
+                    (session, token) => CreateSubmissionAsync(session, validated, token),
                     cancellationToken
                 );
                 if (created.Count == 0)
@@ -432,38 +408,35 @@ public sealed class WorkItemService : IWorkItemService
     internal const int MaxSubmissionAttempts = 3;
 
     /// <summary>One validated submission, as <see cref="CreateSubmissionAsync"/> needs it.</summary>
-    private sealed record SubmissionRequest(
-        IWorkItemType Type,
+    private sealed record ValidatedSubmission(
+        WorkItemSubmissionRequest Request,
         IWorkItemReferenceFormat ReferenceFormat,
-        BsonDocument Payload,
         string OperatorRequestId,
-        string? SubmittedBy,
-        ClaimsPrincipal User,
-        IReadOnlyDictionary<string, string?>? SubmissionMetadata,
         DateTime Now
     );
 
     /// <summary>
     /// The body of a submission's transaction. The transaction runner may run
     /// it more than once, so it builds everything it writes afresh from
-    /// <paramref name="request"/>. Returns the stored submission and the work
-    /// items it created, or a submission committed by a concurrent request
-    /// and no work items.
+    /// <paramref name="submission"/>. Returns the stored submission and the
+    /// work items it created, or a submission committed by a concurrent
+    /// request and no work items.
     /// </summary>
     private async Task<(SubmissionRecord Submission, IReadOnlyList<WorkItem> Created)> CreateSubmissionAsync(
         IClientSessionHandle session,
-        SubmissionRequest request,
+        ValidatedSubmission submission,
         CancellationToken cancellationToken
     )
     {
-        if (await Submissions.FindAsync(session, request.OperatorRequestId, cancellationToken) is { } winner)
+        if (await Submissions.FindAsync(session, submission.OperatorRequestId, cancellationToken) is { } winner)
         {
             return (winner, []);
         }
 
+        var request = submission.Request;
         var payload = request.Payload;
         AccreditationYear.TryRead(payload, out var accreditationYear);
-        var submissionReference = await SubmissionReferenceGenerator.GenerateAsync(
+        var submissionReference = await _submissionReferenceGenerator.GenerateAsync(
             session,
             accreditationYear,
             cancellationToken
@@ -487,21 +460,18 @@ public sealed class WorkItemService : IWorkItemService
             itemPayload[SubmissionReferenceField] = submissionReference;
             itemPayload[SubmissionSizeField] = sites.Count;
 
-            var applicationReference = await request.ReferenceFormat.GenerateAsync(
+            var applicationReference = await submission.ReferenceFormat.GenerateAsync(
                 session,
                 itemPayload,
                 cancellationToken
             );
             var workItem = NewSubmittedWorkItem(
-                request.Type,
+                request,
                 snapshot,
                 itemPayload,
                 applicationReference,
                 operatorPaymentReference,
-                request.SubmittedBy,
-                request.User,
-                request.SubmissionMetadata,
-                request.Now
+                submission.Now
             );
             await _persistence.CreateAsync(session, workItem, cancellationToken);
 
@@ -515,15 +485,15 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        var submission = new SubmissionRecord(
-            request.OperatorRequestId,
+        var record = new SubmissionRecord(
+            submission.OperatorRequestId,
             request.Type.TypeId,
             submissionReference,
             items,
-            request.Now
+            submission.Now
         );
-        await Submissions.InsertAsync(session, submission, cancellationToken);
-        return (submission, created);
+        await Submissions.InsertAsync(session, record, cancellationToken);
+        return (record, created);
     }
 
     private WorkItemSubmissionResult Replay(IWorkItemType type, SubmissionRecord submission)
@@ -541,12 +511,6 @@ public sealed class WorkItemService : IWorkItemService
     private const string SiteField = "site";
     private const string SubmissionReferenceField = "submissionReference";
     private const string SubmissionSizeField = "submissionSize";
-
-    private ISubmissionReferenceGenerator SubmissionReferenceGenerator =>
-        _submissionReferenceGenerator
-        ?? throw new InvalidOperationException(
-            "No ISubmissionReferenceGenerator was supplied to WorkItemService."
-        );
 
     private ISubmissionStore Submissions =>
         _submissionStore
@@ -581,23 +545,19 @@ public sealed class WorkItemService : IWorkItemService
 
     /// <summary>
     /// Generate the <c>applicationReference</c> and persist one new work item
-    /// with its birth audit entry, retrying on a reference collision. Shared by
-    /// <see cref="SubmitAsync"/> and, once per site, by
-    /// <see cref="SubmitSubmissionAsync"/> (RA-739). A duplicate-key collision
-    /// on one of <paramref name="submissionKeys"/> is treated as a replay.
+    /// with its birth audit entry, retrying on a reference collision, for
+    /// <see cref="SubmitAsync"/>. A duplicate-key collision on one of
+    /// <paramref name="submissionKeys"/> is treated as a replay.
     /// </summary>
     private async Task<WorkItemActionResult> PersistNewWorkItemAsync(
-        IWorkItemType type,
+        WorkItemSubmissionRequest request,
         IWorkItemReferenceFormat referenceFormat,
-        BsonDocument payload,
-        string? submittedBy,
-        ClaimsPrincipal user,
-        IReadOnlyDictionary<string, string?>? submissionMetadata,
         IReadOnlyList<SubmissionKey> submissionKeys,
         DateTime now,
         CancellationToken cancellationToken
     )
     {
+        var (type, payload, submittedBy, user, _) = request;
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
 
         // RA-503: the operator backend now sends the operator's real, nation-specific bank
@@ -627,14 +587,11 @@ public sealed class WorkItemService : IWorkItemService
                 cancellationToken
             );
             workItem = NewSubmittedWorkItem(
-                type,
+                request,
                 snapshot,
                 payload,
                 applicationReference,
                 operatorPaymentReference,
-                submittedBy,
-                user,
-                submissionMetadata,
                 now
             );
 
@@ -771,22 +728,21 @@ public sealed class WorkItemService : IWorkItemService
     private const string PaymentReferenceField = "paymentReference";
 
     /// <summary>
-    /// A new work item in its type's initial state, holding
-    /// <paramref name="payload"/> stamped with <paramref name="applicationReference"/>,
+    /// A new work item of <paramref name="request"/>'s type in its initial
+    /// state, holding <paramref name="payload"/> (the request's payload, or
+    /// one site's share of it) stamped with <paramref name="applicationReference"/>,
     /// with its birth audit entry. Nothing is persisted.
     /// </summary>
     private static WorkItem NewSubmittedWorkItem(
-        IWorkItemType type,
+        WorkItemSubmissionRequest request,
         WorkItemTemplateSnapshot snapshot,
         BsonDocument payload,
         string applicationReference,
         string? operatorPaymentReference,
-        string? submittedBy,
-        ClaimsPrincipal user,
-        IReadOnlyDictionary<string, string?>? submissionMetadata,
         DateTime now
     )
     {
+        var (type, _, submittedBy, user, submissionMetadata) = request;
         payload[ApplicationReferenceField] = applicationReference;
 
         // RA-503: prefer the operator-supplied payment reference. Fall back

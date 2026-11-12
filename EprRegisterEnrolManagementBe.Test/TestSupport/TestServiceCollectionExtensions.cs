@@ -34,7 +34,10 @@ public static class TestServiceCollectionExtensions
         var clientFactory = new TestMongoDbClientFactory(fixture.ConnectionString, databaseName);
         services.AddSingleton<IMongoDbClientFactory>(clientFactory);
         services.AddSingleton<IWorkItemPersistence>(sp =>
-            new WorkItemPersistence(clientFactory, sp.GetRequiredService<ILoggerFactory>()));
+            new WorkItemPersistence(
+                clientFactory,
+                sp.GetRequiredService<ILoggerFactory>(),
+                sp.GetRequiredService<IWorkItemRegistry>()));
 
         return services;
     }
