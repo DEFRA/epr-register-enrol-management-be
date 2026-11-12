@@ -114,11 +114,15 @@ test only, via cdp-app-config) turns on:
   to real ReEx. This is what makes the RA-254 prior-year section render for
   journey-test items.
 - **Journey-test fixtures.** On every boot, `TestOrganisationFixtureHostedService`
-  replaces three work items with fixed ids with their pristine documents:
+  replaces four work items with fixed ids with their pristine documents:
   the RA-342 legacy-snapshot item (`00000342-0000-4000-8000-000000000342`), the
-  RA-611 pre-year-start item (`00000611-0000-4000-8000-000000000611`) and the
+  RA-611 pre-year-start item (`00000611-0000-4000-8000-000000000611`), the
   RA-691 accreditation-number-corrected item
-  (`00000691-0000-4000-8000-000000000691`). The demo
+  (`00000691-0000-4000-8000-000000000691`) and the RA-764 organisation-name
+  item (`00000764-0000-4000-8000-000000000764`, seeded with the old name; the
+  RA-764 migration renames it after the reset only where its
+  `Migrations__Ra764OrganisationNameCorrection__*` keys are set, see
+  [`diagnostics/ra764-organisation-name-correction.md`](diagnostics/ra764-organisation-name-correction.md)). The demo
   seed set does **not** run (it needs Development).
 - **The mgmt-tests caller.** `AUTH_SHARED_SECRET__MGMT_TESTS` is registered as
   a third HMAC caller (same v3 contract as below), so the suite can create work

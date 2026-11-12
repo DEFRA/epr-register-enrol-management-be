@@ -215,6 +215,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // it is safe to register unconditionally. Writes only
         // payload.accreditationId plus an audit entry; no state change.
         services.AddSingleton<IWorkItemMigration, ReAccreditationAccreditationNumberCorrectionMigration>();
+        // RA-764: one-off rename of organisation 500069's 2027 cases. Gated like
+        // RA-691 (off by default, spot-check required, dry run unless apply is
+        // set). A hosted LIFECYCLE service rather than an IWorkItemMigration so
+        // it runs in StartedAsync, after TestOrganisationFixtureHostedService
+        // has reset the e2e fixtures; see the class remarks. No audit entry.
+        services.AddHostedService<ReAccreditationOrganisationNameCorrectionMigration>();
         // RA-132: module-scoped approval service that owns the bespoke
         // approval workflow (id issuance, SLA clock stop, queued publishing).
         // RA-410: module-scoped service that owns the single-call decision

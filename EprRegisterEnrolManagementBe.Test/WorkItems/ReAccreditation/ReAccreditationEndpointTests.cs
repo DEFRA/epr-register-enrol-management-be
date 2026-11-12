@@ -6843,6 +6843,48 @@ public class ReAccreditationEndpointTests
                 cancellationToken
             );
 
+
+        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
+
+            string typeId,
+
+            string fieldName,
+
+            BsonValue value,
+
+            CancellationToken cancellationToken = default
+
+        ) => inner.FindByPayloadFieldAsync(typeId, fieldName, value, cancellationToken);
+
+
+        public Task<bool> CompareAndSetPayloadFieldAsync(
+
+            Guid workItemId,
+
+            string fieldName,
+
+            BsonValue expectedValue,
+
+            BsonValue newValue,
+
+            CancellationToken cancellationToken = default
+
+        ) =>
+
+            inner.CompareAndSetPayloadFieldAsync(
+
+                workItemId,
+
+                fieldName,
+
+                expectedValue,
+
+                newValue,
+
+                cancellationToken
+
+            );
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             inner.CreateAsync(workItem, cancellationToken);
 
@@ -6931,6 +6973,48 @@ public class ReAccreditationEndpointTests
                 newValue,
                 auditEntry,
                 cancellationToken
+            );
+
+
+        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
+
+            string typeId,
+
+            string fieldName,
+
+            BsonValue value,
+
+            CancellationToken cancellationToken = default
+
+        ) => inner.FindByPayloadFieldAsync(typeId, fieldName, value, cancellationToken);
+
+
+        public Task<bool> CompareAndSetPayloadFieldAsync(
+
+            Guid workItemId,
+
+            string fieldName,
+
+            BsonValue expectedValue,
+
+            BsonValue newValue,
+
+            CancellationToken cancellationToken = default
+
+        ) =>
+
+            inner.CompareAndSetPayloadFieldAsync(
+
+                workItemId,
+
+                fieldName,
+
+                expectedValue,
+
+                newValue,
+
+                cancellationToken
+
             );
 
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
