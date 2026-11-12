@@ -51,7 +51,7 @@ public class PublicRegister2026Tests
     public void Holds_Clearfield_Envirotech()
     {
         Assert.Equal(
-            new PublicRegister2026Entry(500324, "CLEARFIELD ENVIROTECH LIMITED", "A26ER5003240164PL"),
+            new PublicRegister2026Entry("A26ER5003240164PL", 500324, "CLEARFIELD ENVIROTECH LIMITED"),
             Register["R26ER5003240079PL"]
         );
     }
