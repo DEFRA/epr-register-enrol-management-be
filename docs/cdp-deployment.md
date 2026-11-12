@@ -209,8 +209,11 @@ flipping `OperatorBackendApi__Enabled=true` here, or the first pushes 401.
 
 Every push attempt is recorded on the work item's audit log:
 `query-push-sent` (2xx), `query-push-skipped` (disabled — not an error, does
-not alert), or `query-push-failed` (attempted and errored — does not alert on
-its own yet; see the RA-311 fix doc for the planned failure-rate alert).
+not alert), or `query-push-failed` (attempted and errored, or — RA-000 — not
+attempted because the payload could not be read or carried no query stamped
+for this transition, recorded with a `reason` and logged at Error; does not
+alert on its own yet; see the RA-311 fix doc for the planned failure-rate
+alert).
 
 The push goes out on the `"DefaultClient"` named `HttpClient`
 (`Program.cs::ConfigureHttpClients`), which deliberately bypasses the Squid

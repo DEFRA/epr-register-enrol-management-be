@@ -62,8 +62,11 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
     private static ReAccreditationAssessmentStartedSnapshotMigration BuildMigration() =>
         new(NullLogger<ReAccreditationAssessmentStartedSnapshotMigration>.Instance);
 
-    private static WorkItemTemplateSnapshot Live() =>
-        WorkItemTemplateSnapshot.Capture(new ReAccreditationType());
+    // The v18 rules this migration writes. The live type is v19 (RA-000: the
+    // query-during-* declarations are not caller-invocable), applied by the
+    // migration registered after this one.
+    private static WorkItemTemplateSnapshot V18() =>
+        ReAccreditationQueryNotCallerInvocableSnapshotMigrationTests.BuildV18Snapshot();
 
     private static List<WorkItemTransition> Sorted(IEnumerable<WorkItemTransition> transitions) =>
         transitions.OrderBy(t => t.ActionId).ThenBy(t => t.FromStateId).ToList();
@@ -164,8 +167,8 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
         AssertExit(exits, "withdraw-during-assessment", "withdrawn", callerInvocable: true);
         AssertExit(exits, "sla-extend", "assessment-in-progress", callerInvocable: false);
 
-        // The migrated rules are exactly the live v18 rules, states in declaration order.
-        var live = Live();
+        // The migrated rules are exactly the v18 rules, states in declaration order.
+        var live = V18();
         Assert.Equal(live.States, after.TemplateSnapshot.States);
         Assert.Equal(Sorted(live.Transitions), Sorted(after.TemplateSnapshot.Transitions));
 
@@ -242,7 +245,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
     public async Task An_item_already_on_the_v18_rules_is_not_written()
     {
         var ct = TestContext.Current.CancellationToken;
-        var item = await SeedAsync(StartedStateId, "bob-1", ct, Live());
+        var item = await SeedAsync(StartedStateId, "bob-1", ct, V18());
         var before = (await _persistence.GetByIdAsync(item.Id, ct))!;
 
         await BuildMigration().ApplyAsync(_persistence, ct);
@@ -267,7 +270,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
     {
         _ = build;
         var ct = TestContext.Current.CancellationToken;
-        var live = Live();
+        var live = V18();
         var partial = new WorkItemTemplateSnapshot
         {
             TemplateVersion = "v18",
@@ -353,7 +356,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
     }
 
     [Fact]
-    public void It_is_registered_last_so_it_sets_the_final_version()
+    public void It_is_registered_straight_before_the_v19_migration()
     {
         var services = new ServiceCollection();
         new ReAccreditationModule().RegisterServices(services, new ConfigurationBuilder().Build());
@@ -366,7 +369,9 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
             .Where(t => t is not null && typeof(ReAccreditationSnapshotMigrationBase).IsAssignableFrom(t))
             .ToList();
 
-        Assert.Equal(typeof(ReAccreditationAssessmentStartedSnapshotMigration), snapshotMigrations[^1]);
+        // RA-000: the v19 migration now follows it and sets the final version.
+        Assert.Equal(typeof(ReAccreditationAssessmentStartedSnapshotMigration), snapshotMigrations[^2]);
+        Assert.Equal(typeof(ReAccreditationQueryNotCallerInvocableSnapshotMigration), snapshotMigrations[^1]);
         Assert.True(
             migrations.IndexOf(typeof(ReAccreditationPendingContactSnapshotMigration))
             < migrations.IndexOf(typeof(ReAccreditationAssessmentStartedSnapshotMigration)));
