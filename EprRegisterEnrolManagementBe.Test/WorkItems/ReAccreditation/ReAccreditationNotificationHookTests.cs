@@ -329,7 +329,7 @@ public class ReAccreditationNotificationHookTests
     // sent; the hook logs at Error and records notification-failed.
     [Theory]
     [InlineData("missing", "payload.currentQuery is missing")]
-    [InlineData("stale", "belongs to an earlier query")]
+    [InlineData("stale", "payload.currentQuery is query " + FreshQueryTestData.StaleQueryId)]
     [InlineData("no-raised-at", "payload.currentQuery.raisedAt is missing")]
     public async Task OnActionAppliedAsync_does_not_send_Queried_without_a_fresh_current_query(
         string problem,
@@ -359,7 +359,7 @@ public class ReAccreditationNotificationHookTests
                 break;
             case "stale":
                 workItem.Payload!["currentQuery"] = FreshQueryTestData.CurrentQuery(
-                    FreshQueryTestData.StaleRaisedAt
+                    queryId: FreshQueryTestData.StaleQueryId
                 );
                 break;
             case "no-raised-at":

@@ -9,26 +9,33 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// RA-291 default <see cref="IReAccreditationQueryService"/>.
 ///
 /// Deliberately thin: the state change itself goes through the framework
-/// engine (<see cref="IWorkItemService.ApplyActionAsync"/>) so state
-/// validation, the <c>action-applied</c> audit entry, template-snapshot
-/// resolution and the post-action hooks (including the Notify "Queried"
-/// email) all behave exactly as they do for any other transition. The only
-/// bespoke part is (a) resolving which <c>query-during-*</c> action applies
-/// to the item's current state, (b) self-assigning the application to the
-/// querying case worker, (c) stamping the open
-/// <see cref="Models.CurrentQuery"/> onto the payload so the notification hook
-/// can put the reason in the operator's email, and (d) appending the RA-291
+/// engine (<see cref="IWorkItemService.ApplyActionAsync(Guid, string, WorkItemActionWrite, ClaimsPrincipal, CancellationToken)"/>)
+/// so state validation, the <c>action-applied</c> audit entry,
+/// template-snapshot resolution and the post-action hooks (including the
+/// Notify "Queried" email and the query push) all behave exactly as they do
+/// for any other transition. The only bespoke part is (a) resolving which
+/// <c>query-during-*</c> action applies to the item's current state, (b)
+/// self-assigning the application to the querying case worker, (c) stamping
+/// the open <see cref="Models.CurrentQuery"/> onto the payload so the hooks can
+/// push it and put it in the operator's email, and (d) appending the RA-291
 /// query detail — selected sections and free-text reason — to the audit log so
 /// AC05 is satisfied and the application history renders what was asked for.
 ///
-/// Write order is assign → stamp query → transition → audit. The stamp must
-/// precede the transition because the notification hook runs inside
-/// <see cref="IWorkItemService.ApplyActionAsync"/>; the audit entry follows it
-/// so a failed transition leaves no query recorded against the application.
-/// A successful assign is intentionally NOT compensated if a later step
-/// fails: an assigned-but-un-queried item is the recoverable half-state
-/// (a retry idempotently re-assigns and proceeds), whereas rolling back the
-/// assign would need a further write that could itself fail.
+/// RA-000: (b), (c) and the transition are one write. They go to the engine
+/// as a <see cref="WorkItemActionWrite"/>, which commits them in the
+/// transition's single versioned save, together with the stamp's
+/// <see cref="CurrentQuery.QueryId"/> on the transition's <c>action-applied</c>
+/// entry so the hooks can tell this query's stamp from any other
+/// (<see cref="ReAccreditationFreshQuery"/>). When two query requests for the
+/// same item overlap, one commits and the other gets a concurrency conflict
+/// or an invalid transition and writes nothing: no assignment, no stamp, no
+/// email. A failed transition likewise leaves no assignment and no stamp
+/// behind.
+///
+/// (d) follows as a separate append, so a failed transition leaves no query
+/// recorded against the application; if the append fails after the
+/// transition has committed, it is logged at Error rather than failing the
+/// request.
 ///
 /// The SLA clock is intentionally untouched: querying an application pauses
 /// nobody's stopwatch.
@@ -46,6 +53,12 @@ internal sealed class ReAccreditationQueryService(
     public const string AuditAction = "application-queried";
 
     public const string AuditActionDisplayName = "Application queried";
+
+    /// <summary>
+    /// <c>action-applied</c> detail carrying the <see cref="CurrentQuery.QueryId"/>
+    /// the transition was applied for (RA-000).
+    /// </summary>
+    public const string QueryIdAuditDetail = "queryId";
 
     /// <summary>
     /// Payload field the open query is stored under. Matches the camelCase
@@ -120,17 +133,12 @@ internal sealed class ReAccreditationQueryService(
 
         // RA-291: the query page tells the case worker "the application will
         // also be assigned to you", so the query operation owns that
-        // assignment. Done BEFORE the transition: if the assign fails the
-        // application stays un-queried rather than ending up
-        // queried-but-unassigned, which is the harder state to recover from.
-        //
-        // Routed through the engine rather than written straight onto the
-        // document so the normal `assigned` audit entry and the RA-237
-        // OfficerAssignment notification fire exactly as they do for a manual
-        // assign. Re-assigning to the same user is an idempotent replay in the
-        // engine (success, no audit entry, no duplicate email); an item held
-        // by someone else is re-assigned to the querying regulator. RA-323:
-        // every caseworker may assign to anyone, so this is not role-gated.
+        // assignment. The engine writes the normal `assigned` audit entry and
+        // fires the RA-237 OfficerAssignment notification exactly as for a
+        // manual assign. An item already assigned to this user is left as it
+        // is (no audit entry, no duplicate email); an item held by someone
+        // else is re-assigned to the querying regulator. RA-323: every
+        // caseworker may assign to anyone, so this is not role-gated.
         var actorId = user.FindFirstValue("user:id");
         if (string.IsNullOrWhiteSpace(actorId))
         {
@@ -140,34 +148,49 @@ internal sealed class ReAccreditationQueryService(
                 "the request did not include a 'user:id' claim.");
         }
 
-        var assignResult = await engine.AssignAsync(
-            workItemId, actorId, user.FindFirstValue("user:name"), user, cancellationToken);
-        if (!assignResult.IsSuccess)
+        // RA-291: the open query is payload state the hooks read inside
+        // ApplyActionAsync (the reason and sections they push and email).
+        // RA-000: it is written in the transition's own versioned save, never
+        // before it, so an overlapping request cannot replace it and a failed
+        // transition cannot leave it behind. Setting only payload.currentQuery
+        // on the loaded BSON payload leaves every other field exactly as
+        // stored; round-tripping the payload through ReAccreditationPayload
+        // instead would write modelled-but-absent fields as explicit nulls,
+        // and an explicit payload.accreditationId: null enters the unique +
+        // sparse index on that field (the RA-291 duplicate-key failure).
+        var currentQuery = new CurrentQuery
         {
-            logger.LogInformation(
-                "Query of work item {WorkItemId} abandoned: self-assignment to {UserId} failed ({FailureCode}).",
-                workItemId, actorId, assignResult.FailureCode);
-            return assignResult;
-        }
+            QueryId = Guid.NewGuid().ToString(),
+            Reason = reason,
+            Sections = sections,
+            RaisedAt = _timeProvider.GetUtcNow().UtcDateTime,
+            RaisedBy = actorId,
+        };
 
-        // RA-291: stamp the open query onto the payload BEFORE the transition.
-        // ReAccreditationNotificationHook runs as a post-action hook *inside*
-        // ApplyActionAsync, so this is the only point at which the reason can
-        // be made visible to the email it has to appear in. Writing it as
-        // payload state (rather than threading it through the engine) keeps the
-        // module concept out of the framework envelope and means the hook reads
-        // the very same record the audit entry below is built from — so the
-        // reason in the email is by construction the reason on the application.
-        var stampFailure = await StampCurrentQueryAsync(
-            workItemId, sections, reason, actorId, cancellationToken);
-        if (stampFailure is not null)
-        {
-            return stampFailure;
-        }
-
-        var result = await engine.ApplyActionAsync(workItemId, actionId, user, cancellationToken);
+        var result = await engine.ApplyActionAsync(
+            workItemId,
+            actionId,
+            new WorkItemActionWrite
+            {
+                AssignTo = new WorkItemAssignee(actorId, user.FindFirstValue("user:name")),
+                // ToBsonDocument honours the registered camelCase convention, so
+                // the stored shape matches what ReAccreditationPayload deserialises.
+                PayloadFields = new Dictionary<string, BsonValue>
+                {
+                    [CurrentQueryPayloadField] = currentQuery.ToBsonDocument(),
+                },
+                ActionAppliedDetails = new Dictionary<string, string?>
+                {
+                    [QueryIdAuditDetail] = currentQuery.QueryId,
+                },
+            },
+            user,
+            cancellationToken);
         if (!result.IsSuccess)
         {
+            logger.LogInformation(
+                "Query of work item {WorkItemId} via {ActionId} not applied ({FailureCode}); nothing was written.",
+                workItemId, actionId, result.FailureCode);
             return result;
         }
 
@@ -178,6 +201,7 @@ internal sealed class ReAccreditationQueryService(
             details: new Dictionary<string, string?>
             {
                 ["actionId"] = actionId,
+                [QueryIdAuditDetail] = currentQuery.QueryId,
                 ["sections"] = string.Join(",", sections),
                 ["reason"] = reason,
             },
@@ -207,52 +231,5 @@ internal sealed class ReAccreditationQueryService(
         // out-of-band appender wrote against its own copy of the document.
         var refreshed = await persistence.GetByIdAsync(workItemId, cancellationToken);
         return refreshed is null ? result : WorkItemActionResult.Success(refreshed);
-    }
-
-    /// <summary>
-    /// Write <see cref="CurrentQuery"/> onto the work item payload. Returns
-    /// <c>null</c> on success, or the failure the caller should surface.
-    ///
-    /// Uses a targeted single-field write rather than load → mutate → replace.
-    /// A full-payload replace round-trips the document through
-    /// <see cref="ReAccreditationPayload"/>, which materialises modelled-but-
-    /// absent fields as explicit nulls — and an explicit
-    /// <c>payload.accreditationId: null</c> enters the unique + SPARSE index
-    /// on that field, so the second query anywhere in the collection died with
-    /// a duplicate-key error (RA-291). Setting only
-    /// <c>payload.currentQuery</c> keeps every other field untouched by
-    /// construction, for this field and any modelled field added later.
-    /// </summary>
-    private async Task<WorkItemActionResult?> StampCurrentQueryAsync(
-        Guid workItemId,
-        IReadOnlyList<string> sections,
-        string reason,
-        string actorId,
-        CancellationToken cancellationToken)
-    {
-        var currentQuery = new CurrentQuery
-        {
-            Reason = reason,
-            Sections = sections,
-            RaisedAt = _timeProvider.GetUtcNow().UtcDateTime,
-            RaisedBy = actorId,
-        };
-
-        // ToBsonDocument honours the registered camelCase convention, so the
-        // stored shape matches what ReAccreditationPayload deserialises.
-        var matched = await persistence.SetPayloadFieldAsync(
-            workItemId,
-            CurrentQueryPayloadField,
-            currentQuery.ToBsonDocument(),
-            cancellationToken);
-
-        if (!matched)
-        {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.WorkItemNotFound,
-                $"No work item exists with id '{workItemId}'.");
-        }
-
-        return null;
     }
 }

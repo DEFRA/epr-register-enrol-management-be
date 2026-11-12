@@ -6,28 +6,30 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 /// The business rule is one open query at a time, so "the current query" is
 /// real domain state rather than a transient smuggled between components —
 /// which is why it lives on the payload rather than being passed sideways.
-/// It is stamped by <c>ReAccreditationQueryService</c> immediately BEFORE the
-/// query transition is applied, so that
-/// <c>ReAccreditationNotificationHook</c> — which runs as a post-action hook
-/// INSIDE <c>ApplyActionAsync</c> — can read the reason it must put in the
-/// operator's email. The same record is what the audit entry is built from,
-/// so the reason in the email is by construction the reason recorded against
-/// the application.
+/// <c>ReAccreditationQueryService</c> writes it in the same versioned save as
+/// the query transition (RA-000), so the post-action hooks that run inside
+/// <c>ApplyActionAsync</c> — the query push and
+/// <c>ReAccreditationNotificationHook</c>'s Queried email — read the very
+/// record that transition committed. The same record is what the audit entry
+/// is built from, so the reason in the email is by construction the reason
+/// recorded against the application.
 ///
-/// Only meaningful while the work item is in the <c>queried</c> state.
-/// Because it is written just before the transition, a subsequent failure of
-/// that transition can leave a stamped query on a non-queried item, and it is
-/// deliberately not cleared afterwards — the next query overwrites it, and the
-/// audit log remains the historical record. Readers must therefore not trust
-/// its mere presence: the query-transition hooks check, via
-/// <c>ReAccreditationFreshQuery</c> (RA-000), that it was stamped inside the
-/// time window of the transition they are handling. That rules out a missing
-/// or previous query, not a stamp from an overlapping query request on the
-/// same item, and clock skew between pods can make it reject a genuine one;
-/// see that class for both gaps.
+/// Only meaningful while the work item is in the <c>queried</c> state. It is
+/// deliberately not cleared afterwards — the next query overwrites it, and
+/// the audit log remains the historical record. Readers must therefore not
+/// trust its mere presence: the query-transition hooks check, via
+/// <c>ReAccreditationFreshQuery</c>, that its <see cref="QueryId"/> is the one
+/// recorded on the transition they are handling.
 /// </summary>
 internal sealed record CurrentQuery
 {
+    /// <summary>
+    /// RA-000: identifies this query. The query transition's
+    /// <c>action-applied</c> audit entry records the same value under
+    /// <c>queryId</c>. Stamps written before RA-000 have none.
+    /// </summary>
+    public string? QueryId { get; init; }
+
     /// <summary>Free-text reason, as entered by the case worker (trimmed).</summary>
     public string? Reason { get; init; }
 

@@ -45,6 +45,21 @@ public interface IWorkItemService
     );
 
     /// <summary>
+    /// RA-000: apply <paramref name="actionId"/> and commit
+    /// <paramref name="write"/> in the same versioned save as the state
+    /// change, so either all of it is written or none of it is. A request
+    /// that loses a race to a concurrent writer writes nothing. See
+    /// <see cref="WorkItemActionWrite"/>.
+    /// </summary>
+    Task<WorkItemActionResult> ApplyActionAsync(
+        Guid workItemId,
+        string actionId,
+        WorkItemActionWrite write,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// Assign (or re-assign) a work item to <paramref name="assigneeId"/>,
     /// snapshotting <paramref name="assigneeName"/> alongside the id so list
     /// views do not need a separate user lookup. RA-323: every caseworker
@@ -512,11 +527,98 @@ public sealed class WorkItemService : IWorkItemService
             ex.WriteError?.Message?.Contains(key.Field, StringComparison.OrdinalIgnoreCase) == true
         );
 
-    public async Task<WorkItemActionResult> ApplyActionAsync(
+    /// <summary>
+    /// The <c>action-applied</c> detail keys the engine writes itself. A
+    /// <see cref="WorkItemActionWrite.ActionAppliedDetails"/> entry may not
+    /// reuse one.
+    /// </summary>
+    public static readonly IReadOnlySet<string> ActionAppliedDetailKeys = new HashSet<string>(
+        StringComparer.OrdinalIgnoreCase
+    )
+    {
+        "actionId",
+        "actionDisplayName",
+        "fromStateId",
+        "toStateId",
+    };
+
+    public Task<WorkItemActionResult> ApplyActionAsync(
         Guid workItemId,
         string actionId,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default
+    ) => ApplyActionCoreAsync(workItemId, actionId, write: null, user, cancellationToken);
+
+    public Task<WorkItemActionResult> ApplyActionAsync(
+        Guid workItemId,
+        string actionId,
+        WorkItemActionWrite write,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(write);
+        ValidateActionWrite(write);
+        return ApplyActionCoreAsync(workItemId, actionId, write, user, cancellationToken);
+    }
+
+    /// <summary>
+    /// A malformed <see cref="WorkItemActionWrite"/> is a defect in the
+    /// calling module, not something a request can cause, so it throws
+    /// rather than returning a failure result.
+    /// </summary>
+    private static void ValidateActionWrite(WorkItemActionWrite write)
+    {
+        ArgumentNullException.ThrowIfNull(write.PayloadFields);
+        ArgumentNullException.ThrowIfNull(write.ActionAppliedDetails);
+
+        foreach (var (field, value) in write.PayloadFields)
+        {
+            if (
+                string.IsNullOrWhiteSpace(field)
+                || field.Contains('.', StringComparison.Ordinal)
+                || field.StartsWith('$')
+            )
+            {
+                throw new ArgumentException(
+                    $"Payload field '{field}' must be a single field directly under 'payload' "
+                        + "(no dotted paths, no update operators).",
+                    nameof(write)
+                );
+            }
+
+            if (value is null)
+            {
+                throw new ArgumentException(
+                    $"Payload field '{field}' has a null value; pass BsonNull.Value to store a null.",
+                    nameof(write)
+                );
+            }
+        }
+
+        foreach (var key in write.ActionAppliedDetails.Keys)
+        {
+            if (ActionAppliedDetailKeys.Contains(key))
+            {
+                throw new ArgumentException(
+                    $"Action-applied detail '{key}' is written by the engine and cannot be overridden.",
+                    nameof(write)
+                );
+            }
+        }
+
+        if (write.AssignTo is { } assignee && string.IsNullOrWhiteSpace(assignee.Id))
+        {
+            throw new ArgumentException("AssignTo.Id is required.", nameof(write));
+        }
+    }
+
+    private async Task<WorkItemActionResult> ApplyActionCoreAsync(
+        Guid workItemId,
+        string actionId,
+        WorkItemActionWrite? write,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
     )
     {
         if (RequireActorIdentity(user) is { } identityFailure)
@@ -567,22 +669,33 @@ public sealed class WorkItemService : IWorkItemService
 
         var previousState = workItem.StateId;
         var now = _timeProvider.GetUtcNow().UtcDateTime;
+
+        // RA-000: everything in the write is applied to this loaded copy and
+        // saved by the one ReplaceAsync below, guarded by the version it was
+        // loaded at. The assignment goes first so its audit entry records
+        // the from-state, as a separate AssignAsync before the transition did.
+        var assignment = write?.AssignTo is { } assignee
+            ? ApplyAssignment(workItem, assignee.Id, assignee.Name, user, now)
+            : null;
+        foreach (var (field, value) in write?.PayloadFields ?? new Dictionary<string, BsonValue>())
+        {
+            workItem.Payload[field] = value;
+        }
+
         workItem.StateId = transition.ToStateId;
         workItem.LastModifiedAt = now;
-        AppendAudit(
-            workItem,
-            "action-applied",
-            "Action applied",
-            user,
-            now,
-            new()
-            {
-                ["actionId"] = transition.ActionId,
-                ["actionDisplayName"] = transition.DisplayName,
-                ["fromStateId"] = previousState,
-                ["toStateId"] = workItem.StateId,
-            }
-        );
+        var details = new Dictionary<string, string?>
+        {
+            ["actionId"] = transition.ActionId,
+            ["actionDisplayName"] = transition.DisplayName,
+            ["fromStateId"] = previousState,
+            ["toStateId"] = workItem.StateId,
+        };
+        foreach (var (key, value) in write?.ActionAppliedDetails ?? new Dictionary<string, string?>())
+        {
+            details[key] = value;
+        }
+        AppendAudit(workItem, "action-applied", "Action applied", user, now, details);
         try
         {
             await _persistence.ReplaceAsync(workItem, cancellationToken);
@@ -591,6 +704,20 @@ public sealed class WorkItemService : IWorkItemService
         {
             return ConcurrencyConflict(workItem.Id);
         }
+
+        if (assignment is { } applied)
+        {
+            LogAssigned(workItem, applied.PreviousAssigneeId, user);
+            // Committed with the transition, so a client that stops waiting
+            // must not cancel the assignment email (as for the action hooks).
+            await InvokeAssignmentChangedHooksAsync(
+                workItem,
+                applied.Change,
+                user,
+                CancellationToken.None
+            );
+        }
+
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) transitioned from {FromState} to {ToState} via action {ActionId} by {User}",
             workItem.Id,
@@ -646,19 +773,18 @@ public sealed class WorkItemService : IWorkItemService
             return terminalFailure;
         }
 
-        var trimmedAssigneeId = assigneeId.Trim();
-        var actorUserId = ResolveActorUserId(user);
-
         // RA-323: every caseworker may assign to anyone, including
         // re-assigning an already-assigned item — there is no permission
         // tier to check here any more.
+        var assignment = ApplyAssignment(
+            workItem,
+            assigneeId,
+            assigneeName,
+            user,
+            _timeProvider.GetUtcNow().UtcDateTime
+        );
 
-        var snapshotName = string.IsNullOrWhiteSpace(assigneeName) ? null : assigneeName.Trim();
-        var alreadyAssignedToSameUser =
-            string.Equals(workItem.AssignedToId, trimmedAssigneeId, StringComparison.Ordinal)
-            && string.Equals(workItem.AssignedToName, snapshotName, StringComparison.Ordinal);
-
-        if (alreadyAssignedToSameUser)
+        if (assignment is not { } applied)
         {
             // Re-assigning to the same user is a no-op: persist nothing,
             // write no audit entry, but tell the caller this was a replay
@@ -668,27 +794,6 @@ public sealed class WorkItemService : IWorkItemService
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
-        var previousAssigneeId = workItem.AssignedToId;
-        var previousAssigneeName = workItem.AssignedToName;
-        workItem.AssignedToId = trimmedAssigneeId;
-        workItem.AssignedToName = snapshotName;
-        workItem.AssignedAt = _timeProvider.GetUtcNow().UtcDateTime;
-        workItem.AssignedBy = actorUserId!;
-        workItem.LastModifiedAt = workItem.AssignedAt.Value;
-        AppendAudit(
-            workItem,
-            "assigned",
-            "Assigned",
-            user,
-            workItem.AssignedAt.Value,
-            new()
-            {
-                ["assigneeId"] = trimmedAssigneeId,
-                ["assigneeName"] = snapshotName,
-                ["previousAssigneeId"] = previousAssigneeId,
-                ["previousAssigneeName"] = previousAssigneeName,
-            }
-        );
         try
         {
             await _persistence.ReplaceAsync(workItem, cancellationToken);
@@ -697,28 +802,90 @@ public sealed class WorkItemService : IWorkItemService
         {
             return ConcurrencyConflict(workItem.Id);
         }
+        LogAssigned(workItem, applied.PreviousAssigneeId, user);
+
+        // RA-237: assignment is a first-class envelope operation, so it must
+        // fan out to the post-action hooks explicitly (ApplyActionAsync's hook
+        // fan-out does not cover it). Fires only on this real-change path —
+        // the earlier IdempotentReplay return skips it.
+        await InvokeAssignmentChangedHooksAsync(workItem, applied.Change, user, cancellationToken);
+
+        return WorkItemActionResult.Success(workItem);
+    }
+
+    /// <summary>What <see cref="ApplyAssignment"/> changed.</summary>
+    private readonly record struct AppliedAssignment(
+        WorkItemAssignmentChange Change,
+        string? PreviousAssigneeId
+    );
+
+    /// <summary>
+    /// Assign <paramref name="workItem"/> in memory and append its
+    /// <c>assigned</c> audit entry; the caller persists it. Returns
+    /// <c>null</c>, changing nothing, when the item is already assigned to
+    /// the same user under the same name. Shared by
+    /// <see cref="AssignAsync"/> and by a transition that assigns as part of
+    /// its <see cref="WorkItemActionWrite"/> (RA-000).
+    /// </summary>
+    private static AppliedAssignment? ApplyAssignment(
+        WorkItem workItem,
+        string assigneeId,
+        string? assigneeName,
+        ClaimsPrincipal user,
+        DateTime now
+    )
+    {
+        var trimmedAssigneeId = assigneeId.Trim();
+        var snapshotName = string.IsNullOrWhiteSpace(assigneeName) ? null : assigneeName.Trim();
+        if (
+            string.Equals(workItem.AssignedToId, trimmedAssigneeId, StringComparison.Ordinal)
+            && string.Equals(workItem.AssignedToName, snapshotName, StringComparison.Ordinal)
+        )
+        {
+            return null;
+        }
+
+        var previousAssigneeId = workItem.AssignedToId;
+        var previousAssigneeName = workItem.AssignedToName;
+        workItem.AssignedToId = trimmedAssigneeId;
+        workItem.AssignedToName = snapshotName;
+        workItem.AssignedAt = now;
+        workItem.AssignedBy = ResolveActorUserId(user)!;
+        workItem.LastModifiedAt = now;
+        AppendAudit(
+            workItem,
+            "assigned",
+            "Assigned",
+            user,
+            now,
+            new()
+            {
+                ["assigneeId"] = trimmedAssigneeId,
+                ["assigneeName"] = snapshotName,
+                ["previousAssigneeId"] = previousAssigneeId,
+                ["previousAssigneeName"] = previousAssigneeName,
+            }
+        );
+
+        // A brand-new assignment on a previously unassigned item is Assigned;
+        // changing the assignee of an already-assigned item is Reassigned.
+        return new AppliedAssignment(
+            previousAssigneeId is null
+                ? WorkItemAssignmentChange.Assigned
+                : WorkItemAssignmentChange.Reassigned,
+            previousAssigneeId
+        );
+    }
+
+    private void LogAssigned(WorkItem workItem, string? previousAssigneeId, ClaimsPrincipal user) =>
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) assigned from {PreviousAssignee} to {NewAssignee} by {User}",
             workItem.Id,
             workItem.TypeId,
             previousAssigneeId ?? "(unassigned)",
-            trimmedAssigneeId,
+            workItem.AssignedToId,
             DescribeUser(user)
         );
-
-        // RA-237: assignment is a first-class envelope operation, so it must
-        // fan out to the post-action hooks explicitly (ApplyActionAsync's hook
-        // fan-out does not cover it). A brand-new assignment on a previously
-        // unassigned item is Assigned; changing the assignee of an
-        // already-assigned item is Reassigned. Fires only on this real-change
-        // path — the earlier IdempotentReplay return skips it.
-        var change = previousAssigneeId is null
-            ? WorkItemAssignmentChange.Assigned
-            : WorkItemAssignmentChange.Reassigned;
-        await InvokeAssignmentChangedHooksAsync(workItem, change, user, cancellationToken);
-
-        return WorkItemActionResult.Success(workItem);
-    }
 
     public async Task<WorkItemActionResult> UnassignAsync(
         Guid workItemId,
