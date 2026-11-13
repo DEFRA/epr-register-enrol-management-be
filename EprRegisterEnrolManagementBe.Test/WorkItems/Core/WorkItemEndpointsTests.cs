@@ -2087,6 +2087,48 @@ public class WorkItemEndpointsTests
                 cancellationToken
             );
 
+
+        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
+
+            string typeId,
+
+            string fieldName,
+
+            BsonValue value,
+
+            CancellationToken cancellationToken = default
+
+        ) => Inner.FindByPayloadFieldAsync(typeId, fieldName, value, cancellationToken);
+
+
+        public Task<bool> CompareAndSetPayloadFieldAsync(
+
+            Guid workItemId,
+
+            string fieldName,
+
+            BsonValue expectedValue,
+
+            BsonValue newValue,
+
+            CancellationToken cancellationToken = default
+
+        ) =>
+
+            Inner.CompareAndSetPayloadFieldAsync(
+
+                workItemId,
+
+                fieldName,
+
+                expectedValue,
+
+                newValue,
+
+                cancellationToken
+
+            );
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             Inner.CreateAsync(workItem, cancellationToken);
 

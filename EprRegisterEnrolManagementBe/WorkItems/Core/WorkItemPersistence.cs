@@ -145,6 +145,59 @@ public interface IWorkItemPersistence
     );
 
     /// <summary>
+    /// Every work item of <paramref name="typeId"/> (archived included) whose
+    /// <c>payload.{fieldName}</c> equals <paramref name="value"/>, returned in
+    /// full (notes and audit log included).
+    ///
+    /// <para>
+    /// RA-764: lets a one-off correction locate its targets by an exact
+    /// identity (the registration number) rather than by the value it is about
+    /// to change. Temporary: it exists only for
+    /// <c>ReAccreditationOrganisationNameCorrectionMigration</c> and is removed
+    /// with it. Do not use it elsewhere.
+    /// </para>
+    /// </summary>
+    Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
+        string typeId,
+        string fieldName,
+        BsonValue value,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Atomically replace <c>payload.{fieldName}</c> with
+    /// <paramref name="newValue"/>, but only while it still holds
+    /// <paramref name="expectedValue"/>. Returns <c>true</c> when the document
+    /// was updated and <c>false</c> when no work item with that id still holds
+    /// the expected value, in which case nothing is written.
+    ///
+    /// <para>
+    /// RA-764: a data correction, not a workflow event. It appends NO audit
+    /// entry and leaves <see cref="WorkItem.StateId"/> and
+    /// <see cref="WorkItem.LastModifiedAt"/> untouched. It DOES bump
+    /// <see cref="WorkItem.Version"/>, so a concurrent load, mutate,
+    /// <see cref="ReplaceAsync"/> holding the old version gets a
+    /// <see cref="WorkItemConcurrencyException"/> and retries on fresh data
+    /// instead of silently writing the old value back.
+    /// </para>
+    ///
+    /// <para>
+    /// <strong>Bypasses the audit log deliberately</strong>: RA-764 requires the
+    /// rename to leave Application history untouched. Temporary: it exists only
+    /// for <c>ReAccreditationOrganisationNameCorrectionMigration</c> and is
+    /// removed with it. It must not be used anywhere else; every other payload
+    /// change goes through the engine or a module service, which audit it.
+    /// </para>
+    /// </summary>
+    Task<bool> CompareAndSetPayloadFieldAsync(
+        Guid workItemId,
+        string fieldName,
+        BsonValue expectedValue,
+        BsonValue newValue,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// The work item of <paramref name="typeId"/> whose
     /// <c>payload.{payloadField}</c> equals <paramref name="value"/>, or
     /// <c>null</c> if none exists. Backs the idempotent-submit check in
@@ -686,6 +739,66 @@ public sealed class WorkItemPersistence
         );
 
         return result.ModifiedCount > 0;
+    }
+
+    public async Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
+        string typeId,
+        string fieldName,
+        BsonValue value,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(typeId);
+        ArgumentNullException.ThrowIfNull(value);
+        ThrowIfNotSinglePayloadField(fieldName);
+
+        var filter = Builders<WorkItem>.Filter.And(
+            Builders<WorkItem>.Filter.Eq(w => w.TypeId, typeId),
+            Builders<WorkItem>.Filter.Eq($"payload.{fieldName}", value)
+        );
+
+        return await Collection.Find(filter).ToListAsync(cancellationToken);
+    }
+
+    public async Task<bool> CompareAndSetPayloadFieldAsync(
+        Guid workItemId,
+        string fieldName,
+        BsonValue expectedValue,
+        BsonValue newValue,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentNullException.ThrowIfNull(expectedValue);
+        ArgumentNullException.ThrowIfNull(newValue);
+        ThrowIfNotSinglePayloadField(fieldName);
+
+        var result = await Collection.UpdateOneAsync(
+            Builders<WorkItem>.Filter.And(
+                Builders<WorkItem>.Filter.Eq(w => w.Id, workItemId),
+                Builders<WorkItem>.Filter.Eq($"payload.{fieldName}", expectedValue)
+            ),
+            Builders<WorkItem>.Update
+                .Set($"payload.{fieldName}", newValue)
+                .Inc(w => w.Version, 1),
+            cancellationToken: cancellationToken
+        );
+
+        return result.ModifiedCount > 0;
+    }
+
+    // RA-764: the same dotted-path / operator guard as the other payload-field
+    // methods, kept separate on purpose: PR #236 removes the shared RA-691
+    // helper, and these methods must not depend on it.
+    private static void ThrowIfNotSinglePayloadField(string fieldName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(fieldName);
+        if (fieldName.Contains('.', StringComparison.Ordinal) || fieldName.StartsWith('$'))
+        {
+            throw new ArgumentException(
+                "Payload field name must be a single field directly under 'payload'.",
+                nameof(fieldName)
+            );
+        }
     }
 
     // Guard the dotted-path injection: a caller passing "a.b" or a "$"

@@ -16,7 +16,8 @@ namespace EprRegisterEnrolManagementBe.Test.Notifications;
 ///   placeholders match the required set here.</item>
 /// </list>
 ///
-/// Keys reflect what <c>ReAccreditationNotificationHook.BuildPersonalisation</c>
+/// Keys reflect what <c>ReAccreditationNotificationHook.BuildPersonalisation</c> /
+/// <c>BuildQueriedPersonalisation</c>
 /// (operator-facing) and its regulator-facing <c>SendRegulatorEmailAsync</c>
 /// supply for each template. RA-581: every template's set is built and
 /// declared independently here — there is no shared "base" beyond a handful

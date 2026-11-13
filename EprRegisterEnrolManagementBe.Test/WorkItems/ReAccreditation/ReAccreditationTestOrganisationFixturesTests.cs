@@ -27,6 +27,9 @@ public class ReAccreditationTestOrganisationFixturesTests
     private static readonly Guid s_accreditationNumberCorrectedId = Guid.Parse(
         ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedId
     );
+    private static readonly Guid s_organisationNameCorrectionId = Guid.Parse(
+        ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId
+    );
 
     private readonly MongoIntegrationFixture _fixture;
 
@@ -68,6 +71,7 @@ public class ReAccreditationTestOrganisationFixturesTests
                 ReAccreditationTestOrganisationFixtures.LegacySnapshotId,
                 ReAccreditationTestOrganisationFixtures.PreYearStartId,
                 ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedId,
+                ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId,
             ],
             documents.Select(d => d["_id"].AsString)
         );
@@ -92,7 +96,11 @@ public class ReAccreditationTestOrganisationFixturesTests
     [InlineData("2031-01-01T00:00:00Z")]
     public void Both_fixtures_show_valid_registration_references(string now)
     {
-        var documents = BuildFixtures(new FakeTimeProvider(DateTimeOffset.Parse(now)));
+        // RA-764's fixture carries the real target's registration number
+        // verbatim (the migration is keyed to it), whose legacy "GL" glass
+        // code predates the GR/GO split this check knows.
+        var documents = BuildFixtures(new FakeTimeProvider(DateTimeOffset.Parse(now)))
+            .Where(d => d["_id"].AsString != ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId);
 
         Assert.All(
             documents,
@@ -240,12 +248,99 @@ public class ReAccreditationTestOrganisationFixturesTests
         Assert.True(restored.SlaClock!.StartedAt.Year < DateTime.UtcNow.Year);
     }
 
-    private EphemeralMongoTestFactory NewFactory() =>
-        new(
-            _fixture,
-            "e2e-fixtures",
-            settings: new Dictionary<string, string?> { [TestOrganisations.EnabledKey] = "true" }
+    /// <summary>
+    /// RA-764: without the migration's keys (CDP test) the fixture keeps the
+    /// old name, as a real 2027 case would before the fix.
+    /// </summary>
+    [Fact]
+    public async Task The_organisation_name_fixture_is_seeded_with_the_old_name_and_no_history()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var factory = NewFactory();
+        var persistence = factory.Services.GetRequiredService<IWorkItemPersistence>();
+
+        var item = await persistence.GetByIdAsync(s_organisationNameCorrectionId, ct);
+
+        Assert.NotNull(item);
+        Assert.Equal("submitted", item!.StateId);
+        Assert.Equal(new ReAccreditationType().TemplateVersion, item.TemplateVersion);
+        Assert.Equal(
+            ReAccreditationOrganisationNameCorrectionMigration.OldName,
+            item.Payload["organisationName"].AsString
         );
+        Assert.Equal("R26NR5000690003GL", item.Payload["registrationNumber"].AsString);
+        Assert.Equal(500069, item.Payload["operatorOrgNumber"].ToInt32());
+        Assert.Equal(2027, item.Payload["accreditationYear"].ToInt32());
+        Assert.Null(item.AssignedToId);
+        Assert.Empty(item.AuditLog);
+    }
+
+    /// <summary>
+    /// RA-764: pins the ordering the e2e stack relies on. With the migration
+    /// enabled, the fixture is renamed AFTER the boot-time fixture reset, so it
+    /// must run in StartedAsync. Registered as an IWorkItemMigration instead,
+    /// it would run before the reset and this would see the old name. The
+    /// renamed case is then found through the real list endpoint by its new
+    /// name, and not by its old one.
+    /// </summary>
+    [Fact]
+    public async Task With_the_migration_enabled_the_fixture_is_renamed_after_its_reset_and_found_by_its_new_name()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        using var factory = NewFactory(
+            new Dictionary<string, string?>
+            {
+                [ReAccreditationOrganisationNameCorrectionMigration.EnabledConfigKey] = "true",
+                [ReAccreditationOrganisationNameCorrectionMigration.ApplyConfigKey] = "true",
+                [ReAccreditationOrganisationNameCorrectionMigration.SpotCheckConfirmedByConfigKey] = "e2e",
+            }
+        );
+        var persistence = factory.Services.GetRequiredService<IWorkItemPersistence>();
+        using var client = factory.CreateClient();
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "frontend");
+
+        var item = await persistence.GetByIdAsync(s_organisationNameCorrectionId, ct);
+        var byNewName = await client.GetAsync(
+            "/work-items?organisation=" + Uri.EscapeDataString("VIDRALA UK & IRELAND LIMITED"),
+            ct
+        );
+        var byOldName = await client.GetAsync("/work-items?organisation=Encirc", ct);
+
+        Assert.Equal(
+            ReAccreditationOrganisationNameCorrectionMigration.NewName,
+            item!.Payload["organisationName"].AsString
+        );
+        Assert.Equal("submitted", item.StateId);
+        Assert.Empty(item.AuditLog);
+        Assert.Equal(HttpStatusCode.OK, byNewName.StatusCode);
+        Assert.Contains(
+            ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId,
+            await byNewName.Content.ReadAsStringAsync(ct)
+        );
+        Assert.Equal(HttpStatusCode.OK, byOldName.StatusCode);
+        Assert.DoesNotContain(
+            ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId,
+            await byOldName.Content.ReadAsStringAsync(ct)
+        );
+        Assert.Contains(
+            factory.Services.GetServices<IHostedService>(),
+            s => s is ReAccreditationOrganisationNameCorrectionMigration and IHostedLifecycleService
+        );
+        Assert.DoesNotContain(
+            factory.Services.GetServices<IWorkItemMigration>(),
+            m => m.GetType() == typeof(ReAccreditationOrganisationNameCorrectionMigration)
+        );
+    }
+
+    private EphemeralMongoTestFactory NewFactory(Dictionary<string, string?>? extraSettings = null)
+    {
+        var settings = new Dictionary<string, string?> { [TestOrganisations.EnabledKey] = "true" };
+        foreach (var (key, value) in extraSettings ?? [])
+        {
+            settings[key] = value;
+        }
+        return new(_fixture, "e2e-fixtures", settings: settings);
+    }
 
     private static List<BsonDocument> BuildFixtures(TimeProvider time) =>
         new ReAccreditationTestOrganisationFixtures().Build(new ReAccreditationType(), time).ToList();

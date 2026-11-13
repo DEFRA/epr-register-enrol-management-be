@@ -2,6 +2,7 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
+using EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
@@ -132,6 +133,15 @@ public class NotifyTemplateContractTests
         {
             await sut.OnSubmittedAsync(workItem, s_user, ct);
         }
+        else if (actionId.StartsWith("query-during-", StringComparison.Ordinal))
+        {
+            // RA-000: the Queried email is only sent for a currentQuery the
+            // query operation stamped for this transition, so give the item
+            // the audit trail that transition leaves.
+            var fromStateId = FreshQueryTestData.FromStateFor(actionId);
+            FreshQueryTestData.AppendQueryTransition(workItem, actionId, fromStateId);
+            await sut.OnActionAppliedAsync(workItem, actionId, fromStateId, s_user, ct);
+        }
         else
         {
             await sut.OnActionAppliedAsync(workItem, actionId, "any-from-state", s_user, ct);
@@ -180,6 +190,9 @@ public class NotifyTemplateContractTests
             ["organisationName"] = "Acme Recycling Ltd",
             ["registrationNumber"] = "EX-2024-001",
             ["operatorEmail"] = "operator@example.com",
+            // SubmitAsync always stamps it; the operator emails are not sent
+            // without it (RA-000).
+            ["applicationReference"] = "RA-123456789",
             // RA-581: regulatorName/regulatorEmail both need a resolvable
             // nation; England is matched by the RegulatorNames entry and the
             // mailbox resolver the SUT is built with below.

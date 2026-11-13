@@ -42,7 +42,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///
 /// Registered straight after the v16 one. The v18
 /// <see cref="ReAccreditationAssessmentStartedSnapshotMigration"/> (RA-527
-/// follow-up) follows it and sets the final version.
+/// follow-up) follows it, and the v19
+/// <see cref="ReAccreditationQueryNotCallerInvocableSnapshotMigration"/>
+/// (RA-000) runs last and sets the final version.
 /// </summary>
 internal sealed class ReAccreditationPendingContactSnapshotMigration(
     ILogger<ReAccreditationPendingContactSnapshotMigration> logger)
