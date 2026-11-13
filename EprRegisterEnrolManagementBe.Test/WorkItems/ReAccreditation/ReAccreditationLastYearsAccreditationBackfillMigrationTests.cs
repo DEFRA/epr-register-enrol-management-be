@@ -6,6 +6,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using Migration = EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReAccreditationLastYearsAccreditationBackfillMigration;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
@@ -460,5 +462,133 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
                 && r.Message.Contains("RegisteredOnly=1", StringComparison.Ordinal)
                 && r.Message.Contains("Corrected=1", StringComparison.Ordinal)
         );
+    }
+
+    // ------------------------------- edges -------------------------------
+
+    [Fact]
+    public async Task An_item_without_a_registration_number_is_reported()
+    {
+        var item = await SeedAsync(null, 500027);
+
+        await RunAsync();
+
+        Assert.Null(LastYears(await ReloadAsync(item)));
+        Assert.Contains("it holds no registration number", PlanLineFor(item), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("R26ER5000270036ST", "steel", null)]
+    [InlineData("R26ER5000270036WO", "Wood", null)]
+    [InlineData("R26ER5000270036AL", "aluminium", null)]
+    [InlineData("R26ER5000270036FB", "fibre", null)]
+    [InlineData("R26ER5000270036PA", "paper", null)]
+    [InlineData("R26ER5000270036PL", "plastic", null)]
+    [InlineData("R26ER5000270036GR", "glass", "glass_re_melt")]
+    [InlineData("R26ER5000270036GO", "glass", "glass_other")]
+    [InlineData("R26ER5000270036GR", "glass", null)]
+    [InlineData("R26ER5000270036GO", "glass", null)]
+    public void A_material_matching_the_registration_numbers_code_is_not_a_mismatch(
+        string registrationNumber,
+        string material,
+        string? glassRecyclingProcess
+    )
+    {
+        var payload = new BsonDocument { ["material"] = material, ["operatorOrgNumber"] = 500027 };
+        if (glassRecyclingProcess is not null)
+        {
+            payload["glassRecyclingProcess"] = glassRecyclingProcess;
+        }
+
+        Assert.Null(Migration.IdentityMismatch(payload, registrationNumber));
+    }
+
+    [Theory]
+    [InlineData("R26ER5000270036GO", "glass", "glass_re_melt")]
+    [InlineData("R26ER5000270036GR", "glass", "glass_other")]
+    [InlineData("R26ER5000270036PL", "concrete", null)]
+    public void A_material_that_does_not_match_the_registration_numbers_code_is_a_mismatch(
+        string registrationNumber,
+        string material,
+        string? glassRecyclingProcess
+    )
+    {
+        var payload = new BsonDocument { ["material"] = material };
+        if (glassRecyclingProcess is not null)
+        {
+            payload["glassRecyclingProcess"] = glassRecyclingProcess;
+        }
+
+        Assert.Contains(
+            "registration number's is",
+            Migration.IdentityMismatch(payload, registrationNumber),
+            StringComparison.Ordinal
+        );
+    }
+
+    [Fact]
+    public async Task An_item_changed_between_planning_and_writing_is_not_written()
+    {
+        // Loaded BEFORE configuring the substitute: an await between the call
+        // and Returns() can resume on another thread, where NSubstitute no
+        // longer sees the call to configure.
+        var planned = await ReloadAsync(await EggerAsync());
+        var racing = Substitute.For<IWorkItemPersistence>();
+        racing
+            .FindByPayloadFieldAsync(ReAccreditationType.Id, "accreditationYear", Arg.Any<BsonValue>(), Arg.Any<CancellationToken>())
+            .Returns([planned]);
+        racing
+            .CorrectPayloadFieldAsync(default, default!, default!, default!, default!, Ct)
+            .ReturnsForAnyArgs(false);
+
+        var result = await NewMigration().ApplyAsync(racing, Ct);
+
+        Assert.Equal(Migration.RunResult.Applied, result);
+        Assert.True(Logged(LogLevel.Warning, "changed after planning"));
+        Assert.False(Logged(LogLevel.Information, "APPLIED"));
+    }
+
+    [Fact]
+    public async Task StartedAsync_applies_through_the_registered_persistence()
+    {
+        var item = await EggerAsync();
+
+        await NewMigration().StartedAsync(Ct);
+
+        Assert.Equal(EggerAccreditation, LastYears(await ReloadAsync(item))!["accreditationNumber"].AsString);
+    }
+
+    [Fact]
+    public async Task StartedAsync_logs_a_failure_and_does_not_throw()
+    {
+        var broken = Substitute.For<IServiceProvider>();
+        broken.GetService(typeof(IWorkItemPersistence)).Throws(new InvalidOperationException("mongo down"));
+        var migration = new Migration(
+            broken,
+            new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?> { [Migration.EnabledConfigKey] = "true" })
+                .Build(),
+            _logger
+        );
+
+        await migration.StartedAsync(Ct);
+
+        Assert.True(Logged(LogLevel.Warning, "continuing startup"));
+    }
+
+    [Fact]
+    public async Task StartedAsync_with_the_gate_off_does_not_touch_persistence()
+    {
+        var provider = Substitute.For<IServiceProvider>();
+        var migration = new Migration(provider, new ConfigurationBuilder().Build(), _logger);
+
+        await migration.StartingAsync(Ct);
+        await migration.StartAsync(Ct);
+        await migration.StartedAsync(Ct);
+        await migration.StoppingAsync(Ct);
+        await migration.StopAsync(Ct);
+        await migration.StoppedAsync(Ct);
+
+        provider.DidNotReceiveWithAnyArgs().GetService(default!);
     }
 }
