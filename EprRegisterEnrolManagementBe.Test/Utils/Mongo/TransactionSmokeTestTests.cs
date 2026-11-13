@@ -4,6 +4,8 @@ using EprRegisterEnrolManagementBe.Utils.Mongo;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace EprRegisterEnrolManagementBe.Test.Utils.Mongo;
 
@@ -117,6 +119,24 @@ public sealed class TransactionSmokeTestTests : IAsyncDisposable
             "Mongo transaction smoke test supported=false commit=False abort=False error=NotSupportedException",
             record.Message
         );
+    }
+
+    [Fact]
+    public async Task Hosted_service_logs_an_error_with_the_exception_when_the_smoke_test_cannot_run()
+    {
+        var failure = new InvalidOperationException("no database");
+        var factory = Substitute.For<IMongoDbClientFactory>();
+        factory
+            .GetCollection<BsonDocument>(TransactionSmokeTest.ScratchCollection)
+            .Throws(failure);
+        var logger = new ListLogger<TransactionSmokeTestHostedService>();
+
+        await new TransactionSmokeTestHostedService(factory, logger).RunAsync(Ct);
+
+        var record = Assert.Single(logger.Records);
+        Assert.Equal(LogLevel.Error, record.Level);
+        Assert.Same(failure, record.Exception);
+        Assert.Equal("InvalidOperationException", record.Properties["ErrorKind"]);
     }
 
     private static IMongoDatabase Database(IMongoDbClientFactory factory) =>

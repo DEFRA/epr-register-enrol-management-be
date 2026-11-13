@@ -36,18 +36,7 @@ public static class TransactionSmokeTest
         try
         {
             // Creating a collection inside a transaction is not supported everywhere, so do it first.
-            if (!await CollectionExists(database, cancellationToken))
-            {
-                try
-                {
-                    await database.CreateCollectionAsync(
-                        ScratchCollection,
-                        cancellationToken: cancellationToken
-                    );
-                }
-                // Another instance starting at the same time created it first.
-                catch (MongoCommandException ex) when (ex.CodeName == "NamespaceExists") { }
-            }
+            await MongoCollections.EnsureExistsAsync(database, ScratchCollection, cancellationToken);
 
             var scratch = database.GetCollection<BsonDocument>(ScratchCollection);
             // The checks after each transaction read from the primary, so a lagging secondary can't fail them.
@@ -107,18 +96,6 @@ public static class TransactionSmokeTest
             return new TransactionSmokeResult(commitWorks, abortWorks, ex.GetType().Name + code);
         }
     }
-
-    private static async Task<bool> CollectionExists(
-        IMongoDatabase database,
-        CancellationToken cancellationToken
-    )
-    {
-        using var cursor = await database.ListCollectionNamesAsync(
-            new ListCollectionNamesOptions { Filter = new BsonDocument("name", ScratchCollection) },
-            cancellationToken
-        );
-        return await cursor.AnyAsync(cancellationToken);
-    }
 }
 
 /// <summary>
@@ -169,7 +146,11 @@ internal sealed class TransactionSmokeTestHostedService(
         }
         catch (Exception ex)
         {
-            logger.LogError("Mongo transaction smoke test failed error={ErrorKind}", ex.GetType().Name);
+            logger.LogError(
+                ex,
+                "Mongo transaction smoke test failed with {ErrorKind}; transactions may be unsupported.",
+                ex.GetType().Name
+            );
         }
     }
 }

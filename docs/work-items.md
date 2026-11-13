@@ -55,7 +55,9 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 **Split submissions (RA-739).** For a type that declares
 `SplitsSubmissionPerSite` (add-ORS, `add-overseas-site`), `POST /work-items`
 splits the payload's `sites[]` into one work item per site. Each work item's
-payload is the shared request fields plus a single `site`, its own
+payload is the shared request fields (organisation, `material`, `nation`,
+`accreditationYear` and so on, which the list's filters read as for
+re-accreditation) plus a single `site`, its own
 `applicationReference` (`IYC-ORS-{yyyy}-{seq:D5}`), the shared
 `submissionReference` (`SUB-{yyyy}-{seq:D4}`, one counter per year in
 `referenceSequences` keyed `SUB-{yyyy}`, starting at `0001` and growing past
@@ -107,7 +109,10 @@ stores the rest of the site as sent.
   `WithTransactionAsync`, which retries write conflicts) holds both sequence
   increments, every work item and the submission record. Any failure aborts
   it: nothing is created, no number is used, and the caller gets an error.
-  Submit hooks run per work item only after the commit.
+  Submit hooks run per work item only after the commit. `submissions` and
+  `referenceSequences` are created when their stores are constructed
+  (`MongoService`), never inside the transaction, since creating a collection
+  in a transaction is not supported on every Mongo deployment.
 - **Replay guard.** The `submissions` collection (`MongoSubmissionStore`)
   holds one document per POST: `_id` = `operatorRequestId`, `typeId`,
   `submissionReference`, `workItems: [{ siteId, workItemId,
@@ -124,6 +129,14 @@ stores the rest of the site as sent.
   because the aborted increment means a retry would collide again. Any other
   duplicate key (two first-ever allocations racing to create a counter) is
   retried whole, up to `MaxSubmissionAttempts`.
+
+**Release.** Deploy management-be and management-fe before the operator
+backend (`epr-register-enrol-backend`). With
+`AccreditationChanges__SubmitToCaseManagement` on, the operator backend sends
+the add-overseas-site shape above and parses the split response, which an
+older management-be does not have. The flag is off in every CDP environment
+(cdp-app-config) until it is switched on for dev and test; keep it off in
+prod.
 
 All three endpoints require authentication via the CDP client id
 header (`x-cdp-client-id`) per RA-89/RA-85b.

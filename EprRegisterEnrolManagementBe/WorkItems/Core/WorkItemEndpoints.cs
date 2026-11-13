@@ -270,7 +270,7 @@ public static class WorkItemEndpoints
 
         if (!result.IsSuccess)
         {
-            return LogSubmitFailure(request, result, log);
+            return LogSubmitFailure(request, result.FailureCode, result.Message, log);
         }
 
         var workItem = result.WorkItem!;
@@ -306,9 +306,9 @@ public static class WorkItemEndpoints
             log
         );
 
-        if (result.FailureResult is { } failure)
+        if (!result.IsSuccess)
         {
-            return LogSubmitFailure(request, failure, log);
+            return LogSubmitFailure(request, result.FailureCode, result.Message, log);
         }
 
         var submission = result.Submission!;
@@ -357,7 +357,8 @@ public static class WorkItemEndpoints
 
     private static ProblemHttpResult LogSubmitFailure(
         WorkItemSubmissionRequest request,
-        WorkItemActionResult failure,
+        WorkItemActionFailureCode? failureCode,
+        string? message,
         IStructuredLogger<WorkItemEndpointsLogger> log
     )
     {
@@ -366,11 +367,11 @@ public static class WorkItemEndpoints
             "Work item submission failed",
             SubmissionLogFields(
                 request,
-                ("error.code", failure.FailureCode.ToString()),
-                (ErrorMessageField, failure.Message)
+                ("error.code", failureCode.ToString()),
+                (ErrorMessageField, message)
             )
         );
-        return SubmitFailure(failure);
+        return SubmitFailure(failureCode, message);
     }
 
     private static void LogSubmitSuccess(
@@ -411,12 +412,15 @@ public static class WorkItemEndpoints
         return properties;
     }
 
-    private static ProblemHttpResult SubmitFailure(WorkItemActionResult result) =>
-        result.FailureCode switch
+    private static ProblemHttpResult SubmitFailure(
+        WorkItemActionFailureCode? failureCode,
+        string? message
+    ) =>
+        failureCode switch
         {
             WorkItemActionFailureCode.MissingActorIdentity => TypedResults.Problem(
                 title: "Authentication required",
-                detail: result.Message,
+                detail: message,
                 statusCode: StatusCodes.Status401Unauthorized
             ),
             // RA-219: applicationReference exhaustion is transient and
@@ -424,12 +428,12 @@ public static class WorkItemEndpoints
             // letting the engine throw past this handler as a 500.
             WorkItemActionFailureCode.ApplicationReferenceExhausted => TypedResults.Problem(
                 title: "Submission temporarily unavailable",
-                detail: result.Message,
+                detail: message,
                 statusCode: StatusCodes.Status503ServiceUnavailable
             ),
             _ => TypedResults.Problem(
                 title: InvalidRequestTitle,
-                detail: result.Message,
+                detail: message,
                 statusCode: StatusCodes.Status400BadRequest
             ),
         };

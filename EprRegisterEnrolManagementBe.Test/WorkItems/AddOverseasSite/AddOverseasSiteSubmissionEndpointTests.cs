@@ -26,34 +26,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
         string operatorRequestId,
         int accreditationYear = 2026,
         int siteCount = 3
-    ) =>
-        new
-        {
-            typeId = TypeId,
-            source = "operator-fe",
-            payload = new
-            {
-                operatorRequestId,
-                changeType = "add-overseas-site",
-                operatorOrganisationId = "org-1",
-                organisationName = "Acme Recycling Ltd",
-                operatorOrgNumber = 500500,
-                material = "Plastic",
-                accreditationYear,
-                chargePence = 300000,
-                paymentReference = "PR/PK/REP/500500",
-                sites = Enumerable
-                    .Range(1, siteCount)
-                    .Select(n => new
-                    {
-                        siteId = $"site-{n}",
-                        orsId = $"ORS-{n:D3}",
-                        siteName = $"Overseas site {n}",
-                        country = "France",
-                    })
-                    .ToArray(),
-            },
-        };
+    ) => AddOverseasSiteSubmissions.Body(operatorRequestId, accreditationYear, siteCount);
 
     [Fact]
     public async Task Posting_three_sites_creates_three_submitted_work_items_sharing_one_submission_reference()
@@ -334,6 +307,27 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
         Assert.Equal("SUB-2026-0001", stored!.Payload["submissionReference"].AsString);
         Assert.Equal(1, stored.Payload["submissionSize"].AsInt32);
         Assert.Equal(1, await factory.CountSequencesAsync(cancellationToken));
+    }
+
+    // RA-739: the first-ever submission must not be the thing that creates the
+    // collections its transaction writes to, because creating a collection
+    // inside a transaction is not supported on every Mongo deployment. They
+    // exist as soon as the engine has been resolved, before any submission.
+    [Fact]
+    public async Task The_collections_a_submission_writes_to_exist_before_the_first_submission()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new AppFactory(fixture);
+        _ = factory.Services.GetRequiredService<IWorkItemService>();
+
+        var database = new MongoClient(fixture.ConnectionString).GetDatabase(factory.DatabaseName);
+        var collections = await (
+            await database.ListCollectionNamesAsync(cancellationToken: cancellationToken)
+        ).ToListAsync(cancellationToken);
+
+        Assert.Contains(MongoSubmissionStore.CollectionName, collections);
+        Assert.Contains(MongoReferenceSequenceStore.CollectionName, collections);
+        Assert.Contains("workItems", collections);
     }
 
     [Fact]

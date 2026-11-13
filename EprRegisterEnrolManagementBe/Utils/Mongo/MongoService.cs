@@ -17,6 +17,12 @@ public abstract class MongoService<T>
         Collection = connectionFactory.GetCollection<T>(collectionName);
         var loggerName = GetType().FullName ?? GetType().Name;
         Logger = loggerFactory.CreateLogger(loggerName);
+        // RA-739: create the collection up front. A collection with no
+        // indexes of its own (e.g. submissions, referenceSequences) would
+        // otherwise be created implicitly by its first write, which can be
+        // inside a submission's transaction, and creating a collection inside
+        // a transaction is not supported on every Mongo deployment.
+        MongoCollections.EnsureExists(Collection.Database, collectionName);
         EnsureIndexes();
     }
 

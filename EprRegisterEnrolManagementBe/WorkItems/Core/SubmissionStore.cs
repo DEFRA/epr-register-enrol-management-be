@@ -58,7 +58,9 @@ public interface ISubmissionStore
 /// MongoDB-backed <see cref="ISubmissionStore"/>. One document per submission,
 /// shaped <c>{ _id: operatorRequestId, typeId, submissionReference,
 /// workItems: [{ siteId, workItemId, applicationReference }], submittedAt }</c>.
-/// Only the implicit unique <c>_id</c> index is needed.
+/// Only the implicit unique <c>_id</c> index is needed. The collection is
+/// created when the store is constructed (see <see cref="MongoService{T}"/>),
+/// so the first submission's transaction never has to create it.
 /// </summary>
 [ExcludeFromCodeCoverage]
 public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissionStore

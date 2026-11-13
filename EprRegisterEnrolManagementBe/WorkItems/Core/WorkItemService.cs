@@ -330,10 +330,8 @@ public sealed class WorkItemService : IWorkItemService
         if (payloadError is not null)
         {
             return WorkItemSubmissionResult.Failure(
-                WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.InvalidSubmissionPayload,
-                    payloadError
-                )
+                WorkItemActionFailureCode.InvalidSubmissionPayload,
+                payloadError
             );
         }
 
@@ -391,10 +389,8 @@ public sealed class WorkItemService : IWorkItemService
                         type.TypeId
                     );
                     return WorkItemSubmissionResult.Failure(
-                        WorkItemActionResult.Failure(
-                            WorkItemActionFailureCode.ApplicationReferenceExhausted,
-                            "Failed to generate a unique applicationReference."
-                        )
+                        WorkItemActionFailureCode.ApplicationReferenceExhausted,
+                        "Failed to generate a unique applicationReference."
                     );
                 }
 

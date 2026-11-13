@@ -43,7 +43,10 @@ public interface IReferenceSequenceStore
 /// handed out. Allocation is a single
 /// <c>findAndModify</c> (<c>$inc</c> with upsert, returning the post-image),
 /// which MongoDB applies atomically per document. Only the implicit unique
-/// <c>_id</c> index is needed, because every read and write is by key.
+/// <c>_id</c> index is needed, because every read and write is by key. The
+/// collection is created when the store is constructed (see
+/// <see cref="MongoService{T}"/>), so the first allocation inside a
+/// submission's transaction never has to create it (RA-739).
 /// </summary>
 public sealed class MongoReferenceSequenceStore : MongoService<BsonDocument>, IReferenceSequenceStore
 {

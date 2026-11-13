@@ -13,6 +13,8 @@ namespace EprRegisterEnrolManagementBe.Test.Utils.Mongo;
 /// <see cref="WorkItems.Core.WorkItemPersistence"/> integration tests do not:
 /// the empty-model short-circuit, leaving an unrelated index untouched while
 /// reconciling a conflict, and detecting the conflict by its code name.
+/// RA-739 adds <see cref="MongoIndexReconciler.DropObsoleteIndexes{T}"/>,
+/// which drops the RA-492 <c>payload.operatorRequestId</c> index by name.
 /// </summary>
 public sealed class MongoIndexReconcilerTests
     : IDisposable
@@ -146,5 +148,126 @@ public sealed class MongoIndexReconcilerTests
 
         Assert.Contains(indexes, i => i["key"].AsBsonDocument.Contains("submittedBy"));
         Assert.DoesNotContain(indexes, i => i["key"].AsBsonDocument.Contains("payload.operatorApplicationId"));
+    }
+
+    /// <summary>
+    /// RA-739: the RA-492 single-field unique index on
+    /// <c>payload.operatorRequestId</c> has a different key from its
+    /// (operatorRequestId, site.siteId) replacement, so it never conflicts and
+    /// must be dropped by name, or every site after the first in an add-ORS
+    /// submission collides on it.
+    /// </summary>
+    [Fact]
+    public async Task DropObsoleteIndexes_drops_the_legacy_operatorRequestId_index()
+    {
+        await CreateLegacyOperatorRequestIdIndexAsync();
+
+        var dropped = MongoIndexReconciler.DropObsoleteIndexes(
+            _collection, [WorkItemPersistence.LegacyOperatorRequestIdIndexName], NullLogger.Instance);
+
+        Assert.Equal([WorkItemPersistence.LegacyOperatorRequestIdIndexName], dropped);
+        Assert.DoesNotContain(
+            await IndexNamesAsync(), name => name == WorkItemPersistence.LegacyOperatorRequestIdIndexName);
+    }
+
+    [Fact]
+    public async Task DropObsoleteIndexes_is_a_no_op_when_the_legacy_index_is_absent()
+    {
+        _collection.Indexes.CreateOne(
+            new CreateIndexModel<WorkItem>(Builders<WorkItem>.IndexKeys.Ascending(w => w.SubmittedBy)),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var before = await IndexNamesAsync();
+
+        var dropped = MongoIndexReconciler.DropObsoleteIndexes(
+            _collection, [WorkItemPersistence.LegacyOperatorRequestIdIndexName], NullLogger.Instance);
+
+        Assert.Empty(dropped);
+        Assert.Equal(before, await IndexNamesAsync());
+    }
+
+    [Fact]
+    public void DropObsoleteIndexes_is_a_no_op_when_the_collection_does_not_exist()
+    {
+        var dropped = MongoIndexReconciler.DropObsoleteIndexes(
+            _collection, [WorkItemPersistence.LegacyOperatorRequestIdIndexName], NullLogger.Instance);
+
+        Assert.Empty(dropped);
+    }
+
+    [Fact]
+    public async Task DropObsoleteIndexes_leaves_other_indexes_alone()
+    {
+        await CreateLegacyOperatorRequestIdIndexAsync();
+        // The replacement shares the operatorRequestId prefix but has its own
+        // name, so dropping the legacy index by name must not touch it.
+        _collection.Indexes.CreateOne(
+            new CreateIndexModel<WorkItem>(
+                Builders<WorkItem>.IndexKeys.Combine(
+                    Builders<WorkItem>.IndexKeys.Ascending("payload.operatorRequestId"),
+                    Builders<WorkItem>.IndexKeys.Ascending("payload.site.siteId"))),
+            cancellationToken: TestContext.Current.CancellationToken);
+        _collection.Indexes.CreateOne(
+            new CreateIndexModel<WorkItem>(Builders<WorkItem>.IndexKeys.Ascending(w => w.SubmittedBy)),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        MongoIndexReconciler.DropObsoleteIndexes(
+            _collection, [WorkItemPersistence.LegacyOperatorRequestIdIndexName], NullLogger.Instance);
+
+        Assert.Equal(
+            ["_id_", "payload.operatorRequestId_1_payload.site.siteId_1", "submittedBy_1"],
+            (await IndexNamesAsync()).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void DropObsoleteIndexes_never_drops_the_id_index()
+    {
+        _collection.InsertOne(
+            new WorkItem { TypeId = "test-type", StateId = "state-1" },
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var dropped = MongoIndexReconciler.DropObsoleteIndexes(_collection, ["_id_"], NullLogger.Instance);
+
+        Assert.Empty(dropped);
+    }
+
+    /// <summary>
+    /// RA-739: constructing <see cref="WorkItemPersistence"/> (as startup does)
+    /// against a database that still carries the RA-492 index leaves only the
+    /// per-site replacement on <c>payload.operatorRequestId</c>.
+    /// </summary>
+    [Fact]
+    public async Task Startup_replaces_the_legacy_operatorRequestId_index_with_the_per_site_one()
+    {
+        await CreateLegacyOperatorRequestIdIndexAsync();
+
+        _ = new WorkItemPersistence(_factory, NullLoggerFactory.Instance);
+
+        var indexes = await (await _collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
+            .ToListAsync(TestContext.Current.CancellationToken);
+        var operatorRequestId = Assert.Single(
+            indexes, i => i["key"].AsBsonDocument.Contains("payload.operatorRequestId"));
+        Assert.Equal(
+            new BsonDocument { ["payload.operatorRequestId"] = 1, ["payload.site.siteId"] = 1 },
+            operatorRequestId["key"].AsBsonDocument);
+        Assert.True(operatorRequestId["unique"].ToBoolean());
+    }
+
+    private Task CreateLegacyOperatorRequestIdIndexAsync() =>
+        _collection.Indexes.CreateOneAsync(
+            new CreateIndexModel<WorkItem>(
+                Builders<WorkItem>.IndexKeys.Ascending("payload.operatorRequestId"),
+                new CreateIndexOptions<WorkItem>
+                {
+                    Unique = true,
+                    PartialFilterExpression = Builders<WorkItem>.Filter.Type(
+                        "payload.operatorRequestId", BsonType.String),
+                }),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+    private async Task<List<string>> IndexNamesAsync()
+    {
+        var indexes = await (await _collection.Indexes.ListAsync(TestContext.Current.CancellationToken))
+            .ToListAsync(TestContext.Current.CancellationToken);
+        return indexes.Select(i => i["name"].AsString).ToList();
     }
 }

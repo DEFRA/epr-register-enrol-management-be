@@ -4,23 +4,33 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// RA-739: result of <see cref="IWorkItemService.SubmitPerSiteAsync"/>.
 /// Either the stored <see cref="Submission"/> (newly created, or an earlier
 /// one returned as an idempotent replay), or the
-/// <see cref="WorkItemActionResult"/> failure that stopped it.
+/// <see cref="WorkItemActionFailureCode"/> and message that stopped it.
+/// Shaped like <see cref="WorkItemActionResult"/>, so callers check failure
+/// the same way for both.
 /// </summary>
 public sealed record WorkItemSubmissionResult
 {
     private WorkItemSubmissionResult(
         SubmissionRecord? submission,
-        bool isIdempotentReplay,
-        WorkItemActionResult? failure
+        WorkItemActionFailureCode? failureCode,
+        string? message,
+        bool isIdempotentReplay
     )
     {
         Submission = submission;
+        FailureCode = failureCode;
+        Message = message;
         IsIdempotentReplay = isIdempotentReplay;
-        FailureResult = failure;
     }
 
     /// <summary>The submission and its work items, in site order, or <c>null</c> on failure.</summary>
     public SubmissionRecord? Submission { get; }
+
+    /// <summary>Why the submission failed, or <c>null</c> on success.</summary>
+    public WorkItemActionFailureCode? FailureCode { get; }
+
+    /// <summary>A human-readable description of the failure, or <c>null</c> on success.</summary>
+    public string? Message { get; }
 
     /// <summary>
     /// True when the <c>operatorRequestId</c> was already on file and
@@ -29,30 +39,31 @@ public sealed record WorkItemSubmissionResult
     /// </summary>
     public bool IsIdempotentReplay { get; }
 
-    /// <summary>The failed <see cref="WorkItemActionResult"/>, or <c>null</c> on success.</summary>
-    public WorkItemActionResult? FailureResult { get; }
-
-    public bool IsSuccess => FailureResult is null;
+    public bool IsSuccess => FailureCode is null;
 
     public static WorkItemSubmissionResult Success(SubmissionRecord submission)
     {
         ArgumentNullException.ThrowIfNull(submission);
-        return new(submission, isIdempotentReplay: false, failure: null);
+        return new(submission, failureCode: null, message: null, isIdempotentReplay: false);
     }
 
     public static WorkItemSubmissionResult IdempotentReplay(SubmissionRecord submission)
     {
         ArgumentNullException.ThrowIfNull(submission);
-        return new(submission, isIdempotentReplay: true, failure: null);
+        return new(submission, failureCode: null, message: null, isIdempotentReplay: true);
     }
 
+    public static WorkItemSubmissionResult Failure(WorkItemActionFailureCode code, string message) =>
+        new(submission: null, code, message, isIdempotentReplay: false);
+
+    /// <summary>Carry a failed <see cref="WorkItemActionResult"/>'s code and message over.</summary>
     public static WorkItemSubmissionResult Failure(WorkItemActionResult failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
-        if (failure.IsSuccess)
+        if (failure.FailureCode is not { } code)
         {
             throw new ArgumentException("A failure result is required.", nameof(failure));
         }
-        return new(submission: null, isIdempotentReplay: false, failure);
+        return Failure(code, failure.Message ?? string.Empty);
     }
 }
