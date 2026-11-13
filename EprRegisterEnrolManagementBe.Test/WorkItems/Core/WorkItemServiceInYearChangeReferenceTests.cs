@@ -183,8 +183,10 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
+    // The submission reference is faked here (FixedSubmissionReference), so the only sequence the real
+    // store could see is an in-year change one. The SUB sequence is covered by SubmissionReferenceGeneratorTests.
     [Fact]
-    public async Task Submit_other_types_keep_the_AP_reference_and_allocate_no_sequence()
+    public async Task Submit_other_types_keep_the_AP_reference_and_allocate_no_in_year_change_sequence()
     {
         var type = new TestWorkItemType("re-accreditation", "Re-accreditation");
 

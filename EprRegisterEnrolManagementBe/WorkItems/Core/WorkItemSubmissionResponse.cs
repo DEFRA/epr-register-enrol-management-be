@@ -3,8 +3,8 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
-/// RA-739: the <c>POST /work-items</c> 201 body for a type that uses a
-/// submission reference (add-ORS): the submission reference every work item
+/// RA-739: the <c>POST /work-items</c> 201 body for a type that splits a
+/// submission per site (add-ORS): the submission reference every work item
 /// shares, and one entry per submitted site.
 /// </summary>
 public sealed record WorkItemSubmissionResponse(
