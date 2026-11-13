@@ -12,7 +12,14 @@ jobs:
   build:
     if: github.run_number != 1
     name: CDP SonarCloud coverage scan
-    runs-on: ubuntu-latest
+    # Pinned: on ubuntu-26.04 'dotnet-coverage collect' exits 0 but writes an
+    # essentially empty coverage.xml - the scanner's C# coverage import parses it
+    # in ~20ms instead of ~250ms - so SonarCloud sees 0% coverage on new code and
+    # the quality gate fails. The PR job's own 'dotnet test --coverage' is fine on
+    # 26.04, so moving this scan to that (with --coverage-output-format xml, which
+    # sonar.cs.vscoveragexml.reportsPaths already expects) is the fix when
+    # ubuntu-24.04 is retired.
+    runs-on: ubuntu-24.04
     steps:
       - name: Set up JDK 17
         uses: actions/setup-java@v6
