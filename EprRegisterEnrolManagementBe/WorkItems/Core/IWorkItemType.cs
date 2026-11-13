@@ -6,14 +6,53 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// be pure, deterministic and side-effect free; they are queried by the framework
 /// to advertise what a type can do, not to perform behaviour. Behaviour belongs in
 /// the module's service objects.
+///
+/// RA-739: this is the single place a case type is configured. It declares the
+/// display label (<see cref="DisplayName"/>), <see cref="Category"/>,
+/// <see cref="InYearChangeCode"/>, <see cref="SplitsSubmissionPerSite"/> and
+/// <see cref="Workflow"/>, so adding a case type that follows an existing
+/// workflow is a configuration change.
 /// </summary>
 public interface IWorkItemType : IWorkItemTemplate
 {
     /// <summary>Stable, machine-readable identifier (e.g. "re-accreditation").</summary>
     string TypeId { get; }
 
-    /// <summary>Human-readable name shown in UIs and audit logs.</summary>
+    /// <summary>
+    /// The case type's display label, shown in UIs and audit logs (e.g.
+    /// "Re-accreditation").
+    /// </summary>
     string DisplayName { get; }
+
+    /// <summary>
+    /// RA-739: the group this type belongs to (see
+    /// <see cref="WorkItemCategories"/>), so the list can filter on every type
+    /// in the group without naming each one. In-year change types declare
+    /// <see cref="WorkItemCategories.InYearChange"/>. Defaults to <c>null</c>:
+    /// the type is its own group (re-accreditation).
+    /// </summary>
+    string? Category => null;
+
+    /// <summary>
+    /// RA-739: whether a submission of this type carries a <c>sites[]</c>
+    /// that is split into one work item per site, all sharing the
+    /// submission's <c>SUB-{yyyy}-{sequence}</c> reference. Defaults to
+    /// <c>false</c> (re-accreditation): one work item per submission, which
+    /// still gets a submission reference of its own.
+    /// </summary>
+    bool SplitsSubmissionPerSite => false;
+
+    /// <summary>
+    /// RA-739: the workflow this type follows. A type that follows a shared
+    /// workflow returns it here (re-accreditation returns
+    /// <c>StandardWorkflow.Definition</c>) and takes <see cref="InitialState"/>,
+    /// <see cref="IWorkItemTemplate.States"/> and
+    /// <see cref="IWorkItemTemplate.Transitions"/> from it. The default wraps
+    /// the type's own states and transitions in a bespoke workflow named after
+    /// the type, so a type that declares its state machine directly needs no
+    /// change.
+    /// </summary>
+    WorkItemWorkflow Workflow => new(TypeId, InitialState, States, Transitions);
 
     /// <summary>The state a newly-ingested work item starts in.</summary>
     WorkItemState InitialState { get; }

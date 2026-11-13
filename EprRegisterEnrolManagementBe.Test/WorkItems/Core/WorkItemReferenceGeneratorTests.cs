@@ -26,13 +26,13 @@ public sealed class WorkItemReferenceGeneratorTests
     {
         var payload = new BsonDocument { ["accreditationYear"] = 2026 };
         _iyc.GenerateAsync("ORS", payload, Arg.Any<CancellationToken>())
-            .Returns("IYC-ORS-2026-00000");
+            .Returns("IYC-ORS-2026-00001");
 
         var reference = await Generator
             .ForType(InYearChangeType())
             .GenerateAsync(payload, attempt: 2, TestContext.Current.CancellationToken);
 
-        Assert.Equal("IYC-ORS-2026-00000", reference);
+        Assert.Equal("IYC-ORS-2026-00001", reference);
         _ap.DidNotReceive().Generate(Arg.Any<BsonDocument>(), Arg.Any<int>());
     }
 

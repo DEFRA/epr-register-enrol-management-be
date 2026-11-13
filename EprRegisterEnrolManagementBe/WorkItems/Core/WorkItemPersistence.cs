@@ -17,6 +17,17 @@ public interface IWorkItemPersistence
     Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// As <see cref="CreateAsync(WorkItem, CancellationToken)"/>, but inserts
+    /// in the caller's <paramref name="session"/> (RA-739), so the work item
+    /// exists only if the caller's transaction commits.
+    /// </summary>
+    Task CreateAsync(
+        IClientSessionHandle session,
+        WorkItem workItem,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// Insert <paramref name="workItem"/> only if no document with the
     /// same <see cref="WorkItem.Id"/> exists. Returns <c>true</c> when
     /// the document was inserted and <c>false</c> when an item with
@@ -224,6 +235,9 @@ public sealed class WorkItemPersistence
     // Computed once: state id → workflow rank (RA-324), used by the Status sort.
     private readonly IReadOnlyDictionary<string, int> _statusRank;
 
+    // RA-739: resolves a query's categories to typeIds (df7.16).
+    private readonly IWorkItemRegistry _registry;
+
     public WorkItemPersistence(
         IMongoDbClientFactory connectionFactory,
         ILoggerFactory loggerFactory,
@@ -231,6 +245,7 @@ public sealed class WorkItemPersistence
     )
         : base(connectionFactory, "workItems", loggerFactory)
     {
+        _registry = registry;
         _statusRank = WorkItemSort.StatusRank(registry);
     }
 
@@ -264,6 +279,13 @@ public sealed class WorkItemPersistence
             workItem.SubmittedBy ?? "unknown"
         );
     }
+
+    [ExcludeFromCodeCoverage]
+    public Task CreateAsync(
+        IClientSessionHandle session,
+        WorkItem workItem,
+        CancellationToken cancellationToken = default
+    ) => Collection.InsertOneAsync(session, workItem, cancellationToken: cancellationToken);
 
     public async Task<bool> CreateIfAbsentAsync(
         WorkItem workItem,
@@ -345,7 +367,7 @@ public sealed class WorkItemPersistence
     {
         ArgumentNullException.ThrowIfNull(query);
 
-        var filter = BuildFilter(query);
+        var filter = BuildFilter(query, _registry);
 
         var totalCount = await Collection.CountDocumentsAsync(
             filter,
@@ -423,12 +445,18 @@ public sealed class WorkItemPersistence
         return new WorkItemPage(items, totalCount, page, pageSize);
     }
 
-    internal static FilterDefinition<WorkItem> BuildFilter(WorkItemQuery query)
+    internal static FilterDefinition<WorkItem> BuildFilter(
+        WorkItemQuery query,
+        IWorkItemRegistry registry
+    )
     {
         var builder = Builders<WorkItem>.Filter;
         var clauses = new List<FilterDefinition<WorkItem>>();
 
-        if (query.TypeIds is { Count: > 0 } typeIds)
+        // RA-739: TypeIds plus any category resolved against the registry.
+        // A category that resolved to no types still applies, so it matches
+        // nothing rather than everything.
+        if (query.ResolveTypeIds(registry) is { } typeIds)
         {
             clauses.Add(builder.In(w => w.TypeId, typeIds));
         }
@@ -537,45 +565,14 @@ public sealed class WorkItemPersistence
         // not just a literal "reprocessor" string. Selecting both collapses to
         // no restriction, which is correct: between the two buckets every item
         // matches exactly one.
-        if (query.WasteProcessingTypes is { Count: > 0 } wasteProcessingTypes)
+        if (WasteProcessingTypeClause(builder, query.WasteProcessingTypes) is { } wasteProcessingType)
         {
-            var wantsExporter = wasteProcessingTypes.Any(t =>
-                t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
-            );
-            var wantsReprocessor = wasteProcessingTypes.Any(t =>
-                !t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
-            );
-
-            if (wantsExporter != wantsReprocessor)
-            {
-                var exporterFilter = CaseInsensitiveExactMatch(
-                    builder,
-                    "payload.wasteProcessingType",
-                    "exporter"
-                );
-                clauses.Add(wantsExporter ? exporterFilter : builder.Not(exporterFilter));
-            }
+            clauses.Add(wasteProcessingType);
         }
 
-        var assigneeId = query.NormalisedAssigneeId;
-        if (assigneeId is not null && query.UnassignedOnly)
+        if (AssigneeClause(builder, query) is { } assignee)
         {
-            // "Show me my work and anything still up for grabs" — assigned to
-            // the user OR unassigned.
-            clauses.Add(
-                builder.Or(
-                    builder.Eq(w => w.AssignedToId, assigneeId),
-                    builder.Eq(w => w.AssignedToId, null)
-                )
-            );
-        }
-        else if (assigneeId is not null)
-        {
-            clauses.Add(builder.Eq(w => w.AssignedToId, assigneeId));
-        }
-        else if (query.UnassignedOnly)
-        {
-            clauses.Add(builder.Eq(w => w.AssignedToId, null));
+            clauses.Add(assignee);
         }
 
         var submittedBy = query.NormalisedSubmittedBy;
@@ -615,6 +612,61 @@ public sealed class WorkItemPersistence
         // "Archived: <date>" on the card. It is now purely informational.
 
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
+    }
+
+    // Extracted from BuildFilter (S3776: cognitive complexity) - the applicant-type
+    // clause, or null when the selection restricts nothing (none, or both buckets).
+    private static FilterDefinition<WorkItem>? WasteProcessingTypeClause(
+        FilterDefinitionBuilder<WorkItem> builder,
+        IReadOnlyCollection<string>? wasteProcessingTypes
+    )
+    {
+        if (wasteProcessingTypes is not { Count: > 0 })
+        {
+            return null;
+        }
+
+        var wantsExporter = wasteProcessingTypes.Any(t =>
+            t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
+        );
+        var wantsReprocessor = wasteProcessingTypes.Any(t =>
+            !t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
+        );
+        if (wantsExporter == wantsReprocessor)
+        {
+            return null;
+        }
+
+        var exporterFilter = CaseInsensitiveExactMatch(
+            builder,
+            "payload.wasteProcessingType",
+            "exporter"
+        );
+        return wantsExporter ? exporterFilter : builder.Not(exporterFilter);
+    }
+
+    // Extracted from BuildFilter (S3776: cognitive complexity) - the assignee
+    // clause, or null when the query does not filter on assignment.
+    private static FilterDefinition<WorkItem>? AssigneeClause(
+        FilterDefinitionBuilder<WorkItem> builder,
+        WorkItemQuery query
+    )
+    {
+        var assigneeId = query.NormalisedAssigneeId;
+        if (assigneeId is not null && query.UnassignedOnly)
+        {
+            // "Show me my work and anything still up for grabs" — assigned to
+            // the user OR unassigned.
+            return builder.Or(
+                builder.Eq(w => w.AssignedToId, assigneeId),
+                builder.Eq(w => w.AssignedToId, null)
+            );
+        }
+        if (assigneeId is not null)
+        {
+            return builder.Eq(w => w.AssignedToId, assigneeId);
+        }
+        return query.UnassignedOnly ? builder.Eq(w => w.AssignedToId, null) : null;
     }
 
     /// <summary>
@@ -818,6 +870,16 @@ public sealed class WorkItemPersistence
         }
     }
 
+    /// <summary>
+    /// RA-739: the RA-492 unique index on <c>payload.operatorRequestId</c>
+    /// alone, replaced by the (operatorRequestId, site.siteId) index in
+    /// <see cref="DefineIndexes"/>.
+    /// </summary>
+    internal const string LegacyOperatorRequestIdIndexName = "payload.operatorRequestId_1";
+
+    protected override IReadOnlyCollection<string> ObsoleteIndexNames =>
+        [LegacyOperatorRequestIdIndexName];
+
     [ExcludeFromCodeCoverage]
     protected override List<CreateIndexModel<WorkItem>> DefineIndexes(
         IndexKeysDefinitionBuilder<WorkItem> builder
@@ -891,8 +953,18 @@ public sealed class WorkItemPersistence
         // PARTIAL on "is a string" rather than sparse, for the reason given on
         // accreditationId below: a payload round-tripped through a typed model
         // can carry an explicit null, which sparse would still index.
+        //
+        // RA-739: one add-ORS submission becomes one work item per site, all
+        // carrying the same operatorRequestId, so the key is now
+        // (operatorRequestId, site.siteId). A work item without a site (the
+        // RA-492 single-item shape) indexes site.siteId as null, so it stays
+        // unique on operatorRequestId alone. The RA-492 single-field index is
+        // dropped through ObsoleteIndexNames.
         var operatorRequestId = new CreateIndexModel<WorkItem>(
-            builder.Ascending("payload.operatorRequestId"),
+            builder.Combine(
+                builder.Ascending("payload.operatorRequestId"),
+                builder.Ascending("payload.site.siteId")
+            ),
             new CreateIndexOptions<WorkItem>
             {
                 Unique = true,

@@ -10,6 +10,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class WorkItemQueryBindingTests
 {
+    private static readonly string[] s_expectedCategories = ["in-year-change", "other"];
     private static readonly string[] s_expectedSingleMaterial = ["plastic"];
     private static readonly string[] s_expectedSingleWasteProcessingType = ["exporter"];
     private static readonly string[] s_expectedValidNations = ["England", "Wales"];
@@ -65,6 +66,29 @@ public class WorkItemQueryBindingTests
         Assert.Equal(10, query.PageSize);
         Assert.NotNull(query.TypeIds);
         Assert.Contains("re-accreditation", query.TypeIds!);
+    }
+
+    [Fact]
+    public void CategoryValuesAreBoundTrimmedAndDeduplicated()
+    {
+        // RA-739: ?category= is multi-value, read like ?typeId=.
+        var dict = new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>(
+            StringComparer.OrdinalIgnoreCase)
+        {
+            ["category"] = new(["in-year-change", " in-year-change ", "  ", "other"]),
+        };
+
+        var query = WorkItemQueryBinding.FromQueryString(new QueryCollection(dict));
+
+        Assert.Equal(s_expectedCategories, query.Categories);
+    }
+
+    [Fact]
+    public void MissingCategoryIsNull()
+    {
+        var query = WorkItemQueryBinding.FromQueryString(Q(("typeId", "re-accreditation")));
+
+        Assert.Null(query.Categories);
     }
 
     [Fact]

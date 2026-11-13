@@ -13,6 +13,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// </summary>
 public class WorkItemPersistenceBuildFilterTests
 {
+    private static readonly string[] s_categoriesInYearChange = [WorkItemCategories.InYearChange];
     private static readonly string[] s_materialsPlastic = ["plastic"];
     private static readonly string[] s_materialsPlasticAndGlass = ["plastic", "glass"];
     private static readonly string[] s_materialsWithRegexMetacharacter = ["a.b"];
@@ -41,9 +42,17 @@ public class WorkItemPersistenceBuildFilterTests
     private static readonly IBsonSerializer<WorkItem> s_workItemSerializer =
         BsonSerializer.SerializerRegistry.GetSerializer<WorkItem>();
 
-    private static BsonDocument Render(WorkItemQuery query)
+    private static readonly WorkItemRegistry s_registry = new(
+    [
+        new TestWorkItemType("re-accreditation", "Re-accreditation"),
+        new TestWorkItemType("add-overseas-site", "Add ORS", category: WorkItemCategories.InYearChange),
+    ]);
+
+    private static BsonDocument Render(WorkItemQuery query) => Render(query, s_registry);
+
+    private static BsonDocument Render(WorkItemQuery query, IWorkItemRegistry registry)
     {
-        var filter = WorkItemPersistence.BuildFilter(query);
+        var filter = WorkItemPersistence.BuildFilter(query, registry);
         return filter.Render(new RenderArgs<WorkItem>(s_workItemSerializer, BsonSerializer.SerializerRegistry));
     }
 
@@ -93,6 +102,44 @@ public class WorkItemPersistenceBuildFilterTests
 
         var expected = new BsonDocument("typeId", new BsonDocument("$in",
             new BsonArray { "re-accreditation", "registration" }));
+        Assert.Equal(expected, doc);
+    }
+
+    [Fact]
+    public void ACategoryFilterIsResolvedToItsRegisteredTypes()
+    {
+        // RA-739 (df7.16): the caller passes the category as received;
+        // BuildFilter resolves it against the registry itself, so no caller
+        // can forget to and silently match nothing.
+        var doc = Render(new WorkItemQuery(Categories: s_categoriesInYearChange));
+
+        var expected = new BsonDocument("typeId", new BsonDocument("$in",
+            new BsonArray { "add-overseas-site" }));
+        Assert.Equal(expected, doc);
+    }
+
+    [Fact]
+    public void ACategoryFilterIsUnionedWithTypeIds()
+    {
+        var doc = Render(new WorkItemQuery(
+            TypeIds: s_typeIdsReAccreditation,
+            Categories: s_categoriesInYearChange));
+
+        var expected = new BsonDocument("typeId", new BsonDocument("$in",
+            new BsonArray { "re-accreditation", "add-overseas-site" }));
+        Assert.Equal(expected, doc);
+    }
+
+    [Fact]
+    public void ACategoryWithNoRegisteredTypesMatchesNothing()
+    {
+        // RA-739: a category with no registered types must match nothing,
+        // not everything, so the empty type set still renders as an $in.
+        var doc = Render(
+            new WorkItemQuery(Categories: s_categoriesInYearChange),
+            new WorkItemRegistry([new TestWorkItemType("re-accreditation", "Re-accreditation")]));
+
+        var expected = new BsonDocument("typeId", new BsonDocument("$in", new BsonArray()));
         Assert.Equal(expected, doc);
     }
 

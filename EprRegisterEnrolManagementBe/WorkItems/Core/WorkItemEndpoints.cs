@@ -82,7 +82,9 @@ public static class WorkItemEndpoints
         return app;
     }
 
-    internal static async Task<Results<CreatedAtRoute<WorkItemResponse>, ProblemHttpResult>> Submit(
+    internal static async Task<
+        Results<CreatedAtRoute<WorkItemResponse>, Created<WorkItemSubmissionResponse>, ProblemHttpResult>
+    > Submit(
         JsonElement body,
         HttpContext httpContext,
         [FromServices] IWorkItemRegistry registry,
@@ -229,99 +231,212 @@ public static class WorkItemEndpoints
             ] = sourceElement.GetString();
         }
 
+        var request = new WorkItemSubmissionRequest(
+            type,
+            payloadDocument,
+            submittedBy,
+            httpContext.User,
+            submissionMetadata
+        );
+
+        // RA-739: a type that splits a submission per site (add-ORS) is split
+        // into one work item per site and answered with the shared
+        // submission reference and each site's work item.
+        return type.SplitsSubmissionPerSite
+            ? await SubmitPerSiteAsync(request, httpContext, engine, log, cancellationToken)
+            : await SubmitOneAsync(request, httpContext, engine, log, cancellationToken);
+    }
+
+    private static async Task<
+        Results<CreatedAtRoute<WorkItemResponse>, Created<WorkItemSubmissionResponse>, ProblemHttpResult>
+    > SubmitOneAsync(
+        WorkItemSubmissionRequest request,
+        HttpContext httpContext,
+        IWorkItemService engine,
+        IStructuredLogger<WorkItemEndpointsLogger> log,
+        CancellationToken cancellationToken
+    )
+    {
         // Routed through the engine so the framework owns audit-log
         // composition for the birth event in the same place it owns every
         // other state-changing entry. The engine writes the document and
         // its first 'work-item-submitted' audit entry in a single
         // CreateAsync call.
-        WorkItemActionResult result;
+        var result = await CallEngineAsync(
+            request,
+            () => engine.SubmitAsync(request, cancellationToken),
+            log
+        );
+
+        if (!result.IsSuccess)
+        {
+            return LogSubmitFailure(request, result.FailureCode, result.Message, log);
+        }
+
+        var workItem = result.WorkItem!;
+        // RA-311/MBE-3: a retried "submit application" call for an
+        // operatorApplicationId already on file is handed the existing
+        // work item rather than a new one; surface that via the same
+        // X-Idempotent-Replay header the other idempotent mutations use so
+        // a caller (the operator backend) can tell first-hit from replay.
+        LogSubmitSuccess(
+            request,
+            result.IsIdempotentReplay,
+            httpContext,
+            log,
+            ("work_item.id", workItem.Id.ToString())
+        );
+        var response = ToResponse(engine.Project(workItem));
+        return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
+    }
+
+    private static async Task<
+        Results<CreatedAtRoute<WorkItemResponse>, Created<WorkItemSubmissionResponse>, ProblemHttpResult>
+    > SubmitPerSiteAsync(
+        WorkItemSubmissionRequest request,
+        HttpContext httpContext,
+        IWorkItemService engine,
+        IStructuredLogger<WorkItemEndpointsLogger> log,
+        CancellationToken cancellationToken
+    )
+    {
+        var result = await CallEngineAsync(
+            request,
+            () => engine.SubmitPerSiteAsync(request, cancellationToken),
+            log
+        );
+
+        if (!result.IsSuccess)
+        {
+            return LogSubmitFailure(request, result.FailureCode, result.Message, log);
+        }
+
+        var submission = result.Submission!;
+        // RA-739: a repeated operatorRequestId gets the stored submission
+        // back, flagged as for every other idempotent submit.
+        LogSubmitSuccess(
+            request,
+            result.IsIdempotentReplay,
+            httpContext,
+            log,
+            ("submission.reference", submission.SubmissionReference),
+            ("submission.size", submission.WorkItems.Count)
+        );
+        return TypedResults.Created((string?)null, WorkItemSubmissionResponse.From(submission));
+    }
+
+    /// <summary>
+    /// Run one engine submit call, logging (and rethrowing) anything it
+    /// throws with the submission's type and caller.
+    /// </summary>
+    private static async Task<TResult> CallEngineAsync<TResult>(
+        WorkItemSubmissionRequest request,
+        Func<Task<TResult>> submit,
+        IStructuredLogger<WorkItemEndpointsLogger> log
+    )
+    {
         try
         {
-            result = await engine.SubmitAsync(
-                type,
-                payloadDocument,
-                submittedBy,
-                httpContext.User,
-                submissionMetadata,
-                cancellationToken
-            );
+            return await submit();
         }
         catch (Exception ex)
         {
             log.Log(
                 LogLevel.Error,
                 "Work item submission threw an unhandled exception",
-                new Dictionary<string, object?>
-                {
-                    [WorkItemTypeIdField] = typeId,
-                    [CallerClientIdField] = submittedBy ?? "(unknown)",
-                    ["error.type"] = ex.GetType().FullName,
-                    [ErrorMessageField] = ex.Message,
-                },
+                SubmissionLogFields(
+                    request,
+                    ("error.type", ex.GetType().FullName),
+                    (ErrorMessageField, ex.Message)
+                ),
                 ex
             );
             throw;
         }
+    }
 
-        if (!result.IsSuccess)
-        {
-            log.Log(
-                LogLevel.Warning,
-                "Work item submission failed",
-                new Dictionary<string, object?>
-                {
-                    [WorkItemTypeIdField] = typeId,
-                    [CallerClientIdField] = submittedBy ?? "(unknown)",
-                    ["error.code"] = result.FailureCode.ToString(),
-                    [ErrorMessageField] = result.Message,
-                }
-            );
-            return result.FailureCode switch
-            {
-                WorkItemActionFailureCode.MissingActorIdentity => TypedResults.Problem(
-                    title: "Authentication required",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status401Unauthorized
-                ),
-                // RA-219: applicationReference exhaustion is transient and
-                // server-side, so surface a clean 503 (retryable) rather than
-                // letting the engine throw past this handler as a 500.
-                WorkItemActionFailureCode.ApplicationReferenceExhausted => TypedResults.Problem(
-                    title: "Submission temporarily unavailable",
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status503ServiceUnavailable
-                ),
-                _ => TypedResults.Problem(
-                    title: InvalidRequestTitle,
-                    detail: result.Message,
-                    statusCode: StatusCodes.Status400BadRequest
-                ),
-            };
-        }
+    private static ProblemHttpResult LogSubmitFailure(
+        WorkItemSubmissionRequest request,
+        WorkItemActionFailureCode? failureCode,
+        string? message,
+        IStructuredLogger<WorkItemEndpointsLogger> log
+    )
+    {
+        log.Log(
+            LogLevel.Warning,
+            "Work item submission failed",
+            SubmissionLogFields(
+                request,
+                ("error.code", failureCode.ToString()),
+                (ErrorMessageField, message)
+            )
+        );
+        return SubmitFailure(failureCode, message);
+    }
 
-        var workItem = result.WorkItem!;
+    private static void LogSubmitSuccess(
+        WorkItemSubmissionRequest request,
+        bool isIdempotentReplay,
+        HttpContext httpContext,
+        IStructuredLogger<WorkItemEndpointsLogger> log,
+        params (string Key, object? Value)[] fields
+    )
+    {
         log.Log(
             LogLevel.Information,
-            result.IsIdempotentReplay ? "Work item submission was an idempotent replay" : "Work item submission succeeded",
-            new Dictionary<string, object?>
-            {
-                ["work_item.id"] = workItem.Id.ToString(),
-                [WorkItemTypeIdField] = typeId,
-                [CallerClientIdField] = submittedBy ?? "(unknown)",
-            }
+            isIdempotentReplay
+                ? "Work item submission was an idempotent replay"
+                : "Work item submission succeeded",
+            SubmissionLogFields(request, fields)
         );
-        // RA-311/MBE-3: a retried "submit application" call for an
-        // operatorApplicationId already on file is handed the existing
-        // work item rather than a new one — surface that via the same
-        // X-Idempotent-Replay header the other idempotent mutations use so
-        // a caller (the operator backend) can tell first-hit from replay.
-        if (result.IsIdempotentReplay)
+        if (isIdempotentReplay)
         {
             httpContext.Response.Headers[IdempotentReplayHeader] = "true";
         }
-        var response = ToResponse(engine.Project(workItem));
-        return TypedResults.CreatedAtRoute(response, "GetWorkItemById", new { id = workItem.Id });
     }
+
+    private static Dictionary<string, object?> SubmissionLogFields(
+        WorkItemSubmissionRequest request,
+        params (string Key, object? Value)[] fields
+    )
+    {
+        var properties = new Dictionary<string, object?>
+        {
+            [WorkItemTypeIdField] = request.Type.TypeId,
+            [CallerClientIdField] = request.SubmittedBy ?? "(unknown)",
+        };
+        foreach (var (key, value) in fields)
+        {
+            properties[key] = value;
+        }
+        return properties;
+    }
+
+    private static ProblemHttpResult SubmitFailure(
+        WorkItemActionFailureCode? failureCode,
+        string? message
+    ) =>
+        failureCode switch
+        {
+            WorkItemActionFailureCode.MissingActorIdentity => TypedResults.Problem(
+                title: "Authentication required",
+                detail: message,
+                statusCode: StatusCodes.Status401Unauthorized
+            ),
+            // RA-219: applicationReference exhaustion is transient and
+            // server-side, so surface a clean 503 (retryable) rather than
+            // letting the engine throw past this handler as a 500.
+            WorkItemActionFailureCode.ApplicationReferenceExhausted => TypedResults.Problem(
+                title: "Submission temporarily unavailable",
+                detail: message,
+                statusCode: StatusCodes.Status503ServiceUnavailable
+            ),
+            _ => TypedResults.Problem(
+                title: InvalidRequestTitle,
+                detail: message,
+                statusCode: StatusCodes.Status400BadRequest
+            ),
+        };
 
     private static ProblemHttpResult BadRequest(string title, string detail) =>
         TypedResults.Problem(

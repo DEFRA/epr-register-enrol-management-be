@@ -1210,6 +1210,13 @@ internal sealed class BareFactory(
             services.AddSingleton<TimeProvider>(FakeTime);
             services.RemoveAll<IClientIdAuthNonceStore>();
             services.AddSingleton<IClientIdAuthNonceStore>(NonceStore);
+            // RA-739: the Mongo-backed stores create their collection when
+            // constructed, so stub them like the persistence above; these
+            // tests have no Mongo to talk to.
+            services.RemoveAll<ISubmissionStore>();
+            services.AddSingleton(Substitute.For<ISubmissionStore>());
+            services.RemoveAll<IReferenceSequenceStore>();
+            services.AddSingleton(Substitute.For<IReferenceSequenceStore>());
 
             if (clientSecrets is not null)
             {
