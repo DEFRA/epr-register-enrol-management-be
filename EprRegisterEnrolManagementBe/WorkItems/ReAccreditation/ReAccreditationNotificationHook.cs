@@ -870,8 +870,8 @@ internal sealed class ReAccreditationNotificationHook(
         };
 
     /// <summary>
-    /// RA-000: check the payload's <see cref="CurrentQuery"/> was stamped
-    /// inside the window of the query transition being handled
+    /// RA-000: check the payload's <see cref="CurrentQuery"/> is the one
+    /// stamped for the query transition being handled
     /// (<see cref="ReAccreditationFreshQuery"/>). Queried is mapped only from the
     /// query-during-* actions, which the engine hands over with both ids, so a
     /// missing one is a wiring defect; it fails the check (and so the send)
@@ -977,8 +977,8 @@ internal sealed class ReAccreditationNotificationHook(
             ["year"] = payload.AccreditationYear?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
             [OrganisationNameKey] = payload.OrganisationName ?? string.Empty,
             // RA-291: the date the CURRENT query was raised, stamped by
-            // ReAccreditationQueryService immediately before the query
-            // transition — see CurrentQuery.RaisedAt.
+            // ReAccreditationQueryService with the query transition — see
+            // CurrentQuery.RaisedAt.
             ["Querieddate"] = FormatOperatorFacingDate(verifiedQuery.RaisedAt),
             ["reference"] = reference,
             [RegistrationNumberKey] = payload.RegistrationNumber ?? string.Empty,

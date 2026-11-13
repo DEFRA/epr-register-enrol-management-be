@@ -2324,6 +2324,211 @@ public class WorkItemServiceTests : IAsyncDisposable
         }
     }
 
+    // ---------------- RA-000: ApplyActionAsync with a WorkItemActionWrite ----------------
+
+    private static TestWorkItemType BuildApproveType() =>
+        BuildType(transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]);
+
+    private static WorkItemActionWrite FullWrite(string assigneeId = "alice-1") =>
+        new()
+        {
+            AssignTo = new WorkItemAssignee(assigneeId, "Alice"),
+            PayloadFields = new Dictionary<string, BsonValue>
+            {
+                ["currentQuery"] = new BsonDocument { ["queryId"] = "q-1", ["reason"] = "why" },
+            },
+            ActionAppliedDetails = new Dictionary<string, string?> { ["queryId"] = "q-1" },
+        };
+
+    [Fact]
+    public async Task ApplyAction_with_a_write_commits_assignment_payload_and_transition_in_one_save()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+        var service = BuildServiceWithHook(BuildApproveType(), hook);
+        var workItem = await SeedAsync(configure: w => w.Payload = new BsonDocument { ["keep"] = "me" });
+
+        var result = await service.ApplyActionAsync(workItem.Id, "approve", FullWrite(), User(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        var stored = await GetAsync(workItem.Id);
+        // One save: the version moved by exactly one.
+        Assert.Equal(workItem.Version + 1, stored.Version);
+        Assert.Equal("approved", stored.StateId);
+        Assert.Equal("alice-1", stored.AssignedToId);
+        Assert.Equal("Alice", stored.AssignedToName);
+        Assert.Equal("why", stored.Payload["currentQuery"]["reason"].AsString);
+        Assert.Equal("me", stored.Payload["keep"].AsString);
+
+        Assert.Collection(
+            stored.AuditLog,
+            assigned =>
+            {
+                Assert.Equal("assigned", assigned.Action);
+                Assert.Equal("alice-1", assigned.Details["assigneeId"]);
+                // Recorded against the state the item was assigned in.
+                Assert.Equal("submitted", assigned.StateId);
+            },
+            applied =>
+            {
+                Assert.Equal("action-applied", applied.Action);
+                Assert.Equal("approve", applied.Details["actionId"]);
+                Assert.Equal("submitted", applied.Details["fromStateId"]);
+                Assert.Equal("q-1", applied.Details["queryId"]);
+            });
+
+        Received.InOrder(() =>
+        {
+            hook.OnAssignmentChangedAsync(
+                Arg.Is<WorkItem>(w => w.AssignedToId == "alice-1" && w.StateId == "approved"),
+                WorkItemAssignmentChange.Assigned,
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>());
+            hook.OnActionAppliedAsync(
+                Arg.Is<WorkItem>(w => w.Payload["currentQuery"]["queryId"].AsString == "q-1"),
+                "approve",
+                "submitted",
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Fact]
+    public async Task ApplyAction_with_a_write_that_loses_a_race_writes_nothing_and_fires_no_hooks()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+        var workItem = await SeedAsync();
+        var service = new WorkItemService(
+            new WorkItemRegistry([BuildApproveType()]),
+            new RacingPersistence(
+                _persistence,
+                () =>
+                {
+                    var raceLoaded = _persistence.GetByIdAsync(workItem.Id).GetAwaiter().GetResult();
+                    raceLoaded!.LastModifiedAt = raceLoaded.LastModifiedAt.AddMinutes(1);
+                    _persistence.ReplaceAsync(raceLoaded).GetAwaiter().GetResult();
+                }),
+            NullLogger<WorkItemService>.Instance,
+            TestReferenceGenerators.ApplicationOnly(),
+            _time,
+            postActionHooks: [hook]);
+
+        var result = await service.ApplyActionAsync(workItem.Id, "approve", FullWrite(), User(), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
+        var stored = await GetAsync(workItem.Id);
+        Assert.Equal("submitted", stored.StateId);
+        Assert.Null(stored.AssignedToId);
+        Assert.False(stored.Payload.Contains("currentQuery"));
+        Assert.Empty(stored.AuditLog);
+        Assert.Empty(hook.ReceivedCalls());
+    }
+
+    [Fact]
+    public async Task ApplyAction_with_a_write_from_the_wrong_state_writes_nothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = BuildService(BuildApproveType());
+        var workItem = await SeedAsync(stateId: "rejected");
+
+        var result = await service.ApplyActionAsync(workItem.Id, "approve", FullWrite(), User(), ct);
+
+        Assert.False(result.IsSuccess);
+        var stored = await GetAsync(workItem.Id);
+        Assert.Equal(workItem.Version, stored.Version);
+        Assert.Null(stored.AssignedToId);
+        Assert.False(stored.Payload.Contains("currentQuery"));
+    }
+
+    [Fact]
+    public async Task ApplyAction_with_a_write_to_the_current_assignee_adds_no_assignment_or_hook()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+        var service = BuildServiceWithHook(BuildApproveType(), hook);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "alice-1";
+            w.AssignedToName = "Alice";
+        });
+
+        var result = await service.ApplyActionAsync(workItem.Id, "approve", FullWrite(), User(), ct);
+
+        Assert.True(result.IsSuccess, result.Message);
+        var stored = await GetAsync(workItem.Id);
+        Assert.Equal("action-applied", Assert.Single(stored.AuditLog).Action);
+        await hook.DidNotReceiveWithAnyArgs()
+            .OnAssignmentChangedAsync(default!, default, default!, ct);
+        await hook.Received(1).OnActionAppliedAsync(
+            Arg.Any<WorkItem>(), "approve", "submitted", Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ApplyAction_with_a_write_reassigns_an_item_held_by_someone_else()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var hook = Substitute.For<IWorkItemPostActionHook>();
+        var service = BuildServiceWithHook(BuildApproveType(), hook);
+        var workItem = await SeedAsync(configure: w =>
+        {
+            w.AssignedToId = "bob-1";
+            w.AssignedToName = "Bob";
+        });
+
+        await service.ApplyActionAsync(workItem.Id, "approve", FullWrite(), User(), ct);
+
+        var assigned = Assert.Single((await GetAsync(workItem.Id)).AuditLog, e => e.Action == "assigned");
+        Assert.Equal("bob-1", assigned.Details["previousAssigneeId"]);
+        await hook.Received(1).OnAssignmentChangedAsync(
+            Arg.Any<WorkItem>(), WorkItemAssignmentChange.Reassigned, Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("payload", "a.b")]
+    [InlineData("payload", "$set")]
+    [InlineData("payload", " ")]
+    [InlineData("detail", "actionId")]
+    [InlineData("detail", "FROMSTATEID")]
+    [InlineData("assignee", "")]
+    public async Task ApplyAction_rejects_a_malformed_write_before_loading_anything(string part, string value)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = BuildService(BuildApproveType());
+        var workItem = await SeedAsync();
+        var write = part switch
+        {
+            "payload" => new WorkItemActionWrite
+            {
+                PayloadFields = new Dictionary<string, BsonValue> { [value] = "x" },
+            },
+            "detail" => new WorkItemActionWrite
+            {
+                ActionAppliedDetails = new Dictionary<string, string?> { [value] = "x" },
+            },
+            _ => new WorkItemActionWrite { AssignTo = new WorkItemAssignee(value, null) },
+        };
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ApplyActionAsync(workItem.Id, "approve", write, User(), ct));
+        Assert.Equal(workItem.Version, (await GetAsync(workItem.Id)).Version);
+    }
+
+    [Fact]
+    public async Task ApplyAction_rejects_a_null_payload_value()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var service = BuildService(BuildApproveType());
+        var write = new WorkItemActionWrite
+        {
+            PayloadFields = new Dictionary<string, BsonValue> { ["field"] = null! },
+        };
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            service.ApplyActionAsync(Guid.NewGuid(), "approve", write, User(), ct));
+    }
+
     /// <summary>
     /// Produces a service whose persistence wraps the real one so that a
     /// competing writer bumps the on-disk version between the engine's

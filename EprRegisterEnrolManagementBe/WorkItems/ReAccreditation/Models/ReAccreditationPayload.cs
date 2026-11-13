@@ -205,11 +205,13 @@ internal sealed record ReAccreditationPayload
     public DateOnly? PaymentDate { get; init; }
 
     /// <summary>
-    /// RA-291: the query currently open against this application, stamped by
-    /// <c>ReAccreditationQueryService</c> just before the query transition so
-    /// the notification hook can include the reason in the operator's email.
-    /// See <see cref="Models.CurrentQuery"/> for why this is payload state and
-    /// why readers must gate on the <c>queried</c> state.
+    /// RA-291: the query currently open against this application, written by
+    /// <c>ReAccreditationQueryService</c> in the query transition's own
+    /// versioned save (RA-000). The query push sends its reason and sections
+    /// to the operator backend; the Queried email uses only the date it was
+    /// raised. See
+    /// <see cref="Models.CurrentQuery"/> for why this is payload state and how
+    /// readers check it belongs to the transition they are handling.
     /// </summary>
     public CurrentQuery? CurrentQuery { get; init; }
 }

@@ -17,18 +17,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <c>-decision</c>). Reads <see cref="ReAccreditationPayload.CurrentQuery"/>
 /// off the (already-persisted) <see cref="WorkItem.Payload"/> this hook is
 /// handed — safe because <see cref="ReAccreditationQueryService"/> stamps
-/// <c>currentQuery</c> via a direct write *before* calling
-/// <see cref="IWorkItemService.ApplyActionAsync"/>, which re-loads the
-/// document before persisting the transition, so the instance handed to
-/// post-action hooks already carries it (the same ordering guarantee
+/// <c>currentQuery</c> in the same versioned save as the transition (RA-000),
+/// so the instance handed to post-action hooks carries the stamp that
+/// transition committed (the same guarantee
 /// <see cref="ReAccreditationNotificationHook"/>'s own <c>Queried</c>
-/// template already relies on).
+/// template relies on).
 ///
 /// RA-000: the query-during-* transitions are not caller-invocable, so only
 /// the query service applies them. As defence in depth the hook still checks
-/// the stamp was written inside this transition's window
-/// (<see cref="ReAccreditationFreshQuery"/>, which names what that does not
-/// rule out) and, when it was not, or when the payload cannot be read, pushes nothing,
+/// the stamp's query id matches the one on this transition's
+/// <c>action-applied</c> entry (<see cref="ReAccreditationFreshQuery"/>) and,
+/// when it does not, or when the payload cannot be read, pushes nothing,
 /// logs at Error and records <c>query-push-failed</c> with a <c>reason</c>.
 ///
 /// Never throws — a push failure must not unwind the already-persisted

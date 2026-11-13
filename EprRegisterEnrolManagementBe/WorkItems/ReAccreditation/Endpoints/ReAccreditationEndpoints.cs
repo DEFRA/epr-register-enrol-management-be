@@ -897,13 +897,12 @@ internal static class ReAccreditationEndpoints
         var status = result.FailureCode switch
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            // RA-291 self-assigns the application on query. RA-323 removed the
-            // assign-role tier, so AssignAsync can no longer fail with
-            // NotAuthorized — there is no 403 to map here. The remaining
-            // AssignAsync failures (missing identity, concurrency) are covered
-            // by the arms above/below; anything else falls through to 400.
-            // The application is not in a state that can be queried (already
-            // queried, terminal) or was raced by another writer: a conflict
+            // RA-291 self-assigns the application on query, in the same write
+            // as the transition (RA-000). RA-323 removed the assign-role tier,
+            // so there is no 403 to map here; anything else falls through to
+            // 400. The application is not in a state that can be queried
+            // (already queried, terminal) or was raced by another writer —
+            // including an overlapping query that committed first: a conflict
             // with the current resource state, not a malformed request. The
             // service resolves the query action from the state itself, so the
             // engine's TerminalState / IncompleteTasks codes are unreachable

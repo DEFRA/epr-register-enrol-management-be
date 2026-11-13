@@ -438,11 +438,9 @@ internal sealed class ReAccreditationResumeService(
 
     /// <summary>
     /// Write the resubmitted section values and file references onto
-    /// <c>payload.latestSections</c> BEFORE the transition — same targeted
-    /// single-field-write convention as
-    /// <see cref="ReAccreditationQueryService"/>'s <c>currentQuery</c> stamp,
-    /// for the same reason (a full-payload replace would materialise
-    /// modelled-but-absent fields as explicit nulls).
+    /// <c>payload.latestSections</c> BEFORE the transition, as a targeted
+    /// single-field write: a full-payload replace through the typed model would
+    /// materialise modelled-but-absent fields as explicit nulls.
     ///
     /// RA-291 regression fix: also merges each resubmitted section that has a
     /// canonical top-level field (<see cref="s_canonicalPayloadFieldBySectionKey"/>)
