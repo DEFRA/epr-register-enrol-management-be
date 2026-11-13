@@ -1,4 +1,6 @@
+using System.Globalization;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -172,7 +174,82 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
     public string TypeId => ReAccreditationType.Id;
 
-    public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
+    public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time) =>
+        BuildSeeds(type, time).Select(StampOperatorSubmissionFields);
+
+    /// <summary>
+    /// RA-000 AC 7: every seeded item stands in for an operator backend
+    /// submission (each carries operatorOrganisationId), and a real one now
+    /// always carries <c>operatorOrgNumber</c> and <c>paymentReference</c>.
+    /// Seeds are written straight to the store, not through
+    /// <see cref="WorkItemService"/>, so the seed set stamps them here, where it
+    /// cannot miss one. A seed that already sets either field keeps its own
+    /// value (full-payload-verification deliberately uses distinct values). The
+    /// org number is the seed's numeric operatorOrganisationId; a seed whose id
+    /// is not one is a seed-data bug and fails loudly.
+    /// </summary>
+    private static WorkItem StampOperatorSubmissionFields(WorkItem item)
+    {
+        var payload = item.Payload;
+        if (!payload.Contains("operatorOrgNumber"))
+        {
+            var organisationId = payload.GetValue("operatorOrganisationId", BsonNull.Value);
+            if (
+                !organisationId.IsString
+                || !int.TryParse(
+                    organisationId.AsString,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var orgNumber
+                )
+                || orgNumber > 999999
+            )
+            {
+                throw new InvalidOperationException(
+                    $"Seed {item.Id} has no numeric operatorOrganisationId to use as its operatorOrgNumber."
+                );
+            }
+
+            payload["operatorOrgNumber"] = orgNumber;
+        }
+
+        if (!payload.Contains("paymentReference"))
+        {
+            payload["paymentReference"] = SeedPaymentReference(payload);
+        }
+
+        return item;
+    }
+
+    /// <summary>
+    /// The payment reference the operator backend builds for this nation and
+    /// applicant type (the formats epr-register-enrol-frontend's
+    /// buildPaymentReference used, which the operator backend builds from
+    /// RA-000 on), so seeded items show what a real one does.
+    /// </summary>
+    private static string SeedPaymentReference(BsonDocument payload)
+    {
+        var orgNumber = payload["operatorOrgNumber"].ToInt32();
+        var isExporter = string.Equals(
+            payload.GetValue("wasteProcessingType", BsonNull.Value) is { IsString: true } type
+                ? type.AsString
+                : null,
+            "exporter",
+            StringComparison.OrdinalIgnoreCase
+        );
+        return payload["nation"].AsString switch
+        {
+            nameof(Nation.NorthernIreland) => $"NI/PR/REEX/{orgNumber}",
+            nameof(Nation.Wales) => $"PREX/{orgNumber}",
+            nameof(Nation.Scotland) => $"E800 81581/{orgNumber}",
+            nameof(Nation.England) => isExporter ? $"PR/PK/EXP/{orgNumber}" : $"PR/PK/REP/{orgNumber}",
+            var other => throw new InvalidOperationException(
+                $"Seed payload has unrecognised nation '{other}'."
+            ),
+        };
+    }
+
+    private IEnumerable<WorkItem> BuildSeeds(IWorkItemType type, TimeProvider time)
     {
         ArgumentNullException.ThrowIfNull(type);
         ArgumentNullException.ThrowIfNull(time);
@@ -193,12 +270,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // seed the field the real pipeline supplies, so the UI is exercised
         // outside production.
         //
-        // paymentReference is deliberately set on ONE seed only
-        // (full-payload-verification). It is an override, absent on real
-        // submissions because the operator backend has no payment reference at
-        // submission time, and the frontend falls back to the application
-        // reference. Seeding it everywhere would leave that fallback — the path
-        // almost every real work item takes — completely unexercised.
+        // paymentReference and operatorOrgNumber are stamped on every seed by
+        // StampOperatorSubmissionFields (RA-000 AC 7), mirroring what the
+        // operator backend sends. full-payload-verification sets its own,
+        // distinct values below.
 
         // The eight simple, single-field-varying items below are data-driven
         // (s_simpleFixtures + one Build/SimpleSeedPayload call) rather than

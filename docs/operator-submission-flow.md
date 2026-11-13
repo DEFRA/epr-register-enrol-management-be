@@ -160,6 +160,13 @@ can diagnose mismatches without needing the caller's own logs.
 
 Any guard failure produces a `LogWarning` and a 400 response.
 
+`WorkItemService.SubmitAsync` then checks that a submission from the
+operator backend (client id `Auth:BackendClientId`) carries a valid
+`operatorOrgNumber` and a non-blank `paymentReference` (RA-000 AC 7). If not,
+it logs at Error and the endpoint returns 400 before any reference is
+generated or anything is stored. See `docs/work-items.md`, "Operator backend
+submissions".
+
 The caller-supplied `applicationReference` field (if any) is **silently
 ignored** — management BE generates its own server-side so a caller can never
 spoof or collide a reference.

@@ -151,7 +151,7 @@ public class WorkItemTemplateVersioningTests
             StateId = "anything"
         };
 
-        var projection = new WorkItemService(registry, _persistence, NullLogger<WorkItemService>.Instance, TestReferenceGenerators.ApplicationOnly())
+        var projection = new WorkItemService(registry, _persistence, NullLogger<WorkItemService>.Instance, TestReferenceGenerators.ApplicationOnly(), TestOperatorBackendCaller.Default)
             .Project(orphan);
 
         Assert.Equal("unknown", projection.TemplateVersion);
@@ -159,7 +159,7 @@ public class WorkItemTemplateVersioningTests
     }
 
     private WorkItemService BuildService(IWorkItemType type) =>
-        new(new WorkItemRegistry([type]), _persistence, NullLogger<WorkItemService>.Instance, TestReferenceGenerators.ApplicationOnly());
+        new(new WorkItemRegistry([type]), _persistence, NullLogger<WorkItemService>.Instance, TestReferenceGenerators.ApplicationOnly(), TestOperatorBackendCaller.Default);
 
     /// <summary>
     /// Test fixture exposing TemplateVersion override so we can register

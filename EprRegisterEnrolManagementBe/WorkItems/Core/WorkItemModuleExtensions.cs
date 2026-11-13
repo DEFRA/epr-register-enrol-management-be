@@ -26,6 +26,11 @@ public static class WorkItemModuleExtensions
         services.AddSingleton<IWorkItemRegistry>(sp =>
             new WorkItemRegistry(sp.GetServices<IWorkItemType>()));
         services.AddSingleton<IWorkItemService, WorkItemService>();
+        // RA-000 AC 7: tells an operator backend submission apart from a
+        // hand-created work item, by the same client id the auth handler
+        // registers the operator backend's secret under.
+        services.AddSingleton(sp =>
+            OperatorBackendCaller.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<IWorkItemAuditAppender, WorkItemAuditAppender>();
         // RA-219: server-side applicationReference generation is a framework
         // concern (the engine owns the submission birth event), so the

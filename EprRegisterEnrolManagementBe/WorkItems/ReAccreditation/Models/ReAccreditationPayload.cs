@@ -178,17 +178,14 @@ internal sealed record ReAccreditationPayload
     /// RA-316/RA-503: the operator's payment reference, displayed read-only alongside
     /// <see cref="ChargeAmountPence"/> on the duly-making page.
     ///
-    /// RA-503: genuinely operator-supplied on every real submission -
-    /// epr-register-enrol-frontend computes the nation-specific bank reference
-    /// (buildPaymentReference, e.g. <c>PR/PK/REP/500500</c>) and sends it in the submission
-    /// payload; WorkItemService.SubmitAsync preserves it rather than overwriting it with the
-    /// generated <see cref="ApplicationReference"/>. This is the exact string the operator's
-    /// own "Payment details" page rendered under the literal label "Payment reference"
-    /// alongside the sort code and account number - the reference they actually quoted on
-    /// the bank transfer, now the same value the regulator sees here.
+    /// RA-000 AC 7: required on every submission from the operator backend, which builds the
+    /// nation-specific bank reference (e.g. <c>PR/PK/REP/500500</c>) from the stored
+    /// organisation number and sends it in the payload. WorkItemService.SubmitAsync rejects an
+    /// operator backend submission without one and stores the value exactly as sent. This is the
+    /// reference the operator quoted on the bank transfer, now the same value the regulator sees.
+    /// A hand-created work item gets its <see cref="ApplicationReference"/> here instead.
     ///
-    /// Still nullable and still falls back to <see cref="ApplicationReference"/> when absent -
-    /// a work item created before this fix, or by a submitter that doesn't send it.
+    /// Nullable because a work item stored before RA-447 has none.
     /// </summary>
     public string? PaymentReference { get; init; }
 

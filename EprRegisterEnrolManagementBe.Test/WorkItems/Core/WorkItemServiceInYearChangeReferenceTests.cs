@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -44,15 +45,16 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
     private static TestWorkItemType AddOverseasSiteType() =>
         new(AddOverseasSiteTypeId, "Add overseas reprocessing site", inYearChangeCode: "ORS");
 
-    private WorkItemService BuildService(IWorkItemType type) =>
+    private WorkItemService BuildService(IWorkItemType type, ILogger<WorkItemService>? logger = null) =>
         new(
             new WorkItemRegistry([type]),
             _persistence,
-            NullLogger<WorkItemService>.Instance,
+            logger ?? NullLogger<WorkItemService>.Instance,
             new WorkItemReferenceGenerator(
                 new ApplicationReferenceGenerator(_time),
                 new InYearChangeReferenceGenerator(_sequenceStore)
             ),
+            TestOperatorBackendCaller.Default,
             _time
         );
 
@@ -85,11 +87,11 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         return counter?[MongoReferenceSequenceStore.SequenceField].ToInt64();
     }
 
-    private static ClaimsPrincipal User() =>
+    private static ClaimsPrincipal User(string clientId = "test-client") =>
         new(
             new ClaimsIdentity(
                 [
-                    new Claim("client_id", "test-client"),
+                    new Claim("client_id", clientId),
                     new Claim("user:id", "alice-1"),
                     new Claim("user:name", "Alice Example"),
                 ],
@@ -120,20 +122,97 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         );
     }
 
+    // RA-000 AC 6/7: an in-year change request from the operator backend carries the org number
+    // and the payment reference the operator backend built; both are stored exactly as sent.
     [Fact]
-    public async Task Submit_add_overseas_site_keeps_the_operator_supplied_paymentReference()
+    public async Task Submit_add_overseas_site_from_the_operator_backend_keeps_its_paymentReference()
     {
         var type = AddOverseasSiteType();
 
-        var result = await SubmitAsync(
-            BuildService(type),
-            type,
-            new BsonDocument { ["accreditationYear"] = 2026, ["paymentReference"] = "PR/PK/REP/500500" }
-        );
+        var result = await BuildService(type)
+            .SubmitAsync(
+                type,
+                OperatorChangeRequestPayload(),
+                TestOperatorBackendCaller.ClientId,
+                User(TestOperatorBackendCaller.ClientId),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
 
+        Assert.True(result.IsSuccess);
         var stored = await GetAsync(result.WorkItem!.Id);
         Assert.Equal("IYC-ORS-2026-00000", stored.Payload["applicationReference"].AsString);
         Assert.Equal("PR/PK/REP/500500", stored.Payload["paymentReference"].AsString);
+        Assert.Equal(500500, stored.Payload["operatorOrgNumber"].AsInt32);
+    }
+
+    private static BsonDocument OperatorChangeRequestPayload() =>
+        new()
+        {
+            ["operatorRequestId"] = "req-1",
+            ["operatorOrganisationId"] = "6a2fcd74e16883c137d01188",
+            ["accreditationYear"] = 2026,
+            ["operatorOrgNumber"] = 500500,
+            ["paymentReference"] = "PR/PK/REP/500500",
+        };
+
+    public static TheoryData<string, BsonValue?, string> InvalidOperatorChangeRequests() =>
+        new()
+        {
+            { "operatorOrgNumber", null, OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", BsonNull.Value, OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", "500500", OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", -1, OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", 1_000_000, OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", 500500.5, OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "paymentReference", null, OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
+            { "paymentReference", BsonNull.Value, OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
+            { "paymentReference", "", OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
+            { "paymentReference", "   ", OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
+        };
+
+    // RA-000 AC 6/7: an in-year change request from the operator backend without a valid org
+    // number or payment reference is rejected before a sequence number is allocated, logs at
+    // Error with the ids, and stores nothing. A null value means the field is absent.
+    [Theory]
+    [MemberData(nameof(InvalidOperatorChangeRequests))]
+    public async Task Submit_add_overseas_site_from_the_operator_backend_without_a_valid_field_is_rejected(
+        string field,
+        BsonValue? value,
+        string expectedMessage
+    )
+    {
+        var type = AddOverseasSiteType();
+        var logger = new ListLogger<WorkItemService>();
+        var payload = OperatorChangeRequestPayload();
+        if (value is null)
+        {
+            payload.Remove(field);
+        }
+        else
+        {
+            payload[field] = value;
+        }
+
+        var result = await BuildService(type, logger)
+            .SubmitAsync(
+                type,
+                payload,
+                TestOperatorBackendCaller.ClientId,
+                User(TestOperatorBackendCaller.ClientId),
+                cancellationToken: TestContext.Current.CancellationToken
+            );
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidSubmissionPayload, result.FailureCode);
+        Assert.Equal(expectedMessage, result.Message);
+        Assert.Equal(0, await CountAsync("workItems"));
+        Assert.Equal(0, await CountAsync(MongoReferenceSequenceStore.CollectionName));
+        var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
+        Assert.Equal(field, error.Properties["MissingFields"]);
+        Assert.Equal(TestOperatorBackendCaller.ClientId, error.Properties["ClientId"]);
+        Assert.Equal(AddOverseasSiteTypeId, error.Properties["TypeId"]);
+        Assert.Equal("req-1", error.Properties["OperatorRequestId"]);
+        Assert.Equal("6a2fcd74e16883c137d01188", error.Properties["OperatorOrganisationId"]);
     }
 
     [Fact]

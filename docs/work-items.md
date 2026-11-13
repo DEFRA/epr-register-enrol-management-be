@@ -148,6 +148,52 @@ and `WorkItemReferenceGenerator` picks one from the type's
   `WorkItemReferenceGenerator.cs`) registers the chooser, both generators and
   the sequence store.
 
+
+## Operator backend submissions (RA-000 AC 7)
+
+A `POST /work-items` from the operator journey backend must carry the
+operator's real organisation number and the payment reference the operator
+was told to quote. `OperatorBackendCaller.IsOperatorBackendSubmission`
+decides which submissions this applies to: the caller's authenticated
+`client_id` claim equals `Auth:BackendClientId` (default
+`epr-register-enrol-backend`), the same id the operator backend's per-caller
+secret is registered under (RA-345). The payload's `source` is not used,
+because any caller can write any string there. It applies to every type the
+operator backend submits: re-accreditation applications and in-year change
+requests alike.
+
+| Field | Rule |
+| --- | --- |
+| `payload.operatorOrgNumber` | A JSON number, whole, from 0 to 999999 (`BsonWholeNumber`). A string, a fraction, a negative, a larger number, `null` or no field is rejected. |
+| `payload.paymentReference` | A non-blank JSON string. Stored exactly as sent. Management BE applies no format rule; the operator backend builds it. |
+
+A submission that breaks either rule gets `400` ProblemDetails, title
+`Invalid request`, detail naming each field:
+
+- `A submission from the operator backend must include operatorOrgNumber as a whole number from 0 to 999999.`
+- `A submission from the operator backend must include a non-blank paymentReference string.`
+
+When both are wrong, the detail is the two sentences, org number first,
+separated by a space. Management BE logs at Error with the fields, the
+caller's client id, the type and the `operatorApplicationId`,
+`operatorRequestId` and `operatorOrganisationId` the payload carries. The
+check runs after the idempotent-replay lookup and before any reference or
+sequence number is generated, so nothing is stored and no number is used.
+
+For these submissions the AP reference's organisation segment is always
+`operatorOrgNumber` (zero-padded to 6 digits), and `paymentReference` is
+never replaced.
+
+**Hand-created work items** (any other caller: management-fe's create form,
+client `frontend`, or the mgmt-tests suite) keep their existing path. Without
+a valid `operatorOrgNumber` the AP reference uses the last 5 characters of
+`operatorOrganisationId`, and `paymentReference` is set to the
+`applicationReference` unless the payload supplies one.
+
+`resume-from-query` never sets `paymentReference`, `operatorOrgNumber` or
+`applicationReference`: its request model has none of them, so a value the
+caller puts in that body is ignored.
+
 ## Adding a new work item type
 
 1. **Create a folder** under `EprRegisterEnrolManagementBe/WorkItems/<TypeName>/` containing:

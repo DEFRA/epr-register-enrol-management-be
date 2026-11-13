@@ -37,7 +37,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// it is the module's collaborator under test, not an infrastructure
 /// boundary the integration suite is supposed to hit.
 /// </summary>
-public class ReAccreditationEndpointTests
+public partial class ReAccreditationEndpointTests
 {
     private static readonly string[] s_operationCodesR12 = ["R12"];
     private static readonly string[] s_operationCodesR3 = ["R3"];
@@ -214,7 +214,11 @@ public class ReAccreditationEndpointTests
     public async Task Submit_persists_every_field_from_a_real_operator_submission_payload()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
+        // RA-000 AC 7: signed as the operator backend, as the real adapter is.
+        await using var factory = new ReAccreditationFactory(
+            _fixture,
+            clientId: TestOperatorBackendCaller.ClientId
+        );
         using var client = factory.CreateClient();
 
         var body = new
@@ -233,6 +237,8 @@ public class ReAccreditationEndpointTests
                 siteAddressPostcode = "SW1A 1AA",
                 operatorApplicationId = "app-001",
                 operatorOrganisationId = "12345",
+                operatorOrgNumber = 500023,
+                paymentReference = "PR/PK/REP/500023",
                 operatorRegistrationId = "reg-001",
                 operatorEmail = "jane@example.com",
                 submittedBy = new
@@ -305,6 +311,8 @@ public class ReAccreditationEndpointTests
         Assert.Equal("12345", payload.OperatorOrganisationId);
         Assert.Equal("reg-001", payload.OperatorRegistrationId);
         Assert.Equal("jane@example.com", payload.OperatorEmail);
+        Assert.Equal(500023, persisted.Payload["operatorOrgNumber"].AsInt32);
+        Assert.Equal("PR/PK/REP/500023", payload.PaymentReference);
     }
 
     [Fact]

@@ -14,8 +14,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// </summary>
 public interface IWorkItemReferenceGenerator
 {
-    /// <summary>The reference format for submissions of <paramref name="type"/>.</summary>
-    IWorkItemReferenceFormat ForType(IWorkItemType type);
+    /// <summary>
+    /// The reference format for submissions of <paramref name="type"/> from
+    /// <paramref name="origin"/> (RA-000 AC 7).
+    /// </summary>
+    IWorkItemReferenceFormat ForType(IWorkItemType type, WorkItemSubmissionOrigin origin);
 }
 
 /// <summary>One <c>applicationReference</c> format, chosen for a type.</summary>
@@ -48,19 +51,19 @@ public sealed class WorkItemReferenceGenerator(
     IInYearChangeReferenceGenerator inYearChangeReferenceGenerator
 ) : IWorkItemReferenceGenerator
 {
-    private readonly ApplicationFormat _applicationFormat = new(applicationReferenceGenerator);
-
-    public IWorkItemReferenceFormat ForType(IWorkItemType type)
+    public IWorkItemReferenceFormat ForType(IWorkItemType type, WorkItemSubmissionOrigin origin)
     {
         ArgumentNullException.ThrowIfNull(type);
 
         return type.InYearChangeCode is { } changeTypeCode
             ? new InYearChangeFormat(inYearChangeReferenceGenerator, changeTypeCode)
-            : _applicationFormat;
+            : new ApplicationFormat(applicationReferenceGenerator, origin);
     }
 
-    private sealed class ApplicationFormat(IApplicationReferenceGenerator generator)
-        : IWorkItemReferenceFormat
+    private sealed class ApplicationFormat(
+        IApplicationReferenceGenerator generator,
+        WorkItemSubmissionOrigin origin
+    ) : IWorkItemReferenceFormat
     {
         public string? ValidatePayload(BsonDocument payload) => null;
 
@@ -68,7 +71,7 @@ public sealed class WorkItemReferenceGenerator(
             BsonDocument payload,
             int attempt,
             CancellationToken cancellationToken = default
-        ) => Task.FromResult(generator.Generate(payload, attempt));
+        ) => Task.FromResult(generator.Generate(payload, origin, attempt));
     }
 
     private sealed class InYearChangeFormat(

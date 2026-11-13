@@ -18,11 +18,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// the last 3 characters of the regulator postcode + the first 2
 /// characters of the material, all upper-cased. The organisation segment
 /// is the numeric, operator/regulator-safe <c>operatorOrgNumber</c>
-/// (e.g. <c>500500</c>, zero-padded to 6 digits) when the payload
-/// carries it, falling back to the last 5 characters of
-/// <c>operatorOrganisationId</c> (ReEx's internal ObjectId — never
-/// otherwise surfaced to an operator or regulator) only when
-/// <c>operatorOrgNumber</c> is absent; see
+/// (e.g. <c>500500</c>, zero-padded to 6 digits). RA-000 AC 7: a submission
+/// from the operator backend must carry it, and <see cref="WorkItemService"/>
+/// rejects one that does not before this generator runs. Only a hand-created
+/// work item (<see cref="WorkItemSubmissionOrigin.HandCreated"/>) without one
+/// uses the last 5 characters of <c>operatorOrganisationId</c>; see
 /// <see cref="ResolveOrganisationSegment"/>. The postcode suffix is always
 /// derived from the same postcode chosen per RA-314 AC01/AC02: an
 /// Exporter's is their registered office location
@@ -79,8 +79,10 @@ public interface IApplicationReferenceGenerator
     /// Generate a reference derived from the submission <paramref name="payload"/>.
     /// <paramref name="attempt"/> is the 1-based retry count from the caller's
     /// collision-retry loop; pass 1 for the initial attempt.
+    /// <paramref name="origin"/> decides whether a payload without a valid
+    /// <c>operatorOrgNumber</c> is allowed (RA-000 AC 7).
     /// </summary>
-    string Generate(BsonDocument payload, int attempt);
+    string Generate(BsonDocument payload, WorkItemSubmissionOrigin origin, int attempt);
 }
 
 /// <inheritdoc />
@@ -159,14 +161,14 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         _logger = logger ?? NullLogger<ApplicationReferenceGenerator>.Instance;
     }
 
-    public string Generate(BsonDocument payload, int attempt = 1)
+    public string Generate(BsonDocument payload, WorkItemSubmissionOrigin origin, int attempt = 1)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
         var year = ResolveYear(payload);
         var postcode = ResolveRegulatorPostcode(payload);
         var agency = ResolveAgencyCode(payload, postcode);
-        var orgSegment = ResolveOrganisationSegment(payload);
+        var orgSegment = ResolveOrganisationSegment(payload, origin);
         var postcodeSuffix = PostcodeSuffix(postcode);
         var materialPrefix = MaterialPrefix(GetString(payload, "material"));
 
@@ -182,35 +184,35 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
 
     private static char DisambiguatorChar(int attempt) => (char)('0' + (attempt % 10));
 
-    // RA-503: prefer the numeric, operator/regulator-safe organisation number
-    // (operatorOrgNumber, e.g. 500500) once the upstream backend sends it — this is the same
-    // value RegulatoryNumberGenerator already embeds into accreditation/registration numbers.
-    // Fall back to the last 5 characters of operatorOrganisationId (ReEx's internal ObjectId)
-    // only when operatorOrgNumber is absent or not a usable 6-digit organisation number — e.g.
-    // during the deploy gap before the upstream backend change reaches this environment, for
-    // payloads with no numeric org number at all (manually-created case-management work items),
-    // or a malformed/out-of-range value — so this generator never regresses below its pre-fix
-    // behaviour, and never embeds a garbage or malformed segment into the reference.
-    private static string ResolveOrganisationSegment(BsonDocument payload)
+    // RA-503: the organisation segment is the numeric, operator/regulator-safe organisation
+    // number (operatorOrgNumber, e.g. 500500), the same value RegulatoryNumberGenerator embeds
+    // into accreditation/registration numbers.
+    private static string ResolveOrganisationSegment(
+        BsonDocument payload,
+        WorkItemSubmissionOrigin origin
+    )
     {
-        if (
-            payload.TryGetValue("operatorOrgNumber", out var orgNumberValue)
-            && TryGetOrgNumber(orgNumberValue, out var orgNumber)
-        )
+        if (OperatorOrgNumber.TryRead(payload, out var orgNumber))
         {
             return orgNumber.ToString("D6", CultureInfo.InvariantCulture);
         }
 
-        var organisationId = GetString(payload, "operatorOrganisationId") ?? string.Empty;
-        return organisationId.Length > 5 ? organisationId[^5..] : organisationId;
-    }
+        // RA-000 item 4, AC 7: a work item a caseworker creates by hand through management-fe
+        // (or the mgmt-tests suite creates) has no ReEx organisation number, so it keeps its
+        // existing path: the last 5 characters of the free-text operatorOrganisationId.
+        if (origin == WorkItemSubmissionOrigin.HandCreated)
+        {
+            var organisationId = GetString(payload, "operatorOrganisationId") ?? string.Empty;
+            return organisationId.Length > 5 ? organisationId[^5..] : organisationId;
+        }
 
-    // RA-503: reject negative (which would inject a literal '-' into what the format assumes is a
-    // clean alphanumeric reference), reject non-integral, and cap at 999999 so D6's zero-padding (a
-    // MINIMUM width, not a maximum) can never widen the segment past the intended 6 digits. See
-    // BsonWholeNumber for why the BSON type category alone cannot be trusted.
-    private static bool TryGetOrgNumber(BsonValue value, out int orgNumber) =>
-        BsonWholeNumber.TryGet(value, 0, 999999, out orgNumber);
+        // An operator backend submission never reaches here: WorkItemService rejects one without
+        // a valid operatorOrgNumber (OperatorSubmissionRequirements) before generating.
+        throw new InvalidOperationException(
+            "An operator backend submission has no valid operatorOrgNumber; "
+                + "it must be rejected before an application reference is generated."
+        );
+    }
 
     private int ResolveYear(BsonDocument payload)
     {

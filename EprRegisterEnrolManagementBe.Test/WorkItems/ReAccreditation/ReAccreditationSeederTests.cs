@@ -776,27 +776,35 @@ public class ReAccreditationSeederTests
     }
 
     /// <summary>
-    /// paymentReference is an OVERRIDE, absent on real submissions because the
-    /// operator backend has no payment reference at submission time — the
-    /// frontend falls back to the application reference. Exactly one seed sets
-    /// it, so both the override and the far more common fallback path are
-    /// exercised in a seeded environment. Seeding it everywhere would leave the
-    /// fallback untested.
+    /// RA-000 AC 7: every seeded item stands in for an operator backend
+    /// submission, which always carries a valid operatorOrgNumber and a
+    /// paymentReference. The org number is the seed's numeric
+    /// operatorOrganisationId and the payment reference follows the operator
+    /// backend's nation format; full-payload-verification keeps its own,
+    /// deliberately distinct values.
     /// </summary>
     [Fact]
-    public void Exactly_one_seeded_item_overrides_the_payment_reference()
+    public void Every_seeded_item_carries_an_operator_org_number_and_payment_reference()
     {
         var items = BuildSeeder().Build(new ReAccreditationType(), BuildTime()).ToList();
 
-        var withOverride = items.Where(i => i.Payload.Contains("paymentReference")).ToList();
-
-        Assert.Single(withOverride);
-        Assert.False(
-            string.IsNullOrWhiteSpace(withOverride[0].Payload["paymentReference"].AsString)
+        Assert.All(
+            items,
+            i =>
+            {
+                Assert.InRange(i.Payload["operatorOrgNumber"].AsInt32, 0, 999999);
+                Assert.False(string.IsNullOrWhiteSpace(i.Payload["paymentReference"].AsString));
+            }
         );
-        // Every other seed relies on the applicationReference fallback, which
-        // the framework stamps on all of them.
-        Assert.All(items, i => Assert.True(i.Payload.Contains("applicationReference")));
+        var fullPayload = items.Single(i =>
+            i.Payload["paymentReference"].AsString == "PAY-FULL-PAYLOAD-001"
+        );
+        Assert.Equal(500010, fullPayload.Payload["operatorOrgNumber"].AsInt32);
+        var stamped = items.First(i =>
+            i.Payload["operatorOrganisationId"].AsString == "500001"
+        );
+        Assert.Equal(500001, stamped.Payload["operatorOrgNumber"].AsInt32);
+        Assert.EndsWith("/500001", stamped.Payload["paymentReference"].AsString);
     }
 
     // ── RA-447/CM4: companiesHouseNumber / siteAddress never null in dev ────
