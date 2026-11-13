@@ -14,14 +14,40 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 // registration with no accreditation, so the operator was registered-only in
 // 2026.
 //
-// The rows are copied as published, including six known register errors.
-// Each is marked with a "Register error" comment above its row. Whatever reads
-// this has to deal with them; PublicRegister2026Tests pins them so a change to
-// the data is a deliberate one.
+// The rows are copied as published. Six of the 394 contradict themselves, so
+// they're held back in HeldBack rather than ByRegistrationNumber, and the
+// backfill doesn't use them until someone confirms the right values.
+// PublicRegister2026Tests pins both, so a change to the data is a deliberate one.
 //
 // A point-in-time snapshot, not a live feed.
 internal static class PublicRegister2026
 {
+    /// <summary>
+    /// The register's rows that contradict themselves, kept exactly as published and out of
+    /// <see cref="ByRegistrationNumber"/> until someone confirms what they should be. Once a row is confirmed,
+    /// correct it and move it into <see cref="ByRegistrationNumber"/>.
+    /// </summary>
+    public static readonly IReadOnlyDictionary<string, PublicRegister2026Entry> HeldBack =
+        new Dictionary<string, PublicRegister2026Entry>(StringComparer.Ordinal)
+        {
+            // The accreditation number's org segment is 500532 (Polyclear Ltd's org), not
+            // 500302. Copying it would put the wrong org into the 2027 number.
+            ["R26WR5003020027PL"] = new("A26WR5005320025PL", 500302, "JP RECYCLING LTD"),
+            // The accreditation number ends GL, which isn't a material code. The
+            // registration is GO, so derivation would reject it.
+            ["R26SR5005410022GO"] = new("A26SR5005410022GL", 500541, "Comhairle Nan Eilean Siar"),
+            // The Org ID column says 500069, but both numbers' org is 500226. The
+            // accreditation number is consistent with the registration.
+            ["R26ER5002260055GR"] = new("A26ER5002260023GR", 500069, "Encirc Ltd"),
+            // The Org ID column says 500263, but both numbers' org is 500236. The
+            // accreditation number is consistent with the registration.
+            ["R26WX5002360007ST"] = new("A26WX5002360016ST", 500263, "REDDY PAI METALS LTD"),
+            ["R26WX5002360008AL"] = new("A26WX5002360017AL", 500263, "REDDY PAI METALS LTD"),
+            // The registration number is missing its last character, and the row has no
+            // accreditation, so it can never match an application.
+            ["R26WR5000950025P"] = new(null, 500095, "J. AND A. YOUNG (LEICESTER) LTD"),
+        };
+
     public static readonly IReadOnlyDictionary<string, PublicRegister2026Entry> ByRegistrationNumber =
         new Dictionary<string, PublicRegister2026Entry>(StringComparer.Ordinal)
         {
@@ -94,9 +120,6 @@ internal static class PublicRegister2026
             ["R26ER5002190062WO"] = new("A26ER5002190026WO", 500219, "Arden Wood Shavings Ltd"),
             ["R26ER5002200173PL"] = new("A26ER5002200131PL", 500220, "PP Polymers Ltd"),
             ["R26ER5002210086PL"] = new("A26ER5002210042PL", 500221, "ReNew Wilton Limited"),
-            // Register error: the Org ID column says 500069, but the registration
-            // number's org is 500226. The accreditation number is consistent.
-            ["R26ER5002260055GR"] = new("A26ER5002260023GR", 500069, "Encirc Ltd"),
             ["R26ER5002270082PL"] = new("A26ER5002270061PL", 500227, "Chase Plastics Limited"),
             ["R26ER5002280254PL"] = new("A26ER5002280222PL", 500228, "daly plastics ltd"),
             ["R26ER5002290179WO"] = new("A26ER5002290153WO", 500229, "Coltman Brothers Ltd"),
@@ -383,9 +406,6 @@ internal static class PublicRegister2026
             ["R26SR5002570007WO"] = new("A26SR5002570007WO", 500257, "West Fraser Europe Limited"),
             ["R26SR5003410003PL"] = new("A26SR5003410003PL", 500341, "british polythene limited"),
             ["R26SR5003410011PL"] = new("A26SR5003410011PL", 500341, "british polythene limited"),
-            // Register error: the accreditation number ends GL, which isn't a material
-            // code. The registration is GO, so derivation would reject it.
-            ["R26SR5005410022GO"] = new("A26SR5005410022GL", 500541, "Comhairle Nan Eilean Siar"),
             ["R26SR5005490021PL"] = new("A26SR5005490021PL", 500549, "Marlin Industries Scotland Limited"),
             ["R26SR5005780020GO"] = new("A26SR5005780020GO", 500578, "Brewster Brothers Limited"),
             ["R26SX5000800017PA"] = new("A26SX5000800017PA", 500080, "Amasha Limited"),
@@ -401,9 +421,6 @@ internal static class PublicRegister2026
             ["R26WR5000770018PL"] = new("A26WR5000770020PL", 500077, "New Horizon Plastics Co Limited"),
             ["R26WR5000780019PL"] = new("A26WR5000780018PL", 500078, "NEW HORIZON BIOFUEL & ANIMAL BEDDINGS CO LTD"),
             ["R26WR5000780020WO"] = new("A26WR5000780019WO", 500078, "NEW HORIZON BIOFUEL & ANIMAL BEDDINGS CO LTD"),
-            // Register error: this registration number is missing a character, so it
-            // will never match a real registration.
-            ["R26WR5000950025P"] = new(null, 500095, "J. AND A. YOUNG (LEICESTER) LTD"),
             ["R26WR5001080010WO"] = new("A26WR5001080008WO", 500108, "Kronospan Limited"),
             ["R26WR5001480003AL"] = new("A26WR5001480005AL", 500148, "SWAN ALLOY UK LTD."),
             ["R26WR5001620005PL"] = new("A26WR5001620004PL", 500162, "Plastecowood ltd"),
@@ -413,9 +430,6 @@ internal static class PublicRegister2026
             ["R26WR5002520013WO"] = new("A26WR5002520011WO", 500252, "South West Wood Products Ltd"),
             ["R26WR5002830017PL"] = new("A26WR5002830015PL", 500283, "Pulse Plastics Ltd"),
             ["R26WR5003020009PL"] = new("A26WR5003020007PL", 500302, "JP RECYCLING LTD"),
-            // Register error: the accreditation number's org segment is 500532, not
-            // 500302. Copying it would put the wrong org into the 2027 number.
-            ["R26WR5003020027PL"] = new("A26WR5005320025PL", 500302, "JP RECYCLING LTD"),
             ["R26WR5003720024PL"] = new("A26WR5003720024PL", 500372, "ISSI GREEN ENVIRONMENTAL SOLUTION LIMITED"),
             ["R26WR5003990021PL"] = new("A26WR5003990021PL", 500399, "SW Plastic Solutions Ltd"),
             ["R26WX5000500014PL"] = new("A26WX5000500009PL", 500050, "PAPER TRADE LTD"),
@@ -423,12 +437,6 @@ internal static class PublicRegister2026
             ["R26WX5000560016ST"] = new("A26WX5000560013ST", 500056, "AMG Resources LTD"),
             ["R26WX5000590011PA"] = new("A26WX5000590010PA", 500059, "Shotton Mill Ltd"),
             ["R26WX5001400006PA"] = new("A26WX5001400006PA", 500140, "DS Smith Recycling UK Limited"),
-            // Register error: the Org ID column says 500263, but the registration
-            // number's org is 500236. The accreditation number is consistent.
-            ["R26WX5002360007ST"] = new("A26WX5002360016ST", 500263, "REDDY PAI METALS LTD"),
-            // Register error: the Org ID column says 500263, but the registration
-            // number's org is 500236. The accreditation number is consistent.
-            ["R26WX5002360008AL"] = new("A26WX5002360017AL", 500263, "REDDY PAI METALS LTD"),
             ["R26WX5003080015PL"] = new("A26WX5003080014PL", 500308, "GAP ALTERNATIVE FUELS LIMITED"),
             ["R26WX5005570023PL"] = new("A26WX5005570023PL", 500557, "Circular Commodities (UK) Ltd"),
         };

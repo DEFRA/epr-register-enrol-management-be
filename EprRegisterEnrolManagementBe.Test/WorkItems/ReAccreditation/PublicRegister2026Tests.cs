@@ -4,7 +4,7 @@ using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 // RA-763: pins the 5 November 2026 public register snapshot, so any change to the
-// data, and to its known errors, is a deliberate one.
+// data, and to the rows held back for their errors, is a deliberate one.
 public class PublicRegister2026Tests
 {
     private static readonly Regex RegistrationNumber = new(
@@ -24,18 +24,30 @@ public class PublicRegister2026Tests
     private static IReadOnlyDictionary<string, PublicRegister2026Entry> Register =>
         PublicRegister2026.ByRegistrationNumber;
 
+    private static IReadOnlyDictionary<string, PublicRegister2026Entry> HeldBack =>
+        PublicRegister2026.HeldBack;
+
     [Fact]
-    public void Holds_every_row_of_the_register()
+    public void Holds_every_row_of_the_register_except_the_six_held_back()
     {
-        Assert.Equal(394, Register.Count);
-        Assert.Equal(19, Register.Values.Count(e => e.AccreditationNumber is null));
+        Assert.Equal(388, Register.Count);
+        Assert.Equal(18, Register.Values.Count(e => e.AccreditationNumber is null));
+        Assert.Equal(6, HeldBack.Count);
+        Assert.Equal(394, Register.Count + HeldBack.Count);
+    }
+
+    [Fact]
+    public void A_held_back_row_is_not_in_the_register_the_backfill_uses()
+    {
+        Assert.Empty(Register.Keys.Intersect(HeldBack.Keys));
     }
 
     [Fact]
     public void Accreditation_numbers_are_unique()
     {
         var numbers = Register
-            .Values.Select(e => e.AccreditationNumber)
+            .Values.Concat(HeldBack.Values)
+            .Select(e => e.AccreditationNumber)
             .Where(n => n is not null)
             .ToList();
         Assert.Equal(numbers.Count, numbers.Distinct(StringComparer.Ordinal).Count());
@@ -57,25 +69,10 @@ public class PublicRegister2026Tests
     }
 
     [Fact]
-    public void Every_row_except_the_known_errors_is_well_formed_and_consistent()
+    public void Every_row_is_well_formed_and_consistent()
     {
-        var knownErrors = new[]
-        {
-            TruncatedRegistration,
-            JpRecyclingRegistration,
-            ComhairleRegistration,
-            EncircRegistration,
-            ReddyPaiSteelRegistration,
-            ReddyPaiAluminiumRegistration,
-        };
-
         foreach (var (registration, entry) in Register)
         {
-            if (knownErrors.Contains(registration))
-            {
-                continue;
-            }
-
             Assert.Matches(RegistrationNumber, registration);
             Assert.Equal(entry.OrgId.ToString("D6"), registration[5..11]);
 
@@ -92,13 +89,25 @@ public class PublicRegister2026Tests
     }
 
     [Fact]
-    public void Known_register_errors_are_kept_as_published()
+    public void Held_back_rows_are_kept_as_published()
     {
-        Assert.Null(Register[TruncatedRegistration].AccreditationNumber);
-        Assert.Equal("A26WR5005320025PL", Register[JpRecyclingRegistration].AccreditationNumber);
-        Assert.Equal("A26SR5005410022GL", Register[ComhairleRegistration].AccreditationNumber);
-        Assert.Equal(500069, Register[EncircRegistration].OrgId);
-        Assert.Equal(500263, Register[ReddyPaiSteelRegistration].OrgId);
-        Assert.Equal(500263, Register[ReddyPaiAluminiumRegistration].OrgId);
+        Assert.Equal(
+            new[]
+            {
+                EncircRegistration,
+                ComhairleRegistration,
+                TruncatedRegistration,
+                JpRecyclingRegistration,
+                ReddyPaiSteelRegistration,
+                ReddyPaiAluminiumRegistration,
+            },
+            HeldBack.Keys.Order(StringComparer.Ordinal)
+        );
+        Assert.Null(HeldBack[TruncatedRegistration].AccreditationNumber);
+        Assert.Equal("A26WR5005320025PL", HeldBack[JpRecyclingRegistration].AccreditationNumber);
+        Assert.Equal("A26SR5005410022GL", HeldBack[ComhairleRegistration].AccreditationNumber);
+        Assert.Equal(500069, HeldBack[EncircRegistration].OrgId);
+        Assert.Equal(500263, HeldBack[ReddyPaiSteelRegistration].OrgId);
+        Assert.Equal(500263, HeldBack[ReddyPaiAluminiumRegistration].OrgId);
     }
 }
