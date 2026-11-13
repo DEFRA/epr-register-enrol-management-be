@@ -596,15 +596,12 @@ public sealed class WorkItemService : IWorkItemService
             }
         }
 
-        foreach (var key in write.ActionAppliedDetails.Keys)
+        if (write.ActionAppliedDetails.Keys.FirstOrDefault(ActionAppliedDetailKeys.Contains) is { } reserved)
         {
-            if (ActionAppliedDetailKeys.Contains(key))
-            {
-                throw new ArgumentException(
-                    $"Action-applied detail '{key}' is written by the engine and cannot be overridden.",
-                    nameof(write)
-                );
-            }
+            throw new ArgumentException(
+                $"Action-applied detail '{reserved}' is written by the engine and cannot be overridden.",
+                nameof(write)
+            );
         }
 
         if (write.AssignTo is { } assignee && string.IsNullOrWhiteSpace(assignee.Id))

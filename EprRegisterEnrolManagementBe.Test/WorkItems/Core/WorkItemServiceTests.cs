@@ -2460,7 +2460,7 @@ public class WorkItemServiceTests : IAsyncDisposable
         var stored = await GetAsync(workItem.Id);
         Assert.Equal("action-applied", Assert.Single(stored.AuditLog).Action);
         await hook.DidNotReceiveWithAnyArgs()
-            .OnAssignmentChangedAsync(default!, default, default!, default);
+            .OnAssignmentChangedAsync(default!, default, default!, ct);
         await hook.Received(1).OnActionAppliedAsync(
             Arg.Any<WorkItem>(), "approve", "submitted", Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
     }
