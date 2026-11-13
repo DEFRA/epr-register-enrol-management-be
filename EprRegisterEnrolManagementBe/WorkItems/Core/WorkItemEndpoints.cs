@@ -508,6 +508,8 @@ public static class WorkItemEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
+        [FromServices] IWorkItemRegistry registry,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
@@ -522,33 +524,43 @@ public static class WorkItemEndpoints
         // audit history. Checked against the work item's own frozen
         // TemplateSnapshot (the same source ApplyActionAsync itself
         // resolves the transition from) so this rejects using the exact
-        // rules the item was submitted under.
+        // rules the item was submitted under. The same flag also keeps a
+        // transition whose module service does more than change state (RA-000:
+        // re-accreditation's query-during-*, whose service self-assigns and
+        // stamps the query the post-action hooks send) from being applied
+        // here without those side effects.
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
-        // RA-351: an action id can be declared on more than one state (e.g.
-        // `sla-extend` self-loops on both `assessment-in-progress` and
-        // `queried`). Resolve the CallerInvocable check against the transition
-        // for the item's CURRENT state — matching on action id alone would
-        // test the first-declared transition, which can differ in
-        // CallerInvocable from the one that actually applies here.
-        var actionTransitions = workItem
-            ?.TemplateSnapshot?.Transitions.Where(t =>
-                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
-            )
-            .ToList();
-        var transition =
-            actionTransitions?.FirstOrDefault(t =>
-                string.Equals(
-                    t.FromStateId,
-                    workItem!.StateId,
-                    StringComparison.OrdinalIgnoreCase
-                )
-            ) ?? actionTransitions?.FirstOrDefault();
-        if (transition is { CallerInvocable: false })
+        // RA-000: the template is resolved exactly as the engine resolves it
+        // (frozen snapshot, else the live registered type), so an item with no
+        // snapshot is guarded by the same rules ApplyActionAsync would apply
+        // to it rather than slipping past an empty check.
+        if (
+            workItem is not null
+            && WorkItemEngineRules.ResolveTemplate(workItem, registry) is { } template
+            && WorkItemEngineRules.ResolveTransition(template, workItem.StateId, actionId) is { CallerInvocable: false }
+        )
         {
+            // RA-000: the shipped clients never offer a non-caller-invocable
+            // action here (it is absent from availableActions), so reaching
+            // this is a hand-crafted or out-of-date request trying to skip the
+            // module service that owns the transition. Deliberately Error, not
+            // Warning: a crafted POST means a client has bypassed the UI, and
+            // that should alert rather than blend into warning noise.
+            loggerFactory
+                .CreateLogger(typeof(WorkItemEndpoints).FullName!)
+                .LogError(
+                    "Rejected generic action {ActionId} on work item {WorkItemId} ({TypeId}) in state {StateId} "
+                        + "by {UserId}: the transition is not caller-invocable and is applied only by its module's own service.",
+                    actionId,
+                    id,
+                    workItem.TypeId,
+                    workItem.StateId,
+                    httpContext.User.FindFirst("user:id")?.Value
+                );
             return ToHttpResult(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.UnknownAction,
-                    $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'."),
+                    $"Action '{actionId}' is not declared by work item type '{workItem.TypeId}'."),
                 engine);
         }
 

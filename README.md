@@ -372,6 +372,20 @@ A migration matches the `StartupMigrationRunner.StartupMigration` delegate
 `(IServiceProvider services, ILogger logger, CancellationToken ct)`; resolve
 what it needs from the scoped `services` (e.g. `IMongoDbClientFactory`).
 
+**Exception: RA-764's organisation name correction.**
+`ReAccreditationOrganisationNameCorrectionMigration` does not use this harness
+or `IWorkItemMigration`. It runs in `IHostedLifecycleService.StartedAsync`,
+i.e. after every hosted service has started, and so after the host has begun
+serving traffic. The reason is ordering: the work-item migration runner starts
+before `TestOrganisationFixtureHostedService` resets the journey-test fixtures,
+so a rename made there would be undone on the e2e stack on every boot, and the
+RA-764 e2e fixture could never show the renamed state. Running after the host
+starts is safe for this one: it is off by default, idempotent, and each write is
+a single compare-and-set on the old name, so a request racing it reads either
+the old or the new name and a concurrent writer cannot be overwritten. Prod runs
+the same code path as e2e; only configuration gates it. It goes when RA-764 has
+run (see `docs/diagnostics/ra764-organisation-name-correction.md`).
+
 **Migrations are temporary.** Once a migration has run in every environment,
 delete it (and its registration) but leave the harness in place for the next
 one. Confirm it ran from the `Running startup migration {Migration}` /

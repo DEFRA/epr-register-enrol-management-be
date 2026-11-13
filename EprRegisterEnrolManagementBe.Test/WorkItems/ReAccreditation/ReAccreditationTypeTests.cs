@@ -17,7 +17,8 @@ public class ReAccreditationTypeTests
         // removed payment-received. RA-527: v17 added the two pending-contact
         // states and removed reject. RA-527 follow-up: v18 added the
         // 'assessment-started' state, so starting a case keeps it "Duly made".
-        Assert.Equal("v18", _type.TemplateVersion);
+        // RA-000: v19 made the query-during-* transitions not caller-invocable.
+        Assert.Equal("v19", _type.TemplateVersion);
         Assert.Equal("submitted", _type.InitialState.Id);
     }
 
@@ -253,6 +254,32 @@ public class ReAccreditationTypeTests
 
         Assert.Equal("queried", transition.ToStateId);
         Assert.Equal("Query", transition.DisplayName);
+    }
+
+    // RA-000: only ReAccreditationQueryService applies a query (it
+    // self-assigns, stamps currentQuery and records application-queried), so
+    // the generic action endpoint must reject every query-during-* id.
+    [Theory]
+    [InlineData("query-during-duly-making", "submitted")]
+    [InlineData("query-during-duly-made", "duly-made")]
+    [InlineData("query-during-assessment", "assessment-in-progress")]
+    [InlineData("query-during-assessment", "assessment-started")]
+    [InlineData("query-during-decision", "awaiting-decision")]
+    public void Query_transitions_are_not_caller_invocable(string actionId, string fromStateId)
+    {
+        var transition = Assert.Single(
+            _type.Transitions,
+            t => t.ActionId == actionId && t.FromStateId == fromStateId
+        );
+
+        Assert.Equal("queried", transition.ToStateId);
+        Assert.False(transition.CallerInvocable);
+    }
+
+    [Fact]
+    public void Exactly_five_query_transitions_are_declared()
+    {
+        Assert.Equal(5, _type.Transitions.Count(t => t.ActionId.StartsWith("query-during-", StringComparison.Ordinal)));
     }
 
     [Fact]

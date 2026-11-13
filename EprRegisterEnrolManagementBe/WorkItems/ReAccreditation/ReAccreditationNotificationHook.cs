@@ -1,3 +1,4 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Config;
@@ -201,6 +202,7 @@ internal sealed class ReAccreditationNotificationHook(
             templateKey: "SubmissionConfirmation",
             description: "Operator submission confirmation",
             actionId: null,
+            fromStateId: null,
             user,
             cancellationToken
         );
@@ -263,6 +265,7 @@ internal sealed class ReAccreditationNotificationHook(
             mapping.TemplateKey,
             mapping.Description,
             actionId,
+            fromStateId,
             user,
             cancellationToken
         );
@@ -362,7 +365,7 @@ internal sealed class ReAccreditationNotificationHook(
         WorkItem workItem,
         string templateKey,
         string description,
-        string reference,
+        string? reference,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     )
@@ -402,18 +405,34 @@ internal sealed class ReAccreditationNotificationHook(
         string templateKey,
         string description,
         string? actionId,
+        string? fromStateId,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     )
     {
         var payload = DeserialisePayload(workItem);
-        var recipient = payload?.OperatorEmail;
+
+        // RA-000: an unreadable payload is a failure, not a missing operator
+        // email. DeserialisePayload has already logged it at Error.
+        if (payload is null)
+        {
+            await AppendNotificationFailedAsync(
+                workItem,
+                templateKey,
+                description,
+                NotSentDetails(templateKey, reference: null, "payload could not be deserialised"),
+                user,
+                cancellationToken
+            );
+            return;
+        }
+
+        var recipient = payload.OperatorEmail;
         // RA-248: operators see the human-facing application reference
-        // (RA-#########) in the ((reference)) placeholder. Fall back to the
-        // internal work-item Guid only for legacy/malformed items missing the
-        // reference, so the placeholder is never blank.
-        var reference = string.IsNullOrWhiteSpace(payload?.ApplicationReference)
-            ? workItem.Id.ToString()
+        // (RA-#########) in the ((reference)) placeholder. SubmitAsync always
+        // generates it (docs/work-items.md, "Application reference").
+        var reference = string.IsNullOrWhiteSpace(payload.ApplicationReference)
+            ? null
             : payload.ApplicationReference;
 
         if (!_notifyConfig.IsTriggerEnabled(templateKey))
@@ -427,6 +446,70 @@ internal sealed class ReAccreditationNotificationHook(
                 cancellationToken
             );
             return;
+        }
+
+        // RA-000: a blank reference is a data defect. Sending the internal
+        // work-item Guid instead would show the operator an id they cannot
+        // quote back to us, so the email is not sent.
+        if (reference is null)
+        {
+            logger.LogError(
+                "{TemplateKey} notification for work item {WorkItemId} not sent: payload has no applicationReference.",
+                templateKey,
+                workItem.Id
+            );
+            await AppendNotificationFailedAsync(
+                workItem,
+                templateKey,
+                description,
+                NotSentDetails(templateKey, reference: null, "payload has no applicationReference"),
+                user,
+                cancellationToken
+            );
+            return;
+        }
+
+        // RA-000: the Queried email carries the date of THIS query. Without a
+        // currentQuery the query operation stamped for this transition it
+        // would show a blank date (no stamp) or the previous query's date
+        // (stale stamp), so it is not sent. Its personalisation is built only
+        // from the verified query, so no path reaches it without one.
+        Dictionary<string, string> personalisation;
+        if (string.Equals(templateKey, QueriedTemplateKey, StringComparison.OrdinalIgnoreCase))
+        {
+            if (
+                !TryVerifyQuery(
+                    workItem,
+                    payload,
+                    actionId,
+                    fromStateId,
+                    out var verifiedQuery,
+                    out var failureReason
+                )
+            )
+            {
+                logger.LogError(
+                    "{TemplateKey} notification for work item {WorkItemId} not sent: {Reason}.",
+                    templateKey,
+                    workItem.Id,
+                    failureReason
+                );
+                await AppendNotificationFailedAsync(
+                    workItem,
+                    templateKey,
+                    description,
+                    NotSentDetails(templateKey, reference, failureReason),
+                    user,
+                    cancellationToken
+                );
+                return;
+            }
+
+            personalisation = BuildQueriedPersonalisation(payload, reference, verifiedQuery);
+        }
+        else
+        {
+            personalisation = BuildPersonalisation(payload, workItem, templateKey, reference);
         }
 
         if (string.IsNullOrWhiteSpace(recipient))
@@ -461,14 +544,6 @@ internal sealed class ReAccreditationNotificationHook(
             return;
         }
 
-        var personalisation = BuildPersonalisation(
-            payload!,
-            workItem,
-            templateKey,
-            reference,
-            actionId
-        );
-
         // Entry log: surfaces in docker / CDP logs the moment the hook
         // hands off to the Notify client. Combined with the
         // "Notify send starting" entry log in GovukNotifyClient this
@@ -484,7 +559,7 @@ internal sealed class ReAccreditationNotificationHook(
 
         // RA-211: region drives the reply-to mailbox (NotifyConfig.GetReplyToId);
         // a missing/unresolvable Nation falls back to NotifyConfig.DefaultReplyToId.
-        var region = payload!.Nation?.ToString();
+        var region = payload.Nation?.ToString();
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var result = await notifyClient.SendEmailAsync(
@@ -536,22 +611,14 @@ internal sealed class ReAccreditationNotificationHook(
         else
         {
             details["errorMessage"] = result.ErrorMessage;
-            var appended = await auditAppender.AppendAsync(
-                workItem.Id,
-                action: "notification-failed",
-                actionDisplayName: $"{description} email failed",
+            await AppendNotificationFailedAsync(
+                workItem,
+                templateKey,
+                description,
                 details,
                 user,
                 cancellationToken
             );
-            if (!appended)
-            {
-                logger.LogWarning(
-                    "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
-                    workItem.Id,
-                    templateKey
-                );
-            }
         }
     }
 
@@ -745,23 +812,100 @@ internal sealed class ReAccreditationNotificationHook(
         else
         {
             details["errorMessage"] = result.ErrorMessage;
-            var appended = await auditAppender.AppendAsync(
-                workItem.Id,
-                action: "notification-failed",
-                actionDisplayName: $"{description} email failed",
+            await AppendNotificationFailedAsync(
+                workItem,
+                templateKey,
+                description,
                 details,
                 user,
                 cancellationToken
             );
-            if (!appended)
-            {
-                logger.LogWarning(
-                    "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
-                    workItem.Id,
-                    templateKey
-                );
-            }
         }
+    }
+
+    /// <summary>
+    /// Records <c>notification-failed</c>: a Notify rejection (details carry
+    /// <c>errorMessage</c>) or, RA-000, an email never handed to Notify
+    /// because a value it needs is missing or wrong (details carry
+    /// <c>reason</c>). A failure record that cannot be persisted is lost, so
+    /// that is logged at Error.
+    /// </summary>
+    private async Task AppendNotificationFailedAsync(
+        WorkItem workItem,
+        string templateKey,
+        string description,
+        Dictionary<string, string?> details,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
+    {
+        var appended = await auditAppender.AppendAsync(
+            workItem.Id,
+            action: "notification-failed",
+            actionDisplayName: $"{description} email failed",
+            details,
+            user,
+            cancellationToken
+        );
+        if (!appended)
+        {
+            logger.LogError(
+                "notification-failed audit entry could not be persisted for work item {WorkItemId} ({TemplateKey}).",
+                workItem.Id,
+                templateKey
+            );
+        }
+    }
+
+    private static Dictionary<string, string?> NotSentDetails(
+        string templateKey,
+        string? reference,
+        string reason
+    ) =>
+        new()
+        {
+            ["templateKey"] = templateKey,
+            [ReferenceKey] = reference,
+            ["reason"] = reason,
+        };
+
+    /// <summary>
+    /// RA-000: check the payload's <see cref="CurrentQuery"/> was stamped
+    /// inside the window of the query transition being handled
+    /// (<see cref="ReAccreditationFreshQuery"/>). Queried is mapped only from the
+    /// query-during-* actions, which the engine hands over with both ids, so a
+    /// missing one is a wiring defect; it fails the check (and so the send)
+    /// rather than throwing, because a post-action hook must never throw.
+    /// </summary>
+    private static bool TryVerifyQuery(
+        WorkItem workItem,
+        ReAccreditationPayload payload,
+        string? actionId,
+        string? fromStateId,
+        [NotNullWhen(true)] out ReAccreditationFreshQuery.VerifiedQuery? query,
+        [NotNullWhen(false)] out string? failureReason
+    )
+    {
+        if (actionId is null || fromStateId is null)
+        {
+            var missing = string.Join(
+                " and ",
+                new[] { actionId is null ? "actionId" : null, fromStateId is null ? "fromStateId" : null }.OfType<string>()
+            );
+            query = null;
+            failureReason =
+                $"the query transition's {missing} was not supplied, so payload.currentQuery cannot be verified";
+            return false;
+        }
+
+        return ReAccreditationFreshQuery.TryVerify(
+            workItem,
+            payload.CurrentQuery,
+            actionId,
+            fromStateId,
+            out query,
+            out failureReason
+        );
     }
 
     private ReAccreditationPayload? DeserialisePayload(WorkItem workItem)
@@ -774,7 +918,7 @@ internal sealed class ReAccreditationNotificationHook(
         {
             logger.LogError(
                 ex,
-                "Failed to deserialise payload for work item {WorkItemId}; notification will be skipped.",
+                "Failed to deserialise payload for work item {WorkItemId}.",
                 workItem.Id
             );
             return null;
@@ -817,6 +961,31 @@ internal sealed class ReAccreditationNotificationHook(
             : string.Empty;
 
     /// <summary>
+    /// RA-291 / RA-581: the Queried template's personalisation. Separate from
+    /// <see cref="BuildPersonalisation"/> because it needs the query
+    /// <see cref="ReAccreditationFreshQuery"/> accepted for this transition
+    /// (RA-000), so it cannot be built without one.
+    /// </summary>
+    private Dictionary<string, string> BuildQueriedPersonalisation(
+        ReAccreditationPayload payload,
+        string reference,
+        ReAccreditationFreshQuery.VerifiedQuery verifiedQuery
+    ) =>
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            [ContactNameKey] = ResolveContactName(payload),
+            ["year"] = payload.AccreditationYear?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            [OrganisationNameKey] = payload.OrganisationName ?? string.Empty,
+            // RA-291: the date the CURRENT query was raised, stamped by
+            // ReAccreditationQueryService immediately before the query
+            // transition — see CurrentQuery.RaisedAt.
+            ["Querieddate"] = FormatOperatorFacingDate(verifiedQuery.RaisedAt),
+            ["reference"] = reference,
+            [RegistrationNumberKey] = payload.RegistrationNumber ?? string.Empty,
+            ["regulatorEmail"] = regulatorMailboxResolver.Resolve(payload.Nation) ?? string.Empty,
+        };
+
+    /// <summary>
     /// RA-581: every operator-facing template's personalisation, built
     /// per-template rather than from a shared base set — Notify 400s on a
     /// surplus key just as readily as a missing one, and the five current
@@ -829,8 +998,7 @@ internal sealed class ReAccreditationNotificationHook(
         ReAccreditationPayload payload,
         WorkItem workItem,
         string templateKey,
-        string reference,
-        string? actionId = null
+        string reference
     )
     {
         var contactName = ResolveContactName(payload);
@@ -884,23 +1052,6 @@ internal sealed class ReAccreditationNotificationHook(
                 // "made on" — the original submission date, not the date duly
                 // making itself completed.
                 ["SubmissionDate"] = FormatOperatorFacingDate(workItem.SubmittedAt),
-                ["reference"] = reference,
-                [RegistrationNumberKey] = registrationNumber,
-                ["regulatorEmail"] = regulatorEmail,
-            };
-        }
-
-        if (string.Equals(templateKey, QueriedTemplateKey, StringComparison.OrdinalIgnoreCase))
-        {
-            return new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
-            {
-                [ContactNameKey] = contactName,
-                ["year"] = year,
-                [OrganisationNameKey] = organisationName,
-                // RA-291: the date the CURRENT query was raised, stamped by
-                // ReAccreditationQueryService immediately before the query
-                // transition — see CurrentQuery.RaisedAt.
-                ["Querieddate"] = FormatOperatorFacingDate(payload.CurrentQuery?.RaisedAt),
                 ["reference"] = reference,
                 [RegistrationNumberKey] = registrationNumber,
                 ["regulatorEmail"] = regulatorEmail,

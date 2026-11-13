@@ -1414,4 +1414,115 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             )
         );
     }
+
+    // RA-764: own seeding helper on purpose; PR #236 removes RA-691's.
+    private async Task<WorkItem> CreateWithOrganisationAsync(
+        string organisationName,
+        string registrationNumber,
+        CancellationToken ct,
+        string typeId = "re-accreditation"
+    )
+    {
+        var item = new WorkItem
+        {
+            TypeId = typeId,
+            StateId = "submitted",
+            SubmittedAt = _time.GetUtcNow().UtcDateTime,
+            LastModifiedAt = _time.GetUtcNow().UtcDateTime,
+        };
+        item.ReplacePayload(
+            new BsonDocument
+            {
+                ["organisationName"] = organisationName,
+                ["registrationNumber"] = registrationNumber,
+            }
+        );
+        item.AuditLog.Add(new WorkItemAuditEntry { Action = "x", ActionDisplayName = "x" });
+        await _persistence.CreateAsync(item, ct);
+        return item;
+    }
+
+    [Fact]
+    public async Task FindByPayloadFieldAsync_matches_the_exact_value_only_within_the_type()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var match = await CreateWithOrganisationAsync("Org", "R26NR5000690003GL", ct);
+        await CreateWithOrganisationAsync("Org", "R26NR5000690003GLX", ct);
+        await CreateWithOrganisationAsync("Org", "r26nr5000690003gl", ct);
+        await CreateWithOrganisationAsync("Org", "R26NR5000690003GL", ct, typeId: "other-type");
+
+        var found = await _persistence.FindByPayloadFieldAsync(
+            "re-accreditation",
+            "registrationNumber",
+            "R26NR5000690003GL",
+            ct
+        );
+
+        var item = Assert.Single(found);
+        Assert.Equal(match.Id, item.Id);
+        // Returned in full, unlike QueryAsync.
+        Assert.Single(item.AuditLog);
+    }
+
+    [Fact]
+    public async Task CompareAndSetPayloadFieldAsync_sets_the_field_and_bumps_only_the_version()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = await CreateWithOrganisationAsync("Old Ltd", "R1", ct);
+        var before = (await _persistence.GetByIdAsync(item.Id, ct))!;
+
+        var written = await _persistence.CompareAndSetPayloadFieldAsync(
+            item.Id,
+            "organisationName",
+            "Old Ltd",
+            "New Ltd",
+            ct
+        );
+
+        Assert.True(written);
+        var after = (await _persistence.GetByIdAsync(item.Id, ct))!;
+        Assert.Equal("New Ltd", after.Payload["organisationName"].AsString);
+        Assert.Equal("R1", after.Payload["registrationNumber"].AsString);
+        Assert.Equal(before.Version + 1, after.Version);
+        Assert.Equal(before.LastModifiedAt, after.LastModifiedAt);
+        Assert.Equal(before.StateId, after.StateId);
+        Assert.Single(after.AuditLog);
+    }
+
+    [Fact]
+    public async Task CompareAndSetPayloadFieldAsync_writes_nothing_when_the_value_has_moved_on()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = await CreateWithOrganisationAsync("Someone Else Ltd", "R1", ct);
+
+        var written = await _persistence.CompareAndSetPayloadFieldAsync(
+            item.Id,
+            "organisationName",
+            "Old Ltd",
+            "New Ltd",
+            ct
+        );
+
+        Assert.False(written);
+        var after = (await _persistence.GetByIdAsync(item.Id, ct))!;
+        Assert.Equal("Someone Else Ltd", after.Payload["organisationName"].AsString);
+        Assert.Equal(item.Version, after.Version);
+    }
+
+    [Theory]
+    [InlineData("a.b")]
+    [InlineData("$set")]
+    [InlineData(" ")]
+    public async Task The_RA764_payload_field_methods_reject_field_names_that_escape_the_payload(
+        string fieldName
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            _persistence.CompareAndSetPayloadFieldAsync(Guid.NewGuid(), fieldName, "a", "b", ct)
+        );
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            _persistence.FindByPayloadFieldAsync("re-accreditation", fieldName, "a", ct)
+        );
+    }
 }

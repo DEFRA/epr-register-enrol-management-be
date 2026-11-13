@@ -359,23 +359,34 @@ public static class StandardWorkflow
         // There is deliberately no transition
         // out of 'queried' back to 'queried': an application awaiting a
         // response cannot be queried again.
+        //
+        // RA-000 (v19): CallerInvocable is false on all five. A query is more
+        // than the state change: ReAccreditationQueryService self-assigns the
+        // querier, stamps payload.currentQuery (which the query push to the
+        // operator backend and the Queried email read) and records the
+        // application-queried audit entry. Applied through the generic action
+        // endpoint, none of that happened and the push and email went out with
+        // no query or the previous one.
         new WorkItemTransition(
             "query-during-duly-making",
             QueryActionLabel,
             s_submitted.Id,
-            s_queried.Id
+            s_queried.Id,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "query-during-duly-made",
             QueryActionLabel,
             s_dulyMade.Id,
-            s_queried.Id
+            s_queried.Id,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "query-during-assessment",
             QueryActionLabel,
             s_assessmentInProgress.Id,
-            s_queried.Id
+            s_queried.Id,
+            CallerInvocable: false
         ),
         // RA-527 follow-up (v18): a started case ('assessment-started', "Duly
         // made") is queried through the same action id. The resume and
@@ -388,13 +399,15 @@ public static class StandardWorkflow
             "query-during-assessment",
             QueryActionLabel,
             s_assessmentStarted.Id,
-            s_queried.Id
+            s_queried.Id,
+            CallerInvocable: false
         ),
         new WorkItemTransition(
             "query-during-decision",
             QueryActionLabel,
             s_awaitingDecision.Id,
-            s_queried.Id
+            s_queried.Id,
+            CallerInvocable: false
         ),
         // RA-311/MBE-1: the inverse of the four query-during-* transitions
         // above, one per originating state, so a resubmitted application
@@ -405,7 +418,8 @@ public static class StandardWorkflow
         // to the originating state — see continue-review-during-* below.
         //
         // Security review (RA-311/MBE-1): CallerInvocable is false on all
-        // four. Unlike query-during-*, these four transitions all share the
+        // four. Unlike query-during-* (non-invocable for a different reason,
+        // RA-000 above), these four transitions all share the
         // same FromStateId ('queried'), so the engine's normal from-state
         // guard cannot tell them apart — a caller who could invoke them
         // directly via the generic action endpoint could pick any of the

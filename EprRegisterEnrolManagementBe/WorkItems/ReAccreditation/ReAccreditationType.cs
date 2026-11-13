@@ -179,11 +179,21 @@ internal sealed class ReAccreditationType : IWorkItemType
     // ReAccreditationAssessmentStartedSnapshotMigration patches their frozen
     // snapshot. No data migration: cases already in 'assessment-in-progress'
     // stay there.
-    // RA-739: still v18. Moving the states and transitions into the shared
-    // StandardWorkflow changed none of them. The version stays on the type:
+    // v19 (RA-000): the five query-during-* declarations (query-during-
+    // assessment from two states) became CallerInvocable: false, so only
+    // ReAccreditationQueryService applies them and the generic action
+    // endpoint rejects them. Applying one there skipped the service's
+    // self-assign, currentQuery stamp and application-queried audit entry,
+    // and the query push and Queried email then sent an empty or stale
+    // query. No state or target changed. Items snapshotted before v19 keep
+    // them caller-invocable until
+    // ReAccreditationQueryNotCallerInvocableSnapshotMigration patches their
+    // frozen snapshot.
+    // RA-739: the states and transitions now live in the shared
+    // StandardWorkflow, unchanged by the move. The version stays on the type:
     // a later change to StandardWorkflow needs a new version and snapshot
     // migration here and on every other type that references it.
-    public string TemplateVersion => "v18";
+    public string TemplateVersion => "v19";
 
     public string? Category => null;
     public bool SplitsSubmissionPerSite => false;

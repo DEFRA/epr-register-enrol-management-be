@@ -431,6 +431,21 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             CancellationToken cancellationToken = default
         ) => inner.FindByPayloadFieldPrefixAsync(typeId, fieldName, prefix, cancellationToken);
 
+        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
+            string typeId,
+            string fieldName,
+            BsonValue value,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
+        public Task<bool> CompareAndSetPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue expectedValue,
+            BsonValue newValue,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

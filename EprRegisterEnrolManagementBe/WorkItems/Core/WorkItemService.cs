@@ -890,32 +890,19 @@ public sealed class WorkItemService : IWorkItemService
             return failure;
         }
 
-        var actionTransitions = template!
-            .Transitions.Where(t =>
-                string.Equals(t.ActionId, actionId, StringComparison.OrdinalIgnoreCase)
-            )
-            .ToList();
-        if (actionTransitions.Count == 0)
+        // An action id can be declared on more than one state; see
+        // WorkItemEngineRules.ResolveTransition, which the generic action
+        // endpoint's caller-invocable guard also uses.
+        var transition = WorkItemEngineRules.ResolveTransition(template!, workItem!.StateId, actionId);
+        if (transition is null)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.UnknownAction,
-                $"Action '{actionId}' is not declared by work item type '{workItem!.TypeId}'."
+                $"Action '{actionId}' is not declared by work item type '{workItem.TypeId}'."
             );
         }
 
-        // An action id can be declared as a self-loop on more than one state
-        // (e.g. `sla-extend` on both `assessment-in-progress` and `queried`),
-        // so resolve to the transition whose FromStateId matches the work
-        // item's current state — matching on action id alone would always pick
-        // the first declaration and wrongly reject the action from every other
-        // state it is valid in. Fall back to the first declaration only so the
-        // InvalidTransition message below still names a valid from-state.
-        var transition =
-            actionTransitions.FirstOrDefault(t =>
-                string.Equals(t.FromStateId, workItem!.StateId, StringComparison.OrdinalIgnoreCase)
-            ) ?? actionTransitions[0];
-
-        if (TerminalStates.Find(template, workItem!.StateId) is { } currentTerminalState)
+        if (TerminalStates.Find(template!, workItem.StateId) is { } currentTerminalState)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,

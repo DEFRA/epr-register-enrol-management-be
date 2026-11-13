@@ -174,10 +174,15 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemMigration, ReAccreditationPendingContactSnapshotMigration>();
         // RA-527 follow-up: adds the assessment-started ("Duly made") state,
         // retargets start-assessment to it and adds its four exits (→ v18).
-        // Registered last of the snapshot migrations so it is the one that
-        // sets the final version. Writes only the stored rules and template
-        // version; it never moves a case.
+        // Writes only the stored rules and template version; it never moves
+        // a case.
         services.AddSingleton<IWorkItemMigration, ReAccreditationAssessmentStartedSnapshotMigration>();
+        // RA-000: makes the query-during-* transitions not caller-invocable,
+        // so only the query service applies them (→ v19). Registered after the
+        // v18 migration, which adds a caller-invocable query-during-assessment
+        // from assessment-started, so it is the one that sets the final
+        // version. Writes only the stored rules and template version.
+        services.AddSingleton<IWorkItemMigration, ReAccreditationQueryNotCallerInvocableSnapshotMigration>();
         // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
         // provably-defaulted true. Unlike every migration above it is a no-op
         // until deliberately enabled AND a spot-check is recorded AND apply
@@ -210,6 +215,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // it is safe to register unconditionally. Writes only
         // payload.accreditationId plus an audit entry; no state change.
         services.AddSingleton<IWorkItemMigration, ReAccreditationAccreditationNumberCorrectionMigration>();
+        // RA-764: one-off rename of organisation 500069's 2027 cases. Gated like
+        // RA-691 (off by default, spot-check required, dry run unless apply is
+        // set). A hosted LIFECYCLE service rather than an IWorkItemMigration so
+        // it runs in StartedAsync, after TestOrganisationFixtureHostedService
+        // has reset the e2e fixtures; see the class remarks. No audit entry.
+        services.AddHostedService<ReAccreditationOrganisationNameCorrectionMigration>();
         // RA-132: module-scoped approval service that owns the bespoke
         // approval workflow (id issuance, SLA clock stop, queued publishing).
         // RA-410: module-scoped service that owns the single-call decision
