@@ -49,11 +49,13 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            new WorkItemReferenceGenerator(
-                new ApplicationReferenceGenerator(_time),
-                new InYearChangeReferenceGenerator(_sequenceStore)
+            new WorkItemSubmissionDependencies(
+                new WorkItemReferenceGenerator(
+                    new ApplicationReferenceGenerator(_time),
+                    new InYearChangeReferenceGenerator(_sequenceStore)
+                ),
+                TestReferenceGenerators.FixedSubmissionReference()
             ),
-            TestReferenceGenerators.FixedSubmissionReference(),
             _time
         );
 

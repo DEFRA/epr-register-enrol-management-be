@@ -565,45 +565,14 @@ public sealed class WorkItemPersistence
         // not just a literal "reprocessor" string. Selecting both collapses to
         // no restriction, which is correct: between the two buckets every item
         // matches exactly one.
-        if (query.WasteProcessingTypes is { Count: > 0 } wasteProcessingTypes)
+        if (WasteProcessingTypeClause(builder, query.WasteProcessingTypes) is { } wasteProcessingType)
         {
-            var wantsExporter = wasteProcessingTypes.Any(t =>
-                t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
-            );
-            var wantsReprocessor = wasteProcessingTypes.Any(t =>
-                !t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
-            );
-
-            if (wantsExporter != wantsReprocessor)
-            {
-                var exporterFilter = CaseInsensitiveExactMatch(
-                    builder,
-                    "payload.wasteProcessingType",
-                    "exporter"
-                );
-                clauses.Add(wantsExporter ? exporterFilter : builder.Not(exporterFilter));
-            }
+            clauses.Add(wasteProcessingType);
         }
 
-        var assigneeId = query.NormalisedAssigneeId;
-        if (assigneeId is not null && query.UnassignedOnly)
+        if (AssigneeClause(builder, query) is { } assignee)
         {
-            // "Show me my work and anything still up for grabs" — assigned to
-            // the user OR unassigned.
-            clauses.Add(
-                builder.Or(
-                    builder.Eq(w => w.AssignedToId, assigneeId),
-                    builder.Eq(w => w.AssignedToId, null)
-                )
-            );
-        }
-        else if (assigneeId is not null)
-        {
-            clauses.Add(builder.Eq(w => w.AssignedToId, assigneeId));
-        }
-        else if (query.UnassignedOnly)
-        {
-            clauses.Add(builder.Eq(w => w.AssignedToId, null));
+            clauses.Add(assignee);
         }
 
         var submittedBy = query.NormalisedSubmittedBy;
@@ -643,6 +612,61 @@ public sealed class WorkItemPersistence
         // "Archived: <date>" on the card. It is now purely informational.
 
         return clauses.Count == 0 ? builder.Empty : builder.And(clauses);
+    }
+
+    // Extracted from BuildFilter (S3776: cognitive complexity) - the applicant-type
+    // clause, or null when the selection restricts nothing (none, or both buckets).
+    private static FilterDefinition<WorkItem>? WasteProcessingTypeClause(
+        FilterDefinitionBuilder<WorkItem> builder,
+        IReadOnlyCollection<string>? wasteProcessingTypes
+    )
+    {
+        if (wasteProcessingTypes is not { Count: > 0 })
+        {
+            return null;
+        }
+
+        var wantsExporter = wasteProcessingTypes.Any(t =>
+            t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
+        );
+        var wantsReprocessor = wasteProcessingTypes.Any(t =>
+            !t.Equals("exporter", StringComparison.OrdinalIgnoreCase)
+        );
+        if (wantsExporter == wantsReprocessor)
+        {
+            return null;
+        }
+
+        var exporterFilter = CaseInsensitiveExactMatch(
+            builder,
+            "payload.wasteProcessingType",
+            "exporter"
+        );
+        return wantsExporter ? exporterFilter : builder.Not(exporterFilter);
+    }
+
+    // Extracted from BuildFilter (S3776: cognitive complexity) - the assignee
+    // clause, or null when the query does not filter on assignment.
+    private static FilterDefinition<WorkItem>? AssigneeClause(
+        FilterDefinitionBuilder<WorkItem> builder,
+        WorkItemQuery query
+    )
+    {
+        var assigneeId = query.NormalisedAssigneeId;
+        if (assigneeId is not null && query.UnassignedOnly)
+        {
+            // "Show me my work and anything still up for grabs" — assigned to
+            // the user OR unassigned.
+            return builder.Or(
+                builder.Eq(w => w.AssignedToId, assigneeId),
+                builder.Eq(w => w.AssignedToId, null)
+            );
+        }
+        if (assigneeId is not null)
+        {
+            return builder.Eq(w => w.AssignedToId, assigneeId);
+        }
+        return query.UnassignedOnly ? builder.Eq(w => w.AssignedToId, null) : null;
     }
 
     /// <summary>

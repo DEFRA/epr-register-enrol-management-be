@@ -37,6 +37,7 @@ public static class WorkItemModuleExtensions
         // commits in one transaction, and its record is the replay guard.
         services.AddSingleton<ISubmissionStore, MongoSubmissionStore>();
         services.AddSingleton<IMongoTransactionRunner, MongoTransactionRunner>();
+        services.AddSingleton<WorkItemSubmissionDependencies>();
         services.AddHostedService<WorkItemMigrationHostedService>();
         return services;
     }

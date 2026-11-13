@@ -287,8 +287,10 @@ public class WorkItemSlaCancelledTests
             ]),
             Substitute.For<IWorkItemPersistence>(),
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.FixedSubmissionReference());
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ));
 
     private sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
     {

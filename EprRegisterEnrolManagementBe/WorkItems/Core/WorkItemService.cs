@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using MongoDB.Bson;
@@ -138,6 +139,22 @@ public sealed record WorkItemEngineProjection(
     bool IsTerminal = false
 );
 
+/// <summary>
+/// What <see cref="WorkItemService"/> needs to reference and store a
+/// submission, bundled into one argument so its constructor stays under
+/// SonarCloud's parameter-count cap (S107) now that RA-739 adds the
+/// submission reference generator, store and transaction runner.
+/// <see cref="SubmissionStore"/> and <see cref="Transactions"/> are used only
+/// by <see cref="WorkItemService.SubmitPerSiteAsync"/>, so a caller that
+/// never submits per site may omit them.
+/// </summary>
+public sealed record WorkItemSubmissionDependencies(
+    IWorkItemReferenceGenerator ReferenceGenerator,
+    ISubmissionReferenceGenerator SubmissionReferenceGenerator,
+    ISubmissionStore? SubmissionStore = null,
+    IMongoTransactionRunner? Transactions = null
+);
+
 public sealed class WorkItemService : IWorkItemService
 {
     private const string SourceKey = "source";
@@ -167,25 +184,23 @@ public sealed class WorkItemService : IWorkItemService
         IWorkItemRegistry registry,
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
-        IWorkItemReferenceGenerator referenceGenerator,
-        ISubmissionReferenceGenerator submissionReferenceGenerator,
+        WorkItemSubmissionDependencies submission,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
-        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null,
-        ISubmissionStore? submissionStore = null,
-        IMongoTransactionRunner? transactions = null
+        IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null
     )
     {
-        ArgumentNullException.ThrowIfNull(submissionReferenceGenerator);
-        _submissionReferenceGenerator = submissionReferenceGenerator;
-        _submissionStore = submissionStore;
-        _transactions = transactions;
+        ArgumentNullException.ThrowIfNull(submission);
+        ArgumentNullException.ThrowIfNull(submission.SubmissionReferenceGenerator);
+        _submissionReferenceGenerator = submission.SubmissionReferenceGenerator;
+        _submissionStore = submission.SubmissionStore;
+        _transactions = submission.Transactions;
         this._registry = registry;
         this._persistence = persistence;
         this._logger = logger;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _referenceGenerator = referenceGenerator;
+        _referenceGenerator = submission.ReferenceGenerator;
         _originStateResolvers =
             originStateResolvers?.ToArray() ?? Array.Empty<IWorkItemOriginStateResolver>();
     }
@@ -302,7 +317,7 @@ public sealed class WorkItemService : IWorkItemService
         {
             throw new ArgumentException(
                 $"Work item type '{type.TypeId}' does not split a submission per site; submit it with SubmitAsync.",
-                nameof(type)
+                nameof(request)
             );
         }
 
@@ -338,76 +353,99 @@ public sealed class WorkItemService : IWorkItemService
         SubmissionPayload.TryReadOperatorRequestId(payload, out var operatorRequestId);
         var validated = new ValidatedSubmission(request, referenceFormat, operatorRequestId, now);
 
-        for (var attempt = 1; ; attempt++)
+        for (var attempt = 1; attempt <= MaxSubmissionAttempts; attempt++)
         {
-            try
+            if (await TrySubmitPerSiteAsync(validated, attempt, cancellationToken) is { } result)
             {
-                var (submission, created) = await Transactions.RunAsync(
-                    (session, token) => CreateSubmissionAsync(session, validated, token),
-                    cancellationToken
-                );
-                if (created.Count == 0)
-                {
-                    return Replay(type, submission);
-                }
-
-                _logger.LogInformation(
-                    "Submission {SubmissionReference} ({TypeId}) created {Count} work items by {User}",
-                    submission.SubmissionReference,
-                    type.TypeId,
-                    created.Count,
-                    DescribeUser(user)
-                );
-                // Only once the transaction has committed, so no hook ever
-                // sees a work item that was rolled back.
-                foreach (var workItem in created)
-                {
-                    await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
-                }
-                return WorkItemSubmissionResult.Success(submission);
+                return result;
             }
-            // A duplicate key is not a transient transaction error, so the
-            // transaction runner does not retry it.
-            catch (MongoException ex) when (MongoDuplicateKey.Is(ex))
+        }
+
+        // The last attempt rethrows instead of asking for another.
+        throw new UnreachableException();
+    }
+
+    /// <summary>
+    /// One attempt at <see cref="SubmitPerSiteAsync"/>'s transaction. Returns
+    /// its result, or <c>null</c> when it hit a duplicate key that a retry can
+    /// clear. On the last attempt that duplicate key is rethrown instead.
+    /// </summary>
+    private async Task<WorkItemSubmissionResult?> TrySubmitPerSiteAsync(
+        ValidatedSubmission validated,
+        int attempt,
+        CancellationToken cancellationToken
+    )
+    {
+        var (type, _, _, user, _) = validated.Request;
+        var operatorRequestId = validated.OperatorRequestId;
+        try
+        {
+            var (submission, created) = await Transactions.RunAsync(
+                (session, token) => CreateSubmissionAsync(session, validated, token),
+                cancellationToken
+            );
+            if (created.Count == 0)
             {
-                // A concurrent submission of the same request committed
-                // first. Its record is now on file: hand that back.
-                if (await Submissions.FindAsync(operatorRequestId, cancellationToken) is { } winner)
-                {
-                    return Replay(type, winner);
-                }
+                return Replay(type, submission);
+            }
 
-                // An in-year change reference collides only once its yearly
-                // sequence has wrapped. The aborted transaction rolled the
-                // number back, so a retry would collide again.
-                if (ex is MongoWriteException write && IsApplicationReferenceDuplicate(write))
-                {
-                    _logger.LogError(
-                        ex,
-                        "Submission {OperatorRequestId} ({TypeId}) collided on applicationReference",
-                        operatorRequestId,
-                        type.TypeId
-                    );
-                    return WorkItemSubmissionResult.Failure(
-                        WorkItemActionFailureCode.ApplicationReferenceExhausted,
-                        "Failed to generate a unique applicationReference."
-                    );
-                }
+            _logger.LogInformation(
+                "Submission {SubmissionReference} ({TypeId}) created {Count} work items by {User}",
+                submission.SubmissionReference,
+                type.TypeId,
+                created.Count,
+                DescribeUser(user)
+            );
+            // Only once the transaction has committed, so no hook ever
+            // sees a work item that was rolled back.
+            foreach (var workItem in created)
+            {
+                await InvokeSubmittedHooksAsync(workItem, user, cancellationToken);
+            }
+            return WorkItemSubmissionResult.Success(submission);
+        }
+        // A duplicate key is not a transient transaction error, so the
+        // transaction runner does not retry it.
+        catch (MongoException ex) when (MongoDuplicateKey.Is(ex))
+        {
+            // A concurrent submission of the same request committed
+            // first. Its record is now on file: hand that back.
+            if (await Submissions.FindAsync(operatorRequestId, cancellationToken) is { } winner)
+            {
+                return Replay(type, winner);
+            }
 
-                // Two first-ever allocations from one sequence raced to insert
-                // its counter. The counter now exists, so a retry succeeds.
-                if (attempt >= MaxSubmissionAttempts)
-                {
-                    throw;
-                }
-                _logger.LogWarning(
+            // An in-year change reference collides only once its yearly
+            // sequence has wrapped. The aborted transaction rolled the
+            // number back, so a retry would collide again.
+            if (ex is MongoWriteException write && IsApplicationReferenceDuplicate(write))
+            {
+                _logger.LogError(
                     ex,
-                    "Submission {OperatorRequestId} ({TypeId}) hit a duplicate key on attempt {Attempt}; retrying",
+                    "Submission {OperatorRequestId} ({TypeId}) collided on applicationReference",
                     operatorRequestId,
-                    type.TypeId,
-                    attempt
+                    type.TypeId
+                );
+                return WorkItemSubmissionResult.Failure(
+                    WorkItemActionFailureCode.ApplicationReferenceExhausted,
+                    "Failed to generate a unique applicationReference."
                 );
             }
+
+            // Two first-ever allocations from one sequence raced to insert
+            // its counter. The counter now exists, so a retry succeeds.
+            if (attempt >= MaxSubmissionAttempts)
+            {
+                throw;
+            }
+            _logger.LogWarning(
+                ex,
+                "Submission {OperatorRequestId} ({TypeId}) hit a duplicate key on attempt {Attempt}; retrying",
+                operatorRequestId,
+                type.TypeId,
+                attempt
+            );
+            return null;
         }
     }
 
@@ -629,11 +667,8 @@ public sealed class WorkItemService : IWorkItemService
             // back as a replay instead. (For an in-year change this attempt has
             // already used a sequence number; it is skipped, never reused.)
             catch (MongoWriteException ex)
-                when (MongoDuplicateKey.Is(ex)
-                    && FindCollidingSubmissionKey(ex, submissionKeys) is not null
-                )
+                when (FindCollidingSubmissionKey(ex, submissionKeys) is { } key)
             {
-                var key = FindCollidingSubmissionKey(ex, submissionKeys)!;
                 var winner = await _persistence.FindBySubmissionKeyAsync(
                     type.TypeId,
                     key.Field,
@@ -707,13 +742,26 @@ public sealed class WorkItemService : IWorkItemService
             }
         }
 
+        return await CompleteSubmissionAsync(workItem!, user, cancellationToken);
+    }
+
+    // Extracted from PersistNewWorkItemAsync (S3776: cognitive complexity) - runs
+    // once the work item is persisted, so a hook never sees one that failed to
+    // write.
+    private async Task<WorkItemActionResult> CompleteSubmissionAsync(
+        WorkItem workItem,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
+    {
+        var payload = workItem.Payload;
         var persistedReference = payload.Contains(ApplicationReferenceField)
             ? payload[ApplicationReferenceField].AsString
             : null;
 
         _logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) submitted in state {StateId} applicationReference={ApplicationReference} by {User}",
-            workItem!.Id,
+            workItem.Id,
             workItem.TypeId,
             workItem.StateId,
             persistedReference,
@@ -858,19 +906,22 @@ public sealed class WorkItemService : IWorkItemService
             .ToList();
 
     /// <summary>
-    /// The submission key whose unique index raised this duplicate-key write
-    /// error, or <c>null</c>. The driver puts the offending index name in the
-    /// write error message (e.g. <c>index: payload.operatorRequestId_1</c>),
-    /// the same substring-match approach as
-    /// <see cref="IsApplicationReferenceDuplicate"/>.
+    /// The submission key whose unique index raised this write error, or
+    /// <c>null</c> when it is not a duplicate key on one of them. The driver
+    /// puts the offending index name in the write error message (e.g.
+    /// <c>index: payload.operatorRequestId_1</c>), the same substring-match
+    /// approach as <see cref="IsApplicationReferenceDuplicate"/>.
     /// </summary>
     private static SubmissionKey? FindCollidingSubmissionKey(
         MongoWriteException ex,
         IReadOnlyList<SubmissionKey> keys
     ) =>
-        keys.FirstOrDefault(key =>
-            ex.WriteError?.Message?.Contains(key.Field, StringComparison.OrdinalIgnoreCase) == true
-        );
+        MongoDuplicateKey.Is(ex)
+            ? keys.FirstOrDefault(key =>
+                ex.WriteError?.Message?.Contains(key.Field, StringComparison.OrdinalIgnoreCase)
+                == true
+            )
+            : null;
 
     public async Task<WorkItemActionResult> ApplyActionAsync(
         Guid workItemId,

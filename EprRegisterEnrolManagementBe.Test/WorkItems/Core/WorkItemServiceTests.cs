@@ -40,9 +40,11 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            new SubmissionReferenceGenerator(
-                new MongoReferenceSequenceStore(_clientFactory, NullLoggerFactory.Instance)
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                new SubmissionReferenceGenerator(
+                    new MongoReferenceSequenceStore(_clientFactory, NullLoggerFactory.Instance)
+                )
             ),
             _time
         );
@@ -55,8 +57,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.FixedSubmissionReference(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ),
             _time,
             postActionHooks: [hook]
         );
@@ -215,8 +219,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.FixedSubmissionReference(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ),
             _time,
             postActionHooks: [slowHook, pushHook]
         );
@@ -1748,8 +1754,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.FixedSubmissionReference(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ),
             time
         );
 
@@ -2126,8 +2134,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
-            TestReferenceGenerators.FixedSubmissionReference(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(generator),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ),
             _time
         );
 
@@ -2184,8 +2194,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
-            TestReferenceGenerators.FixedSubmissionReference(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(generator),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ),
             _time
         );
 
@@ -2219,8 +2231,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
-            TestReferenceGenerators.FixedSubmissionReference(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(generator),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ),
             _time
         );
 
@@ -2384,8 +2398,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             racing,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestReferenceGenerators.FixedSubmissionReference(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ),
             _time
         );
     }

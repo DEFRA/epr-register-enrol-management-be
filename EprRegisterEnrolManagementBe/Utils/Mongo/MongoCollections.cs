@@ -29,9 +29,11 @@ public static class MongoCollections
         {
             database.CreateCollection(collectionName);
         }
-        // Another instance starting at the same time created it first. Newer
-        // servers return success instead when the options match.
-        catch (MongoCommandException ex) when (ex.CodeName == NamespaceExists) { }
+        catch (MongoCommandException ex) when (ex.CodeName == NamespaceExists)
+        {
+            // Another instance starting at the same time created it first. Newer
+            // servers return success instead when the options match.
+        }
     }
 
     /// <summary>As <see cref="EnsureExists(IMongoDatabase, string)"/>, asynchronously.</summary>
@@ -61,9 +63,11 @@ public static class MongoCollections
         {
             await database.CreateCollectionAsync(collectionName, cancellationToken: cancellationToken);
         }
-        // Another instance starting at the same time created it first. Newer
-        // servers return success instead when the options match.
-        catch (MongoCommandException ex) when (ex.CodeName == NamespaceExists) { }
+        catch (MongoCommandException ex) when (ex.CodeName == NamespaceExists)
+        {
+            // Another instance starting at the same time created it first. Newer
+            // servers return success instead when the options match.
+        }
     }
 
     private static ListCollectionNamesOptions FilterFor(string collectionName) =>
