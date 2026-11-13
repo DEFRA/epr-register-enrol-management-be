@@ -1822,6 +1822,78 @@ public class ReAccreditationEndpointTests
         Assert.Equal("ORS-2026-0001", site["orsId"].AsString);
     }
 
+    [Fact]
+    public async Task ResumeFromQuery_saves_the_recalculated_charge_and_audits_the_old_and_new_values()
+    {
+        // RA-766: the operator backend recalculates the charge when a query
+        // changes the tonnage band or overseas sites; the Case Management service used to drop it.
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildQueried(id, TenantClientId, "query-during-duly-making");
+        item.Payload = new BsonDocument { ["chargeAmountPence"] = 218400 };
+        await factory.SeedAsync(item, cancellationToken);
+
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["prn-tonnage"],
+            Sections: null,
+            FileReferences: [],
+            ChargeAmountPence: 327600
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query",
+            request,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(327600, persisted!.Payload!["chargeAmountPence"].AsInt32);
+        Assert.False(persisted.Payload["latestSections"].AsBsonDocument.Contains("chargeAmountPence"));
+        var entry = Assert.Single(
+            persisted.AuditLog,
+            a => a.Action == ReAccreditationResumeService.AuditAction
+        );
+        Assert.Equal("218400", entry.Details["previousChargeAmountPence"]);
+        Assert.Equal("327600", entry.Details["chargeAmountPence"]);
+    }
+
+    [Fact]
+    public async Task ResumeFromQuery_rejects_a_negative_charge_with_a_400()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildQueried(id, TenantClientId, "query-during-duly-making");
+        item.Payload = new BsonDocument { ["chargeAmountPence"] = 218400 };
+        await factory.SeedAsync(item, cancellationToken);
+
+        var request = new ResumeFromQueryRequest(
+            new ResponderContactDetails("Jane Doe", "jane@example.com", "Manager"),
+            ["prn-tonnage"],
+            Sections: null,
+            FileReferences: [],
+            ChargeAmountPence: -1
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/resume-from-query",
+            request,
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("queried", persisted!.StateId);
+        Assert.Equal(218400, persisted.Payload!["chargeAmountPence"].AsInt32);
+    }
+
     /// <summary>
     /// RA-523 helper: drive resume-from-query the way production does — the
     /// operator backend (HttpCaseWorkingApiAdapter) calls it as the OPERATOR,
@@ -3004,6 +3076,256 @@ public class ReAccreditationEndpointTests
             item.Payload!["paymentDate"] = paymentDate;
         }
         return item;
+    }
+
+    // ---------------------- RA-766: PUT .../charge (temporary) ----------------------
+
+    private static WorkItem BuildChargeCandidate(
+        Guid id,
+        string stateId = "queried",
+        int? chargeAmountPence = 218400,
+        bool dulyMade = false
+    )
+    {
+        var item = BuildInState(id, stateId, TenantClientId);
+        item.Payload = new BsonDocument { ["someUnmodelledKey"] = "must-survive" };
+        if (chargeAmountPence is not null)
+        {
+            item.Payload["chargeAmountPence"] = chargeAmountPence;
+        }
+        if (dulyMade)
+        {
+            item.Payload["paymentDate"] = "2026-07-15";
+        }
+        return item;
+    }
+
+    [Fact]
+    public async Task SetCharge_updates_a_duly_made_item_without_changing_state_and_audits_it()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            BuildChargeCandidate(id, "duly-made", dulyMade: true),
+            cancellationToken
+        );
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/charge",
+            new { chargeAmountPence = 327600 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(cancellationToken)
+        );
+        Assert.Equal("updated", body.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal(327600, body.RootElement.GetProperty("chargeAmountPence").GetInt32());
+        Assert.True(body.RootElement.GetProperty("dulyMade").GetBoolean());
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal("duly-made", persisted!.StateId);
+        Assert.Equal(327600, persisted.Payload!["chargeAmountPence"].AsInt32);
+        Assert.Equal("must-survive", persisted.Payload["someUnmodelledKey"].AsString);
+        var entry = Assert.Single(persisted.AuditLog);
+        Assert.Equal("charge-corrected", entry.Action);
+        Assert.Equal("218400", entry.Details["previousChargeAmountPence"]);
+        Assert.Equal("327600", entry.Details["chargeAmountPence"]);
+        Assert.Equal("true", entry.Details["dulyMade"]);
+        Assert.Equal("RA-766", entry.Details["reason"]);
+    }
+
+    [Fact]
+    public async Task SetCharge_reports_unchanged_and_writes_nothing_when_the_charge_is_equal()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildChargeCandidate(id), cancellationToken);
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/charge",
+            new { chargeAmountPence = 218400 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(cancellationToken)
+        );
+        Assert.Equal("unchanged", body.RootElement.GetProperty("outcome").GetString());
+        Assert.False(body.RootElement.GetProperty("dulyMade").GetBoolean());
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Empty(persisted!.AuditLog);
+    }
+
+    [Fact]
+    public async Task SetCharge_sets_a_charge_on_an_item_that_has_none()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildChargeCandidate(id, chargeAmountPence: null), cancellationToken);
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/charge",
+            new { chargeAmountPence = 54600 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(54600, persisted!.Payload!["chargeAmountPence"].AsInt32);
+        Assert.Null(Assert.Single(persisted.AuditLog).Details["previousChargeAmountPence"]);
+    }
+
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    [InlineData("approved-pending-contact")]
+    [InlineData("rejected-pending-contact")]
+    public async Task SetCharge_is_a_409_for_a_closed_item_and_changes_nothing(string stateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildChargeCandidate(id, stateId), cancellationToken);
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/charge",
+            new { chargeAmountPence = 327600 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(218400, persisted!.Payload!["chargeAmountPence"].AsInt32);
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Theory]
+    [InlineData("submitted")]
+    [InlineData("duly-made")]
+    [InlineData("queried")]
+    [InlineData("updated")]
+    [InlineData("assessment-in-progress")]
+    [InlineData("awaiting-decision")]
+    public async Task SetCharge_updates_an_item_in_any_open_state(string stateId)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildChargeCandidate(id, stateId), cancellationToken);
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/charge",
+            new { chargeAmountPence = 327600 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SetCharge_is_a_404_for_an_unknown_work_item()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/re-accreditation/{Guid.NewGuid()}/charge",
+            new { chargeAmountPence = 327600 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task SetCharge_is_a_404_for_a_work_item_that_is_not_re_accreditation()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        var item = BuildChargeCandidate(id);
+        item = new WorkItem
+        {
+            Id = id,
+            TypeId = "some-other-type",
+            StateId = item.StateId,
+            SubmittedBy = TenantClientId,
+            Payload = item.Payload,
+        };
+        await factory.SeedAsync(item, cancellationToken);
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/charge",
+            new { chargeAmountPence = 327600 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("{}")]
+    [InlineData("""{"chargeAmountPence":null}""")]
+    [InlineData("""{"chargeAmountPence":-1}""")]
+    public async Task SetCharge_is_a_400_for_a_missing_or_negative_charge(string json)
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildChargeCandidate(id), cancellationToken);
+
+        var response = await client.PutAsync(
+            $"/work-items/re-accreditation/{id}/charge",
+            new StringContent(json, System.Text.Encoding.UTF8, "application/json"),
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(218400, persisted!.Payload!["chargeAmountPence"].AsInt32);
+    }
+
+    [Fact]
+    public async Task SetCharge_accepts_a_zero_charge()
+    {
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildChargeCandidate(id), cancellationToken);
+
+        var response = await client.PutAsJsonAsync(
+            $"/work-items/re-accreditation/{id}/charge",
+            new { chargeAmountPence = 0 },
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
+        Assert.Equal(0, persisted!.Payload!["chargeAmountPence"].AsInt32);
     }
 
     [Fact]

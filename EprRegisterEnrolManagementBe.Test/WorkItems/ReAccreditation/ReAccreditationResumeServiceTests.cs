@@ -921,6 +921,205 @@ public class ReAccreditationResumeServiceTests
             Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
     }
 
+    // ------------------------------ RA-766 charge ------------------------------
+
+    private static WorkItem Item(BsonDocument payload) =>
+        new() { TypeId = ReAccreditationType.Id, StateId = "queried", Payload = payload };
+
+    private static ResumeFromQueryRequest WithCharge(int? chargeAmountPence) =>
+        s_request with { ChargeAmountPence = chargeAmountPence };
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_saves_a_new_charge_on_the_top_level_payload_field()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.WorkItem.Payload = new BsonDocument { ["chargeAmountPence"] = 218400 };
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, WithCharge(327600), harness.User, ct);
+
+        Assert.True(result.IsSuccess);
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id, "chargeAmountPence", new BsonInt32(327600), ct);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_saves_a_zero_charge()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.WorkItem.Payload = new BsonDocument { ["chargeAmountPence"] = 218400 };
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, WithCharge(0), harness.User, ct);
+
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id, "chargeAmountPence", new BsonInt32(0), ct);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_saves_the_charge_when_none_is_stored()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+
+        await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, WithCharge(54600), harness.User, ct);
+
+        await harness.Persistence.Received(1).SetPayloadFieldAsync(
+            harness.WorkItem.Id, "chargeAmountPence", new BsonInt32(54600), ct);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_does_not_rewrite_a_charge_equal_to_the_stored_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.WorkItem.Payload = new BsonDocument { ["chargeAmountPence"] = 218400 };
+
+        await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, WithCharge(218400), harness.User, ct);
+
+        await harness.Persistence.DidNotReceive().SetPayloadFieldAsync(
+            Arg.Any<Guid>(), "chargeAmountPence", Arg.Any<BsonValue>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_keeps_the_stored_charge_when_none_is_sent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.WorkItem.Payload = new BsonDocument { ["chargeAmountPence"] = 218400 };
+
+        await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, WithCharge(null), harness.User, ct);
+
+        await harness.Persistence.DidNotReceive().SetPayloadFieldAsync(
+            Arg.Any<Guid>(), "chargeAmountPence", Arg.Any<BsonValue>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_does_not_write_the_charge_into_latest_sections()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        BsonValue? latestSections = null;
+        harness.Persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(), ReAccreditationResumeService.LatestSectionsPayloadField,
+                Arg.Do<BsonValue>(v => latestSections = v), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, WithCharge(327600), harness.User, ct);
+
+        Assert.NotNull(latestSections);
+        Assert.False(latestSections.AsBsonDocument.Contains("chargeAmountPence"));
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_records_the_old_and_new_charge_on_the_audit_entry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.WorkItem.Payload = new BsonDocument { ["chargeAmountPence"] = 218400 };
+
+        await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, WithCharge(327600), harness.User, ct);
+
+        await harness.AuditAppender.Received(1).AppendAsync(
+            harness.WorkItem.Id,
+            ReAccreditationResumeService.AuditAction,
+            ReAccreditationResumeService.AuditActionDisplayName,
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["previousChargeAmountPence"] == "218400" && d["chargeAmountPence"] == "327600"),
+            harness.User,
+            ct);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_audit_entry_has_no_charge_when_none_is_stored_or_sent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+
+        await harness.Service.ResumeFromQueryAsync(harness.WorkItem.Id, WithCharge(null), harness.User, ct);
+
+        await harness.AuditAppender.Received(1).AppendAsync(
+            harness.WorkItem.Id,
+            ReAccreditationResumeService.AuditAction,
+            ReAccreditationResumeService.AuditActionDisplayName,
+            Arg.Is<Dictionary<string, string?>>(d =>
+                d["previousChargeAmountPence"] == null && d["chargeAmountPence"] == null),
+            harness.User,
+            ct);
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_a_duplicate_resume_changes_nothing()
+    {
+        // The first call moved the item out of 'queried'; the retry is an
+        // idempotent replay and must not write the charge (or anything) again.
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment", stateId: "updated");
+        harness.WorkItem.Payload = new BsonDocument { ["chargeAmountPence"] = 218400 };
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, WithCharge(327600), harness.User, ct);
+
+        Assert.True(result.IsIdempotentReplay);
+        await harness.Persistence.DidNotReceive().SetPayloadFieldAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<BsonValue>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task ResumeFromQueryAsync_fails_not_found_when_the_charge_write_matches_no_work_item()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var harness = new Harness("query-during-assessment");
+        harness.Persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(), "chargeAmountPence", Arg.Any<BsonValue>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await harness.Service.ResumeFromQueryAsync(
+            harness.WorkItem.Id, WithCharge(327600), harness.User, ct);
+
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+        await harness.Engine.DidNotReceive().ApplyActionAsync(
+            Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<ClaimsPrincipal>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(null, null)]
+    [InlineData(0, 0)]
+    [InlineData(327600, 327600)]
+    public void ReadChargeAmountPence_reads_a_whole_number_and_nothing_else(int? stored, int? expected)
+    {
+        var item = Item(
+            stored is null ? new BsonDocument() : new BsonDocument { ["chargeAmountPence"] = stored });
+
+        Assert.Equal(expected, ReAccreditationResumeService.ReadChargeAmountPence(item));
+    }
+
+    [Fact]
+    public void ReadChargeAmountPence_reads_an_int64_that_fits_an_int()
+    {
+        Assert.Equal(327600, ReAccreditationResumeService.ReadChargeAmountPence(
+            Item(new BsonDocument { ["chargeAmountPence"] = 327600L })));
+    }
+
+    [Fact]
+    public void ReadChargeAmountPence_ignores_a_value_that_is_not_a_whole_int()
+    {
+        Assert.Null(ReAccreditationResumeService.ReadChargeAmountPence(
+            Item(new BsonDocument { ["chargeAmountPence"] = 12.5 })));
+        Assert.Null(ReAccreditationResumeService.ReadChargeAmountPence(
+            Item(new BsonDocument { ["chargeAmountPence"] = 4_000_000_000L })));
+        Assert.Null(ReAccreditationResumeService.ReadChargeAmountPence(
+            Item(new BsonDocument { ["chargeAmountPence"] = "327600" })));
+    }
+
     private sealed class Harness
     {
         public Harness(

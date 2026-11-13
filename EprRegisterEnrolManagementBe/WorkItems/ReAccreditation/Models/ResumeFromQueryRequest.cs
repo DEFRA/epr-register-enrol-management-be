@@ -15,12 +15,19 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 /// file list itself before calling this endpoint. All members are nullable
 /// so a structurally-broken body reaches <see cref="ReAccreditationResumeValidator"/>
 /// and is rejected with a ProblemDetails 400 rather than a binding failure.
+///
+/// RA-766: <see cref="ChargeAmountPence"/> is the registration charge the
+/// operator backend recalculated for the resubmitted application, in PENCE
+/// (the operator backend is the only place the charge is calculated). Null
+/// means "not sent" (an older operator backend, or no band) and leaves the
+/// stored charge as it is.
 /// </summary>
 internal sealed record ResumeFromQueryRequest(
     ResponderContactDetails? ResponderContactDetails,
     IReadOnlyList<string>? SectionKeys,
     Dictionary<string, JsonElement>? Sections,
-    IReadOnlyList<SectionFileReference>? FileReferences);
+    IReadOnlyList<SectionFileReference>? FileReferences,
+    int? ChargeAmountPence = null);
 
 /// <summary>
 /// Contact details for whoever resubmitted the application, captured on the

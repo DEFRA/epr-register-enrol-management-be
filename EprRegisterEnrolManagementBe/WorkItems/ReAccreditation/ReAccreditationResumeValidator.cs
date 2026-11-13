@@ -22,6 +22,7 @@ internal static class ReAccreditationResumeValidator
     public const string MissingResponderMessage =
         "responderContactDetails.fullName, .email and .role are all required";
     public const string InvalidSectionValueMessage = "each entry in sections must be a JSON object";
+    public const string NegativeChargeMessage = "chargeAmountPence must not be negative";
 
     public static string? Validate(ResumeFromQueryRequest? request)
     {
@@ -61,6 +62,12 @@ internal static class ReAccreditationResumeValidator
                     return InvalidSectionValueMessage;
                 }
             }
+        }
+
+        // RA-766: null means "not sent". Zero is a legitimate charge.
+        if (request.ChargeAmountPence is < 0)
+        {
+            return NegativeChargeMessage;
         }
 
         return null;

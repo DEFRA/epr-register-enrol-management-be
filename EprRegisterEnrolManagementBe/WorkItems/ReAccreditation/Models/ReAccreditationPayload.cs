@@ -167,8 +167,11 @@ internal sealed record ReAccreditationPayload
     /// submission payload and displayed, read-only, on the duly-making page so
     /// the regulator can confirm the charge before recording the payment date.
     ///
-    /// Nullable and never written by this service. Absent on every work item
-    /// submitted before RA-316, so readers must degrade rather than assume a
+    /// Nullable. RA-766: written by this service only to keep it in step with
+    /// the operator backend, on <c>resume-from-query</c> (the operator backend
+    /// recalculates it when a query changes the tonnage band or overseas sites)
+    /// and by the temporary <c>PUT .../charge</c> correction endpoint. Absent
+    /// on every work item submitted before RA-316, so readers must degrade rather than assume a
     /// value; note that <c>0</c> is a legitimate charge and must not be
     /// conflated with "missing".
     /// </summary>
