@@ -1103,6 +1103,13 @@ public class ReAccreditationResumeServiceTests
     }
 
     [Fact]
+    public void ReadChargeAmountPence_reads_an_int64_that_fits_an_int()
+    {
+        Assert.Equal(327600, ReAccreditationResumeService.ReadChargeAmountPence(
+            Item(new BsonDocument { ["chargeAmountPence"] = 327600L })));
+    }
+
+    [Fact]
     public void ReadChargeAmountPence_ignores_a_value_that_is_not_a_whole_int()
     {
         Assert.Null(ReAccreditationResumeService.ReadChargeAmountPence(

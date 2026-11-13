@@ -115,15 +115,18 @@ internal sealed class ReAccreditationChargeCorrectionService(
                 );
             }
 
-            logger.LogInformation(
-                "Charge of re-accreditation work item {WorkItemId} corrected by {UserId} "
-                    + "from {PreviousChargeAmountPence} to {ChargeAmountPence} pence (duly made: {DulyMade}).",
-                workItemId,
-                user.FindFirstValue("user:id"),
-                previous?.ToString(CultureInfo.InvariantCulture) ?? "none",
-                chargeAmountPence,
-                dulyMade
-            );
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Charge of re-accreditation work item {WorkItemId} corrected by {UserId} "
+                        + "from {PreviousChargeAmountPence} to {ChargeAmountPence} pence (duly made: {DulyMade}).",
+                    workItemId,
+                    user.FindFirstValue("user:id"),
+                    previous?.ToString(CultureInfo.InvariantCulture) ?? "none",
+                    chargeAmountPence,
+                    dulyMade
+                );
+            }
             return new ChargeCorrectionResult
             {
                 Outcome = ChargeCorrectionResult.Updated,
