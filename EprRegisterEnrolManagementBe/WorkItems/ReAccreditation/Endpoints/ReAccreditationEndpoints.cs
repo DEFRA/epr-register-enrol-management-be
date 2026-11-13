@@ -90,6 +90,11 @@ internal static class ReAccreditationEndpoints
     // "approved"/"rejected" string, so 4 KiB is already absurdly generous.
     public const long MaxDecisionBodyBytes = 4 * 1024;
 
+    // RA-766 (temporary): the charge endpoint calls .DisableValidation() so a
+    // missing or malformed value is a ProblemDetails 400, so it carries its own
+    // size guard. A legitimate body is one integer, so 1 KiB is generous.
+    public const long MaxSetChargeBodyBytes = 1024;
+
     /// <summary>
     /// ProblemDetails title for every log-decision failure. Constant across all
     /// of them on purpose: the frontend switches on <c>errorCode</c> or the
@@ -115,6 +120,9 @@ internal static class ReAccreditationEndpoints
     /// Constant for the same reason as <see cref="DulyMakeProblemTitle"/>.
     /// </summary>
     public const string ChangePaymentDateProblemTitle = "Could not change payment date";
+
+    /// <summary>RA-766 (temporary): ProblemDetails title for every charge correction failure.</summary>
+    public const string SetChargeProblemTitle = "Could not set re-accreditation charge";
 
     /// <summary>
     /// ProblemDetails title for every recycling-operations update failure.
@@ -162,6 +170,17 @@ internal static class ReAccreditationEndpoints
             .WithName("ChangePaymentDateReAccreditation")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxChangePaymentDateBodyBytes))
+            .RequireAuthorization();
+
+        // RA-766 (temporary, remove after the one-off correction is verified):
+        // called by the operator backend's charge correction migration to set the
+        // charge on a work item whose charge was never updated after a query.
+        // No state change.
+        group
+            .MapPut("/{id:guid}/charge", SetCharge)
+            .WithName("SetReAccreditationCharge")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxSetChargeBodyBytes))
             .RequireAuthorization();
 
         // RA-410: bespoke log-decision endpoint. Both hops of a determination
@@ -474,6 +493,58 @@ internal static class ReAccreditationEndpoints
         }
 
         return ToServiceFailureProblem(result, DulyMakeProblemTitle);
+    }
+
+    /// <summary>
+    /// RA-766 (temporary): set the charge held on a re-accreditation work item.
+    /// 400 for a missing or negative charge, 404 when the work item is not found
+    /// or is not re-accreditation, 409 when it is closed (approved, refused,
+    /// withdrawn or awaiting applicant contact). Duly-made items are updated.
+    /// </summary>
+    public static async Task<
+        Results<Ok<SetChargeResponse>, NotFound, ProblemHttpResult>
+    > SetCharge(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromBody] SetChargeRequest? request,
+        [FromServices] IReAccreditationChargeCorrectionService chargeCorrectionService,
+        CancellationToken cancellationToken
+    )
+    {
+        if (request?.ChargeAmountPence is not { } chargeAmountPence || chargeAmountPence < 0)
+        {
+            return TypedResults.Problem(
+                title: SetChargeProblemTitle,
+                detail: "chargeAmountPence is required and must not be negative",
+                statusCode: StatusCodes.Status400BadRequest
+            );
+        }
+
+        var result = await chargeCorrectionService.CorrectChargeAsync(
+            id,
+            chargeAmountPence,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.Failure is null)
+        {
+            return TypedResults.Ok(
+                new SetChargeResponse(result.Outcome!, result.ChargeAmountPence, result.DulyMade)
+            );
+        }
+
+        // A work item of another type is "not re-accreditation": 404, as the plan says.
+        if (
+            result.Failure.FailureCode
+            is WorkItemActionFailureCode.WorkItemNotFound
+                or WorkItemActionFailureCode.UnknownAction
+        )
+        {
+            return TypedResults.NotFound();
+        }
+
+        return ToServiceFailureProblem(result.Failure, SetChargeProblemTitle);
     }
 
     /// <summary>

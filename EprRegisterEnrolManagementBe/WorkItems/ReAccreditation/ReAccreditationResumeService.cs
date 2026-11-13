@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
@@ -44,6 +45,9 @@ internal sealed class ReAccreditationResumeService(
     public const string AuditAction = "query-responded";
     public const string AuditActionDisplayName = "Query responded";
     public const string LatestSectionsPayloadField = "latestSections";
+
+    /// <summary>RA-766: the top-level payload field holding the registration charge, in pence.</summary>
+    public const string ChargeAmountPencePayloadField = "chargeAmountPence";
 
     /// <summary>
     /// RA-523: how many times the post-resume assignment restore will retry a
@@ -253,6 +257,14 @@ internal sealed class ReAccreditationResumeService(
             return stampFailure;
         }
 
+        var previousChargeAmountPence = ReadChargeAmountPence(workItem);
+        var chargeFailure = await StampChargeAsync(
+            workItemId, request.ChargeAmountPence, previousChargeAmountPence, cancellationToken);
+        if (chargeFailure is not null)
+        {
+            return chargeFailure;
+        }
+
         var result = await engine.ApplyActionAsync(workItemId, resumeActionId, user, cancellationToken);
         if (!result.IsSuccess)
         {
@@ -271,6 +283,8 @@ internal sealed class ReAccreditationResumeService(
                 ["responderEmail"] = request.ResponderContactDetails?.Email,
                 ["responderRole"] = request.ResponderContactDetails?.Role,
                 ["fileReferences"] = SerialiseFileReferences(request.FileReferences),
+                ["previousChargeAmountPence"] = previousChargeAmountPence?.ToString(CultureInfo.InvariantCulture),
+                ["chargeAmountPence"] = request.ChargeAmountPence?.ToString(CultureInfo.InvariantCulture),
             },
             user,
             cancellationToken);
@@ -515,6 +529,53 @@ internal sealed class ReAccreditationResumeService(
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// RA-766: save the charge the operator backend recalculated after the
+    /// query. The top-level payload field only, never <c>latestSections</c>.
+    /// Skipped when none was sent (so a stored charge is never cleared) or when
+    /// it equals the stored one (so a replay writes nothing). The comparison
+    /// uses the work item already loaded, not a re-read.
+    /// </summary>
+    private async Task<WorkItemActionResult?> StampChargeAsync(
+        Guid workItemId,
+        int? chargeAmountPence,
+        int? storedChargeAmountPence,
+        CancellationToken cancellationToken)
+    {
+        if (chargeAmountPence is not { } charge || charge == storedChargeAmountPence)
+        {
+            return null;
+        }
+
+        var matched = await persistence.SetPayloadFieldAsync(
+            workItemId, ChargeAmountPencePayloadField, new BsonInt32(charge), cancellationToken);
+
+        return matched
+            ? null
+            : WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.WorkItemNotFound,
+                $"No work item exists with id '{workItemId}'.");
+    }
+
+    /// <summary>
+    /// The stored charge in pence, or null when absent (submitted before
+    /// RA-316) or not a whole number that fits an int.
+    /// </summary>
+    internal static int? ReadChargeAmountPence(WorkItem workItem)
+    {
+        if (workItem.Payload is null
+            || !workItem.Payload.TryGetValue(ChargeAmountPencePayloadField, out var value)
+            || !value.IsNumeric)
+        {
+            return null;
+        }
+
+        var number = value.ToDouble();
+        return number == Math.Truncate(number) && number is >= int.MinValue and <= int.MaxValue
+            ? (int)number
+            : null;
     }
 
     private static BsonValue ToBsonValue(string? value) => value is null ? BsonNull.Value : new BsonString(value);

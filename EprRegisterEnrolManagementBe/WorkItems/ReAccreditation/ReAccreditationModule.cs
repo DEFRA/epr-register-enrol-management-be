@@ -275,6 +275,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IReAccreditationChangePaymentDateService,
             ReAccreditationChangePaymentDateService
         >();
+        // RA-766 (temporary, remove with the PUT .../charge endpoint): sets the
+        // charge held on a work item for the operator backend's one-off correction.
+        services.AddSingleton<
+            IReAccreditationChargeCorrectionService,
+            ReAccreditationChargeCorrectionService
+        >();
         // RA-291: bespoke query workflow (state-derived query-during-* action
         // + query-detail audit entry).
         services.AddSingleton<IReAccreditationQueryService, ReAccreditationQueryService>();
