@@ -54,6 +54,14 @@ public interface IWorkItemPostActionHook
     /// effects (e.g. notifying the regulator that an officer has been
     /// assigned).
     ///
+    /// RA-000: it also fires when a transition assigns the item as part of
+    /// its <see cref="WorkItemActionWrite"/>
+    /// (<see cref="IWorkItemService.ApplyActionAsync(Guid, string, WorkItemActionWrite, ClaimsPrincipal, CancellationToken)"/>).
+    /// The assignment and the transition are committed together, so the
+    /// <see cref="WorkItem"/> passed in is already in the transition's
+    /// to-state, and this hook runs before that transition's
+    /// <see cref="OnActionAppliedAsync"/> hooks.
+    ///
     /// Only fires on a real change — an idempotent no-op (re-assigning the
     /// same user, unassigning an already-unassigned item) does not invoke
     /// the hook, mirroring the framework rule that no-ops write no audit
