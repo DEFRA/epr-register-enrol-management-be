@@ -8,11 +8,13 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 /// which is why it lives on the payload rather than being passed sideways.
 /// <c>ReAccreditationQueryService</c> writes it in the same versioned save as
 /// the query transition (RA-000), so the post-action hooks that run inside
-/// <c>ApplyActionAsync</c> — the query push and
-/// <c>ReAccreditationNotificationHook</c>'s Queried email — read the very
-/// record that transition committed. The same record is what the audit entry
-/// is built from, so the reason in the email is by construction the reason
-/// recorded against the application.
+/// <c>ApplyActionAsync</c> read the very record that transition committed:
+/// the query push sends its reason and sections to the operator backend, and
+/// <c>ReAccreditationNotificationHook</c>'s Queried email uses only
+/// <see cref="RaisedAt"/> (RA-581 removed the reason from that template). The
+/// same record is what the <c>application-queried</c> audit entry is built
+/// from, so the pushed reason is by construction the reason recorded against
+/// the application.
 ///
 /// Only meaningful while the work item is in the <c>queried</c> state. It is
 /// deliberately not cleared afterwards — the next query overwrites it, and

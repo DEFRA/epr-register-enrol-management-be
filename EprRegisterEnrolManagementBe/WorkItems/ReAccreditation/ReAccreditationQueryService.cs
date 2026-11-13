@@ -16,8 +16,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// for any other transition. The only bespoke part is (a) resolving which
 /// <c>query-during-*</c> action applies to the item's current state, (b)
 /// self-assigning the application to the querying case worker, (c) stamping
-/// the open <see cref="Models.CurrentQuery"/> onto the payload so the hooks can
-/// push it and put it in the operator's email, and (d) appending the RA-291
+/// the open <see cref="Models.CurrentQuery"/> onto the payload so the query
+/// push can send its reason and sections and the Queried email the date it was
+/// raised, and (d) appending the RA-291
 /// query detail — selected sections and free-text reason — to the audit log so
 /// AC05 is satisfied and the application history renders what was asked for.
 ///
@@ -149,7 +150,8 @@ internal sealed class ReAccreditationQueryService(
         }
 
         // RA-291: the open query is payload state the hooks read inside
-        // ApplyActionAsync (the reason and sections they push and email).
+        // ApplyActionAsync: the push sends its reason and sections, the Queried
+        // email the date it was raised.
         // RA-000: it is written in the transition's own versioned save, never
         // before it, so an overlapping request cannot replace it and a failed
         // transition cannot leave it behind. Setting only payload.currentQuery
