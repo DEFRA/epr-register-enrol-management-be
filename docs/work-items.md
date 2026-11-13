@@ -285,16 +285,16 @@ type is configured. Every setting is code, not runtime data:
 | Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` |
 
 - **Category** groups related types so the list can filter on the group
-  without naming each type. In-year change types (add-ORS now; update ORS and
+  without naming each type: `GET /work-items?category=in-year-change`
+  (repeatable, and unioned with any `typeId`). In-year change types (add-ORS now; update ORS and
   tonnage band upgrade later) declare `WorkItemCategories.InYearChange`
   (`in-year-change`). Each change type still has its own `TypeId`, so a
   type's workflow can change on its own.
 - **Splits a submission per site** marks types whose `sites[]` is split into
   one work item per site, all sharing the submission's
   `SUB-{yyyy}-{sequence}` reference (see
-  [Ingestion API](#ingestion-api)). The list's `category` filter arrives in a
-  later RA-739 task. A type without it (re-accreditation) still gets a
-  submission reference, on its single work item.
+  [Ingestion API](#ingestion-api)). A type without it (re-accreditation)
+  still gets a submission reference, on its single work item.
 - **Workflow** is a `WorkItemWorkflow`: the states (in status sort order),
   their labels, the transitions and the initial state. `StandardWorkflow`
   (`WorkItems/Workflows/StandardWorkflow.cs`) is re-accreditation's lifecycle

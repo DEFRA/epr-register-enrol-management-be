@@ -8,8 +8,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// framework's "one folder + one registration line" promise.
 ///
 /// RA-739: this is re-accreditation's case type configuration — its label,
-/// category (none), in-year change code (none), submission reference use
-/// (none) and workflow. Its states and transitions are the shared
+/// category (none), in-year change code (none), not split per site (its
+/// single work item still gets a submission reference) and workflow. Its states and transitions are the shared
 /// <see cref="StandardWorkflow"/>, which follows the workflow diagram
 /// referenced in RA-85. The state and action id constants below are kept so
 /// re-accreditation's services can keep naming them from their own type.
