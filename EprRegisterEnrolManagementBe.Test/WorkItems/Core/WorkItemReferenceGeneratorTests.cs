@@ -29,11 +29,12 @@ public sealed class WorkItemReferenceGeneratorTests
             .Returns("IYC-ORS-2026-00000");
 
         var reference = await Generator
-            .ForType(InYearChangeType())
+            .ForType(InYearChangeType(), WorkItemSubmissionOrigin.OperatorBackend)
             .GenerateAsync(payload, attempt: 2, TestContext.Current.CancellationToken);
 
         Assert.Equal("IYC-ORS-2026-00000", reference);
-        _ap.DidNotReceive().Generate(Arg.Any<BsonDocument>(), Arg.Any<int>());
+        _ap.DidNotReceive()
+            .Generate(Arg.Any<BsonDocument>(), Arg.Any<WorkItemSubmissionOrigin>(), Arg.Any<int>());
     }
 
     [Fact]
@@ -42,17 +43,25 @@ public sealed class WorkItemReferenceGeneratorTests
         var payload = new BsonDocument();
         _iyc.Validate(payload).Returns("bad year");
 
-        Assert.Equal("bad year", Generator.ForType(InYearChangeType()).ValidatePayload(payload));
+        Assert.Equal("bad year", Generator
+                .ForType(InYearChangeType(), WorkItemSubmissionOrigin.OperatorBackend)
+                .ValidatePayload(payload));
     }
 
-    [Fact]
-    public async Task ForType_without_a_change_code_uses_the_AP_generator_with_the_attempt()
+    // The submission origin reaches the AP generator unchanged, so only a
+    // hand-created work item can use its operatorOrganisationId fallback.
+    [Theory]
+    [InlineData(WorkItemSubmissionOrigin.OperatorBackend)]
+    [InlineData(WorkItemSubmissionOrigin.HandCreated)]
+    public async Task ForType_without_a_change_code_uses_the_AP_generator_with_the_origin_and_attempt(
+        WorkItemSubmissionOrigin origin
+    )
     {
         var payload = new BsonDocument();
-        _ap.Generate(payload, 3).Returns("AP26EA3");
+        _ap.Generate(payload, origin, 3).Returns("AP26EA3");
 
         // The type id alone never selects IYC: only the declared code does.
-        var format = Generator.ForType(new TestWorkItemType("add-overseas-site", "No code"));
+        var format = Generator.ForType(new TestWorkItemType("add-overseas-site", "No code"), origin);
 
         Assert.Null(format.ValidatePayload(payload));
         Assert.Equal(
