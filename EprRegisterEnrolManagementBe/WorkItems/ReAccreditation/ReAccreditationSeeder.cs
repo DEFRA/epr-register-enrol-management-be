@@ -174,8 +174,18 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
     public string TypeId => ReAccreditationType.Id;
 
-    public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time) =>
-        BuildSeeds(type, time).Select(StampOperatorSubmissionFields);
+    // Payload field and value the seeds below repeat.
+    private const string WasteProcessingTypeField = "wasteProcessingType";
+    private const string ExporterWasteProcessingType = "exporter";
+
+    // Argument checks run eagerly here; BuildSeeds is the lazy iterator (S4456).
+    public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
+    {
+        ArgumentNullException.ThrowIfNull(type);
+        ArgumentNullException.ThrowIfNull(time);
+
+        return BuildSeeds(type, time).Select(StampOperatorSubmissionFields);
+    }
 
     /// <summary>
     /// RA-000 AC 7: every seeded item stands in for an operator backend
@@ -191,7 +201,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     private static WorkItem StampOperatorSubmissionFields(WorkItem item)
     {
         var payload = item.Payload;
-        if (!payload.Contains("operatorOrgNumber"))
+        if (!payload.Contains(OperatorOrgNumber.Field))
         {
             var organisationId = payload.GetValue("operatorOrganisationId", BsonNull.Value);
             if (
@@ -210,7 +220,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 );
             }
 
-            payload["operatorOrgNumber"] = orgNumber;
+            payload[OperatorOrgNumber.Field] = orgNumber;
         }
 
         if (!payload.Contains("paymentReference"))
@@ -229,12 +239,12 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// </summary>
     private static string SeedPaymentReference(BsonDocument payload)
     {
-        var orgNumber = payload["operatorOrgNumber"].ToInt32();
+        var orgNumber = payload[OperatorOrgNumber.Field].ToInt32();
         var isExporter = string.Equals(
-            payload.GetValue("wasteProcessingType", BsonNull.Value) is { IsString: true } type
+            payload.GetValue(WasteProcessingTypeField, BsonNull.Value) is { IsString: true } type
                 ? type.AsString
                 : null,
-            "exporter",
+            ExporterWasteProcessingType,
             StringComparison.OrdinalIgnoreCase
         );
         return payload["nation"].AsString switch
@@ -251,9 +261,6 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
     private IEnumerable<WorkItem> BuildSeeds(IWorkItemType type, TimeProvider time)
     {
-        ArgumentNullException.ThrowIfNull(type);
-        ArgumentNullException.ThrowIfNull(time);
-
         var now = time.GetUtcNow().UtcDateTime;
 
         // RA-316: every payload below carries chargeAmountPence (integer pence,
@@ -319,7 +326,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // as a Reprocessor and the BES/ORS sections stop rendering.
                 // RA-434-processortype independently relies on the same field
                 // for the same reason (its BES/ORS fixture).
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 // RA-412 (self-review): AccreditationIdGenerator and
                 // ApplicationReferenceGenerator both require this on the
                 // Exporter branch (the registered-office postcode, per
@@ -516,7 +523,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // header/audit-log/list card prefer this field over operatorOrganisationId, rather than
         // the two happening to coincide. operatorOrganisationId itself stays untouched at
         // "500009", the org id segment of this item's registrationNumber.
-        fullPayloadVerificationItem.Payload["operatorOrgNumber"] = 500010;
+        fullPayloadVerificationItem.Payload[OperatorOrgNumber.Field] = 500010;
         yield return fullPayloadVerificationItem;
 
         // RA-292: the ORS / interim-site / authority-to-issue fixture.
@@ -569,7 +576,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // item above — this item's overseasSites/ORS sites need it too.
                 // RA-434-processortype independently relies on the same field
                 // for the same reason (this is the RA-292 ORS/BES fixture).
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
                 ["companyRegisterAddressPostcode"] = "SA1 1AA",
@@ -881,7 +888,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = GlobalGlassExportsOrganisationName,
                 ["registrationNumber"] = "R25EX5000110506GR",
                 ["operatorApplicationId"] = "app-global-glass-exports-001",
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
                 ["companyRegisterAddressPostcode"] = "CF10 1AA",
@@ -928,7 +935,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "continental.exports@example.com",
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 ["companiesHouseNumber"] = "09876543",
                 ["companyRegisteredAddress"] = "1 Continental Way, Dover, Kent",
                 ["companyRegisterAddressPostcode"] = "CT16 1AA",
@@ -1027,7 +1034,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = Ra557OverseasSitesResubmitOrganisationName,
                 ["registrationNumber"] = "R25EX5000140557PL",
                 ["operatorApplicationId"] = "app-ra557-ors-resubmit-001",
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 ["companyRegisterAddressPostcode"] = "BS1 4ST",
                 ["material"] = "plastic",
                 ["previousAccreditationYear"] = 2025,
@@ -1064,7 +1071,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = MultipleInterimSitesOrganisationName,
                 ["registrationNumber"] = "R25WX5000160603FB",
                 ["operatorApplicationId"] = "app-multiple-interim-sites-001",
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 ["companyRegisterAddressPostcode"] = "CF10 1EP",
                 ["material"] = "fibre",
                 ["previousAccreditationYear"] = 2025,

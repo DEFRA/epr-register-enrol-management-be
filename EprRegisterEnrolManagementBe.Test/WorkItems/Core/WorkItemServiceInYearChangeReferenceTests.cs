@@ -50,11 +50,13 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             logger ?? NullLogger<WorkItemService>.Instance,
-            new WorkItemReferenceGenerator(
-                new ApplicationReferenceGenerator(_time),
-                new InYearChangeReferenceGenerator(_sequenceStore)
+            new WorkItemSubmissionServices(
+                new WorkItemReferenceGenerator(
+                    new ApplicationReferenceGenerator(_time),
+                    new InYearChangeReferenceGenerator(_sequenceStore)
+                ),
+                TestOperatorBackendCaller.Default
             ),
-            TestOperatorBackendCaller.Default,
             _time
         );
 
@@ -155,42 +157,56 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             ["paymentReference"] = "PR/PK/REP/500500",
         };
 
-    public static TheoryData<string, BsonValue?, string> InvalidOperatorChangeRequests() =>
+    private const string Absent = "<absent>";
+
+    // Each invalid value, by label, so the theory rows stay serializable (xUnit1045).
+    private static readonly Dictionary<string, BsonValue> s_invalidValues = new()
+    {
+        ["null"] = BsonNull.Value,
+        ["string"] = "500500",
+        ["negative"] = -1,
+        ["above 999999"] = 1_000_000,
+        ["fractional"] = 500500.5,
+        ["empty"] = "",
+        ["blank"] = "   ",
+    };
+
+    public static TheoryData<string, string, string> InvalidOperatorChangeRequests() =>
         new()
         {
-            { "operatorOrgNumber", null, OperatorSubmissionRequirements.MissingOrgNumberMessage },
-            { "operatorOrgNumber", BsonNull.Value, OperatorSubmissionRequirements.MissingOrgNumberMessage },
-            { "operatorOrgNumber", "500500", OperatorSubmissionRequirements.MissingOrgNumberMessage },
-            { "operatorOrgNumber", -1, OperatorSubmissionRequirements.MissingOrgNumberMessage },
-            { "operatorOrgNumber", 1_000_000, OperatorSubmissionRequirements.MissingOrgNumberMessage },
-            { "operatorOrgNumber", 500500.5, OperatorSubmissionRequirements.MissingOrgNumberMessage },
-            { "paymentReference", null, OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
-            { "paymentReference", BsonNull.Value, OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
-            { "paymentReference", "", OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
-            { "paymentReference", "   ", OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
+            { "operatorOrgNumber", Absent, OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", "null", OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", "string", OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", "negative", OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", "above 999999", OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", "fractional", OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "paymentReference", Absent, OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
+            { "paymentReference", "null", OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
+            { "paymentReference", "empty", OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
+            { "paymentReference", "blank", OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
         };
 
     // RA-000 AC 6/7: an in-year change request from the operator backend without a valid org
     // number or payment reference is rejected before a sequence number is allocated, logs at
-    // Error with the ids, and stores nothing. A null value means the field is absent.
+    // Error with the ids, and stores nothing.
     [Theory]
     [MemberData(nameof(InvalidOperatorChangeRequests))]
     public async Task Submit_add_overseas_site_from_the_operator_backend_without_a_valid_field_is_rejected(
         string field,
-        BsonValue? value,
+        string label,
         string expectedMessage
     )
     {
         var type = AddOverseasSiteType();
         var logger = new ListLogger<WorkItemService>();
         var payload = OperatorChangeRequestPayload();
-        if (value is null)
+        if (label == Absent)
         {
             payload.Remove(field);
         }
         else
         {
-            payload[field] = value;
+            payload[field] = s_invalidValues[label];
         }
 
         var result = await BuildService(type, logger)

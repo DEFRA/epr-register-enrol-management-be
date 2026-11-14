@@ -92,7 +92,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA500021AAGL", reference);
     }
@@ -108,7 +108,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: postcode);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal(expectedAgency, reference.Substring(4, 2));
     }
@@ -130,7 +130,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: postcode, nation: nation);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal(expectedAgency, reference.Substring(4, 2));
     }
@@ -143,7 +143,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: "EH1 1AA", nation: nation);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         // Falls through to the postcode-derived code (Scotland, EH1) rather than defaulting to
         // England outright - an unrecognised nation is not the same as an absent one, but neither
@@ -158,7 +158,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: "CF10 1AA", nation: null);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("NR", reference.Substring(4, 2));
     }
@@ -173,7 +173,7 @@ public sealed class ApplicationReferenceGeneratorTests
             material: "glass"
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal(reference.ToUpperInvariant(), reference);
         Assert.Equal("AP26EA500021AAGL", reference);
@@ -186,7 +186,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator(fakeTime);
         var payload = MakePayload(accreditationYear: null);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.StartsWith("AP31", reference);
     }
@@ -200,7 +200,7 @@ public sealed class ApplicationReferenceGeneratorTests
             operatorOrganisationId: "6a2fcd74e16883c137d01188"
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         // Only the last 5 chars of the raw id ("01188") appear, not the full 24-char id.
         Assert.Equal("AP26EA011881AAGL", reference);
@@ -218,7 +218,7 @@ public sealed class ApplicationReferenceGeneratorTests
             operatorOrgNumber: 500500
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA5005001AAGL", reference);
         Assert.DoesNotContain("01188", reference, StringComparison.OrdinalIgnoreCase);
@@ -232,7 +232,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, operatorOrganisationId: "50002");
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA500021AAGL", reference);
     }
@@ -245,7 +245,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, operatorOrgNumber: 42);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA0000421AAGL", reference);
     }
@@ -270,7 +270,7 @@ public sealed class ApplicationReferenceGeneratorTests
             operatorOrgNumber: invalidValue
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA011881AAGL", reference);
     }
@@ -285,7 +285,7 @@ public sealed class ApplicationReferenceGeneratorTests
         );
         payload["operatorOrgNumber"] = 500500.7;
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA011881AAGL", reference);
     }
@@ -301,7 +301,7 @@ public sealed class ApplicationReferenceGeneratorTests
         // (int)long.MaxValue silently wraps to -1 - confirm that never reaches the reference.
         payload["operatorOrgNumber"] = long.MaxValue;
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA011881AAGL", reference);
     }
@@ -323,7 +323,7 @@ public sealed class ApplicationReferenceGeneratorTests
         // confirm Generate degrades to the fallback instead of throwing past the caller.
         payload["operatorOrgNumber"] = invalidValue;
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA011881AAGL", reference);
     }
@@ -341,7 +341,7 @@ public sealed class ApplicationReferenceGeneratorTests
         // must degrade to the fallback instead of throwing or embedding a garbage segment.
         payload["operatorOrgNumber"] = new BsonDecimal128(decimal.MaxValue);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA011881AAGL", reference);
     }
@@ -352,7 +352,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, operatorOrgNumber: 999999);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA9999991AAGL", reference);
     }
@@ -367,7 +367,7 @@ public sealed class ApplicationReferenceGeneratorTests
             operatorOrgNumber: 500500
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.OperatorBackend);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.OperatorBackend, attempt: 1);
 
         Assert.Equal("AP26EA5005001AAGL", reference);
     }
@@ -385,7 +385,7 @@ public sealed class ApplicationReferenceGeneratorTests
         );
 
         Assert.Throws<InvalidOperationException>(() =>
-            generator.Generate(payload, WorkItemSubmissionOrigin.OperatorBackend)
+            generator.Generate(payload, WorkItemSubmissionOrigin.OperatorBackend, attempt: 1)
         );
     }
 
@@ -405,7 +405,7 @@ public sealed class ApplicationReferenceGeneratorTests
         payload["operatorOrgNumber"] = invalidValue;
 
         Assert.Throws<InvalidOperationException>(() =>
-            generator.Generate(payload, WorkItemSubmissionOrigin.OperatorBackend)
+            generator.Generate(payload, WorkItemSubmissionOrigin.OperatorBackend, attempt: 1)
         );
     }
 
@@ -415,7 +415,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, operatorOrganisationId: "1234");
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA12341AAGL", reference);
     }
@@ -431,7 +431,7 @@ public sealed class ApplicationReferenceGeneratorTests
             material: null
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA", reference);
     }
@@ -442,8 +442,8 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026);
 
-        var first = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
-        var second = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var first = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
+        var second = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal(first, second);
     }
@@ -495,7 +495,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakeFlatPayload(accreditationYear: 2026);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("AP26EA500021AAGL", reference);
     }
@@ -514,7 +514,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakeFlatPayload(accreditationYear: 2026, siteAddressPostcode: postcode);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal(expectedAgency, reference.Substring(4, 2));
     }
@@ -531,7 +531,7 @@ public sealed class ApplicationReferenceGeneratorTests
         };
         payload["siteAddressPostcode"] = "M1 1AE";
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         // Last 3 chars of the flat "M1 1AE" ("1AE"), not the nested "BS1 1AA" ("1AA").
         Assert.Equal("AP26EA500021AEGL", reference);
@@ -550,7 +550,7 @@ public sealed class ApplicationReferenceGeneratorTests
             companyRegisterAddressPostcode: "EH1 1AA" // Scotland registered office
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("SE", reference.Substring(4, 2));
         Assert.Equal("AP26SE500021AAGL", reference);
@@ -572,7 +572,7 @@ public sealed class ApplicationReferenceGeneratorTests
             nation: "Wales" // disagrees with the Scotland postcode - nation must win the agency code
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("NR", reference.Substring(4, 2));
         Assert.Equal("AP26NR500021AAGL", reference);
@@ -589,7 +589,7 @@ public sealed class ApplicationReferenceGeneratorTests
             companyRegisterAddressPostcode: "EH1 1AA" // Scotland registered office — must be ignored
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("EA", reference.Substring(4, 2));
         Assert.Equal("AP26EA500021AAGL", reference);
@@ -605,7 +605,7 @@ public sealed class ApplicationReferenceGeneratorTests
             companyRegisterAddressPostcode: "EH1 1AA"
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         // No wasteProcessingType (e.g. case-management admin UI payloads) behaves like a reprocessor.
         Assert.Equal("EA", reference.Substring(4, 2));
@@ -622,7 +622,7 @@ public sealed class ApplicationReferenceGeneratorTests
             companyRegisterAddressPostcode: null
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("EA", reference.Substring(4, 2));
     }
@@ -638,7 +638,7 @@ public sealed class ApplicationReferenceGeneratorTests
             companyRegisterAddressPostcode: null
         );
 
-        generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         var entry = Assert.Single(logger.Entries);
         Assert.Equal(LogLevel.Warning, entry.Level);
@@ -655,7 +655,7 @@ public sealed class ApplicationReferenceGeneratorTests
             companyRegisterAddressPostcode: "EH1 1AA"
         );
 
-        generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Empty(logger.Entries);
     }
@@ -691,7 +691,7 @@ public sealed class ApplicationReferenceGeneratorTests
             companyRegisterAddressPostcode: "EH1 1AA"
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("SE", reference.Substring(4, 2));
     }
@@ -709,7 +709,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakeFlatPayload(accreditationYear: 2026, siteAddressPostcode: postcode);
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal(expectedAgency, reference.Substring(4, 2));
     }
@@ -723,7 +723,7 @@ public sealed class ApplicationReferenceGeneratorTests
             operatorOrganisationId: "6a2fcd74e16883c137d01188"
         );
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.DoesNotContain(
             "6a2fcd74e16883c137d0",
@@ -742,7 +742,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: "1AA");
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("EA", reference.Substring(4, 2));
     }
@@ -759,7 +759,7 @@ public sealed class ApplicationReferenceGeneratorTests
             ["material"] = "Glass",
         };
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         // No postcode suffix contributed, and agency falls open to England.
         Assert.Equal("EA", reference.Substring(4, 2));
@@ -777,7 +777,7 @@ public sealed class ApplicationReferenceGeneratorTests
             ["material"] = "Glass",
         };
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.Equal("EA", reference.Substring(4, 2));
     }
@@ -799,7 +799,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, siteAddressPostcode: "W1A");
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         // agency(2) + organisationId(5) then the 3-char postcode suffix.
         Assert.Equal("W1A", reference.Substring(4 + 2 + 5, 3));
@@ -811,7 +811,7 @@ public sealed class ApplicationReferenceGeneratorTests
         var generator = new ApplicationReferenceGenerator();
         var payload = MakePayload(accreditationYear: 2026, material: "Pl");
 
-        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated);
+        var reference = generator.Generate(payload, WorkItemSubmissionOrigin.HandCreated, attempt: 1);
 
         Assert.EndsWith("PL", reference, StringComparison.OrdinalIgnoreCase);
     }

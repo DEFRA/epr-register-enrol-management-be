@@ -31,6 +31,9 @@ public static class WorkItemModuleExtensions
         // registers the operator backend's secret under.
         services.AddSingleton(sp =>
             OperatorBackendCaller.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
+        services.AddSingleton(sp => new WorkItemSubmissionServices(
+            sp.GetRequiredService<IWorkItemReferenceGenerator>(),
+            sp.GetRequiredService<OperatorBackendCaller>()));
         services.AddSingleton<IWorkItemAuditAppender, WorkItemAuditAppender>();
         // RA-219: server-side applicationReference generation is a framework
         // concern (the engine owns the submission birth event), so the

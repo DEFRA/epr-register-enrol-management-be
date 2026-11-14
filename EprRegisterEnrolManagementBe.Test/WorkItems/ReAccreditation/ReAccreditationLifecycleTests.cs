@@ -69,8 +69,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
         // RA-448 phase 2: the accreditation number now comes from
         // IAccreditationNumberAdapter (a real backend call), not a local
@@ -207,8 +206,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
 
         var workItem = new WorkItem
@@ -241,8 +239,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
 
         var workItem = new WorkItem
@@ -278,8 +275,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
 
         var workItem = new WorkItem
@@ -310,8 +306,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
 
         var workItem = new WorkItem
@@ -347,8 +342,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
 
         var workItem = new WorkItem
@@ -386,8 +380,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
 
         var workItem = new WorkItem
@@ -424,8 +417,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
 
         var workItem = new WorkItem
@@ -469,8 +461,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
 
         var workItem = new WorkItem
@@ -527,8 +518,7 @@ public class ReAccreditationLifecycleTests
             new WorkItemRegistry([type]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default
+            TestReferenceGenerators.Submission()
         );
         // The query stamps the open query with a targeted payload write
         // before transitioning; the substitute must report a match.

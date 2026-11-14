@@ -60,7 +60,7 @@ public sealed class OperatorBackendCaller
     {
         ArgumentNullException.ThrowIfNull(configuration);
         return new OperatorBackendCaller(
-            configuration.GetValue(ClientIdConfigKey, DefaultClientId)!
+            configuration.GetValue(ClientIdConfigKey, DefaultClientId)
         );
     }
 

@@ -12,7 +12,13 @@ jobs:
   build:
     if: github.run_number != 1
     name: CDP SonarCloud coverage scan
-    runs-on: ubuntu-latest
+    # Pinned, not ubuntu-latest: on the ubuntu-26.04 image that ubuntu-latest
+    # is rolling out to, dotnet-coverage prints "No code coverage data
+    # available. Profiler was not initialized." and writes an empty
+    # coverage.xml, so SonarCloud reports 0% coverage on new code. The same
+    # job on ubuntu-24.04 collects coverage normally. Move back to
+    # ubuntu-latest once dotnet-coverage runs on the newer image.
+    runs-on: ubuntu-24.04
     steps:
       - name: Set up JDK 17
         uses: actions/setup-java@v6

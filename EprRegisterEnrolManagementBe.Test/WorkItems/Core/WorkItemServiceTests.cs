@@ -40,8 +40,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default,
+            TestReferenceGenerators.Submission(),
             _time
         );
 
@@ -53,8 +52,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default,
+            TestReferenceGenerators.Submission(),
             _time,
             postActionHooks: [hook]
         );
@@ -224,8 +222,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default,
+            TestReferenceGenerators.Submission(),
             _time,
             postActionHooks: [slowHook, pushHook]
         );
@@ -1757,8 +1754,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default,
+            TestReferenceGenerators.Submission(),
             time
         );
 
@@ -2081,8 +2077,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
-            TestOperatorBackendCaller.Default,
+            TestReferenceGenerators.Submission(generator),
             _time
         );
 
@@ -2149,8 +2144,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
-            TestOperatorBackendCaller.Default,
+            TestReferenceGenerators.Submission(generator),
             _time
         );
 
@@ -2187,8 +2181,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
-            TestOperatorBackendCaller.Default,
+            TestReferenceGenerators.Submission(generator),
             _time
         );
 
@@ -2373,8 +2366,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             racing,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
-            TestOperatorBackendCaller.Default,
+            TestReferenceGenerators.Submission(),
             _time
         );
     }

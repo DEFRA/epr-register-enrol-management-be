@@ -118,6 +118,19 @@ public sealed record WorkItemEngineProjection(
     bool IsTerminal = false
 );
 
+/// <summary>
+/// The collaborators <see cref="WorkItemService.SubmitAsync"/> alone uses,
+/// bundled into one constructor argument so <see cref="WorkItemService"/>
+/// stays under SonarCloud's parameter-count cap (S107), the same approach as
+/// <c>ClientIdSignaturePayload</c>: the <c>applicationReference</c> formats
+/// (RA-219, RA-492) and the check that tells an operator backend submission
+/// from a hand-created one (RA-000 AC 7).
+/// </summary>
+public sealed record WorkItemSubmissionServices(
+    IWorkItemReferenceGenerator ReferenceGenerator,
+    OperatorBackendCaller OperatorBackendCaller
+);
+
 public sealed class WorkItemService : IWorkItemService
 {
     private const string SourceKey = "source";
@@ -145,8 +158,7 @@ public sealed class WorkItemService : IWorkItemService
         IWorkItemRegistry registry,
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
-        IWorkItemReferenceGenerator referenceGenerator,
-        OperatorBackendCaller operatorBackendCaller,
+        WorkItemSubmissionServices submissionServices,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null
@@ -157,8 +169,9 @@ public sealed class WorkItemService : IWorkItemService
         this._logger = logger;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _referenceGenerator = referenceGenerator;
-        _operatorBackendCaller = operatorBackendCaller;
+        ArgumentNullException.ThrowIfNull(submissionServices);
+        _referenceGenerator = submissionServices.ReferenceGenerator;
+        _operatorBackendCaller = submissionServices.OperatorBackendCaller;
         _originStateResolvers =
             originStateResolvers?.ToArray() ?? Array.Empty<IWorkItemOriginStateResolver>();
     }

@@ -161,7 +161,7 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
         _logger = logger ?? NullLogger<ApplicationReferenceGenerator>.Instance;
     }
 
-    public string Generate(BsonDocument payload, WorkItemSubmissionOrigin origin, int attempt = 1)
+    public string Generate(BsonDocument payload, WorkItemSubmissionOrigin origin, int attempt)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
