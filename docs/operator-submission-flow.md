@@ -162,7 +162,7 @@ Any guard failure produces a `LogWarning` and a 400 response.
 
 `WorkItemService.SubmitAsync` then checks that a submission from the
 operator backend (client id `Auth:BackendClientId`) carries a valid
-`operatorOrgNumber` and a non-blank `paymentReference` (RA-000 AC 7). If not,
+`operatorOrgNumber` and a non-blank `paymentReference`. If not,
 it logs at Error and the endpoint returns 400 before any reference is
 generated or anything is stored. See `docs/work-items.md`, "Operator backend
 submissions".

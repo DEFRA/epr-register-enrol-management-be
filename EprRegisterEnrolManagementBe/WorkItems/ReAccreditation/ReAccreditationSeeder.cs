@@ -188,7 +188,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     }
 
     /// <summary>
-    /// RA-000 AC 7: every seeded item stands in for an operator backend
+    /// Every seeded item stands in for an operator backend
     /// submission (each carries operatorOrganisationId), and a real one now
     /// always carries <c>operatorOrgNumber</c> and <c>paymentReference</c>.
     /// Seeds are written straight to the store, not through
@@ -196,7 +196,8 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
     /// cannot miss one. A seed that already sets either field keeps its own
     /// value (full-payload-verification deliberately uses distinct values). The
     /// org number is the seed's numeric operatorOrganisationId; a seed whose id
-    /// is not one is a seed-data bug and fails loudly.
+    /// is not one is a seed-data bug and fails loudly. See "Operator backend
+    /// submissions" in docs/work-items.md.
     /// </summary>
     private static WorkItem StampOperatorSubmissionFields(WorkItem item)
     {
@@ -212,7 +213,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                     CultureInfo.InvariantCulture,
                     out var orgNumber
                 )
-                || orgNumber > 999999
+                || orgNumber is < 1 or > 999999
             )
             {
                 throw new InvalidOperationException(
@@ -233,11 +234,12 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
     /// <summary>
     /// The payment reference the operator backend builds for this nation and
-    /// applicant type (the formats epr-register-enrol-frontend's
-    /// buildPaymentReference used, which the operator backend builds from
-    /// RA-000 on), so seeded items show what a real one does.
+    /// applicant type, so seeded items show what a real one does. The source of
+    /// truth is <c>PaymentReferenceBuilder.Build</c> in epr-register-enrol-backend
+    /// (AccreditationApplication/Services/PaymentReferences.cs); the seeder tests
+    /// pin one exact reference per nation so a drift from it is caught.
     /// </summary>
-    private static string SeedPaymentReference(BsonDocument payload)
+    internal static string SeedPaymentReference(BsonDocument payload)
     {
         var orgNumber = payload[OperatorOrgNumber.Field].ToInt32();
         var isExporter = string.Equals(
@@ -278,7 +280,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // outside production.
         //
         // paymentReference and operatorOrgNumber are stamped on every seed by
-        // StampOperatorSubmissionFields (RA-000 AC 7), mirroring what the
+        // StampOperatorSubmissionFields, mirroring what the
         // operator backend sends. full-payload-verification sets its own,
         // distinct values below.
 

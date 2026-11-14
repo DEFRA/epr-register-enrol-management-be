@@ -12,7 +12,7 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-000 AC 7: <c>POST /work-items</c> from the operator backend must carry a
+/// <c>POST /work-items</c> from the operator backend must carry a
 /// valid <c>operatorOrgNumber</c> and a <c>paymentReference</c>. Anything else
 /// is a 400 ProblemDetails naming the field, an Error log with the ids, and no
 /// work item. A hand-created work item (any other caller) keeps its existing
@@ -26,7 +26,7 @@ public partial class ReAccreditationEndpointTests
 
     private const string OrgNumberDetail =
         "A submission from the operator backend must include operatorOrgNumber "
-        + "as a whole number from 0 to 999999.";
+        + "as a whole number from 1 to 999999.";
 
     private const string PaymentReferenceDetail =
         "A submission from the operator backend must include a non-blank paymentReference string.";
@@ -69,6 +69,7 @@ public partial class ReAccreditationEndpointTests
         [Absent] = () => null,
         ["null"] = () => null,
         ["string"] = () => JsonValue.Create("500500"),
+        ["zero"] = () => JsonValue.Create(0),
         ["negative"] = () => JsonValue.Create(-1),
         ["above 999999"] = () => JsonValue.Create(1_000_000),
         ["fractional"] = () => JsonValue.Create(500500.5),
@@ -94,6 +95,7 @@ public partial class ReAccreditationEndpointTests
             { "operatorOrgNumber", Absent, OrgNumberDetail },
             { "operatorOrgNumber", "null", OrgNumberDetail },
             { "operatorOrgNumber", "string", OrgNumberDetail },
+            { "operatorOrgNumber", "zero", OrgNumberDetail },
             { "operatorOrgNumber", "negative", OrgNumberDetail },
             { "operatorOrgNumber", "above 999999", OrgNumberDetail },
             { "operatorOrgNumber", "fractional", OrgNumberDetail },
@@ -256,7 +258,7 @@ public partial class ReAccreditationEndpointTests
     }
 
     /// <summary>
-    /// RA-000 item 4, AC 7: a work item a caseworker creates by hand (any caller
+    /// A work item a caseworker creates by hand (any caller
     /// other than the operator backend) keeps its existing path. Its payload has
     /// no organisation number or payment reference, so the reference uses the
     /// operatorOrganisationId tail and the payment reference is the
@@ -298,7 +300,7 @@ public partial class ReAccreditationEndpointTests
         };
 
     /// <summary>
-    /// RA-000 AC 7: resume-from-query never sets the payment reference, the org
+    /// Resume-from-query never sets the payment reference, the org
     /// number or the application reference. They are fixed at submit, where the
     /// rule above applies. Whatever the operator backend puts in a resume body
     /// for these fields (its adapter has sent a paymentReference there), the

@@ -1998,7 +1998,7 @@ public class WorkItemServiceTests : IAsyncDisposable
     [Fact]
     public async Task Submit_HandCreated_without_a_paymentReference_uses_the_applicationReference()
     {
-        // RA-000 item 4, AC 7: a hand-created work item (any caller other than the operator
+        // A hand-created work item (any caller other than the operator
         // backend; management-fe's create form has no paymentReference field, RA-316) keeps its
         // existing path, where the payment reference is the applicationReference. An operator
         // backend submission without one is rejected instead (see

@@ -26,9 +26,10 @@ public static class WorkItemModuleExtensions
         services.AddSingleton<IWorkItemRegistry>(sp =>
             new WorkItemRegistry(sp.GetServices<IWorkItemType>()));
         services.AddSingleton<IWorkItemService, WorkItemService>();
-        // RA-000 AC 7: tells an operator backend submission apart from a
-        // hand-created work item, by the same client id the auth handler
-        // registers the operator backend's secret under.
+        // Tells an operator backend submission apart from a hand-created work
+        // item, by the same client id the auth handler registers the operator
+        // backend's secret under (see "Operator backend submissions" in
+        // docs/work-items.md).
         services.AddSingleton(sp =>
             OperatorBackendCaller.FromConfiguration(sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton(sp => new WorkItemSubmissionServices(

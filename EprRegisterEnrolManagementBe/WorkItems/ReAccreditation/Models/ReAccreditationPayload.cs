@@ -178,12 +178,13 @@ internal sealed record ReAccreditationPayload
     /// RA-316/RA-503: the operator's payment reference, displayed read-only alongside
     /// <see cref="ChargeAmountPence"/> on the duly-making page.
     ///
-    /// RA-000 AC 7: required on every submission from the operator backend, which builds the
+    /// Required on every submission from the operator backend, which builds the
     /// nation-specific bank reference (e.g. <c>PR/PK/REP/500500</c>) from the stored
     /// organisation number and sends it in the payload. WorkItemService.SubmitAsync rejects an
     /// operator backend submission without one and stores the value exactly as sent. This is the
     /// reference the operator quoted on the bank transfer, now the same value the regulator sees.
-    /// A hand-created work item gets its <see cref="ApplicationReference"/> here instead.
+    /// A hand-created work item that supplies none gets its <see cref="ApplicationReference"/>
+    /// here instead. See "Operator backend submissions" in docs/work-items.md.
     ///
     /// Nullable because a work item stored before RA-447 has none.
     /// </summary>

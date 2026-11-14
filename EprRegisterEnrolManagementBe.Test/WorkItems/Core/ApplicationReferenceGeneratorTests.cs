@@ -9,7 +9,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// RA-318: unit coverage for the deterministic, payload-derived
 /// applicationReference generator. Format:
 /// AP + 2-digit year + 2-char agency + organisation segment (RA-503: the
-/// numeric operatorOrgNumber zero-padded to 6 digits; RA-000 AC 7: only a
+/// numeric operatorOrgNumber zero-padded to 6 digits; only a
 /// hand-created work item without one uses the last 5 chars of
 /// operatorOrganisationId, and an operator backend submission without one
 /// is an error) +
@@ -224,7 +224,7 @@ public sealed class ApplicationReferenceGeneratorTests
         Assert.DoesNotContain("01188", reference, StringComparison.OrdinalIgnoreCase);
     }
 
-    // RA-000 item 4, AC 7: a hand-created work item has no ReEx organisation number, so it keeps
+    // A hand-created work item need not carry a ReEx organisation number; without one it keeps
     // the last-5-characters-of-operatorOrganisationId path.
     [Fact]
     public void Generate_uses_operatorOrganisationId_for_a_hand_created_item_without_operatorOrgNumber()
@@ -254,11 +254,12 @@ public sealed class ApplicationReferenceGeneratorTests
     // - IsNumeric admits Int64/Double/Decimal128, none of which ToInt32() can convert safely from
     // (silent wraparound for Int64/Double, OverflowException for Decimal128), and D6 is a MINIMUM
     // width, not a cap, so an out-of-range value would otherwise widen the reference unpredictably.
-    // On a hand-created work item (RA-000 AC 7) every invalid case takes the operatorOrganisationId
+    // On a hand-created work item every invalid case (0 included: it is an unset value) takes the operatorOrganisationId
     // path rather than embedding a garbage/malformed segment or throwing. An operator backend
     // submission with any of these values is rejected before generation (see the
     // Generate_throws_for_an_operator_backend_submission_* tests below).
     [Theory]
+    [InlineData(0)]
     [InlineData(-1)]
     [InlineData(1_000_000)]
     public void Generate_rejects_an_out_of_range_operatorOrgNumber_and_falls_back(int invalidValue)
@@ -372,7 +373,7 @@ public sealed class ApplicationReferenceGeneratorTests
         Assert.Equal("AP26EA5005001AAGL", reference);
     }
 
-    // RA-000 AC 7: an operator backend submission never takes the operatorOrganisationId (ReEx
+    // An operator backend submission never takes the operatorOrganisationId (ReEx
     // ObjectId) path. WorkItemService rejects such a payload first, so reaching the generator
     // with one is a programming error and must fail loudly rather than build a reference.
     [Fact]
@@ -390,6 +391,7 @@ public sealed class ApplicationReferenceGeneratorTests
     }
 
     [Theory]
+    [InlineData(0)]
     [InlineData(-1)]
     [InlineData(1_000_000)]
     [InlineData(500500.7)]

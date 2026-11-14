@@ -48,7 +48,7 @@ public sealed class WorkItemReferenceGeneratorTests
                 .ValidatePayload(payload));
     }
 
-    // RA-000 AC 7: the submission origin reaches the AP generator unchanged, so only a
+    // The submission origin reaches the AP generator unchanged, so only a
     // hand-created work item can use its operatorOrganisationId fallback.
     [Theory]
     [InlineData(WorkItemSubmissionOrigin.OperatorBackend)]

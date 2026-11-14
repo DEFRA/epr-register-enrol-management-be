@@ -776,13 +776,40 @@ public class ReAccreditationSeederTests
     }
 
     /// <summary>
-    /// RA-000 AC 7: every seeded item stands in for an operator backend
+    /// Every seeded item stands in for an operator backend
     /// submission, which always carries a valid operatorOrgNumber and a
     /// paymentReference. The org number is the seed's numeric
     /// operatorOrganisationId and the payment reference follows the operator
     /// backend's nation format; full-payload-verification keeps its own,
     /// deliberately distinct values.
     /// </summary>
+    /// <summary>
+    /// One exact reference per nation and applicant type, matching
+    /// <c>PaymentReferenceBuilder.Build</c> in epr-register-enrol-backend, the
+    /// source of truth, so a drift between the two is caught here.
+    /// </summary>
+    [Theory]
+    [InlineData("England", "reprocessor", "PR/PK/REP/500001")]
+    [InlineData("England", "exporter", "PR/PK/EXP/500001")]
+    [InlineData("Wales", "reprocessor", "PREX/500001")]
+    [InlineData("Scotland", "reprocessor", "E800 81581/500001")]
+    [InlineData("NorthernIreland", "exporter", "NI/PR/REEX/500001")]
+    public void Seeded_payment_reference_matches_the_operator_backend_format(
+        string nation,
+        string wasteProcessingType,
+        string expected
+    )
+    {
+        var payload = new BsonDocument
+        {
+            ["operatorOrgNumber"] = 500001,
+            ["nation"] = nation,
+            ["wasteProcessingType"] = wasteProcessingType,
+        };
+
+        Assert.Equal(expected, ReAccreditationSeeder.SeedPaymentReference(payload));
+    }
+
     [Fact]
     public void Every_seeded_item_carries_an_operator_org_number_and_payment_reference()
     {

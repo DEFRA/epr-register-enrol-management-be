@@ -149,7 +149,7 @@ and `WorkItemReferenceGenerator` picks one from the type's
   the sequence store.
 
 
-## Operator backend submissions (RA-000 AC 7)
+## Operator backend submissions
 
 A `POST /work-items` from the operator journey backend must carry the
 operator's real organisation number and the payment reference the operator
@@ -164,13 +164,13 @@ requests alike.
 
 | Field | Rule |
 | --- | --- |
-| `payload.operatorOrgNumber` | A JSON number, whole, from 0 to 999999 (`BsonWholeNumber`). A string, a fraction, a negative, a larger number, `null` or no field is rejected. |
+| `payload.operatorOrgNumber` | A JSON number, whole, from 1 to 999999 (`BsonWholeNumber`). A string, a fraction, 0 (an unset value), a negative, a larger number, `null` or no field is rejected. |
 | `payload.paymentReference` | A non-blank JSON string. Stored exactly as sent. Management BE applies no format rule; the operator backend builds it. |
 
 A submission that breaks either rule gets `400` ProblemDetails, title
 `Invalid request`, detail naming each field:
 
-- `A submission from the operator backend must include operatorOrgNumber as a whole number from 0 to 999999.`
+- `A submission from the operator backend must include operatorOrgNumber as a whole number from 1 to 999999.`
 - `A submission from the operator backend must include a non-blank paymentReference string.`
 
 When both are wrong, the detail is the two sentences, org number first,

@@ -124,7 +124,7 @@ public sealed record WorkItemEngineProjection(
 /// stays under SonarCloud's parameter-count cap (S107), the same approach as
 /// <c>ClientIdSignaturePayload</c>: the <c>applicationReference</c> formats
 /// (RA-219, RA-492) and the check that tells an operator backend submission
-/// from a hand-created one (RA-000 AC 7).
+/// from a hand-created one (see "Operator backend submissions" in docs/work-items.md).
 /// </summary>
 public sealed record WorkItemSubmissionServices(
     IWorkItemReferenceGenerator ReferenceGenerator,
@@ -249,13 +249,14 @@ public sealed class WorkItemService : IWorkItemService
             }
         }
 
-        // RA-000 AC 7: a submission from the operator backend must carry the
+        // A submission from the operator backend must carry the
         // operator's real organisation number and the payment reference the
         // operator was told to quote. Reject it before any reference or
         // sequence number is generated or anything is persisted, so a payload
         // the operator backend built without them can never become a work item
         // with a made-up reference. Hand-created work items keep their existing
-        // path (see OperatorBackendCaller.IsOperatorBackendSubmission).
+        // path (see OperatorBackendCaller.IsOperatorBackendSubmission, and
+        // "Operator backend submissions" in docs/work-items.md).
         var origin = _operatorBackendCaller.ResolveOrigin(user);
         if (
             origin == WorkItemSubmissionOrigin.OperatorBackend
@@ -323,7 +324,8 @@ public sealed class WorkItemService : IWorkItemService
             );
             payload[ApplicationReferenceField] = applicationReference;
 
-            // RA-000 item 4, AC 7: only a hand-created work item keeps its existing path, where
+            // Only a hand-created work item keeps its existing path (see "Operator backend
+            // submissions" in docs/work-items.md), where
             // the payment reference is the applicationReference unless one was supplied
             // (management-fe's create form deliberately has no such field, RA-316). An operator
             // backend submission keeps the paymentReference it sent, never this one.

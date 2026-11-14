@@ -3,7 +3,8 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
-/// The fields a submission from the operator backend must carry (RA-000 AC 7).
+/// The fields a submission from the operator backend must carry
+/// (see "Operator backend submissions" in docs/work-items.md).
 /// <see cref="WorkItemService"/> rejects the submission with a 400 when any is
 /// missing or invalid, before a reference is generated or anything is stored.
 /// Applies to every work-item type the operator backend submits: a
@@ -15,7 +16,7 @@ internal static class OperatorSubmissionRequirements
 
     internal const string MissingOrgNumberMessage =
         "A submission from the operator backend must include operatorOrgNumber "
-        + "as a whole number from 0 to 999999.";
+        + "as a whole number from 1 to 999999.";
 
     internal const string MissingPaymentReferenceMessage =
         "A submission from the operator backend must include a non-blank paymentReference string.";
@@ -60,11 +61,11 @@ internal static class OperatorOrgNumber
 {
     public const string Field = "operatorOrgNumber";
 
-    // RA-503: reject negative (which would inject a literal '-' into the reference), reject
-    // non-integral, and cap at 999999 so D6's zero-padding (a MINIMUM width, not a maximum) can
-    // never widen the reference segment past 6 digits. See BsonWholeNumber for why the BSON
-    // type category alone cannot be trusted.
-    private const int Min = 0;
+    // Reject 0 (an unset value, never a real organisation number) and negatives (RA-503: a '-'
+    // would land in the reference), reject non-integral, and cap at 999999 so D6's zero-padding
+    // (a MINIMUM width, not a maximum) can never widen the reference segment past 6 digits. See
+    // BsonWholeNumber for why the BSON type category alone cannot be trusted.
+    private const int Min = 1;
     private const int Max = 999999;
 
     public static bool TryRead(BsonDocument payload, out int orgNumber)

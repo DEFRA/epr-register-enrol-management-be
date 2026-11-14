@@ -124,7 +124,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
         );
     }
 
-    // RA-000 AC 6/7: an in-year change request from the operator backend carries the org number
+    // An in-year change request from the operator backend carries the org number
     // and the payment reference the operator backend built; both are stored exactly as sent.
     [Fact]
     public async Task Submit_add_overseas_site_from_the_operator_backend_keeps_its_paymentReference()
@@ -164,6 +164,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
     {
         ["null"] = BsonNull.Value,
         ["string"] = "500500",
+        ["zero"] = 0,
         ["negative"] = -1,
         ["above 999999"] = 1_000_000,
         ["fractional"] = 500500.5,
@@ -177,6 +178,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             { "operatorOrgNumber", Absent, OperatorSubmissionRequirements.MissingOrgNumberMessage },
             { "operatorOrgNumber", "null", OperatorSubmissionRequirements.MissingOrgNumberMessage },
             { "operatorOrgNumber", "string", OperatorSubmissionRequirements.MissingOrgNumberMessage },
+            { "operatorOrgNumber", "zero", OperatorSubmissionRequirements.MissingOrgNumberMessage },
             { "operatorOrgNumber", "negative", OperatorSubmissionRequirements.MissingOrgNumberMessage },
             { "operatorOrgNumber", "above 999999", OperatorSubmissionRequirements.MissingOrgNumberMessage },
             { "operatorOrgNumber", "fractional", OperatorSubmissionRequirements.MissingOrgNumberMessage },
@@ -186,7 +188,7 @@ public sealed class WorkItemServiceInYearChangeReferenceTests : IAsyncDisposable
             { "paymentReference", "blank", OperatorSubmissionRequirements.MissingPaymentReferenceMessage },
         };
 
-    // RA-000 AC 6/7: an in-year change request from the operator backend without a valid org
+    // An in-year change request from the operator backend without a valid org
     // number or payment reference is rejected before a sequence number is allocated, logs at
     // Error with the ids, and stores nothing.
     [Theory]

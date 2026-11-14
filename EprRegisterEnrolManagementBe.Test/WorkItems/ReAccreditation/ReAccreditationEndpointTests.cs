@@ -214,7 +214,7 @@ public partial class ReAccreditationEndpointTests
     public async Task Submit_persists_every_field_from_a_real_operator_submission_payload()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        // RA-000 AC 7: signed as the operator backend, as the real adapter is.
+        // Signed as the operator backend, as the real adapter is.
         await using var factory = new ReAccreditationFactory(
             _fixture,
             clientId: TestOperatorBackendCaller.ClientId

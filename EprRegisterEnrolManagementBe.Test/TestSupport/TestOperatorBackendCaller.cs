@@ -3,7 +3,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 namespace EprRegisterEnrolManagementBe.Test.TestSupport;
 
 /// <summary>
-/// RA-000 AC 7: the <see cref="OperatorBackendCaller"/> the app registers by
+/// The <see cref="OperatorBackendCaller"/> the app registers by
 /// default. A principal whose <c>client_id</c> is <see cref="ClientId"/> is an
 /// operator backend submission; any other caller is hand-created.
 /// </summary>

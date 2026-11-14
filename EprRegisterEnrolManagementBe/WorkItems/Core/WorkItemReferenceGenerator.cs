@@ -16,7 +16,7 @@ public interface IWorkItemReferenceGenerator
 {
     /// <summary>
     /// The reference format for submissions of <paramref name="type"/> from
-    /// <paramref name="origin"/> (RA-000 AC 7).
+    /// <paramref name="origin"/> (see "Operator backend submissions" in docs/work-items.md).
     /// </summary>
     IWorkItemReferenceFormat ForType(IWorkItemType type, WorkItemSubmissionOrigin origin);
 }

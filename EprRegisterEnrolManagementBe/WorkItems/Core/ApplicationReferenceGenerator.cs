@@ -18,8 +18,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// the last 3 characters of the regulator postcode + the first 2
 /// characters of the material, all upper-cased. The organisation segment
 /// is the numeric, operator/regulator-safe <c>operatorOrgNumber</c>
-/// (e.g. <c>500500</c>, zero-padded to 6 digits). RA-000 AC 7: a submission
-/// from the operator backend must carry it, and <see cref="WorkItemService"/>
+/// (e.g. <c>500500</c>, zero-padded to 6 digits). A submission from the
+/// operator backend must carry it (see "Operator backend submissions" in
+/// docs/work-items.md), and <see cref="WorkItemService"/>
 /// rejects one that does not before this generator runs. Only a hand-created
 /// work item (<see cref="WorkItemSubmissionOrigin.HandCreated"/>) without one
 /// uses the last 5 characters of <c>operatorOrganisationId</c>; see
@@ -80,7 +81,7 @@ public interface IApplicationReferenceGenerator
     /// <paramref name="attempt"/> is the 1-based retry count from the caller's
     /// collision-retry loop; pass 1 for the initial attempt.
     /// <paramref name="origin"/> decides whether a payload without a valid
-    /// <c>operatorOrgNumber</c> is allowed (RA-000 AC 7).
+    /// <c>operatorOrgNumber</c> is allowed (see "Operator backend submissions" in docs/work-items.md).
     /// </summary>
     string Generate(BsonDocument payload, WorkItemSubmissionOrigin origin, int attempt);
 }
@@ -197,9 +198,10 @@ public sealed class ApplicationReferenceGenerator : IApplicationReferenceGenerat
             return orgNumber.ToString("D6", CultureInfo.InvariantCulture);
         }
 
-        // RA-000 item 4, AC 7: a work item a caseworker creates by hand through management-fe
-        // (or the mgmt-tests suite creates) has no ReEx organisation number, so it keeps its
-        // existing path: the last 5 characters of the free-text operatorOrganisationId.
+        // A work item a caseworker creates by hand through management-fe (or the mgmt-tests
+        // suite creates) need not carry a ReEx organisation number. Without a valid one it keeps
+        // its existing path: the last 5 characters of the free-text operatorOrganisationId (see
+        // "Operator backend submissions" in docs/work-items.md).
         if (origin == WorkItemSubmissionOrigin.HandCreated)
         {
             var organisationId = GetString(payload, "operatorOrganisationId") ?? string.Empty;

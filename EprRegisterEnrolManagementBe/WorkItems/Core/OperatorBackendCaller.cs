@@ -3,7 +3,8 @@ using System.Security.Claims;
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 
 /// <summary>
-/// Where a <c>POST /work-items</c> submission came from (RA-000 item 4, AC 7).
+/// Where a <c>POST /work-items</c> submission came from
+/// (see "Operator backend submissions" in docs/work-items.md).
 /// </summary>
 public enum WorkItemSubmissionOrigin
 {
@@ -18,14 +19,15 @@ public enum WorkItemSubmissionOrigin
     /// <summary>
     /// Any other authenticated caller: a caseworker creating a work item by hand
     /// through management-fe, or the mgmt-tests journey suite (ADR-0009). These
-    /// payloads have no operator organisation number or payment reference.
+    /// payloads need not carry an operator organisation number or a payment
+    /// reference; when they do, the values are used.
     /// </summary>
     HandCreated,
 }
 
 /// <summary>
 /// Identifies submissions from the operator journey backend by the caller's
-/// authenticated client id (RA-000 item 4, AC 7).
+/// authenticated client id (see "Operator backend submissions" in docs/work-items.md).
 /// </summary>
 /// <remarks>
 /// The client id is the <c>client_id</c> claim set by
@@ -67,7 +69,7 @@ public sealed class OperatorBackendCaller
     /// <summary>
     /// True when <paramref name="user"/> is the operator backend. This is the
     /// explicit check that keeps hand-created work items on their own path
-    /// (RA-000 item 4, AC 7).
+    /// (see "Operator backend submissions" in docs/work-items.md).
     /// </summary>
     public bool IsOperatorBackendSubmission(ClaimsPrincipal user)
     {

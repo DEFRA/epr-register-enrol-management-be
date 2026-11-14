@@ -23,7 +23,7 @@ internal static class TestReferenceGenerators
     /// <summary>
     /// The <see cref="WorkItemSubmissionServices"/> most engine tests need:
     /// <see cref="ApplicationOnly"/> plus the default operator backend caller
-    /// (RA-000 AC 7).
+    /// (see "Operator backend submissions" in docs/work-items.md).
     /// </summary>
     public static WorkItemSubmissionServices Submission(
         IApplicationReferenceGenerator? applicationReferenceGenerator = null
