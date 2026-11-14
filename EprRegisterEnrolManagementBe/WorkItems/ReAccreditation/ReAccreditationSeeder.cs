@@ -184,7 +184,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         ArgumentNullException.ThrowIfNull(type);
         ArgumentNullException.ThrowIfNull(time);
 
-        return BuildSeeds(type, time).Select(StampOperatorSubmissionFields);
+        return BuildSeeds(time).Select(StampOperatorSubmissionFields);
     }
 
     /// <summary>
@@ -259,7 +259,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         };
     }
 
-    private IEnumerable<WorkItem> BuildSeeds(IWorkItemType type, TimeProvider time)
+    private IEnumerable<WorkItem> BuildSeeds(TimeProvider time)
     {
         var now = time.GetUtcNow().UtcDateTime;
 
