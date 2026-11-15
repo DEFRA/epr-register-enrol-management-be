@@ -23,6 +23,11 @@ internal static class ReAccreditationEndpoints
 {
     private const string ErrorCodeKey = "errorCode";
     private const string FieldKey = "field";
+
+    // RA-766: the two 409s PUT .../charge can return, told apart so the operator backend's
+    // one-off migration does not count a contended work item as a closed one.
+    internal const string ChargeClosedErrorCode = "work-item-closed";
+    internal const string ChargeConcurrencyErrorCode = "concurrency-conflict";
     private const string WrongWorkItemTypeTitle = "Wrong work item type";
 
     private static readonly JsonSerializerOptions s_payloadJsonOptions = new()
@@ -499,7 +504,9 @@ internal static class ReAccreditationEndpoints
     /// RA-766 (temporary): set the charge held on a re-accreditation work item.
     /// 400 for a missing or negative charge, 404 when the work item is not found
     /// or is not re-accreditation, 409 when it is closed (approved, refused,
-    /// withdrawn or awaiting applicant contact). Duly-made items are updated.
+    /// withdrawn or awaiting applicant contact), with <c>errorCode</c> <c>work-item-closed</c>;
+    /// a 409 with <c>errorCode</c> <c>concurrency-conflict</c> means the item was busy, not closed.
+    /// Duly-made items are updated.
     /// </summary>
     public static async Task<
         Results<Ok<SetChargeResponse>, NotFound, ProblemHttpResult>
@@ -544,8 +551,26 @@ internal static class ReAccreditationEndpoints
             return TypedResults.NotFound();
         }
 
-        return ToServiceFailureProblem(result.Failure, SetChargeProblemTitle);
+        var problem = ToServiceFailureProblem(result.Failure, SetChargeProblemTitle);
+        if (ToChargeErrorCode(result.Failure.FailureCode) is { } errorCode)
+        {
+            problem.ProblemDetails.Extensions[ErrorCodeKey] = errorCode;
+        }
+
+        return problem;
     }
+
+    /// <summary>
+    /// RA-766: the <c>errorCode</c> on a <c>PUT .../charge</c> 409. Both a closed work
+    /// item and an exhausted concurrency retry are 409s, so the code is what tells them apart.
+    /// </summary>
+    internal static string? ToChargeErrorCode(WorkItemActionFailureCode? code) =>
+        code switch
+        {
+            WorkItemActionFailureCode.TerminalState => ChargeClosedErrorCode,
+            WorkItemActionFailureCode.ConcurrencyConflict => ChargeConcurrencyErrorCode,
+            _ => null,
+        };
 
     /// <summary>
     /// RA-576: change the payment date of a re-accreditation work item.

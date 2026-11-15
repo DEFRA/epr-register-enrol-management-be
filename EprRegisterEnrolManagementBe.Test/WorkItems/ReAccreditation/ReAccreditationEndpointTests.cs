@@ -3209,10 +3209,22 @@ public class ReAccreditationEndpointTests
         );
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
+        Assert.Equal("work-item-closed", problem!.Extensions["errorCode"]?.ToString());
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal(218400, persisted!.Payload!["chargeAmountPence"].AsInt32);
         Assert.Empty(persisted.AuditLog);
     }
+
+    [Theory]
+    [InlineData(WorkItemActionFailureCode.TerminalState, "work-item-closed")]
+    [InlineData(WorkItemActionFailureCode.ConcurrencyConflict, "concurrency-conflict")]
+    [InlineData(WorkItemActionFailureCode.MissingActorIdentity, null)]
+    [InlineData(WorkItemActionFailureCode.InvalidTransition, null)]
+    public void SetCharge_error_code_tells_a_closed_item_from_a_busy_one(
+        WorkItemActionFailureCode code,
+        string? expected
+    ) => Assert.Equal(expected, ReAccreditationEndpoints.ToChargeErrorCode(code));
 
     [Theory]
     [InlineData("submitted")]

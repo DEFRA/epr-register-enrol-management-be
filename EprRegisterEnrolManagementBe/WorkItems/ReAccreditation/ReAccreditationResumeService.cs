@@ -46,9 +46,6 @@ internal sealed class ReAccreditationResumeService(
     public const string AuditActionDisplayName = "Query responded";
     public const string LatestSectionsPayloadField = "latestSections";
 
-    /// <summary>RA-766: the top-level payload field holding the registration charge, in pence.</summary>
-    public const string ChargeAmountPencePayloadField = "chargeAmountPence";
-
     /// <summary>
     /// RA-523: how many times the post-resume assignment restore will retry a
     /// concurrency conflict before giving up. See
@@ -257,7 +254,7 @@ internal sealed class ReAccreditationResumeService(
             return stampFailure;
         }
 
-        var previousChargeAmountPence = ReadChargeAmountPence(workItem);
+        var previousChargeAmountPence = ReAccreditationPayload.ReadChargeAmountPence(workItem);
         var chargeFailure = await StampChargeAsync(
             workItemId, request.ChargeAmountPence, previousChargeAmountPence, cancellationToken);
         if (chargeFailure is not null)
@@ -550,36 +547,13 @@ internal sealed class ReAccreditationResumeService(
         }
 
         var matched = await persistence.SetPayloadFieldAsync(
-            workItemId, ChargeAmountPencePayloadField, new BsonInt32(charge), cancellationToken);
+            workItemId, ReAccreditationPayload.ChargeAmountPenceField, new BsonInt32(charge), cancellationToken);
 
         return matched
             ? null
             : WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.WorkItemNotFound,
                 $"No work item exists with id '{workItemId}'.");
-    }
-
-    /// <summary>
-    /// The stored charge in pence, or null when absent (submitted before
-    /// RA-316) or not a whole number that fits an int. Only integer BSON
-    /// types are read: the payload is parsed from JSON, which stores a whole
-    /// number as Int32 (or Int64 when large), so a floating-point value is
-    /// not a charge this service wrote.
-    /// </summary>
-    internal static int? ReadChargeAmountPence(WorkItem workItem)
-    {
-        if (workItem.Payload is null
-            || !workItem.Payload.TryGetValue(ChargeAmountPencePayloadField, out var value))
-        {
-            return null;
-        }
-
-        return value.BsonType switch
-        {
-            BsonType.Int32 => value.AsInt32,
-            BsonType.Int64 when value.AsInt64 is >= int.MinValue and <= int.MaxValue => (int)value.AsInt64,
-            _ => null,
-        };
     }
 
     private static BsonValue ToBsonValue(string? value) => value is null ? BsonNull.Value : new BsonString(value);

@@ -1099,24 +1099,24 @@ public class ReAccreditationResumeServiceTests
         var item = Item(
             stored is null ? new BsonDocument() : new BsonDocument { ["chargeAmountPence"] = stored });
 
-        Assert.Equal(expected, ReAccreditationResumeService.ReadChargeAmountPence(item));
+        Assert.Equal(expected, ReAccreditationPayload.ReadChargeAmountPence(item));
     }
 
     [Fact]
     public void ReadChargeAmountPence_reads_an_int64_that_fits_an_int()
     {
-        Assert.Equal(327600, ReAccreditationResumeService.ReadChargeAmountPence(
+        Assert.Equal(327600, ReAccreditationPayload.ReadChargeAmountPence(
             Item(new BsonDocument { ["chargeAmountPence"] = 327600L })));
     }
 
     [Fact]
     public void ReadChargeAmountPence_ignores_a_value_that_is_not_a_whole_int()
     {
-        Assert.Null(ReAccreditationResumeService.ReadChargeAmountPence(
+        Assert.Null(ReAccreditationPayload.ReadChargeAmountPence(
             Item(new BsonDocument { ["chargeAmountPence"] = 12.5 })));
-        Assert.Null(ReAccreditationResumeService.ReadChargeAmountPence(
+        Assert.Null(ReAccreditationPayload.ReadChargeAmountPence(
             Item(new BsonDocument { ["chargeAmountPence"] = 4_000_000_000L })));
-        Assert.Null(ReAccreditationResumeService.ReadChargeAmountPence(
+        Assert.Null(ReAccreditationPayload.ReadChargeAmountPence(
             Item(new BsonDocument { ["chargeAmountPence"] = "327600" })));
     }
 

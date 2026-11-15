@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -42,12 +43,14 @@ internal sealed class ReAccreditationChargeCorrectionService(
     /// The states a charge is never corrected in: the template's terminal
     /// states (approved, rejected, withdrawn) plus the two pending-contact
     /// states, which are not terminal but are already a decided outcome.
-    /// The one list; the operator backend relies on the 409 it produces.
+    /// The pending-contact states come from <see cref="ReAccreditationConfirmContactGuard"/>,
+    /// so they stay in step with it. The operator backend keeps its own copy of
+    /// the five ids (<c>ChargeCorrectionMigration.ClosedWorkItemStates</c>) for
+    /// its dry run, which never sends the PUT: a change here also needs a change there.
     /// </summary>
     internal static bool IsClosed(IWorkItemTemplate template, string stateId) =>
         TerminalStates.Find(template, stateId) is not null
-        || string.Equals(stateId, ReAccreditationType.ApprovedPendingContactStateId, StringComparison.OrdinalIgnoreCase)
-        || string.Equals(stateId, ReAccreditationType.RejectedPendingContactStateId, StringComparison.OrdinalIgnoreCase);
+        || ReAccreditationConfirmContactGuard.ForPendingState(stateId) is not null;
 
     public async Task<ChargeCorrectionResult> CorrectChargeAsync(
         Guid workItemId,
@@ -77,7 +80,7 @@ internal sealed class ReAccreditationChargeCorrectionService(
                 return refusal;
             }
 
-            var previous = ReAccreditationResumeService.ReadChargeAmountPence(workItem!);
+            var previous = ReAccreditationPayload.ReadChargeAmountPence(workItem!);
             var dulyMade = HasPaymentDate(workItem!);
 
             if (previous == chargeAmountPence)
@@ -196,7 +199,7 @@ internal sealed class ReAccreditationChargeCorrectionService(
         var now = timeProvider.GetUtcNow().UtcDateTime;
 
         var payload = (workItem.Payload ?? new BsonDocument()).DeepClone().AsBsonDocument;
-        payload[ReAccreditationResumeService.ChargeAmountPencePayloadField] = new BsonInt32(chargeAmountPence);
+        payload[ReAccreditationPayload.ChargeAmountPenceField] = new BsonInt32(chargeAmountPence);
         workItem.ReplacePayload(payload);
         workItem.LastModifiedAt = now;
 
