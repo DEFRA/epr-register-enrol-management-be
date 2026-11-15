@@ -254,6 +254,11 @@ internal sealed class ReAccreditationResumeService(
             return stampFailure;
         }
 
+        // The charge is saved before the transition, like latestSections, and not after: a
+        // charge write that failed after the item had left `queried` would be lost, because
+        // the retry is then an idempotent replay that writes nothing. The cost is that when the
+        // transition fails, the retry reads the already-saved charge, so its audit entry records
+        // previousChargeAmountPence equal to chargeAmountPence. The charge itself is right.
         var previousChargeAmountPence = ReAccreditationPayload.ReadChargeAmountPence(workItem);
         var chargeFailure = await StampChargeAsync(
             workItemId, request.ChargeAmountPence, previousChargeAmountPence, cancellationToken);
