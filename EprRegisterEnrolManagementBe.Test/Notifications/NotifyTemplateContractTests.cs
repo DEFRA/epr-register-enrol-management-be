@@ -210,6 +210,7 @@ public class NotifyTemplateContractTests
             // exercises the non-empty path.
             ["currentQuery"] = new BsonDocument
             {
+                ["queryId"] = FreshQueryTestData.QueryId,
                 ["reason"] = "Please confirm the tonnage figures.",
                 ["sections"] = new BsonArray { "prn-tonnage" },
                 ["raisedAt"] = new DateTime(2025, 11, 3, 0, 0, 0, DateTimeKind.Utc),

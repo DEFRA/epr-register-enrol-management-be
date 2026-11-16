@@ -332,15 +332,15 @@ public class ReAccreditationQueryPushHookTests
     [Fact]
     public async Task OnActionAppliedAsync_does_not_push_a_stale_current_query_left_by_an_earlier_query()
     {
-        // The previous query's stamp, raised before the item even entered the
-        // state it is now being queried from. Pushing it would ask the
-        // operator the old question again.
+        // The previous query's stamp, which carries that query's id rather
+        // than the one on this transition. Pushing it would ask the operator
+        // the old question again.
         var ct = TestContext.Current.CancellationToken;
         var logger = new ListLogger<ReAccreditationQueryPushHook>();
         var (hook, adapter, auditAppender) = BuildSut(logger);
         var workItem = BuildWorkItem(
             actionId: "query-during-duly-made",
-            currentQuery: FreshQueryTestData.CurrentQuery(FreshQueryTestData.StaleRaisedAt));
+            currentQuery: FreshQueryTestData.CurrentQuery(queryId: FreshQueryTestData.StaleQueryId));
 
         await hook.OnActionAppliedAsync(workItem, "query-during-duly-made", "duly-made", s_user, ct);
 
@@ -349,7 +349,9 @@ public class ReAccreditationQueryPushHookTests
         await auditAppender.Received(1).AppendAsync(
             workItem.Id, "query-push-failed", Arg.Any<string>(),
             Arg.Is<Dictionary<string, string?>>(d =>
-                d["reason"]!.Contains("belongs to an earlier query")),
+                d["reason"]!.Contains(
+                    $"payload.currentQuery is query {FreshQueryTestData.StaleQueryId}, but the "
+                    + $"query-during-duly-made transition was applied for query {FreshQueryTestData.QueryId}")),
             s_user, ct);
         var error = Assert.Single(logger.Records, r => r.Level == LogLevel.Error);
         Assert.Equal(workItem.Id, error.Properties["WorkItemId"]);
