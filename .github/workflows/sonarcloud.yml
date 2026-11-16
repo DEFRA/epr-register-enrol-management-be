@@ -12,7 +12,9 @@ jobs:
   build:
     if: github.run_number != 1
     name: CDP SonarCloud coverage scan
-    runs-on: ubuntu-latest
+    # Pinned: dotnet-coverage's profiler does not initialise on ubuntu-26.04 (what ubuntu-latest now
+    # resolves to), so Sonar received no coverage. Move back to ubuntu-latest once that is fixed.
+    runs-on: ubuntu-24.04
     steps:
       - name: Set up JDK 17
         uses: actions/setup-java@v6
