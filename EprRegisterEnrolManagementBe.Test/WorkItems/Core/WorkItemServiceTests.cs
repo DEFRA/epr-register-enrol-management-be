@@ -2485,16 +2485,31 @@ public class WorkItemServiceTests : IAsyncDisposable
     public async Task ApplyAction_with_a_write_from_the_wrong_state_writes_nothing()
     {
         var ct = TestContext.Current.CancellationToken;
-        var service = BuildService(BuildApproveType());
-        var workItem = await SeedAsync(stateId: "rejected");
+        // A live (non-terminal) state that "approve" does not leave from, so
+        // the engine refuses it as an invalid transition, not a terminal one.
+        var states = new[]
+        {
+            new WorkItemState("submitted", "Submitted"),
+            new WorkItemState("on-hold", "On hold"),
+            new WorkItemState("approved", "Approved", IsTerminal: true),
+        };
+        var service = BuildService(new TestWorkItemType(
+            TypeId,
+            "Test type",
+            initialState: states[0],
+            states: states,
+            transitions: [new WorkItemTransition("approve", "Approve", "submitted", "approved")]));
+        var workItem = await SeedAsync(stateId: "on-hold");
 
         var result = await service.ApplyActionAsync(workItem.Id, "approve", FullWrite(), User(), ct);
 
         Assert.False(result.IsSuccess);
+        Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         var stored = await GetAsync(workItem.Id);
         Assert.Equal(workItem.Version, stored.Version);
         Assert.Null(stored.AssignedToId);
         Assert.False(stored.Payload.Contains("currentQuery"));
+        Assert.Empty(stored.AuditLog);
     }
 
     [Fact]
@@ -2551,7 +2566,6 @@ public class WorkItemServiceTests : IAsyncDisposable
     {
         var ct = TestContext.Current.CancellationToken;
         var service = BuildService(BuildApproveType());
-        var workItem = await SeedAsync();
         var write = part switch
         {
             "payload" => new WorkItemActionWrite
@@ -2565,9 +2579,10 @@ public class WorkItemServiceTests : IAsyncDisposable
             _ => new WorkItemActionWrite { AssignTo = new WorkItemAssignee(value, null) },
         };
 
+        // No item has this id, so a check that ran after the load would
+        // return WorkItemNotFound instead of throwing.
         await Assert.ThrowsAsync<ArgumentException>(() =>
-            service.ApplyActionAsync(workItem.Id, "approve", write, User(), ct));
-        Assert.Equal(workItem.Version, (await GetAsync(workItem.Id)).Version);
+            service.ApplyActionAsync(Guid.NewGuid(), "approve", write, User(), ct));
     }
 
     [Fact]
