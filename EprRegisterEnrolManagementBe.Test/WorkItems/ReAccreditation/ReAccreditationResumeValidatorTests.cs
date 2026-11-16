@@ -49,6 +49,24 @@ public class ReAccreditationResumeValidatorTests
     }
 
     [Fact]
+    public void Validate_rejects_a_negative_charge()
+    {
+        Assert.Equal(
+            ReAccreditationResumeValidator.NegativeChargeMessage,
+            ReAccreditationResumeValidator.Validate(Request() with { ChargeAmountPence = -1 }));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(0)]
+    [InlineData(327600)]
+    public void Validate_accepts_a_missing_zero_or_positive_charge(int? chargeAmountPence)
+    {
+        Assert.Null(
+            ReAccreditationResumeValidator.Validate(Request() with { ChargeAmountPence = chargeAmountPence }));
+    }
+
+    [Fact]
     public void Validate_rejects_an_empty_section_keys_array()
     {
         Assert.Equal(
