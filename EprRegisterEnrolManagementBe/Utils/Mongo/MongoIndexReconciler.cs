@@ -49,6 +49,18 @@ public static class MongoIndexReconciler
     private static readonly int[] s_conflictCodes = [85, 86];
 
     /// <summary>
+    /// MongoDB server error code <c>27</c> (<c>IndexNotFound</c>): the index named
+    /// in a drop is no longer on the collection. Two instances starting together in
+    /// a deploy both list the obsolete index and both try to drop it, so the slower
+    /// one asks for an index the faster one has already removed. That is a race, not
+    /// a fault, and it is tolerated here the same way
+    /// <see cref="MongoCollections.EnsureExists"/> tolerates <c>NamespaceExists</c> —
+    /// otherwise it is thrown from the persistence constructor and the instance
+    /// fails to start.
+    /// </summary>
+    private const int IndexNotFoundCode = 27;
+
+    /// <summary>
     /// Render every desired index model down to its key <see cref="BsonDocument"/>
     /// using the collection's document serializer, so callers do not have to
     /// reimplement the serializer-registry plumbing.
@@ -174,7 +186,15 @@ public static class MongoIndexReconciler
                 "Dropping obsolete index {IndexName} on {Collection}.",
                 name,
                 collection.CollectionNamespace.CollectionName);
-            collection.Indexes.DropOne(name);
+            if (!TryDropIndex(
+                collection.Indexes,
+                name,
+                collection.CollectionNamespace.CollectionName,
+                logger))
+            {
+                continue;
+            }
+
             dropped.Add(name);
         }
 
@@ -229,6 +249,47 @@ public static class MongoIndexReconciler
     /// </summary>
     private static bool IsIndexDefinitionConflict(MongoCommandException ex) =>
         s_conflictCodes.Contains(ex.Code);
+
+    /// <summary>
+    /// Drop <paramref name="name"/>, treating "it has already gone" as done
+    /// rather than as a fault. Measured against the driver (3.11) and the
+    /// server we test on, a repeated drop returns ok and never raises
+    /// <c>IndexNotFound</c>, so this is defence in depth for a server that
+    /// does: the call sits in the persistence constructor, where an unhandled
+    /// command exception stops the instance from starting at all.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> when this call dropped the index, <c>false</c> when it was
+    /// already gone.
+    /// </returns>
+    internal static bool TryDropIndex<T>(
+        IMongoIndexManager<T> indexes,
+        string name,
+        string collectionName,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(indexes);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        try
+        {
+            indexes.DropOne(name);
+            return true;
+        }
+        catch (MongoCommandException ex) when (IsIndexNotFound(ex))
+        {
+            logger.LogInformation(
+                ex,
+                "Obsolete index {IndexName} on {Collection} had already gone, so another instance "
+                    + "starting at the same time dropped it first.",
+                name,
+                collectionName);
+            return false;
+        }
+    }
+
+    private static bool IsIndexNotFound(MongoCommandException ex) =>
+        ex.Code == IndexNotFoundCode;
 
     private static IReadOnlyList<string> DropConflictingIndexes<T>(
         IMongoCollection<T> collection,

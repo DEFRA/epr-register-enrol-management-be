@@ -2,8 +2,13 @@ using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Net;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using MongoDB.Driver.Core.Clusters;
+using MongoDB.Driver.Core.Connections;
+using MongoDB.Driver.Core.Servers;
+using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.Utils.Mongo;
 
@@ -14,7 +19,8 @@ namespace EprRegisterEnrolManagementBe.Test.Utils.Mongo;
 /// the empty-model short-circuit, leaving an unrelated index untouched while
 /// reconciling a conflict, and detecting the conflict by its code name.
 /// RA-739 adds <see cref="MongoIndexReconciler.DropObsoleteIndexes{T}"/>,
-/// which drops the RA-492 <c>payload.operatorRequestId</c> index by name.
+/// which drops the RA-492 <c>payload.operatorRequestId</c> index by name, and
+/// and tolerates a server that reports the index as already gone.
 /// </summary>
 public sealed class MongoIndexReconcilerTests
     : IDisposable
@@ -184,6 +190,69 @@ public sealed class MongoIndexReconcilerTests
         Assert.Empty(dropped);
         Assert.Equal(before, await IndexNamesAsync());
     }
+
+    /// <summary>
+    /// RA-739 PR review: the review expected a concurrent drop to raise
+    /// <c>IndexNotFound</c> (27) from the persistence constructor and stop an
+    /// instance starting. Probed against driver 3.11 and the server these tests
+    /// run on, a repeated drop returns ok - both through <c>DropOne</c> and as a
+    /// raw <c>dropIndexes</c> command - so that crash does not happen here. The
+    /// tolerance is kept as defence in depth for a server that does raise it,
+    /// and is exercised with a faked index manager, since no server we have
+    /// produces the error.
+    /// </summary>
+    [Fact]
+    public void TryDropIndex_treats_IndexNotFound_as_already_dropped()
+    {
+        var indexes = Substitute.For<IMongoIndexManager<WorkItem>>();
+        indexes.When(i => i.DropOne(StaleIndexName)).Do(_ => throw CommandFailure(27, "IndexNotFound"));
+
+        var dropped = MongoIndexReconciler.TryDropIndex(
+            indexes, StaleIndexName, "workItems", NullLogger.Instance);
+
+        Assert.False(dropped);
+    }
+
+    [Fact]
+    public void TryDropIndex_reports_the_drop_it_performed()
+    {
+        var indexes = Substitute.For<IMongoIndexManager<WorkItem>>();
+
+        var dropped = MongoIndexReconciler.TryDropIndex(
+            indexes, StaleIndexName, "workItems", NullLogger.Instance);
+
+        Assert.True(dropped);
+        indexes.Received(1).DropOne(StaleIndexName);
+    }
+
+    /// <summary>Any other command failure is a real fault and must not be swallowed.</summary>
+    [Fact]
+    public void TryDropIndex_lets_other_command_failures_through()
+    {
+        var indexes = Substitute.For<IMongoIndexManager<WorkItem>>();
+        indexes.When(i => i.DropOne(StaleIndexName)).Do(_ => throw CommandFailure(13, "Unauthorized"));
+
+        var ex = Assert.Throws<MongoCommandException>(() =>
+            MongoIndexReconciler.TryDropIndex(
+                indexes, StaleIndexName, "workItems", NullLogger.Instance));
+
+        Assert.Equal(13, ex.Code);
+    }
+
+    private const string StaleIndexName = "payload.operatorRequestId_1";
+
+    private static MongoCommandException CommandFailure(int code, string codeName) =>
+        new(
+            new ConnectionId(new ServerId(new ClusterId(1), new DnsEndPoint("localhost", 27017))),
+            $"Command dropIndexes failed: {codeName}.",
+            new BsonDocument { { "dropIndexes", "workItems" }, { "index", StaleIndexName } },
+            new BsonDocument
+            {
+                { "ok", 0 },
+                { "code", code },
+                { "codeName", codeName },
+                { "errmsg", $"{codeName} for test" },
+            });
 
     [Fact]
     public void DropObsoleteIndexes_is_a_no_op_when_the_collection_does_not_exist()

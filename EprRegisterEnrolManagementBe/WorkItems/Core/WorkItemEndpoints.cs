@@ -431,6 +431,14 @@ public static class WorkItemEndpoints
                 detail: message,
                 statusCode: StatusCodes.Status503ServiceUnavailable
             ),
+            // RA-739: the idempotency key is already on file for another work
+            // item type, so the same key can never be accepted here - a 409
+            // says that, where a 400 would invite a retry.
+            WorkItemActionFailureCode.SubmissionRequestIdReused => TypedResults.Problem(
+                title: "Submission request id already used",
+                detail: message,
+                statusCode: StatusCodes.Status409Conflict
+            ),
             _ => TypedResults.Problem(
                 title: InvalidRequestTitle,
                 detail: message,

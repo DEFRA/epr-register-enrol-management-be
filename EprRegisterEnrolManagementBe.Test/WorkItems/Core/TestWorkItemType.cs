@@ -15,7 +15,8 @@ internal sealed class TestWorkItemType : IWorkItemType
         IReadOnlyCollection<WorkItemState>? states = null,
         IReadOnlyCollection<WorkItemTransition>? transitions = null,
         string? inYearChangeCode = null,
-        string? category = null)
+        string? category = null,
+        bool splitsSubmissionPerSite = false)
     {
         TypeId = typeId;
         DisplayName = displayName;
@@ -24,6 +25,7 @@ internal sealed class TestWorkItemType : IWorkItemType
         Transitions = transitions ?? Array.Empty<WorkItemTransition>();
         InYearChangeCode = inYearChangeCode;
         Category = category;
+        SplitsSubmissionPerSite = splitsSubmissionPerSite;
     }
 
     public string TypeId { get; }
@@ -33,4 +35,11 @@ internal sealed class TestWorkItemType : IWorkItemType
     public IReadOnlyCollection<WorkItemTransition> Transitions { get; }
     public string? InYearChangeCode { get; }
     public string? Category { get; }
+
+    /// <summary>
+    /// RA-739: lets a test register a second type that submits one work item
+    /// per site, which production does not have yet - <c>add-overseas-site</c>
+    /// is the only one - so the cross-type paths can still be exercised.
+    /// </summary>
+    public bool SplitsSubmissionPerSite { get; }
 }

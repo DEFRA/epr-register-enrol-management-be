@@ -547,6 +547,28 @@ public sealed class WorkItemService : IWorkItemService
 
     private WorkItemSubmissionResult Replay(IWorkItemType type, SubmissionRecord submission)
     {
+        // RA-739 PR review: the replay lookup matches on operatorRequestId
+        // alone, so a key reused for a different work item type would get the
+        // earlier submission back as a success with X-Idempotent-Replay: true.
+        // The caller would read that as "accepted" and never learn its own
+        // request was ignored, so reuse across types is refused instead.
+        if (!string.Equals(submission.TypeId, type.TypeId, StringComparison.Ordinal))
+        {
+            _logger.LogWarning(
+                "Submission for operatorRequestId {OperatorRequestId} arrived as typeId {TypeId} but is "
+                    + "already on file as {StoredTypeId} (submission {SubmissionReference}); refusing it.",
+                submission.OperatorRequestId,
+                type.TypeId,
+                submission.TypeId,
+                submission.SubmissionReference
+            );
+            return WorkItemSubmissionResult.Failure(
+                WorkItemActionFailureCode.SubmissionRequestIdReused,
+                $"operatorRequestId '{submission.OperatorRequestId}' is already on file for work item "
+                    + $"type '{submission.TypeId}', so it cannot be reused for '{type.TypeId}'."
+            );
+        }
+
         _logger.LogInformation(
             "Submission for operatorRequestId {OperatorRequestId} (typeId {TypeId}) is a replay; "
                 + "returning submission {SubmissionReference} instead of creating a duplicate.",

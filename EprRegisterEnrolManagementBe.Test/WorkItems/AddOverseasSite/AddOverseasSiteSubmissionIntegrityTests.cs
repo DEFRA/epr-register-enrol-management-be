@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Driver;
+using TestWorkItemType = EprRegisterEnrolManagementBe.Test.WorkItems.Core.TestWorkItemType;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -84,6 +85,48 @@ public sealed class AddOverseasSiteSubmissionIntegrityTests(MongoIntegrationFixt
         var next = await PostCreatedAsync(client, Submission("request-next", siteCount: 1));
         Assert.Equal("SUB-2026-0002", next.GetProperty("submissionReference").GetString());
         Assert.Equal(["IYC-ORS-2026-00004"], ApplicationReferences(next));
+    }
+
+    /// <summary>
+    /// RA-739 PR review: <c>operatorRequestId</c> is the caller's idempotency
+    /// key and the replay lookup matches on it alone, across every type that
+    /// submits per site. Reused for a different type it must not hand back the
+    /// first submission as a success: the caller would read another request's
+    /// references as its own and never learn that its submission was ignored.
+    /// Production has only <c>add-overseas-site</c> today, so the second
+    /// per-site type is registered by this test.
+    /// </summary>
+    [Fact]
+    public async Task Reusing_an_operatorRequestId_for_a_different_type_is_refused_not_replayed()
+    {
+        var otherType = new TestWorkItemType(
+            "add-overseas-site-other",
+            "Another per-site type",
+            inYearChangeCode: "OTH",
+            splitsSubmissionPerSite: true
+        );
+        await using var factory = new AppFactory(
+            fixture,
+            services => services.AddSingleton<IWorkItemType>(otherType)
+        );
+        using var client = factory.CreateClient();
+        await PostCreatedAsync(client, Submission("request-shared"));
+
+        var reused = Submission("request-shared");
+        reused["typeId"] = "add-overseas-site-other";
+        var response = await client.PostAsJsonAsync("/work-items", reused, Ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.False(response.Headers.Contains(ReplayHeader));
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Contains(
+            "already on file",
+            problem.GetProperty("detail").GetString(),
+            StringComparison.Ordinal
+        );
+        // Nothing was created for the refused submission.
+        Assert.Equal(3, await factory.CountAsync("workItems"));
+        Assert.Equal(1, await factory.CountAsync("submissions"));
     }
 
     [Fact]
