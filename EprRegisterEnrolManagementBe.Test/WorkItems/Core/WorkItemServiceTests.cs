@@ -2463,7 +2463,9 @@ public class WorkItemServiceTests : IAsyncDisposable
                     _persistence.ReplaceAsync(raceLoaded).GetAwaiter().GetResult();
                 }),
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                TestReferenceGenerators.FixedSubmissionReference()),
             _time,
             postActionHooks: [hook]);
 

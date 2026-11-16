@@ -92,7 +92,9 @@ public sealed class ReAccreditationQueryRaceMongoIntegrationTests : IAsyncDispos
             new WorkItemRegistry([new ReAccreditationType()]),
             persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                TestReferenceGenerators.FixedSubmissionReference()),
             clock,
             [pushHook]);
         return new ReAccreditationQueryService(
