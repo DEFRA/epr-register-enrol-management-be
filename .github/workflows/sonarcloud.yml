@@ -12,6 +12,8 @@ jobs:
   build:
     if: github.run_number != 1
     name: CDP SonarCloud coverage scan
+    # Pinned: dotnet-coverage's profiler does not initialise on ubuntu-26.04 (what ubuntu-latest now
+    # resolves to), so Sonar received no coverage. Move back to ubuntu-latest once that is fixed.
     runs-on: ubuntu-24.04
     steps:
       - name: Set up JDK 17
@@ -64,7 +66,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Needed to get PR information, if any
           SONAR_TOKEN: ${{ secrets.EPR_SONAR_TOKEN }}
         run: |
-          ./.sonar/scanner/dotnet-sonarscanner begin /k:"DEFRA_epr-register-enrol-management-be" /o:"defra" /d:sonar.token="$SONAR_TOKEN" /d:sonar.host.url="https://sonarcloud.io" /d:sonar.cs.vscoveragexml.reportsPaths=coverage.xml /d:sonar.cpd.exclusions="**/PublicRegister2026.cs" /d:sonar.coverage.exclusions="tools/CustomAnalyzers/**"
+          ./.sonar/scanner/dotnet-sonarscanner begin /k:"DEFRA_epr-register-enrol-management-be" /o:"defra" /d:sonar.token="$SONAR_TOKEN" /d:sonar.host.url="https://sonarcloud.io" /d:sonar.cs.vscoveragexml.reportsPaths=coverage.xml /d:sonar.coverage.exclusions="tools/CustomAnalyzers/**"
           dotnet build --no-incremental
           ./.sonar/coverage/dotnet-coverage collect "dotnet test" -f xml -o "coverage.xml"
           ./.sonar/scanner/dotnet-sonarscanner end /d:sonar.token="$SONAR_TOKEN"
