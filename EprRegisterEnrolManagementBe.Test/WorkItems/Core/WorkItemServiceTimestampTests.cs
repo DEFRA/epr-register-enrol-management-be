@@ -47,7 +47,10 @@ public class WorkItemServiceTimestampTests
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
+            new WorkItemSubmissionDependencies(
+                TestReferenceGenerators.ApplicationOnly(),
+                TestReferenceGenerators.FixedSubmissionReference()
+            ),
             _time);
 
     private static TestWorkItemType BuildType() =>
@@ -82,8 +85,8 @@ public class WorkItemServiceTimestampTests
     public async Task Submit_stamps_SubmittedAt_LastModifiedAt_and_birth_audit_from_TimeProvider()
     {
         var result = await BuildService(BuildType()).SubmitAsync(
-            BuildType(), new BsonDocument(), submittedBy: "test-client",
-            User(), cancellationToken: TestContext.Current.CancellationToken);
+            new WorkItemSubmissionRequest(BuildType(), new BsonDocument(), SubmittedBy: "test-client", User()),
+            cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.True(result.IsSuccess, result.Message);
 

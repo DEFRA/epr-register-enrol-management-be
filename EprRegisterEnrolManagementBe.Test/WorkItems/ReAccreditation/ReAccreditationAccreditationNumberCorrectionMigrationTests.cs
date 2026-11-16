@@ -449,6 +449,12 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task CreateAsync(
+            MongoDB.Driver.IClientSessionHandle session,
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
         public Task<bool> CreateIfAbsentAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

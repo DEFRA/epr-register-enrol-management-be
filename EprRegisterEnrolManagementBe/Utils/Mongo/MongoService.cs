@@ -17,13 +17,28 @@ public abstract class MongoService<T>
         Collection = connectionFactory.GetCollection<T>(collectionName);
         var loggerName = GetType().FullName ?? GetType().Name;
         Logger = loggerFactory.CreateLogger(loggerName);
+        // RA-739: create the collection up front. A collection with no
+        // indexes of its own (e.g. submissions, referenceSequences) would
+        // otherwise be created implicitly by its first write, which can be
+        // inside a submission's transaction, and creating a collection inside
+        // a transaction is not supported on every Mongo deployment.
+        MongoCollections.EnsureExists(Collection.Database, collectionName);
         EnsureIndexes();
     }
 
     protected abstract List<CreateIndexModel<T>> DefineIndexes(IndexKeysDefinitionBuilder<T> builder);
 
+    /// <summary>
+    /// Names of indexes this collection no longer wants (RA-739). They are
+    /// dropped, if present, before the desired indexes are created, so an
+    /// index whose key changed does not linger beside its replacement.
+    /// </summary>
+    protected virtual IReadOnlyCollection<string> ObsoleteIndexNames => [];
+
     protected void EnsureIndexes()
     {
+        MongoIndexReconciler.DropObsoleteIndexes(Collection, ObsoleteIndexNames, Logger);
+
         var builder = Builders<T>.IndexKeys;
         var indexes = DefineIndexes(builder);
         if (indexes.Count == 0) return;

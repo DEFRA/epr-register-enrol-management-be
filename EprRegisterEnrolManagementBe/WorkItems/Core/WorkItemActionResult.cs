@@ -84,6 +84,17 @@ public enum WorkItemActionFailureCode
     /// the same reason as <see cref="UpstreamNotificationFailed"/>.
     /// </summary>
     AccreditationNumberUnavailable,
+
+    /// <summary>
+    /// RA-739: the <c>operatorRequestId</c> on a submission is already on file
+    /// for a different work item type. It is the caller's idempotency key, and
+    /// the replay lookup matches on it alone, so replaying the earlier
+    /// submission would answer a different request with someone else's
+    /// references and the caller could not tell its own was ignored. Nothing
+    /// was created; the caller must submit with its own key. Maps to a 409,
+    /// since retrying the same key cannot succeed.
+    /// </summary>
+    SubmissionRequestIdReused,
 }
 
 /// <summary>

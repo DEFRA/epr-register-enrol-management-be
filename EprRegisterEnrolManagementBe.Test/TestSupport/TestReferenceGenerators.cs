@@ -20,12 +20,35 @@ internal static class TestReferenceGenerators
             new UnexpectedInYearChangeReferenceGenerator()
         );
 
+    /// <summary>
+    /// RA-739: a submission reference generator for engine tests that need no
+    /// Mongo sequence store. Every submission gets <c>SUB-{yyyy}-0001</c>.
+    /// </summary>
+    public static ISubmissionReferenceGenerator FixedSubmissionReference() =>
+        new FixedSubmissionReferenceGenerator();
+
+    private sealed class FixedSubmissionReferenceGenerator : ISubmissionReferenceGenerator
+    {
+        public Task<string> GenerateAsync(
+            MongoDB.Driver.IClientSessionHandle? session,
+            int accreditationYear,
+            CancellationToken cancellationToken = default
+        ) => Task.FromResult($"SUB-{accreditationYear:D4}-0001");
+    }
+
     private sealed class UnexpectedInYearChangeReferenceGenerator
         : IInYearChangeReferenceGenerator
     {
         public string? Validate(BsonDocument payload) => throw Unexpected("Validate");
 
         public Task<string> GenerateAsync(
+            string changeTypeCode,
+            BsonDocument payload,
+            CancellationToken cancellationToken = default
+        ) => throw Unexpected(changeTypeCode);
+
+        public Task<string> GenerateAsync(
+            MongoDB.Driver.IClientSessionHandle session,
             string changeTypeCode,
             BsonDocument payload,
             CancellationToken cancellationToken = default
