@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.WorkItems.Core;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization.Attributes;
 
@@ -167,8 +168,11 @@ internal sealed record ReAccreditationPayload
     /// submission payload and displayed, read-only, on the duly-making page so
     /// the regulator can confirm the charge before recording the payment date.
     ///
-    /// Nullable and never written by this service. Absent on every work item
-    /// submitted before RA-316, so readers must degrade rather than assume a
+    /// Nullable. RA-766: written by this service only to keep it in step with
+    /// the operator backend, on <c>resume-from-query</c> (the operator backend
+    /// recalculates it when a query changes the tonnage band or overseas sites)
+    /// and by the temporary <c>PUT .../charge</c> correction endpoint. Absent
+    /// on every work item submitted before RA-316, so readers must degrade rather than assume a
     /// value; note that <c>0</c> is a legitimate charge and must not be
     /// conflated with "missing".
     /// </summary>
@@ -210,4 +214,30 @@ internal sealed record ReAccreditationPayload
     /// why readers must gate on the <c>queried</c> state.
     /// </summary>
     public CurrentQuery? CurrentQuery { get; init; }
+
+    /// <summary>RA-766: the top-level payload field holding <see cref="ChargeAmountPence"/>.</summary>
+    public const string ChargeAmountPenceField = "chargeAmountPence";
+
+    /// <summary>
+    /// The stored charge in pence, or null when absent (submitted before
+    /// RA-316) or not a whole number that fits an int. Only integer BSON
+    /// types are read: the payload is parsed from JSON, which stores a whole
+    /// number as Int32 (or Int64 when large), so a floating-point value is
+    /// not a charge this service wrote.
+    /// </summary>
+    internal static int? ReadChargeAmountPence(WorkItem workItem)
+    {
+        if (workItem.Payload is null
+            || !workItem.Payload.TryGetValue(ChargeAmountPenceField, out var value))
+        {
+            return null;
+        }
+
+        return value.BsonType switch
+        {
+            BsonType.Int32 => value.AsInt32,
+            BsonType.Int64 when value.AsInt64 is >= int.MinValue and <= int.MaxValue => (int)value.AsInt64,
+            _ => null,
+        };
+    }
 }
