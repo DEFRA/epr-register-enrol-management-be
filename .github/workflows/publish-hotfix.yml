@@ -21,6 +21,6 @@ jobs:
         with:
           fetch-depth: 0 # Depth 0 required for branch-based versioning
       - name: Publish Hot Fix
-        uses: DEFRA/cdp-build-action/build-hotfix@f95d7ca6ee42255191e17bbf5dd8e08810a189a3 # main
+        uses: DEFRA/cdp-build-action/build-hotfix@5e3632e25c7d4c3d514da45acaa149fd4c193640 # main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
