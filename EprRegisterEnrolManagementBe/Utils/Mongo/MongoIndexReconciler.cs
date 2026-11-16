@@ -49,6 +49,18 @@ public static class MongoIndexReconciler
     private static readonly int[] s_conflictCodes = [85, 86];
 
     /// <summary>
+    /// MongoDB server error code <c>27</c> (<c>IndexNotFound</c>): the index named
+    /// in a drop is no longer on the collection. Two instances starting together in
+    /// a deploy both list the obsolete index and both try to drop it, so the slower
+    /// one asks for an index the faster one has already removed. That is a race, not
+    /// a fault, and it is tolerated here the same way
+    /// <see cref="MongoCollections.EnsureExists"/> tolerates <c>NamespaceExists</c> —
+    /// otherwise it is thrown from the persistence constructor and the instance
+    /// fails to start.
+    /// </summary>
+    private const int IndexNotFoundCode = 27;
+
+    /// <summary>
     /// Render every desired index model down to its key <see cref="BsonDocument"/>
     /// using the collection's document serializer, so callers do not have to
     /// reimplement the serializer-registry plumbing.
@@ -133,6 +145,63 @@ public static class MongoIndexReconciler
     }
 
     /// <summary>
+    /// Drop each named index that exists on the collection (RA-739). Used when
+    /// an index's key changes: the old index has a different key from its
+    /// replacement, so <see cref="EnsureIndexes{T}"/> never sees a conflict
+    /// and would otherwise leave it in place. A name that is not present is
+    /// ignored, so this is idempotent.
+    /// </summary>
+    /// <returns>The names of the indexes that were dropped.</returns>
+    public static IReadOnlyList<string> DropObsoleteIndexes<T>(
+        IMongoCollection<T> collection,
+        IReadOnlyCollection<string> indexNames,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(collection);
+        ArgumentNullException.ThrowIfNull(indexNames);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        if (indexNames.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var existing = collection
+            .Indexes.List()
+            .ToList()
+            .Select(index => index.GetValue("name", BsonNull.Value))
+            .Where(name => name.IsString)
+            .Select(name => name.AsString)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var dropped = new List<string>();
+        foreach (var name in indexNames.Where(existing.Contains))
+        {
+            if (string.Equals(name, IdIndexName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            logger.LogWarning(
+                "Dropping obsolete index {IndexName} on {Collection}.",
+                name,
+                collection.CollectionNamespace.CollectionName);
+            if (!TryDropIndex(
+                collection.Indexes,
+                name,
+                collection.CollectionNamespace.CollectionName,
+                logger))
+            {
+                continue;
+            }
+
+            dropped.Add(name);
+        }
+
+        return dropped;
+    }
+
+    /// <summary>
     /// Same contract as <see cref="EnsureIndexes{T}"/> but one model at a
     /// time, used once a batched <c>CreateMany</c> has already failed with a
     /// duplicate-key error so the offending index can be isolated: every
@@ -180,6 +249,47 @@ public static class MongoIndexReconciler
     /// </summary>
     private static bool IsIndexDefinitionConflict(MongoCommandException ex) =>
         s_conflictCodes.Contains(ex.Code);
+
+    /// <summary>
+    /// Drop <paramref name="name"/>, treating "it has already gone" as done
+    /// rather than as a fault. Measured against the driver (3.11) and the
+    /// server we test on, a repeated drop returns ok and never raises
+    /// <c>IndexNotFound</c>, so this is defence in depth for a server that
+    /// does: the call sits in the persistence constructor, where an unhandled
+    /// command exception stops the instance from starting at all.
+    /// </summary>
+    /// <returns>
+    /// <c>true</c> when this call dropped the index, <c>false</c> when it was
+    /// already gone.
+    /// </returns>
+    internal static bool TryDropIndex<T>(
+        IMongoIndexManager<T> indexes,
+        string name,
+        string collectionName,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(indexes);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        try
+        {
+            indexes.DropOne(name);
+            return true;
+        }
+        catch (MongoCommandException ex) when (IsIndexNotFound(ex))
+        {
+            logger.LogInformation(
+                ex,
+                "Obsolete index {IndexName} on {Collection} had already gone, so another instance "
+                    + "starting at the same time dropped it first.",
+                name,
+                collectionName);
+            return false;
+        }
+    }
+
+    private static bool IsIndexNotFound(MongoCommandException ex) =>
+        ex.Code == IndexNotFoundCode;
 
     private static IReadOnlyList<string> DropConflictingIndexes<T>(
         IMongoCollection<T> collection,

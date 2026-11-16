@@ -24,7 +24,8 @@ service.
 - [.NET SDK 10.0](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker](https://www.docker.com/) and Docker Compose (for the Docker workflow)
 - [MongoDB 7+](https://www.mongodb.com/docs/manual/installation/) running
-  locally on `mongodb://127.0.0.1:27017` (or use the Docker Compose stack)
+  locally on `mongodb://127.0.0.1:27017` as a replica set (or use the Docker
+  Compose stack, which runs one)
 
 ## Local development
 
@@ -100,6 +101,24 @@ the Compose stack:
 ```bash
 docker compose up -d mongodb
 ```
+
+The Compose `mongodb` service runs as a **single-node replica set** (`rs0`)
+(RA-739), because in-year change submissions are written all-or-nothing in a
+multi-document transaction, which MongoDB only supports on a replica set. Its
+healthcheck initiates the set on first start and is a no-op afterwards; an
+existing `mongodb-data` volume keeps its data. From the host, connect with
+`directConnection=true`, because the set advertises its member as
+`mongodb:27017`, which only resolves inside the Compose network:
+
+```bash
+mongosh "mongodb://127.0.0.1:27017/?directConnection=true"
+```
+
+`appsettings.Development.json` already does this. A locally installed
+standalone `mongod` still works for everything except transactions. At startup
+the service runs a **transaction smoke test** and logs one line:
+`Mongo transaction smoke test supported=true`, or an error with
+`supported=false` when the server cannot run transactions.
 
 ## Running with Docker Compose
 
@@ -223,7 +242,7 @@ Notify-testing walkthrough.
 
 | Variable | Secret? | Description |
 | --- | --- | --- |
-| `Mongo__DatabaseUri` | No | MongoDB connection string (default `mongodb://127.0.0.1:27017`; IAM auth in deployed environments) |
+| `Mongo__DatabaseUri` | No | MongoDB connection string (default `mongodb://127.0.0.1:27017/?directConnection=true`; IAM auth in deployed environments). Must reach a replica set for transactions |
 | `Mongo__DatabaseName` | No | MongoDB database name (default `epr-register-case-management`) |
 | `OPERATOR_SERVICE_BASE_URL` | No | Public frontend URL, used for the "back to your application" link in query-notification emails |
 | `Cors__AllowedOrigins` | No | CORS allow-list (array). Empty = deny-all |
