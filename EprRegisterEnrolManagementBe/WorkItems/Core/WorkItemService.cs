@@ -764,7 +764,7 @@ public sealed class WorkItemService : IWorkItemService
             }
         }
 
-        return await CompleteSubmissionAsync(workItem!, user, cancellationToken);
+        return await CompleteSubmissionAsync(workItem, user, cancellationToken);
     }
 
     // Extracted from PersistNewWorkItemAsync (S3776: cognitive complexity) - runs

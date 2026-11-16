@@ -205,7 +205,9 @@ public sealed class MongoIndexReconcilerTests
     public void TryDropIndex_treats_IndexNotFound_as_already_dropped()
     {
         var indexes = Substitute.For<IMongoIndexManager<WorkItem>>();
-        indexes.When(i => i.DropOne(StaleIndexName)).Do(_ => throw CommandFailure(27, "IndexNotFound"));
+        indexes
+            .When(i => i.DropOne(StaleIndexName, Arg.Any<CancellationToken>()))
+            .Do(_ => throw CommandFailure(27, "IndexNotFound"));
 
         var dropped = MongoIndexReconciler.TryDropIndex(
             indexes, StaleIndexName, "workItems", NullLogger.Instance);
@@ -222,7 +224,9 @@ public sealed class MongoIndexReconcilerTests
             indexes, StaleIndexName, "workItems", NullLogger.Instance);
 
         Assert.True(dropped);
-        indexes.Received(1).DropOne(StaleIndexName);
+        indexes
+            .Received(1)
+            .DropOne(StaleIndexName, Arg.Any<CancellationToken>());
     }
 
     /// <summary>Any other command failure is a real fault and must not be swallowed.</summary>
@@ -230,7 +234,9 @@ public sealed class MongoIndexReconcilerTests
     public void TryDropIndex_lets_other_command_failures_through()
     {
         var indexes = Substitute.For<IMongoIndexManager<WorkItem>>();
-        indexes.When(i => i.DropOne(StaleIndexName)).Do(_ => throw CommandFailure(13, "Unauthorized"));
+        indexes
+            .When(i => i.DropOne(StaleIndexName, Arg.Any<CancellationToken>()))
+            .Do(_ => throw CommandFailure(13, "Unauthorized"));
 
         var ex = Assert.Throws<MongoCommandException>(() =>
             MongoIndexReconciler.TryDropIndex(
