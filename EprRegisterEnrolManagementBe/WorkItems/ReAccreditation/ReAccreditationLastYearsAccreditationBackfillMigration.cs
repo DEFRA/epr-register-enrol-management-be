@@ -8,7 +8,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// RA-763 remediation: 2027 accreditation numbers are derived from the
 /// operator's 2026 accreditation number, which the operator backend now keeps
 /// on each application and sends with new submissions as
-/// <c>payload.lastYearsAccreditation</c> (<c>{ year, accreditationNumber }</c>).
+/// <c>payload.lastYearsAccreditationNumber</c> (<c>{ year, accreditationNumber }</c>).
 /// Work items submitted before that hold none. This one-off gives every
 /// existing 2027 re-accreditation work item its 2026 accreditation number from
 /// the 5 November 2026 public register (<see cref="PublicRegister2026"/>), and
@@ -79,7 +79,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
     public const int LastYear = AccreditationYear - 1;
 
     /// <summary>Payload key the operator backend sends for new submissions.</summary>
-    public const string PayloadKey = "lastYearsAccreditation";
+    public const string PayloadKey = "lastYearsAccreditationNumber";
 
     // Contract with management-fe (renders the details rows). Do not change one side.
     public const string AddedAuditAction = "last-years-accreditation-number-added";
@@ -445,7 +445,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         IWorkItemPersistence persistence,
         WorkItem item,
         string registrationNumber,
-        string? lastYearsAccreditation,
+        string? lastYearsAccreditationNumber,
         CancellationToken cancellationToken
     )
     {
@@ -457,7 +457,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
         // The operator backend's derivation (AccreditationReferenceDerivation):
         // A + the year applied for + everything after the source's year.
-        var expected = $"A{AccreditationYear % 100:D2}{(lastYearsAccreditation ?? registrationNumber)[3..]}";
+        var expected = $"A{AccreditationYear % 100:D2}{(lastYearsAccreditationNumber ?? registrationNumber)[3..]}";
         var correction = Corrections.FirstOrDefault(c => c.RegistrationNumber == registrationNumber);
 
         if (issued == expected)
