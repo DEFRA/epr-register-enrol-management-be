@@ -1,4 +1,6 @@
+using System.Globalization;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -172,11 +174,95 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
 
     public string TypeId => ReAccreditationType.Id;
 
+    // Payload field and value the seeds below repeat.
+    private const string WasteProcessingTypeField = "wasteProcessingType";
+    private const string ExporterWasteProcessingType = "exporter";
+
+    // Argument checks run eagerly here; BuildSeeds is the lazy iterator (S4456).
     public IEnumerable<WorkItem> Build(IWorkItemType type, TimeProvider time)
     {
         ArgumentNullException.ThrowIfNull(type);
         ArgumentNullException.ThrowIfNull(time);
 
+        return BuildSeeds(time).Select(StampOperatorSubmissionFields);
+    }
+
+    /// <summary>
+    /// Every seeded item stands in for an operator backend
+    /// submission (each carries operatorOrganisationId), and a real one now
+    /// always carries <c>operatorOrgNumber</c> and <c>paymentReference</c>.
+    /// Seeds are written straight to the store, not through
+    /// <see cref="WorkItemService"/>, so the seed set stamps them here, where it
+    /// cannot miss one. A seed that already sets either field keeps its own
+    /// value (full-payload-verification deliberately uses distinct values). The
+    /// org number is the seed's numeric operatorOrganisationId; a seed whose id
+    /// is not one is a seed-data bug and fails loudly. See "Operator backend
+    /// submissions" in docs/work-items.md.
+    /// </summary>
+    private static WorkItem StampOperatorSubmissionFields(WorkItem item)
+    {
+        var payload = item.Payload;
+        if (!payload.Contains(OperatorOrgNumber.Field))
+        {
+            var organisationId = payload.GetValue("operatorOrganisationId", BsonNull.Value);
+            if (
+                !organisationId.IsString
+                || !int.TryParse(
+                    organisationId.AsString,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out var orgNumber
+                )
+                || orgNumber is < 1 or > 999999
+            )
+            {
+                throw new InvalidOperationException(
+                    $"Seed {item.Id} has no numeric operatorOrganisationId to use as its operatorOrgNumber."
+                );
+            }
+
+            payload[OperatorOrgNumber.Field] = orgNumber;
+        }
+
+        if (!payload.Contains("paymentReference"))
+        {
+            payload["paymentReference"] = SeedPaymentReference(payload);
+        }
+
+        return item;
+    }
+
+    /// <summary>
+    /// The payment reference the operator backend builds for this nation and
+    /// applicant type, so seeded items show what a real one does. The source of
+    /// truth is <c>PaymentReferenceBuilder.Build</c> in epr-register-enrol-backend
+    /// (AccreditationApplication/Services/PaymentReferences.cs); the seeder tests
+    /// pin one exact reference per nation so a drift from it is caught.
+    /// </summary>
+    internal static string SeedPaymentReference(BsonDocument payload)
+    {
+        var orgNumber = payload[OperatorOrgNumber.Field].ToInt32();
+        var isExporter = string.Equals(
+            payload.GetValue(WasteProcessingTypeField, BsonNull.Value) is { IsString: true } type
+                ? type.AsString
+                : null,
+            ExporterWasteProcessingType,
+            StringComparison.OrdinalIgnoreCase
+        );
+        return payload["nation"].AsString switch
+        {
+            nameof(Nation.NorthernIreland) => $"NI/PR/REEX/{orgNumber}",
+            nameof(Nation.Wales) => $"PREX/{orgNumber}",
+            nameof(Nation.Scotland) => $"E800 81581/{orgNumber}",
+            nameof(Nation.England) => isExporter ? $"PR/PK/EXP/{orgNumber}" : $"PR/PK/REP/{orgNumber}",
+            var other => throw new InvalidOperationException(
+                $"Seed payload has unrecognised nation '{other}'."
+            ),
+        };
+    }
+
+    private IEnumerable<WorkItem> BuildSeeds(TimeProvider time)
+    {
         var now = time.GetUtcNow().UtcDateTime;
 
         // RA-316: every payload below carries chargeAmountPence (integer pence,
@@ -193,12 +279,10 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // seed the field the real pipeline supplies, so the UI is exercised
         // outside production.
         //
-        // paymentReference is deliberately set on ONE seed only
-        // (full-payload-verification). It is an override, absent on real
-        // submissions because the operator backend has no payment reference at
-        // submission time, and the frontend falls back to the application
-        // reference. Seeding it everywhere would leave that fallback — the path
-        // almost every real work item takes — completely unexercised.
+        // paymentReference and operatorOrgNumber are stamped on every seed by
+        // StampOperatorSubmissionFields, mirroring what the
+        // operator backend sends. full-payload-verification sets its own,
+        // distinct values below.
 
         // The eight simple, single-field-varying items below are data-driven
         // (s_simpleFixtures + one Build/SimpleSeedPayload call) rather than
@@ -244,7 +328,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // as a Reprocessor and the BES/ORS sections stop rendering.
                 // RA-434-processortype independently relies on the same field
                 // for the same reason (its BES/ORS fixture).
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 // RA-412 (self-review): AccreditationIdGenerator and
                 // ApplicationReferenceGenerator both require this on the
                 // Exporter branch (the registered-office postcode, per
@@ -441,7 +525,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
         // header/audit-log/list card prefer this field over operatorOrganisationId, rather than
         // the two happening to coincide. operatorOrganisationId itself stays untouched at
         // "500009", the org id segment of this item's registrationNumber.
-        fullPayloadVerificationItem.Payload["operatorOrgNumber"] = 500010;
+        fullPayloadVerificationItem.Payload[OperatorOrgNumber.Field] = 500010;
         yield return fullPayloadVerificationItem;
 
         // RA-292: the ORS / interim-site / authority-to-issue fixture.
@@ -494,7 +578,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 // item above — this item's overseasSites/ORS sites need it too.
                 // RA-434-processortype independently relies on the same field
                 // for the same reason (this is the RA-292 ORS/BES fixture).
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
                 ["companyRegisterAddressPostcode"] = "SA1 1AA",
@@ -806,7 +890,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = GlobalGlassExportsOrganisationName,
                 ["registrationNumber"] = "R25EX5000110506GR",
                 ["operatorApplicationId"] = "app-global-glass-exports-001",
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 // RA-412 (self-review): see the same field on
                 // full-payload-verification above for why it's required.
                 ["companyRegisterAddressPostcode"] = "CF10 1AA",
@@ -853,7 +937,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["previousAccreditationYear"] = 2025,
                 ["complianceIssuesReported"] = 0,
                 ["operatorEmail"] = "continental.exports@example.com",
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 ["companiesHouseNumber"] = "09876543",
                 ["companyRegisteredAddress"] = "1 Continental Way, Dover, Kent",
                 ["companyRegisterAddressPostcode"] = "CT16 1AA",
@@ -952,7 +1036,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = Ra557OverseasSitesResubmitOrganisationName,
                 ["registrationNumber"] = "R25EX5000140557PL",
                 ["operatorApplicationId"] = "app-ra557-ors-resubmit-001",
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 ["companyRegisterAddressPostcode"] = "BS1 4ST",
                 ["material"] = "plastic",
                 ["previousAccreditationYear"] = 2025,
@@ -989,7 +1073,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
                 ["organisationName"] = MultipleInterimSitesOrganisationName,
                 ["registrationNumber"] = "R25WX5000160603FB",
                 ["operatorApplicationId"] = "app-multiple-interim-sites-001",
-                ["wasteProcessingType"] = "exporter",
+                [WasteProcessingTypeField] = ExporterWasteProcessingType,
                 ["companyRegisterAddressPostcode"] = "CF10 1EP",
                 ["material"] = "fibre",
                 ["previousAccreditationYear"] = 2025,

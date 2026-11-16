@@ -118,6 +118,19 @@ public sealed record WorkItemEngineProjection(
     bool IsTerminal = false
 );
 
+/// <summary>
+/// The collaborators <see cref="WorkItemService.SubmitAsync"/> alone uses,
+/// bundled into one constructor argument so <see cref="WorkItemService"/>
+/// stays under SonarCloud's parameter-count cap (S107), the same approach as
+/// <c>ClientIdSignaturePayload</c>: the <c>applicationReference</c> formats
+/// (RA-219, RA-492) and the check that tells an operator backend submission
+/// from a hand-created one (see "Operator backend submissions" in docs/work-items.md).
+/// </summary>
+public sealed record WorkItemSubmissionServices(
+    IWorkItemReferenceGenerator ReferenceGenerator,
+    OperatorBackendCaller OperatorBackendCaller
+);
+
 public sealed class WorkItemService : IWorkItemService
 {
     private const string SourceKey = "source";
@@ -138,13 +151,14 @@ public sealed class WorkItemService : IWorkItemService
     private readonly IReadOnlyCollection<IWorkItemPostActionHook> _postActionHooks;
     private readonly TimeProvider _timeProvider;
     private readonly IWorkItemReferenceGenerator _referenceGenerator;
+    private readonly OperatorBackendCaller _operatorBackendCaller;
     private readonly IReadOnlyCollection<IWorkItemOriginStateResolver> _originStateResolvers;
 
     public WorkItemService(
         IWorkItemRegistry registry,
         IWorkItemPersistence persistence,
         ILogger<WorkItemService> logger,
-        IWorkItemReferenceGenerator referenceGenerator,
+        WorkItemSubmissionServices submissionServices,
         TimeProvider? timeProvider = null,
         IEnumerable<IWorkItemPostActionHook>? postActionHooks = null,
         IEnumerable<IWorkItemOriginStateResolver>? originStateResolvers = null
@@ -155,7 +169,9 @@ public sealed class WorkItemService : IWorkItemService
         this._logger = logger;
         _postActionHooks = postActionHooks?.ToArray() ?? Array.Empty<IWorkItemPostActionHook>();
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _referenceGenerator = referenceGenerator;
+        ArgumentNullException.ThrowIfNull(submissionServices);
+        _referenceGenerator = submissionServices.ReferenceGenerator;
+        _operatorBackendCaller = submissionServices.OperatorBackendCaller;
         _originStateResolvers =
             originStateResolvers?.ToArray() ?? Array.Empty<IWorkItemOriginStateResolver>();
     }
@@ -233,10 +249,42 @@ public sealed class WorkItemService : IWorkItemService
             }
         }
 
+        // A submission from the operator backend must carry the
+        // operator's real organisation number and the payment reference the
+        // operator was told to quote. Reject it before any reference or
+        // sequence number is generated or anything is persisted, so a payload
+        // the operator backend built without them can never become a work item
+        // with a made-up reference. Hand-created work items keep their existing
+        // path (see OperatorBackendCaller.IsOperatorBackendSubmission, and
+        // "Operator backend submissions" in docs/work-items.md).
+        var origin = _operatorBackendCaller.ResolveOrigin(user);
+        if (
+            origin == WorkItemSubmissionOrigin.OperatorBackend
+            && OperatorSubmissionRequirements.FindProblems(payload) is { Count: > 0 } problems
+        )
+        {
+            _logger.LogError(
+                "Rejected work item submission from the operator backend (clientId {ClientId}, "
+                    + "typeId {TypeId}): missing or invalid {MissingFields}. "
+                    + "operatorApplicationId={OperatorApplicationId} operatorRequestId={OperatorRequestId} "
+                    + "operatorOrganisationId={OperatorOrganisationId}",
+                _operatorBackendCaller.ClientId,
+                type.TypeId,
+                string.Join(", ", problems.Select(p => p.Field)),
+                ReadLoggableString(payload, ApplicationSubmissionKeyField),
+                ReadLoggableString(payload, ChangeRequestSubmissionKeyField),
+                ReadLoggableString(payload, "operatorOrganisationId")
+            );
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidSubmissionPayload,
+                string.Join(" ", problems.Select(p => p.Message))
+            );
+        }
+
         // RA-492: reject a payload the reference format cannot use (an in-year
         // change without a 4-digit accreditationYear) before any sequence number
         // is allocated or anything is persisted.
-        var referenceFormat = _referenceGenerator.ForType(type);
+        var referenceFormat = _referenceGenerator.ForType(type, origin);
         if (referenceFormat.ValidatePayload(payload) is { } payloadError)
         {
             return WorkItemActionResult.Failure(
@@ -247,18 +295,14 @@ public sealed class WorkItemService : IWorkItemService
 
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
 
-        // RA-503: the operator backend now sends the operator's real, nation-specific bank
-        // payment reference (buildPaymentReference in epr-register-enrol-frontend, e.g.
-        // PR/PK/REP/500500 - the exact string shown to the operator on their submit-confirmation
-        // and view-payment-details pages) directly in the submission payload. Captured once,
-        // before the retry loop, so a regenerated applicationReference on a later attempt can
-        // never overwrite it - unlike applicationReference, this value doesn't depend on attempt
-        // and must stay exactly what the operator was told to quote.
-        var operatorPaymentReference =
-            payload.TryGetValue("paymentReference", out var operatorPaymentReferenceValue)
-            && operatorPaymentReferenceValue.IsString
-            && !string.IsNullOrWhiteSpace(operatorPaymentReferenceValue.AsString)
-                ? operatorPaymentReferenceValue.AsString
+        // RA-503/RA-000: an operator backend submission carries the operator's real,
+        // nation-specific bank payment reference (e.g. PR/PK/REP/500500, the exact string the
+        // operator was told to quote), validated above and stored exactly as sent. A hand-created
+        // work item's supplied value is captured once, before the retry loop, so a regenerated
+        // applicationReference on a later attempt can never overwrite it.
+        var handCreatedPaymentReference =
+            origin == WorkItemSubmissionOrigin.HandCreated
+                ? OperatorSubmissionRequirements.ReadPaymentReference(payload)
                 : null;
 
         // RA-219: the backend owns the applicationReference. Generate one
@@ -280,11 +324,16 @@ public sealed class WorkItemService : IWorkItemService
             );
             payload[ApplicationReferenceField] = applicationReference;
 
-            // RA-503: prefer the operator-supplied payment reference captured above. Fall back
-            // to applicationReference only when the payload never carried one - a submitter that
-            // predates this (RA-447/CM3, RA-316) or a source that doesn't send it, so this is
-            // never left blank rather than because the two are meant to be interchangeable.
-            payload["paymentReference"] = operatorPaymentReference ?? applicationReference;
+            // Only a hand-created work item keeps its existing path (see "Operator backend
+            // submissions" in docs/work-items.md), where
+            // the payment reference is the applicationReference unless one was supplied
+            // (management-fe's create form deliberately has no such field, RA-316). An operator
+            // backend submission keeps the paymentReference it sent, never this one.
+            if (origin == WorkItemSubmissionOrigin.HandCreated)
+            {
+                payload[OperatorSubmissionRequirements.PaymentReferenceField] =
+                    handCreatedPaymentReference ?? applicationReference;
+            }
 
             workItem = new WorkItem
             {
@@ -481,11 +530,21 @@ public sealed class WorkItemService : IWorkItemService
     /// application (RA-311/MBE-3), <c>operatorRequestId</c> for an in-year
     /// change request (RA-492).
     /// </summary>
+    private const string ApplicationSubmissionKeyField = "operatorApplicationId";
+    private const string ChangeRequestSubmissionKeyField = "operatorRequestId";
+
     private static readonly string[] s_submissionKeyFields =
     [
-        "operatorApplicationId",
-        "operatorRequestId",
+        ApplicationSubmissionKeyField,
+        ChangeRequestSubmissionKeyField,
     ];
+
+    /// <summary>
+    /// A payload id for an Error log line: its string value, or null when the
+    /// field is absent or not a string. Used only for logging, never stored.
+    /// </summary>
+    private static string? ReadLoggableString(BsonDocument payload, string field) =>
+        payload.TryGetValue(field, out var value) && value.IsString ? value.AsString : null;
 
     private static List<SubmissionKey> ResolveSubmissionKeys(BsonDocument payload) =>
         s_submissionKeyFields

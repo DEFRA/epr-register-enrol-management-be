@@ -40,7 +40,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.Submission(),
             _time
         );
 
@@ -52,7 +52,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.Submission(),
             _time,
             postActionHooks: [hook]
         );
@@ -104,6 +104,17 @@ public class WorkItemServiceTests : IAsyncDisposable
         new(
             new ClaimsIdentity(
                 [new Claim("client_id", "test-client"), new Claim("user:id", "test-user")],
+                "test"
+            )
+        );
+
+    private static ClaimsPrincipal OperatorBackendUser() =>
+        new(
+            new ClaimsIdentity(
+                [
+                    new Claim("client_id", TestOperatorBackendCaller.ClientId),
+                    new Claim("user:id", "operator@example.com"),
+                ],
                 "test"
             )
         );
@@ -211,7 +222,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.Submission(),
             _time,
             postActionHooks: [slowHook, pushHook]
         );
@@ -1743,7 +1754,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.Submission(),
             time
         );
 
@@ -1985,12 +1996,14 @@ public class WorkItemServiceTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Submit_NoOperatorSuppliedPaymentReference_FallsBackToTheGeneratedApplicationReference()
+    public async Task Submit_HandCreated_without_a_paymentReference_uses_the_applicationReference()
     {
-        // RA-447/CM3: paymentReference used to stay null forever (the operator backend cannot
-        // know applicationReference before management-be generates it). RA-503: the operator
-        // backend now sends its own real bank reference in most cases (see the test below) -
-        // this fallback covers a payload with none, e.g. a submitter that predates that change.
+        // A hand-created work item (any caller other than the operator
+        // backend; management-fe's create form has no paymentReference field, RA-316) keeps its
+        // existing path, where the payment reference is the applicationReference. An operator
+        // backend submission without one is rejected instead (see
+        // WorkItemServiceInYearChangeReferenceTests and the ReAccreditationEndpointTests
+        // operator submission tests).
         var type = BuildType();
 
         var result = await BuildService(type)
@@ -2011,22 +2024,26 @@ public class WorkItemServiceTests : IAsyncDisposable
         );
     }
 
-    // RA-503: the operator's real, nation-specific bank payment reference (buildPaymentReference
-    // in epr-register-enrol-frontend) must be preserved exactly as sent, never overwritten by the
+    // RA-503/RA-000: the operator's real, nation-specific bank payment reference (built by the
+    // operator backend) must be preserved exactly as sent, never overwritten by the
     // locally-generated applicationReference - they are different values by design (the operator
     // already quoted this one on their bank transfer).
     [Fact]
     public async Task Submit_OperatorSuppliedPaymentReference_IsPreservedRatherThanOverwritten()
     {
         var type = BuildType();
-        var payload = new BsonDocument { ["paymentReference"] = "PR/PK/REP/500500" };
+        var payload = new BsonDocument
+        {
+            ["operatorOrgNumber"] = 500500,
+            ["paymentReference"] = "PR/PK/REP/500500",
+        };
 
         var result = await BuildService(type)
             .SubmitAsync(
                 type,
                 payload,
-                "test-client",
-                AuditUser(),
+                TestOperatorBackendCaller.ClientId,
+                OperatorBackendUser(),
                 cancellationToken: TestContext.Current.CancellationToken
             );
 
@@ -2060,16 +2077,20 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
+            TestReferenceGenerators.Submission(generator),
             _time
         );
 
-        var payload = new BsonDocument { ["paymentReference"] = "PR/PK/REP/500500" };
+        var payload = new BsonDocument
+        {
+            ["operatorOrgNumber"] = 500500,
+            ["paymentReference"] = "PR/PK/REP/500500",
+        };
         var result = await service.SubmitAsync(
             type,
             payload,
-            "test-client",
-            AuditUser(),
+            TestOperatorBackendCaller.ClientId,
+            OperatorBackendUser(),
             cancellationToken: TestContext.Current.CancellationToken
         );
 
@@ -2123,7 +2144,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
+            TestReferenceGenerators.Submission(generator),
             _time
         );
 
@@ -2160,7 +2181,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             _persistence,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(generator),
+            TestReferenceGenerators.Submission(generator),
             _time
         );
 
@@ -2316,7 +2337,7 @@ public class WorkItemServiceTests : IAsyncDisposable
     {
         public int CallCount { get; private set; }
 
-        public string Generate(BsonDocument payload, int attempt)
+        public string Generate(BsonDocument payload, WorkItemSubmissionOrigin origin, int attempt)
         {
             var value = values[Math.Min(CallCount, values.Length - 1)];
             CallCount++;
@@ -2345,7 +2366,7 @@ public class WorkItemServiceTests : IAsyncDisposable
             new WorkItemRegistry([type]),
             racing,
             NullLogger<WorkItemService>.Instance,
-            TestReferenceGenerators.ApplicationOnly(),
+            TestReferenceGenerators.Submission(),
             _time
         );
     }

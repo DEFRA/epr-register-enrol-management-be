@@ -20,6 +20,15 @@ internal static class TestReferenceGenerators
             new UnexpectedInYearChangeReferenceGenerator()
         );
 
+    /// <summary>
+    /// The <see cref="WorkItemSubmissionServices"/> most engine tests need:
+    /// <see cref="ApplicationOnly"/> plus the default operator backend caller
+    /// (see "Operator backend submissions" in docs/work-items.md).
+    /// </summary>
+    public static WorkItemSubmissionServices Submission(
+        IApplicationReferenceGenerator? applicationReferenceGenerator = null
+    ) => new(ApplicationOnly(applicationReferenceGenerator), TestOperatorBackendCaller.Default);
+
     private sealed class UnexpectedInYearChangeReferenceGenerator
         : IInYearChangeReferenceGenerator
     {

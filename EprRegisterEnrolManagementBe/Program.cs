@@ -325,8 +325,8 @@ static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration con
         map,
         config,
         callerName: "Backend",
-        clientIdKey: "Auth:BackendClientId",
-        clientIdDefault: "epr-register-enrol-backend",
+        clientIdKey: OperatorBackendCaller.ClientIdConfigKey,
+        clientIdDefault: OperatorBackendCaller.DefaultClientId,
         secretKey: "AUTH_SHARED_SECRET:BACKEND"
     );
     // RA-000: the mgmt-tests journey suite creates its own work items on CDP
