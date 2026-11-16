@@ -508,11 +508,14 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         var level = NeedsAPerson(plan) ? LogLevel.Warning : LogLevel.Information;
         logger.Log(
             level,
-            "RA-763 {Mode}: work item {WorkItemId} ({ApplicationReference}, registration "
-                + "{RegistrationNumber}): {Outcome}, issued number {IssuedNumber}. {Detail}",
+            "RA-763 {Mode}: work item {WorkItemId} ({ApplicationReference}, org {OrgNumber} "
+                + "{OrganisationName}, registration {RegistrationNumber}): {Outcome}, issued number "
+                + "{IssuedNumber}. {Detail}",
             mode,
             plan.Item.Id,
             ReadString(plan.Item.Payload, "applicationReference"),
+            ReadOrgNumber(plan.Item.Payload),
+            ReadString(plan.Item.Payload, OrganisationNameField),
             ReadString(plan.Item.Payload, RegistrationNumberField),
             plan.Outcome,
             plan.Issued,
@@ -571,10 +574,12 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         }
 
         logger.LogInformation(
-            "RA-763 APPLIED: work item {WorkItemId} ({ApplicationReference}) {Change}. "
-                + "Spot check confirmed by {ConfirmedBy}",
+            "RA-763 APPLIED: work item {WorkItemId} ({ApplicationReference}, org {OrgNumber} "
+                + "{OrganisationName}) {Change}. Spot check confirmed by {ConfirmedBy}",
             plan.Item.Id,
             ReadString(plan.Item.Payload, "applicationReference"),
+            ReadOrgNumber(plan.Item.Payload),
+            ReadString(plan.Item.Payload, OrganisationNameField),
             change,
             confirmedBy
         );
@@ -646,6 +651,17 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
         return (y, number);
     }
+
+    // The organisation's number and name are a business's, as on the public register, so they may be logged; they
+    // let whoever reviews the dry run see which organisation each line is about.
+    private const string OrganisationNameField = "organisationName";
+
+    private static string? ReadOrgNumber(BsonDocument? payload) =>
+        payload is not null
+        && payload.TryGetValue(OperatorOrgNumberField, out var value)
+        && !value.IsBsonNull
+            ? value.ToString()
+            : null;
 
     private static string? ReadString(BsonDocument? payload, string field) =>
         payload is not null && payload.TryGetValue(field, out var value) && value.IsString

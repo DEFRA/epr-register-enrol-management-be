@@ -202,6 +202,25 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
 
     // ------------------------------- last year's accreditation -------------------------------
 
+    // Whoever reviews the dry run sees which organisation each line is about, and what would be written.
+    [Fact]
+    public async Task Dry_run_and_applied_lines_name_the_organisation()
+    {
+        var item = await EggerAsync(p => p["organisationName"] = "Egger (UK) Limited");
+
+        await RunAsync();
+
+        var plan = PlanLineFor(item);
+        Assert.Contains("org 500027 Egger (UK) Limited", plan, StringComparison.Ordinal);
+        Assert.Contains(EggerAccreditation, plan, StringComparison.Ordinal);
+        Assert.True(Logged(LogLevel.Information, $"APPLIED: work item {item.Id} ("));
+        Assert.Contains(
+            _logger.Records,
+            r => r.Message.StartsWith("RA-763 APPLIED", StringComparison.Ordinal)
+                && r.Message.Contains("org 500027 Egger (UK) Limited", StringComparison.Ordinal)
+        );
+    }
+
     [Fact]
     public async Task Apply_adds_last_years_accreditation_with_an_audit_entry()
     {
