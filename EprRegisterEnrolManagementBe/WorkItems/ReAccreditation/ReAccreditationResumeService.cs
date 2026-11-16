@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
@@ -253,6 +254,19 @@ internal sealed class ReAccreditationResumeService(
             return stampFailure;
         }
 
+        // The charge is saved before the transition, like latestSections, and not after: a
+        // charge write that failed after the item had left `queried` would be lost, because
+        // the retry is then an idempotent replay that writes nothing. The cost is that when the
+        // transition fails, the retry reads the already-saved charge, so its audit entry records
+        // previousChargeAmountPence equal to chargeAmountPence. The charge itself is right.
+        var previousChargeAmountPence = ReAccreditationPayload.ReadChargeAmountPence(workItem);
+        var chargeFailure = await StampChargeAsync(
+            workItemId, request.ChargeAmountPence, previousChargeAmountPence, cancellationToken);
+        if (chargeFailure is not null)
+        {
+            return chargeFailure;
+        }
+
         var result = await engine.ApplyActionAsync(workItemId, resumeActionId, user, cancellationToken);
         if (!result.IsSuccess)
         {
@@ -271,6 +285,8 @@ internal sealed class ReAccreditationResumeService(
                 ["responderEmail"] = request.ResponderContactDetails?.Email,
                 ["responderRole"] = request.ResponderContactDetails?.Role,
                 ["fileReferences"] = SerialiseFileReferences(request.FileReferences),
+                ["previousChargeAmountPence"] = previousChargeAmountPence?.ToString(CultureInfo.InvariantCulture),
+                ["chargeAmountPence"] = request.ChargeAmountPence?.ToString(CultureInfo.InvariantCulture),
             },
             user,
             cancellationToken);
@@ -513,6 +529,34 @@ internal sealed class ReAccreditationResumeService(
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// RA-766: save the charge the operator backend recalculated after the
+    /// query. The top-level payload field only, never <c>latestSections</c>.
+    /// Skipped when none was sent (so a stored charge is never cleared) or when
+    /// it equals the stored one (so a replay writes nothing). The comparison
+    /// uses the work item already loaded, not a re-read.
+    /// </summary>
+    private async Task<WorkItemActionResult?> StampChargeAsync(
+        Guid workItemId,
+        int? chargeAmountPence,
+        int? storedChargeAmountPence,
+        CancellationToken cancellationToken)
+    {
+        if (chargeAmountPence is not { } charge || charge == storedChargeAmountPence)
+        {
+            return null;
+        }
+
+        var matched = await persistence.SetPayloadFieldAsync(
+            workItemId, ReAccreditationPayload.ChargeAmountPenceField, new BsonInt32(charge), cancellationToken);
+
+        return matched
+            ? null
+            : WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.WorkItemNotFound,
+                $"No work item exists with id '{workItemId}'.");
     }
 
     private static BsonValue ToBsonValue(string? value) => value is null ? BsonNull.Value : new BsonString(value);
