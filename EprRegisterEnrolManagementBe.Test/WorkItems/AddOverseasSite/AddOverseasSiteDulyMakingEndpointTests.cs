@@ -1,16 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using EprRegisterEnrolManagementBe.Auth;
-using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
-using EprRegisterEnrolManagementBe.Utils.Mongo;
-using EprRegisterEnrolManagementBe.WorkItems.Core;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
-using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -24,7 +15,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 /// </summary>
 public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixture fixture)
 {
-    private const int SiteChargePence = 32800;
+    private const int SiteChargePence = AddOverseasSiteAppFactory.SiteChargePence;
 
     private static readonly DateOnly s_paymentDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-3);
 
@@ -32,7 +23,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_making_one_site_moves_only_that_work_item_to_duly_made_on_the_payment_date_clock()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AppFactory(fixture);
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-1", siteCount: 2, ct);
 
@@ -62,18 +53,14 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_making_pushes_nothing_to_the_operator_journey()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AppFactory(fixture);
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-no-push", siteCount: 1, ct);
 
         var response = await PostDulyMakeAsync(client, ids[0], s_paymentDate.ToString("yyyy-MM-dd"), ct);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        // The status push runs in the background, so give it time to happen.
-        await Task.Delay(500, ct);
-        Assert.Empty(factory.PushAdapter.ReceivedCalls());
-        var persisted = await factory.Persistence.GetByIdAsync(ids[0], ct);
-        Assert.DoesNotContain(persisted!.AuditLog, a => a.Action.StartsWith("status-push", StringComparison.Ordinal));
+        await factory.AssertNothingPushedAsync(ids[0], ct);
     }
 
     [Theory]
@@ -86,7 +73,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     )
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AppFactory(fixture);
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-invalid", siteCount: 1, ct);
 
@@ -105,7 +92,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task A_work_item_already_duly_made_cannot_be_duly_made_again()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AppFactory(fixture);
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-twice", siteCount: 1, ct);
         var first = await PostDulyMakeAsync(client, ids[0], s_paymentDate.ToString("yyyy-MM-dd"), ct);
@@ -123,7 +110,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_make_details_carry_the_sites_own_charge()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AppFactory(fixture);
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-charge", siteCount: 1, ct);
 
@@ -136,7 +123,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_make_details_list_the_other_work_items_from_the_same_submission_with_their_current_status()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AppFactory(fixture);
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-1", siteCount: 3, ct);
         await factory.SubmitAsync(client, "related-other-submission", siteCount: 2, ct);
@@ -169,7 +156,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_make_details_list_no_related_work_items_for_a_single_site_submission()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AppFactory(fixture);
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-single", siteCount: 1, ct);
 
@@ -184,66 +171,4 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
         string? paymentDate,
         CancellationToken ct
     ) => client.PostAsJsonAsync($"/work-items/{id}/duly-make", new { paymentDate }, ct);
-
-    private sealed class AppFactory(MongoIntegrationFixture fixture) : WebApplicationFactory<Program>
-    {
-        private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("addorsdm");
-
-        public IOperatorBackendPushAdapter PushAdapter { get; } = Substitute.For<IOperatorBackendPushAdapter>();
-
-        public IWorkItemPersistence Persistence => Services.GetRequiredService<IWorkItemPersistence>();
-
-        /// <summary>Posts an add-ORS submission and returns its work item ids, in site order.</summary>
-        public async Task<List<Guid>> SubmitAsync(
-            HttpClient client,
-            string operatorRequestId,
-            int siteCount,
-            CancellationToken ct
-        )
-        {
-            var response = await client.PostAsJsonAsync(
-                "/work-items",
-                AddOverseasSiteSubmissions.Body(operatorRequestId, siteCount: siteCount, siteChargePence: SiteChargePence),
-                ct
-            );
-            Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-            var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
-            return body.GetProperty("workItems").EnumerateArray().Select(w => w.GetProperty("id").GetGuid()).ToList();
-        }
-
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            builder.UseSetting("WorkItems:SeedOnStartup", "false");
-            builder.ConfigureServices(services =>
-            {
-                services.UseEphemeralMongoPersistence(fixture, _databaseName);
-                services.RemoveAll<IOperatorBackendPushAdapter>();
-                services.AddSingleton(PushAdapter);
-            });
-        }
-
-        protected override void ConfigureClient(HttpClient client)
-        {
-            base.ConfigureClient(client);
-            client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "test-client");
-            client.DefaultRequestHeaders.Add("x-cdp-user-id", "alice-1");
-            client.DefaultRequestHeaders.Add("x-cdp-user-name", "Alice Example");
-        }
-
-        protected override void Dispose(bool disposing)
-        {
-            if (disposing)
-            {
-                try
-                {
-                    Services.GetRequiredService<IMongoDbClientFactory>().GetClient().DropDatabase(_databaseName);
-                }
-                catch
-                {
-                    // Best-effort; the ephemeral mongod dies with the fixture.
-                }
-            }
-            base.Dispose(disposing);
-        }
-    }
 }
