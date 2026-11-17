@@ -336,11 +336,28 @@ type is configured. Every setting is code, not runtime data:
   [Template versioning](#template-versioning-ra-94)). Changing a shared
   workflow changes every type that references it, so each of those types
   needs a new `TemplateVersion` and a snapshot migration.
-- A workflow's transitions name its own states, so re-accreditation's bespoke
-  services (duly make, decision, confirm contact, resume, continue review)
-  reach its `CallerInvocable: false` transitions. Another type on the Standard
-  workflow gets the same states and transitions but needs its own endpoints
-  before a caseworker can use those steps (add-ORS: RA-495).
+- A workflow's transitions name its own states, so only a service reaches
+  its `CallerInvocable: false` transitions. Re-accreditation's query, resume
+  and continue review are its own (`/work-items/re-accreditation/{id}/...`).
+- **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
+  confirm applicant contact are shared services
+  (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:
+  `GET|POST /work-items/{id}/duly-make` (the GET returns the type's charge),
+  `POST /work-items/{id}/decision` and `POST /work-items/{id}/confirm-contact`.
+  A type opts in with an `IStandardLifecycleStrategy`
+  (`services.AddStandardLifecycle<TStrategy>()` in its module), which holds
+  what differs per type: the operator-journey push target (`null`: nothing
+  pushed, no `status-push-*` entry), the determination writes
+  (re-accreditation mints an accreditation number; `StandardDeterminationWrites`
+  for a type that mints none), the charge source and the payment-date stamp.
+  `AddStandardLifecycle` also registers the type's post-commit status push
+  hook (re-accreditation registers its strategy directly instead, keeping
+  `ReAccreditationStatusPushHook` in its place in the hook order). Emails stay
+  the module's own post-action hooks. A work item of a type
+  that has not opted in gets `400` with `errorCode: wrong-work-item-type`.
+  Re-accreditation's own routes (`/work-items/re-accreditation/{id}/duly-make`,
+  `/decision`, `/confirm-contact`) are unchanged: they run the same shared
+  services limited to re-accreditation.
 
 ## Conventions
 

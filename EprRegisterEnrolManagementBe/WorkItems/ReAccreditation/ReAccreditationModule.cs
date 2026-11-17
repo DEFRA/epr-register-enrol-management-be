@@ -2,6 +2,7 @@ using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -258,6 +259,17 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             HttpOverseasSiteRecyclingOperationsAdapter
         >();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
+        // RA-495: opts re-accreditation in to the shared Standard-workflow
+        // lifecycle routes (/work-items/{id}/duly-make|decision|confirm-contact)
+        // alongside its own. Registered directly rather than through
+        // AddStandardLifecycle: its status push hook is
+        // ReAccreditationStatusPushHook above, already in its place in the
+        // hook order.
+        services.AddSingleton<IStandardLifecycleStrategy>(sp => new ReAccreditationLifecycleStrategy(
+            sp.GetRequiredService<IReAccreditationApprovalService>(),
+            sp.GetRequiredService<IReAccreditationRefusalService>(),
+            sp.GetRequiredService<ILoggerFactory>().CreateLogger<ReAccreditationLifecycleStrategy>()
+        ));
         // RA-527: both steps of a refusal (the counterpart of the approval
         // service): step 1 for the log-decision service, step 2 for the
         // confirm-contact service.

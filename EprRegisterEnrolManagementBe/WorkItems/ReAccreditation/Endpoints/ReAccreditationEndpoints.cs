@@ -8,6 +8,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Bson;
@@ -648,29 +649,7 @@ internal static class ReAccreditationEndpoints
     private static ProblemHttpResult ToServiceFailureProblem(
         WorkItemActionResult result,
         string title
-    )
-    {
-        var status = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.InvalidTransition
-            or WorkItemActionFailureCode.TerminalState
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        var extensions =
-            result.FailureCode == WorkItemActionFailureCode.UnknownAction
-                ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
-                : null;
-
-        return TypedResults.Problem(
-            title: title,
-            detail: result.Message,
-            statusCode: status,
-            extensions: extensions
-        );
-    }
+    ) => StandardLifecycleProblems.ServiceFailure(result, title);
 
     /// <summary>
     /// Return live prior-year accreditation data from ReEx for the given
@@ -870,49 +849,8 @@ internal static class ReAccreditationEndpoints
     /// The ProblemDetails for a failed determination step (RA-410 /decision,
     /// RA-527 /confirm-contact). Both share one failure vocabulary.
     /// </summary>
-    private static ProblemHttpResult DecisionProblem(WorkItemActionResult result, string title)
-    {
-        var decisionStatus = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
-            // All three are conflicts with the resource's current state rather
-            // than malformed requests: the frontend's correct response is "this
-            // application has changed, reload it", never a field-level error.
-            WorkItemActionFailureCode.InvalidTransition
-            or WorkItemActionFailureCode.TerminalState
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            // epr-p86e / RA-410: the operator journey could not be notified, so
-            // the decision was abandoned before anything was persisted. The
-            // request itself was well-formed — this is a server-side dependency
-            // being unreachable — so it maps to a generic 500, not a 4xx. No
-            // errorCode is attached: the frontend shows a generic try-again.
-            WorkItemActionFailureCode.UpstreamNotificationFailed =>
-                StatusCodes.Status500InternalServerError,
-            // RA-475: the backend accreditation-number call failed (or timed
-            // out) before anything was persisted — a server-side dependency
-            // problem, not a malformed request, so a generic 500 rather than
-            // the 400 management-fe reads as a client validation problem.
-            WorkItemActionFailureCode.AccreditationNumberUnavailable =>
-                StatusCodes.Status500InternalServerError,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        // The only 400 the service itself can produce is a type mismatch. Give
-        // it an errorCode too so the frontend never has to parse prose to work
-        // out whether a 400 belongs against the outcome input.
-        var decisionExtensions =
-            result.FailureCode == WorkItemActionFailureCode.UnknownAction
-                ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
-                : null;
-
-        return TypedResults.Problem(
-            title: title,
-            detail: result.Message,
-            statusCode: decisionStatus,
-            extensions: decisionExtensions
-        );
-    }
+    private static ProblemHttpResult DecisionProblem(WorkItemActionResult result, string title) =>
+        StandardLifecycleProblems.DecisionFailure(result, title);
 
     /// <summary>
     /// Bind the wire <c>outcome</c> string onto

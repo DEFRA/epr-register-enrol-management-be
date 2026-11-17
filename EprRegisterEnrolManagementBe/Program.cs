@@ -14,6 +14,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Http;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using MongoDB.Driver;
@@ -190,6 +191,9 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // Register the framework, then add one line per work item module.
     // See docs in EprRegisterEnrolManagementBe/WorkItems/Core for the contract a module must implement.
     services.AddWorkItemFramework();
+    // RA-495: the shared Standard-workflow lifecycle (duly make, make
+    // determination, confirm contact) that a module opts its type in to.
+    services.AddStandardLifecycleServices();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
     // RA-000: the e2e- fixture reset writes through the same persistence
     // instance (a single writer of the collection), via an interface the
@@ -861,5 +865,7 @@ static void ConfigureEndpoints(WebApplication app)
     // (extend / override today, started / stopped / projection later)
     // without bloating the core endpoint group.
     app.MapWorkItemSlaEndpoints();
+    // RA-495: the shared Standard-workflow lifecycle routes.
+    app.MapStandardLifecycleEndpoints();
     app.MapWorkItemModules();
 }
