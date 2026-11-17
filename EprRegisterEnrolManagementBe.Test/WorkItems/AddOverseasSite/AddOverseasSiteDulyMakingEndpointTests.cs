@@ -11,7 +11,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 /// Driven through the real ASP.NET pipeline with the production modules
 /// registered, against ephemeral MongoDB, from a submission posted to
 /// <c>POST /work-items</c> as the operator backend posts it. The
-/// operator-backend push adapter is a fake: add-ORS has no push target yet.
+/// operator-backend push adapter is a fake (pushes: AddOverseasSiteStatusPushEndpointTests).
 /// </summary>
 public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixture fixture)
 {
@@ -47,20 +47,6 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
         var sibling = await factory.Persistence.GetByIdAsync(ids[1], ct);
         Assert.Equal("submitted", sibling!.StateId);
         Assert.Null(sibling.SlaClock);
-    }
-
-    [Fact]
-    public async Task Duly_making_pushes_nothing_to_the_operator_journey()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var ids = await factory.SubmitAsync(client, "duly-make-no-push", siteCount: 1, ct);
-
-        var response = await PostDulyMakeAsync(client, ids[0], s_paymentDate.ToString("yyyy-MM-dd"), ct);
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-
-        await factory.AssertNothingPushedAsync(ids[0], ct);
     }
 
     [Theory]

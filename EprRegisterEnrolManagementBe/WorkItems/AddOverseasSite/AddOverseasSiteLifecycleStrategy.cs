@@ -8,9 +8,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 /// RA-495: add-ORS's opt-in to the shared Standard-workflow lifecycle
 /// services:
 /// <list type="bullet">
-///   <item>Push target: none yet, so nothing is pushed to the operator
-///   journey (the change-request status route arrives with a later RA-495
-///   task).</item>
+///   <item>Push target: the operator journey's change-request status route
+///   (<see cref="AddOverseasSiteOperatorJourneyPush"/>). Transitions are
+///   pushed after they commit, with re-accreditation's skips, and confirm
+///   contact pushes the final decision before it commits.</item>
 ///   <item>Minting: none. The site joins an accreditation that already
 ///   exists, so the determination writes are
 ///   <see cref="StandardDeterminationWrites"/>.</item>
@@ -26,7 +27,7 @@ internal sealed class AddOverseasSiteLifecycleStrategy(StandardDeterminationWrit
 
     public IWorkItemType Type => s_type;
 
-    public IOperatorJourneyPush? OperatorJourneyPush => null;
+    public IOperatorJourneyPush? OperatorJourneyPush => AddOverseasSiteOperatorJourneyPush.Instance;
 
     public IStandardDeterminationSteps Determinations => determinations;
 

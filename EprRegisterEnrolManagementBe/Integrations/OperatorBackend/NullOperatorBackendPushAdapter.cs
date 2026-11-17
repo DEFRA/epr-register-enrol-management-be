@@ -48,4 +48,29 @@ internal sealed class NullOperatorBackendPushAdapter : IOperatorBackendPushAdapt
         DateTime occurredAt,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
+
+    public Task<OperatorBackendPushResult> PushChangeRequestStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
+
+    // RA-495: Skipped, not Failure, for the same reason as the decision push above.
+    public Task<OperatorBackendPushResult> PushChangeRequestDecisionStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
 }

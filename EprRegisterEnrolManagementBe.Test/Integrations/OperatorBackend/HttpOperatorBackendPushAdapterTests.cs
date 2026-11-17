@@ -647,6 +647,107 @@ public class HttpOperatorBackendPushAdapterTests
         Assert.Equal(1, handler.CallCount);
     }
 
+    // ------------------- RA-495: the change-request status route -------------------
+
+    [Fact]
+    public async Task PushChangeRequestStatusChangedAsync_posts_the_status_body_signed_to_the_change_request_status_endpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut(sharedSecret: "shh-its-a-secret");
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 11, 3, 10, 15, 0, DateTimeKind.Utc);
+
+        var result = await adapter.PushChangeRequestStatusChangedAsync(
+            workItemId, correlationId, "submitted", "duly-made", "Duly made", "duly-make", "Mark as duly made",
+            occurredAt, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
+        Assert.Equal(
+            $"{BaseUrl}/api/v1/accreditation-changes/case-management/{workItemId}/status",
+            handler.LastRequest.RequestUri!.ToString());
+        Assert.Equal(correlationId.ToString(), handler.LastRequest.Headers.GetValues("X-Correlation-Id").Single());
+        Assert.Equal(
+            "epr-register-enrol-management-be",
+            handler.LastRequest.Headers.GetValues("x-cdp-client-id").Single());
+        Assert.True(handler.LastRequest.Headers.Contains("x-cdp-auth-signature"));
+
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        var root = body.RootElement;
+        Assert.Equal("submitted", root.GetProperty("fromStateId").GetString());
+        Assert.Equal("duly-made", root.GetProperty("toStateId").GetString());
+        Assert.Equal("Duly made", root.GetProperty("toStateDisplayName").GetString());
+        Assert.Equal("duly-make", root.GetProperty("actionId").GetString());
+        Assert.Equal("Mark as duly made", root.GetProperty("actionDisplayName").GetString());
+        Assert.Equal(occurredAt, root.GetProperty("occurredAt").GetDateTime());
+        Assert.Equal(6, root.EnumerateObject().Count());
+    }
+
+    [Fact]
+    public async Task PushChangeRequestStatusChangedAsync_gives_up_after_the_best_effort_retries()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.InternalServerError, "still down");
+
+        var result = await adapter.PushChangeRequestStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "submitted", "duly-made", "Duly made", "duly-make", "Mark as duly made",
+            DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(3, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushChangeRequestDecisionStatusChangedAsync_posts_to_the_change_request_status_endpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+
+        var result = await adapter.PushChangeRequestDecisionStatusChangedAsync(
+            workItemId, Guid.NewGuid(), "approved-pending-contact", "approved", "Granted",
+            "confirm-contact-approved", "Confirm applicant contacted", DateTime.UtcNow, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            $"{BaseUrl}/api/v1/accreditation-changes/case-management/{workItemId}/status",
+            handler.LastRequest!.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task PushChangeRequestDecisionStatusChangedAsync_uses_the_strict_decision_retries()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.InternalServerError, "still down");
+
+        var result = await adapter.PushChangeRequestDecisionStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "approved-pending-contact", "approved", "Granted",
+            "confirm-contact-approved", "Confirm applicant contacted", DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(6, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushChangeRequestDecisionStatusChangedAsync_does_not_retry_a_4xx_response()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.Conflict, "nothing to grant");
+
+        var result = await adapter.PushChangeRequestDecisionStatusChangedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "approved-pending-contact", "approved", "Granted",
+            "confirm-contact-approved", "Confirm applicant contacted", DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, handler.CallCount);
+    }
+
     private sealed class FakeHttpMessageHandler : HttpMessageHandler
     {
         public HttpRequestMessage? LastRequest { get; private set; }

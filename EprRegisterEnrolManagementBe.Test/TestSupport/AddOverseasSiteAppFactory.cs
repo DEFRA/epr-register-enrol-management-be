@@ -20,11 +20,15 @@ namespace EprRegisterEnrolManagementBe.Test.TestSupport;
 /// MongoDB, for the add-ORS lifecycle endpoint tests. Work items come from a
 /// submission posted to <c>POST /work-items</c> as the operator backend posts
 /// it. The operator-backend push adapter, the accreditation number adapter and
-/// the Notify client are fakes, so a test can assert none of them is used.
+/// the Notify client are fakes: a test reads the pushes the adapter received
+/// (every push succeeds unless told otherwise) and can assert the others are
+/// never used.
 /// </summary>
-internal sealed class AddOverseasSiteAppFactory(MongoIntegrationFixture fixture) : WebApplicationFactory<Program>
+internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
 {
     public const int SiteChargePence = 32800;
+
+    private readonly MongoIntegrationFixture _fixture;
 
     private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("addors");
 
@@ -54,17 +58,67 @@ internal sealed class AddOverseasSiteAppFactory(MongoIntegrationFixture fixture)
         return body.GetProperty("workItems").EnumerateArray().Select(w => w.GetProperty("id").GetGuid()).ToList();
     }
 
-    /// <summary>
-    /// add-ORS has no operator-journey push target yet (RA-495 task 008). The
-    /// status push runs in the background, so give it time to happen, then
-    /// check nothing was pushed or recorded as pushed.
-    /// </summary>
-    public async Task AssertNothingPushedAsync(Guid workItemId, CancellationToken ct)
+    public AddOverseasSiteAppFactory(MongoIntegrationFixture fixture, params OperatorBackendPushResult[] decisionResults)
     {
-        await Task.Delay(500, ct);
-        Assert.Empty(PushAdapter.ReceivedCalls());
-        var persisted = await Persistence.GetByIdAsync(workItemId, ct);
-        Assert.DoesNotContain(persisted!.AuditLog, a => a.Action.StartsWith("status-push", StringComparison.Ordinal));
+        _fixture = fixture;
+        var results = decisionResults.Length == 0 ? [OperatorBackendPushResult.Success()] : decisionResults;
+        // Every push succeeds, except that each decision push returns the next
+        // of decisionResults (the last one repeats).
+        PushAdapter
+            .PushChangeRequestDecisionStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(results[0]), results.Skip(1).Select(Task.FromResult).ToArray());
+        PushAdapter
+            .PushChangeRequestStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(OperatorBackendPushResult.Success()));
+        PushAdapter
+            .PushDecisionStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(OperatorBackendPushResult.Success()));
+        PushAdapter
+            .PushStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
+            .ReturnsForAnyArgs(Task.FromResult(OperatorBackendPushResult.Success()));
+    }
+
+    /// <summary>One push the fake adapter received, by the adapter method that sent it.</summary>
+    public sealed record Push(string Method, Guid WorkItemId, string FromStateId, string ToStateId, string ActionId);
+
+    /// <summary>Every push the fake adapter has received, in order.</summary>
+    public IReadOnlyList<Push> Pushes =>
+        PushAdapter
+            .ReceivedCalls()
+            .Select(call =>
+            {
+                var args = call.GetArguments();
+                return new Push(
+                    call.GetMethodInfo().Name,
+                    (Guid)args[0]!,
+                    (string)args[2]!,
+                    (string)args[3]!,
+                    (string)args[5]!
+                );
+            })
+            .ToList();
+
+    /// <summary>
+    /// Waits for <paramref name="count"/> audit entries named
+    /// <paramref name="action"/> on the work item: the post-commit status push
+    /// runs in the background, so its audit entry lands after the response.
+    /// </summary>
+    public async Task<WorkItem> WaitForAuditAsync(Guid workItemId, string action, CancellationToken ct, int count = 1)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (true)
+        {
+            var item = await Persistence.GetByIdAsync(workItemId, ct);
+            if (item!.AuditLog.Count(a => a.Action == action) >= count)
+            {
+                return item;
+            }
+            if (DateTime.UtcNow > deadline)
+            {
+                Assert.Fail($"Work item {workItemId} has no {count} '{action}' audit entries.");
+            }
+            await Task.Delay(50, ct);
+        }
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -74,7 +128,7 @@ internal sealed class AddOverseasSiteAppFactory(MongoIntegrationFixture fixture)
         builder.UseSetting("Notify:Enabled", "true");
         builder.ConfigureServices(services =>
         {
-            services.UseEphemeralMongoPersistence(fixture, _databaseName);
+            services.UseEphemeralMongoPersistence(_fixture, _databaseName);
             services.RemoveAll<IOperatorBackendPushAdapter>();
             services.AddSingleton(PushAdapter);
             services.RemoveAll<IAccreditationNumberAdapter>();

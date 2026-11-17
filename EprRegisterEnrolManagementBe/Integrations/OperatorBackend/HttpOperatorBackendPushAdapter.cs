@@ -62,6 +62,10 @@ internal sealed class HttpOperatorBackendPushAdapter(
     private const string StatusRelativePathTemplate =
         "/api/v1/accreditation-applications/case-management/{0}/status";
 
+    // RA-495: an in-year change request's status route.
+    private const string ChangeRequestStatusRelativePathTemplate =
+        "/api/v1/accreditation-changes/case-management/{0}/status";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -149,6 +153,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
         CancellationToken cancellationToken = default
     ) =>
         PushStatusInternalAsync(
+            StatusRelativePathTemplate,
             workItemId,
             correlationId,
             fromStateId,
@@ -174,6 +179,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
         CancellationToken cancellationToken = default
     ) =>
         PushStatusInternalAsync(
+            StatusRelativePathTemplate,
             workItemId,
             correlationId,
             fromStateId,
@@ -187,13 +193,68 @@ internal sealed class HttpOperatorBackendPushAdapter(
             cancellationToken
         );
 
+    public Task<OperatorBackendPushResult> PushChangeRequestStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default
+    ) =>
+        PushStatusInternalAsync(
+            ChangeRequestStatusRelativePathTemplate,
+            workItemId,
+            correlationId,
+            fromStateId,
+            toStateId,
+            toStateDisplayName,
+            actionId,
+            actionDisplayName,
+            occurredAt,
+            _retryPipeline,
+            "change-request-status-changed",
+            cancellationToken
+        );
+
+    public Task<OperatorBackendPushResult> PushChangeRequestDecisionStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default
+    ) =>
+        PushStatusInternalAsync(
+            ChangeRequestStatusRelativePathTemplate,
+            workItemId,
+            correlationId,
+            fromStateId,
+            toStateId,
+            toStateDisplayName,
+            actionId,
+            actionDisplayName,
+            occurredAt,
+            _decisionRetryPipeline,
+            "change-request-decision-status-changed",
+            cancellationToken
+        );
+
     /// <summary>
-    /// Shared body for both status pushes. Identical on the wire — same
-    /// endpoint, body and signing — differing only in the resilience
-    /// <paramref name="pipeline"/> (best-effort vs the decision gate's larger
-    /// budget) and the <paramref name="operationName"/> used in logs.
+    /// Shared body for every status push. Identical on the wire — same body
+    /// and signing — differing only in the route
+    /// (<paramref name="relativePathTemplate"/>: accreditation application or,
+    /// RA-495, change request), the resilience <paramref name="pipeline"/>
+    /// (best-effort vs the decision gate's larger budget) and the
+    /// <paramref name="operationName"/> used in logs.
     /// </summary>
     private async Task<OperatorBackendPushResult> PushStatusInternalAsync(
+        string relativePathTemplate,
         Guid workItemId,
         Guid correlationId,
         string fromStateId,
@@ -213,7 +274,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
         }
 
         var relativePath = string.Format(
-            StatusRelativePathTemplate,
+            relativePathTemplate,
             Uri.EscapeDataString(workItemId.ToString())
         );
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";

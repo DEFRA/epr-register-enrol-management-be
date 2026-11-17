@@ -362,9 +362,12 @@ type is configured. Every setting is code, not runtime data:
   Re-accreditation's own routes (`/work-items/re-accreditation/{id}/duly-make`,
   `/decision`, `/confirm-contact`) are unchanged: they run the same shared
   services limited to re-accreditation.
-  Add-ORS (`AddOverseasSiteLifecycleStrategy`) opts in with no push target
-  yet, no minting (`StandardDeterminationWrites`), no emails, and the site's
-  own charge (`payload.site.chargePence`).
+  Add-ORS (`AddOverseasSiteLifecycleStrategy`) opts in with the operator
+  journey's change-request status route as its push target
+  (`POST api/v1/accreditation-changes/case-management/{workItemId}/status`,
+  same body, signing and retries as re-accreditation's route), no minting
+  (`StandardDeterminationWrites`), no emails, and the site's own charge
+  (`payload.site.chargePence`).
 
 ## Conventions
 

@@ -71,6 +71,42 @@ public interface IOperatorBackendPushAdapter
         string actionDisplayName,
         DateTime occurredAt,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// RA-495: push an in-year change request's state transition to the
+    /// operator backend's change-request status route
+    /// (<c>POST api/v1/accreditation-changes/case-management/{workItemId}/status</c>).
+    /// Same body, signing and best-effort retries as
+    /// <see cref="PushStatusChangedAsync"/>, which goes to the
+    /// accreditation-application route instead.
+    /// </summary>
+    Task<OperatorBackendPushResult> PushChangeRequestStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// RA-495: the pre-commit decision push for an in-year change request, to
+    /// the same route as <see cref="PushChangeRequestStatusChangedAsync"/>
+    /// but with the strict decision retries of
+    /// <see cref="PushDecisionStatusChangedAsync"/>.
+    /// </summary>
+    Task<OperatorBackendPushResult> PushChangeRequestDecisionStatusChangedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string fromStateId,
+        string toStateId,
+        string toStateDisplayName,
+        string actionId,
+        string actionDisplayName,
+        DateTime occurredAt,
+        CancellationToken cancellationToken = default);
 }
 
 /// <summary>

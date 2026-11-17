@@ -11,9 +11,10 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 /// confirmation, through the shared Standard-lifecycle routes
 /// (<c>POST /work-items/{id}/decision</c> and <c>/confirm-contact</c>).
 /// Approval mints nothing (the accreditation already exists) and no email is
-/// sent. add-ORS has no operator-journey push target yet, so nothing is
-/// pushed. Driven through the real ASP.NET pipeline with the production
-/// modules registered, against ephemeral MongoDB.
+/// sent. The operator-journey pushes are covered by
+/// AddOverseasSiteStatusPushEndpointTests. Driven through the real ASP.NET
+/// pipeline with the production modules registered, against ephemeral
+/// MongoDB.
 /// </summary>
 public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFixture fixture)
 {
@@ -45,7 +46,6 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
 
         await factory.NumberAdapter.DidNotReceiveWithAnyArgs().GenerateOrUpdateAccreditationNumberAsync(default!, default);
         Assert.Empty(factory.NotifyClient.ReceivedCalls());
-        await factory.AssertNothingPushedAsync(id, ct);
     }
 
     [Fact]
@@ -70,7 +70,6 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         Assert.Equal("rejected", refused!.StateId);
         Assert.Contains(refused.AuditLog, a => a.Action == "applicant-contacted" && a.Details["outcome"] == "rejected");
         Assert.Empty(factory.NotifyClient.ReceivedCalls());
-        await factory.AssertNothingPushedAsync(id, ct);
     }
 
     [Theory]
@@ -177,6 +176,8 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
                 )
             ).StatusCode
         );
+        // The duly-made push lands in the background; let it settle first.
+        await factory.WaitForAuditAsync(id, "status-push-sent", ct);
         Assert.Equal(
             HttpStatusCode.OK,
             (await client.PostAsync($"/work-items/{id}/actions/start-assessment", content: null, ct)).StatusCode
