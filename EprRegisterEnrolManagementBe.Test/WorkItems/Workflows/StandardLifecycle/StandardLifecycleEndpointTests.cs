@@ -146,6 +146,8 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         var response = await PostDulyMakeAsync(client, id, s_paymentDate.ToString("yyyy-MM-dd"), ct);
 
         Assert.Equal(327600, details.GetProperty("chargePence").GetInt32());
+        // RA-495: re-accreditation is not submitted per site, so nothing is related.
+        Assert.Empty(details.GetProperty("relatedWorkItems").EnumerateArray());
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Equal("duly-made", (await factory.Persistence.GetByIdAsync(id, ct))!.StateId);
     }

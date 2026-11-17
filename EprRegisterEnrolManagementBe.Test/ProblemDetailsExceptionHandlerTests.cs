@@ -173,6 +173,10 @@ public class ProblemDetailsExceptionHandlerTests
             string typeId, string payloadField, string value, CancellationToken cancellationToken = default) =>
             inner.FindBySubmissionKeyAsync(typeId, payloadField, value, cancellationToken);
 
+        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+            string submissionReference, CancellationToken cancellationToken = default) =>
+            inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
+
         public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("boom");
 

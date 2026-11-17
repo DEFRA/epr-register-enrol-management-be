@@ -91,4 +91,9 @@ public abstract class ForwardingWorkItemPersistence(IWorkItemPersistence inner) 
         string value,
         CancellationToken cancellationToken = default
     ) => Inner.FindBySubmissionKeyAsync(typeId, payloadField, value, cancellationToken);
+
+    public virtual Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+        string submissionReference,
+        CancellationToken cancellationToken = default
+    ) => Inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
 }

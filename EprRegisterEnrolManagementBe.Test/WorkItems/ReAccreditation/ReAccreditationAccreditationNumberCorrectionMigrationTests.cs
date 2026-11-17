@@ -480,5 +480,10 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             string value,
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
+
+        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+            string submissionReference,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
     }
 }

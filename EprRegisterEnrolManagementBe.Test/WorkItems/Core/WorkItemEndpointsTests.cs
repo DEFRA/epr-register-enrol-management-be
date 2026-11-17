@@ -2120,6 +2120,11 @@ public class WorkItemEndpointsTests
             string typeId, string payloadField, string value, CancellationToken cancellationToken = default
         ) => Inner.FindBySubmissionKeyAsync(typeId, payloadField, value, cancellationToken);
 
+        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+            string submissionReference,
+            CancellationToken cancellationToken = default
+        ) => Inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
+
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,
             CancellationToken cancellationToken = default

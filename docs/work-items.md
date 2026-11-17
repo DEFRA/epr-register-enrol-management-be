@@ -342,7 +342,11 @@ type is configured. Every setting is code, not runtime data:
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services
   (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:
-  `GET|POST /work-items/{id}/duly-make` (the GET returns the type's charge),
+  `GET|POST /work-items/{id}/duly-make` (the GET returns the type's charge and
+  `relatedWorkItems`: the other work items with the same
+  `payload.submissionReference`, each with its reference, site name and ORS
+  id, type, state and charge, read through
+  `IWorkItemPersistence.FindBySubmissionReferenceAsync` on its own index),
   `POST /work-items/{id}/decision` and `POST /work-items/{id}/confirm-contact`.
   A type opts in with an `IStandardLifecycleStrategy`
   (`services.AddStandardLifecycle<TStrategy>()` in its module), which holds
@@ -358,6 +362,9 @@ type is configured. Every setting is code, not runtime data:
   Re-accreditation's own routes (`/work-items/re-accreditation/{id}/duly-make`,
   `/decision`, `/confirm-contact`) are unchanged: they run the same shared
   services limited to re-accreditation.
+  Add-ORS (`AddOverseasSiteLifecycleStrategy`) opts in with no push target
+  yet, no minting (`StandardDeterminationWrites`), no emails, and the site's
+  own charge (`payload.site.chargePence`).
 
 ## Conventions
 

@@ -225,6 +225,18 @@ public interface IWorkItemPersistence
         string value,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// RA-495: every work item created from the submission whose
+    /// <c>payload.submissionReference</c> is <paramref name="submissionReference"/>
+    /// (one per site, see <see cref="IWorkItemType.SplitsSubmissionPerSite"/>),
+    /// archived included, ordered by <c>payload.applicationReference</c>.
+    /// Backs the related change requests on the Duly make page.
+    /// </summary>
+    Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+        string submissionReference,
+        CancellationToken cancellationToken = default
+    );
 }
 
 public sealed class WorkItemPersistence
@@ -358,6 +370,22 @@ public sealed class WorkItemPersistence
 
         return await Collection.Find(filter).FirstOrDefaultAsync(cancellationToken);
     }
+
+    [ExcludeFromCodeCoverage]
+    public async Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+        string submissionReference,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(submissionReference);
+
+        return await Collection
+            .Find(Builders<WorkItem>.Filter.Eq(SubmissionReferencePath, submissionReference))
+            .Sort(Builders<WorkItem>.Sort.Ascending("payload.applicationReference"))
+            .ToListAsync(cancellationToken);
+    }
+
+    private const string SubmissionReferencePath = "payload.submissionReference";
 
     [ExcludeFromCodeCoverage]
     public async Task<WorkItemPage> QueryAsync(
@@ -1011,6 +1039,21 @@ public sealed class WorkItemPersistence
                 ),
             }
         );
+        // RA-495: the work items of one per-site submission, read together for
+        // the related change requests on the Duly make page. Not unique (a
+        // submission has one work item per site); partial so work items with
+        // no submission reference (every type that does not split) are left
+        // out.
+        var submissionReference = new CreateIndexModel<WorkItem>(
+            builder.Ascending(SubmissionReferencePath),
+            new CreateIndexOptions<WorkItem>
+            {
+                PartialFilterExpression = Builders<WorkItem>.Filter.Type(
+                    SubmissionReferencePath,
+                    BsonType.String
+                ),
+            }
+        );
         return
         [
             typeAndSubmitted,
@@ -1023,6 +1066,7 @@ public sealed class WorkItemPersistence
             operatorApplicationId,
             operatorRequestId,
             accreditationId,
+            submissionReference,
         ];
     }
 }

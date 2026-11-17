@@ -7251,6 +7251,11 @@ public class ReAccreditationEndpointTests
                 cancellationToken
             );
 
+        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+            string submissionReference,
+            CancellationToken cancellationToken = default
+        ) => inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
+
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,
             CancellationToken cancellationToken = default
@@ -7388,6 +7393,11 @@ public class ReAccreditationEndpointTests
                 value,
                 cancellationToken
             );
+
+        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+            string submissionReference,
+            CancellationToken cancellationToken = default
+        ) => inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
 
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,

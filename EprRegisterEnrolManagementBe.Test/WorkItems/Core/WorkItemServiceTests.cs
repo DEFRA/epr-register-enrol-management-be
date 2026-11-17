@@ -2514,6 +2514,11 @@ public class WorkItemServiceTests : IAsyncDisposable
                 cancellationToken
             );
 
+        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+            string submissionReference,
+            CancellationToken cancellationToken = default
+        ) => inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
+
         public Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,
             CancellationToken cancellationToken = default

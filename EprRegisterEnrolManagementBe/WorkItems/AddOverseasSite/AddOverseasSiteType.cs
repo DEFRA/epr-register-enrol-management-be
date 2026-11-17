@@ -10,8 +10,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 /// so each work item gets an <c>IYC-ORS-{yyyy}-{sequence}</c> reference. A
 /// submission holds one or more sites and is split into one work item per
 /// site, all sharing one <c>SUB-{yyyy}-{sequence}</c> submission reference.
-/// It follows the shared <see cref="StandardWorkflow"/>. Its action endpoints
-/// (duly make, query, determination, confirm contact) arrive with RA-495.
+/// It follows the shared <see cref="StandardWorkflow"/>, and its lifecycle
+/// actions run through the shared Standard-lifecycle routes (RA-495, see
+/// <see cref="AddOverseasSiteLifecycleStrategy"/>). Query and withdraw stay
+/// re-accreditation-only.
 /// </summary>
 internal sealed class AddOverseasSiteType : IWorkItemType
 {

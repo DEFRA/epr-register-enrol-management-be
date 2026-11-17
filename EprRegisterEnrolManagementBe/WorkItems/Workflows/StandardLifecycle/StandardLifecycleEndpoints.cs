@@ -1,4 +1,5 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using MongoDB.Bson;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 
@@ -87,7 +88,40 @@ internal static class StandardLifecycleEndpoints
             );
         }
 
-        return TypedResults.Ok(new DulyMakeDetailsResponse(id, strategy.ReadChargePence(workItem)));
+        var related = await RelatedWorkItemsAsync(workItem, persistence, strategies, cancellationToken);
+        return TypedResults.Ok(new DulyMakeDetailsResponse(id, strategy.ReadChargePence(workItem), related));
+    }
+
+    private const string SubmissionReferenceField = "submissionReference";
+
+    /// <summary>
+    /// RA-495: the other work items created from the same submission as
+    /// <paramref name="workItem"/> (one per site, matched on
+    /// <c>payload.submissionReference</c>), so the caseworker can see the whole
+    /// payment. Empty for a work item with no submission reference. Each
+    /// sibling's charge comes from its own type's charge source.
+    /// </summary>
+    private static async Task<IReadOnlyList<RelatedWorkItemResponse>> RelatedWorkItemsAsync(
+        WorkItem workItem,
+        IWorkItemPersistence persistence,
+        StandardLifecycleStrategies strategies,
+        CancellationToken cancellationToken
+    )
+    {
+        if (
+            !workItem.Payload.TryGetValue(SubmissionReferenceField, out var reference)
+            || !reference.IsString
+            || string.IsNullOrWhiteSpace(reference.AsString)
+        )
+        {
+            return [];
+        }
+
+        var siblings = await persistence.FindBySubmissionReferenceAsync(reference.AsString, cancellationToken);
+        return siblings
+            .Where(sibling => sibling.Id != workItem.Id)
+            .Select(sibling => RelatedWorkItemResponse.From(sibling, strategies.Find(sibling.TypeId)))
+            .ToList();
     }
 
     /// <summary>
@@ -249,7 +283,46 @@ internal sealed record StandardDecisionRequest(string? Outcome);
 
 /// <summary>
 /// RA-495: <c>GET /work-items/{id}/duly-make</c>: the charge, in pence, the
-/// caseworker matches the payment against; null when the work item carries
-/// none.
+/// caseworker matches the payment against (null when the work item carries
+/// none), and the other work items from the same submission.
 /// </summary>
-internal sealed record DulyMakeDetailsResponse(Guid WorkItemId, int? ChargePence);
+internal sealed record DulyMakeDetailsResponse(
+    Guid WorkItemId,
+    int? ChargePence,
+    IReadOnlyList<RelatedWorkItemResponse> RelatedWorkItems
+);
+
+/// <summary>
+/// RA-495: another work item from the same submission, as the Duly make page's
+/// related change requests list shows it. The site fields are null for a work
+/// item with no <c>payload.site</c>; the charge is null when its type has not
+/// opted in to the Standard lifecycle or the work item carries none.
+/// </summary>
+internal sealed record RelatedWorkItemResponse(
+    Guid Id,
+    string TypeId,
+    string StateId,
+    string? ApplicationReference,
+    string? SiteName,
+    string? OrsId,
+    int? ChargePence
+)
+{
+    public static RelatedWorkItemResponse From(WorkItem workItem, IStandardLifecycleStrategy? strategy)
+    {
+        var payload = workItem.Payload;
+        var site = payload.TryGetValue("site", out var value) && value.IsBsonDocument ? value.AsBsonDocument : null;
+        return new RelatedWorkItemResponse(
+            workItem.Id,
+            workItem.TypeId,
+            workItem.StateId,
+            StringOrNull(payload, "applicationReference"),
+            StringOrNull(site, "siteName"),
+            StringOrNull(site, "orsId"),
+            strategy?.ReadChargePence(workItem)
+        );
+    }
+
+    private static string? StringOrNull(BsonDocument? document, string field) =>
+        document is not null && document.TryGetValue(field, out var value) && value.IsString ? value.AsString : null;
+}
