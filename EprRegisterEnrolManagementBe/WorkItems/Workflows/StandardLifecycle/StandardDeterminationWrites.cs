@@ -33,15 +33,15 @@ internal sealed class StandardDeterminationWrites(
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
     private readonly IWorkItemPostActionHook[] _postActionHooks = postActionHooks.ToArray();
 
+    /// <summary>Nothing to prepare: the approval goes straight to its step 1 write.</summary>
     public Task<StandardApprovalPreparation> PrepareApprovalAsync(
         WorkItem workItem,
         CancellationToken cancellationToken
-    ) => Task.FromResult(StandardApprovalPreparation.NothingToPrepare);
+    ) => Task.FromResult(StandardApprovalPreparation.Ready(RecordApprovedDeterminationAsync));
 
-    public Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
+    private Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
         Guid workItemId,
         ClaimsPrincipal user,
-        StandardApprovalPreparation preparation,
         CancellationToken cancellationToken
     ) =>
         RecordDeterminationAsync(

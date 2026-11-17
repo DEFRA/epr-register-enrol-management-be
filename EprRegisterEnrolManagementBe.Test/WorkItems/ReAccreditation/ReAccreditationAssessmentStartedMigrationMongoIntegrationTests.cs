@@ -5,7 +5,7 @@ using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -340,7 +340,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
         var (succeeded, message) = exit switch
         {
             "determination" => Outcome(await BuildDecisionService(engine).LogDecisionAsync(
-                item.Id, ReAccreditationDecisionOutcome.Rejected, s_user, ct)),
+                item.Id, StandardDecisionOutcome.Rejected, s_user, ct)),
             "query" => Outcome(await BuildQueryService(engine).QueryAsync(
                 item.Id, ["business-plan"], "Please confirm the tonnage figures.", s_user, ct)),
             "withdraw" => Outcome(await new ReAccreditationWithdrawService(

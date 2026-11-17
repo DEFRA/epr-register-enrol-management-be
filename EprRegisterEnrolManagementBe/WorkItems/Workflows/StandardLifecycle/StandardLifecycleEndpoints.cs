@@ -65,7 +65,7 @@ internal static class StandardLifecycleEndpoints
     /// <summary>
     /// What the caseworker needs on the Duly make page that the type supplies:
     /// the charge to match the payment against
-    /// (<see cref="IStandardLifecycleStrategy.ReadChargePence"/>).
+    /// (<see cref="IStandardDulyMakingRules.ReadChargePence"/>).
     /// </summary>
     public static async Task<Results<Ok<DulyMakeDetailsResponse>, NotFound, ProblemHttpResult>> GetDulyMakeDetails(
         [FromRoute] Guid id,
@@ -92,8 +92,6 @@ internal static class StandardLifecycleEndpoints
         return TypedResults.Ok(new DulyMakeDetailsResponse(id, strategy.ReadChargePence(workItem), related));
     }
 
-    private const string SubmissionReferenceField = "submissionReference";
-
     /// <summary>
     /// RA-495: the other work items created from the same submission as
     /// <paramref name="workItem"/> (one per site, matched on
@@ -108,16 +106,12 @@ internal static class StandardLifecycleEndpoints
         CancellationToken cancellationToken
     )
     {
-        if (
-            !workItem.Payload.TryGetValue(SubmissionReferenceField, out var reference)
-            || !reference.IsString
-            || string.IsNullOrWhiteSpace(reference.AsString)
-        )
+        if (!SubmissionPayload.TryReadSubmissionReference(workItem.Payload, out var reference))
         {
             return [];
         }
 
-        var siblings = await persistence.FindBySubmissionReferenceAsync(reference.AsString, cancellationToken);
+        var siblings = await persistence.FindBySubmissionReferenceAsync(reference, cancellationToken);
         return siblings
             .Where(sibling => sibling.Id != workItem.Id)
             .Select(sibling => RelatedWorkItemResponse.From(sibling, strategies.Find(sibling.TypeId)))
@@ -255,10 +249,14 @@ internal static class StandardLifecycleEndpoints
     }
 
     /// <summary>
-    /// Case-insensitive but strictly two-valued: <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/>
-    /// alone would also accept "0"/"1".
+    /// Binds the wire <c>outcome</c> string onto <see cref="StandardDecisionOutcome"/>
+    /// (re-accreditation's own decision route uses it too). Case-insensitive,
+    /// matching the JSON enum convention used elsewhere on the wire, but
+    /// strictly two-valued: <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/>
+    /// alone would also accept "0"/"1" and any future member, which would let a
+    /// caller reach an outcome the frontend never offers.
     /// </summary>
-    private static bool TryParseOutcome(string? value, out StandardDecisionOutcome outcome)
+    internal static bool TryParseOutcome(string? value, out StandardDecisionOutcome outcome)
     {
         switch (value?.Trim().ToLowerInvariant())
         {
@@ -311,7 +309,7 @@ internal sealed record RelatedWorkItemResponse(
     public static RelatedWorkItemResponse From(WorkItem workItem, IStandardLifecycleStrategy? strategy)
     {
         var payload = workItem.Payload;
-        var site = payload.TryGetValue("site", out var value) && value.IsBsonDocument ? value.AsBsonDocument : null;
+        var site = SubmissionPayload.ReadSite(payload);
         return new RelatedWorkItemResponse(
             workItem.Id,
             workItem.TypeId,

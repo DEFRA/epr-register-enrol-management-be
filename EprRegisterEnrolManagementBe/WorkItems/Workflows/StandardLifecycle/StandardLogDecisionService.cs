@@ -195,12 +195,7 @@ internal sealed class StandardLogDecisionService(
             return failed;
         }
 
-        var result = await determinations.RecordApprovedDeterminationAsync(
-            workItemId,
-            user,
-            preparation,
-            cancellationToken
-        );
+        var result = await preparation.RecordApprovedDeterminationAsync(workItemId, user, cancellationToken);
 
         LogStepOne(result, workItemId, "approved", user);
         return result;

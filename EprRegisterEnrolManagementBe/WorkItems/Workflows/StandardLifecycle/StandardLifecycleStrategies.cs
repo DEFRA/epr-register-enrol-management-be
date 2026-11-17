@@ -6,11 +6,25 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// RA-495: the case types that have opted in to the shared Standard-workflow
 /// lifecycle services, looked up by type id.
 /// </summary>
-internal sealed class StandardLifecycleStrategies
+internal sealed class StandardLifecycleStrategies(IEnumerable<IStandardLifecycleStrategy> strategies)
+    : StandardLifecycleStrategies<IStandardLifecycleStrategy>(strategies)
 {
-    private readonly IReadOnlyList<IStandardLifecycleStrategy> _strategies;
+    /// <summary>A lookup holding only <paramref name="strategy"/>.</summary>
+    public static StandardLifecycleStrategies Of(IStandardLifecycleStrategy strategy) => new([strategy]);
+}
 
-    public StandardLifecycleStrategies(IEnumerable<IStandardLifecycleStrategy> strategies)
+/// <summary>
+/// RA-495: the opted-in case types, looked up by type id, as the
+/// <typeparamref name="TStrategy"/> part of their strategies a service needs
+/// (<see cref="StandardDulyMakingService"/> needs only the
+/// <see cref="IStandardDulyMakingRules"/>).
+/// </summary>
+internal class StandardLifecycleStrategies<TStrategy>
+    where TStrategy : IStandardDulyMakingRules
+{
+    private readonly IReadOnlyList<TStrategy> _strategies;
+
+    public StandardLifecycleStrategies(IEnumerable<TStrategy> strategies)
     {
         _strategies = strategies.ToList();
         var duplicate = _strategies
@@ -24,11 +38,8 @@ internal sealed class StandardLifecycleStrategies
         }
     }
 
-    /// <summary>A lookup holding only <paramref name="strategy"/>.</summary>
-    public static StandardLifecycleStrategies Of(IStandardLifecycleStrategy strategy) => new([strategy]);
-
     /// <summary>The strategy for <paramref name="typeId"/>, or null when that type has not opted in.</summary>
-    public IStandardLifecycleStrategy? Find(string? typeId) =>
+    public TStrategy? Find(string? typeId) =>
         _strategies.FirstOrDefault(s =>
             string.Equals(s.Type.TypeId, typeId, StringComparison.OrdinalIgnoreCase)
         );

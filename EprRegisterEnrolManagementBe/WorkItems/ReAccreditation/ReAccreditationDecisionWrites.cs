@@ -1,4 +1,3 @@
-using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
@@ -8,29 +7,19 @@ using MongoDB.Bson.Serialization;
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-527: the pieces of a determination write shared by
+/// RA-527: the payload reads and writes shared by
 /// <see cref="ReAccreditationApprovalService"/> and
 /// <see cref="ReAccreditationRefusalService"/> — each step of either outcome
 /// is one <see cref="IWorkItemPersistence.ReplaceAsync"/> call that appends its
 /// own audit entries, optionally updates the payload, and then runs the
 /// post-action hooks.
+///
+/// RA-495: the audit entry, actor check and post-action hook fan-out are the
+/// shared <see cref="StandardLifecycleAudit"/>'s, which both services call
+/// directly.
 /// </summary>
 internal static class ReAccreditationDecisionWrites
 {
-    /// <summary>
-    /// Appends an audit entry to <paramref name="workItem"/> in memory, to be
-    /// persisted by the caller's single write. Call it AFTER any state change:
-    /// the entry snapshots the item's state as of this event.
-    /// </summary>
-    public static void AppendAudit(
-        WorkItem workItem,
-        string action,
-        string actionDisplayName,
-        ClaimsPrincipal user,
-        DateTime createdAt,
-        Dictionary<string, string?> details
-    ) => StandardLifecycleAudit.Append(workItem, action, actionDisplayName, user, createdAt, details);
-
     /// <summary>
     /// The work item's payload as the model, or null (logged) when the stored
     /// payload cannot be read. Writing over an unreadable payload would destroy
@@ -96,32 +85,4 @@ internal static class ReAccreditationDecisionWrites
         workItem.ReplacePayload(merged);
         return updated;
     }
-
-    /// <summary>
-    /// Runs every post-action hook for a committed write. A failing hook is
-    /// logged, never rethrown: the write has landed.
-    /// </summary>
-    public static Task InvokeActionAppliedHooksAsync(
-        IReadOnlyList<IWorkItemPostActionHook> hooks,
-        WorkItem workItem,
-        string actionId,
-        string fromStateId,
-        ClaimsPrincipal user,
-        ILogger logger
-    ) =>
-        StandardLifecycleAudit.InvokeActionAppliedHooksAsync(
-            hooks,
-            workItem,
-            actionId,
-            fromStateId,
-            user,
-            logger
-        );
-
-    /// <summary>
-    /// A 401-shaped failure when <paramref name="user"/> carries no
-    /// <c>user:id</c> claim, otherwise null.
-    /// </summary>
-    public static WorkItemActionResult? RequireActorIdentity(ClaimsPrincipal user) =>
-        StandardLifecycleAudit.RequireActorIdentity(user);
 }

@@ -33,7 +33,7 @@ internal sealed class ReAccreditationChangePaymentDateService(
     private const int MaxAttempts = 3;
     // A dedicated audit action, not `action-applied`: this is not a state
     // transition, and a transition-shaped entry would be mistaken for a resume
-    // entry by ReAccreditationUpdatedOrigin (same pattern as `sla-extended`).
+    // entry by StandardUpdatedOrigin (same pattern as `sla-extended`).
     private const string AuditAction = "payment-date-changed";
     private const string AuditActionDisplayName = "Payment date changed";
     private const string DateFormat = "yyyy-MM-dd";

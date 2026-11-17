@@ -385,7 +385,7 @@ public sealed class WorkItemPersistence
             .ToListAsync(cancellationToken);
     }
 
-    private const string SubmissionReferencePath = "payload.submissionReference";
+    private const string SubmissionReferencePath = "payload." + SubmissionPayload.SubmissionReferenceField;
 
     [ExcludeFromCodeCoverage]
     public async Task<WorkItemPage> QueryAsync(

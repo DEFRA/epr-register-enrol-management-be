@@ -3,6 +3,7 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using MongoDB.Bson;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -32,7 +33,7 @@ internal sealed class ReAccreditationChargeCorrectionService(
 
     // A dedicated audit action, not `action-applied`: this is not a state
     // transition, and a transition-shaped entry would be mistaken for a resume
-    // entry by ReAccreditationUpdatedOrigin.
+    // entry by StandardUpdatedOrigin.
     public const string AuditAction = "charge-corrected";
     public const string AuditActionDisplayName = "Charge corrected";
     public const string AuditReason = "RA-766";
@@ -43,14 +44,14 @@ internal sealed class ReAccreditationChargeCorrectionService(
     /// The states a charge is never corrected in: the template's terminal
     /// states (approved, rejected, withdrawn) plus the two pending-contact
     /// states, which are not terminal but are already a decided outcome.
-    /// The pending-contact states come from <see cref="ReAccreditationConfirmContactGuard"/>,
+    /// The pending-contact states come from <see cref="StandardConfirmContactGuard"/>,
     /// so they stay in step with it. The operator backend keeps its own copy of
     /// the five ids (<c>ChargeCorrectionMigration.ClosedWorkItemStates</c>) for
     /// its dry run, which never sends the PUT: a change here also needs a change there.
     /// </summary>
     internal static bool IsClosed(IWorkItemTemplate template, string stateId) =>
         TerminalStates.Find(template, stateId) is not null
-        || ReAccreditationConfirmContactGuard.ForPendingState(stateId) is not null;
+        || StandardConfirmContactGuard.ForPendingState(stateId) is not null;
 
     public async Task<ChargeCorrectionResult> CorrectChargeAsync(
         Guid workItemId,

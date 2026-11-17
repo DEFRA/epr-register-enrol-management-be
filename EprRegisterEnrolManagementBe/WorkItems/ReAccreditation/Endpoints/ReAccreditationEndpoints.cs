@@ -757,7 +757,7 @@ internal static class ReAccreditationEndpoints
         CancellationToken cancellationToken
     )
     {
-        if (!TryParseOutcome(request?.Outcome, out var outcome))
+        if (!StandardLifecycleEndpoints.TryParseOutcome(request?.Outcome, out var outcome))
         {
             return TypedResults.Problem(
                 title: LogDecisionProblemTitle,
@@ -851,30 +851,6 @@ internal static class ReAccreditationEndpoints
     /// </summary>
     private static ProblemHttpResult DecisionProblem(WorkItemActionResult result, string title) =>
         StandardLifecycleProblems.DecisionFailure(result, title);
-
-    /// <summary>
-    /// Bind the wire <c>outcome</c> string onto
-    /// <see cref="ReAccreditationDecisionOutcome"/>. Case-insensitive, matching
-    /// the JSON enum convention used elsewhere on the wire, but strictly
-    /// two-valued: <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/>
-    /// alone would also accept "0"/"1" and any future member, which would let a
-    /// caller reach an outcome the frontend never offers.
-    /// </summary>
-    private static bool TryParseOutcome(string? value, out ReAccreditationDecisionOutcome outcome)
-    {
-        switch (value?.Trim().ToLowerInvariant())
-        {
-            case "approved":
-                outcome = ReAccreditationDecisionOutcome.Approved;
-                return true;
-            case "rejected":
-                outcome = ReAccreditationDecisionOutcome.Rejected;
-                return true;
-            default:
-                outcome = default;
-                return false;
-        }
-    }
 
     /// <summary>
     /// RA-291: raise a query against a re-accreditation application. The

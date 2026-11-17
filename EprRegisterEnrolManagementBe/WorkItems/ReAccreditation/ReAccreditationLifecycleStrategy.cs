@@ -1,9 +1,7 @@
 using System.Security.Claims;
-using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
-using Microsoft.Extensions.Logging.Abstractions;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 
@@ -21,37 +19,34 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   <see cref="ReAccreditationDeterminationSteps"/>.</item>
 ///   <item>Notifications: <see cref="ReAccreditationNotificationHook"/>,
 ///   which the module registers as a post-action hook.</item>
-///   <item>Charge source: the payload's <c>chargeAmountPence</c>.</item>
+///   <item>Charge source and payment-date stamp: <see cref="ReAccreditationDulyMakingRules"/>.</item>
 /// </list>
-/// The approval and refusal services are optional only so re-accreditation's
-/// own duly-making service, which needs neither, can build one.
 /// </summary>
 internal sealed class ReAccreditationLifecycleStrategy(
-    IReAccreditationApprovalService? approvalService = null,
-    IReAccreditationRefusalService? refusalService = null,
-    ILogger? logger = null
-) : IStandardLifecycleStrategy
+    IReAccreditationApprovalService approvalService,
+    IReAccreditationRefusalService refusalService,
+    ILogger logger
+) : ReAccreditationDulyMakingRules, IStandardLifecycleStrategy
+{
+    public IOperatorJourneyPush? OperatorJourneyPush => ReAccreditationOperatorJourneyPush.Instance;
+
+    public IStandardDeterminationSteps Determinations { get; } =
+        new ReAccreditationDeterminationSteps(approvalService, refusalService, logger);
+}
+
+/// <summary>
+/// RA-495: what re-accreditation's duly make needs from the shared
+/// lifecycle: the type, the charge source (the payload's
+/// <c>chargeAmountPence</c>) and the payment-date stamp. Re-accreditation's
+/// own duly-making service (<see cref="ReAccreditationDulyMakingService"/>)
+/// uses it on its own; <see cref="ReAccreditationLifecycleStrategy"/> adds
+/// the push target and the determination writes.
+/// </summary>
+internal class ReAccreditationDulyMakingRules : IStandardDulyMakingRules
 {
     private static readonly ReAccreditationType s_type = new();
 
-    private readonly ReAccreditationDeterminationSteps? _determinations =
-        approvalService is null || refusalService is null
-            ? null
-            : new ReAccreditationDeterminationSteps(
-                approvalService,
-                refusalService,
-                logger ?? NullLogger.Instance
-            );
-
     public IWorkItemType Type => s_type;
-
-    public IOperatorJourneyPush? OperatorJourneyPush => ReAccreditationOperatorJourneyPush.Instance;
-
-    public IStandardDeterminationSteps Determinations =>
-        _determinations
-        ?? throw new InvalidOperationException(
-            "This re-accreditation lifecycle strategy was built without the approval and refusal services."
-        );
 
     public int? ReadChargePence(WorkItem workItem) => ReAccreditationPayload.ReadChargeAmountPence(workItem);
 
@@ -149,21 +144,12 @@ internal sealed class ReAccreditationDeterminationSteps(
             );
         }
 
-        return new StandardApprovalPreparation(null, accreditationNumber);
-    }
-
-    public Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
-        Guid workItemId,
-        ClaimsPrincipal user,
-        StandardApprovalPreparation preparation,
-        CancellationToken cancellationToken
-    ) =>
-        approvalService.RecordApprovedDeterminationAsync(
-            workItemId,
-            user,
-            (AccreditationNumberResult)preparation.Minted!,
-            cancellationToken
+        // Step 1 stamps exactly the number minted here; it never mints another.
+        return StandardApprovalPreparation.Ready(
+            (workItemId, user, ct) =>
+                approvalService.RecordApprovedDeterminationAsync(workItemId, user, accreditationNumber, ct)
         );
+    }
 
     public Task<WorkItemActionResult> RecordRefusedDeterminationAsync(
         Guid workItemId,

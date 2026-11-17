@@ -18,20 +18,12 @@ internal interface IStandardDeterminationSteps
 {
     /// <summary>
     /// Anything an approval needs before step 1 writes anything, such as
-    /// minting an accreditation number. Runs after the shared checks and
-    /// before the <c>submit-for-decision</c> hop, so a failure here leaves the
-    /// item untouched.
+    /// minting an accreditation number, and the step 1 write that uses it.
+    /// Runs after the shared checks and before the <c>submit-for-decision</c>
+    /// hop, so a failure here leaves the item untouched.
     /// </summary>
     Task<StandardApprovalPreparation> PrepareApprovalAsync(
         WorkItem workItem,
-        CancellationToken cancellationToken
-    );
-
-    /// <summary>Step 1 of an approval: <c>awaiting-decision</c> → <c>approved-pending-contact</c>.</summary>
-    Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
-        Guid workItemId,
-        ClaimsPrincipal user,
-        StandardApprovalPreparation preparation,
         CancellationToken cancellationToken
     );
 
@@ -73,19 +65,52 @@ internal interface IStandardDeterminationSteps
 }
 
 /// <summary>
-/// RA-495: the outcome of <see cref="IStandardDeterminationSteps.PrepareApprovalAsync"/>.
-/// <see cref="Refusal"/> is the failure to hand back (nothing written);
-/// otherwise <see cref="Minted"/> is whatever the type minted (re-accreditation:
-/// its accreditation number result), handed unchanged to its own step 1 write,
-/// or null for a type that mints nothing.
+/// RA-495: step 1 of an approval, <c>awaiting-decision</c> →
+/// <c>approved-pending-contact</c>, with whatever the type prepared for it
+/// (re-accreditation: the accreditation number it minted) already bound.
 /// </summary>
-internal sealed record StandardApprovalPreparation(
-    WorkItemActionResult? Refusal,
-    object? Minted
-)
-{
-    public static readonly StandardApprovalPreparation NothingToPrepare = new(null, null);
+internal delegate Task<WorkItemActionResult> StandardApprovedDeterminationWrite(
+    Guid workItemId,
+    ClaimsPrincipal user,
+    CancellationToken cancellationToken
+);
 
-    public static StandardApprovalPreparation Refused(WorkItemActionResult refusal) =>
-        new(refusal, null);
+/// <summary>
+/// RA-495: the outcome of <see cref="IStandardDeterminationSteps.PrepareApprovalAsync"/>:
+/// either <see cref="Refusal"/>, the failure to hand back (nothing written),
+/// or the step 1 write to run once the <c>submit-for-decision</c> hop has
+/// landed (<see cref="RecordApprovedDeterminationAsync"/>).
+/// </summary>
+internal sealed class StandardApprovalPreparation
+{
+    private readonly StandardApprovedDeterminationWrite? _recordApprovedDetermination;
+
+    private StandardApprovalPreparation(
+        WorkItemActionResult? refusal,
+        StandardApprovedDeterminationWrite? recordApprovedDetermination
+    )
+    {
+        Refusal = refusal;
+        _recordApprovedDetermination = recordApprovedDetermination;
+    }
+
+    /// <summary>The failure to hand back, or null when the approval may go ahead.</summary>
+    public WorkItemActionResult? Refusal { get; }
+
+    /// <summary>The approval may go ahead with <paramref name="recordApprovedDetermination"/> as its step 1.</summary>
+    public static StandardApprovalPreparation Ready(StandardApprovedDeterminationWrite recordApprovedDetermination) =>
+        new(null, recordApprovedDetermination);
+
+    public static StandardApprovalPreparation Refused(WorkItemActionResult refusal) => new(refusal, null);
+
+    /// <summary>Step 1 of the approval. Only for a preparation that was not <see cref="Refused"/>.</summary>
+    public Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
+        Guid workItemId,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    ) =>
+        (
+            _recordApprovedDetermination
+            ?? throw new InvalidOperationException("A refused approval has no step 1 write.")
+        )(workItemId, user, cancellationToken);
 }

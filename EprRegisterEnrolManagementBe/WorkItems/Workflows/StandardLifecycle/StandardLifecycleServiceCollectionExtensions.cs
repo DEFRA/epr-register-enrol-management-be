@@ -33,7 +33,7 @@ internal static class StandardLifecycleServiceCollectionExtensions
             sp.GetServices<IWorkItemPostActionHook>(),
             sp.GetRequiredService<TimeProvider>(),
             Logger<StandardDulyMakingService>(sp),
-            sp.GetRequiredService<StandardLifecycleStrategies>()
+            new StandardLifecycleStrategies<IStandardDulyMakingRules>(sp.GetServices<IStandardLifecycleStrategy>())
         ));
         services.AddSingleton<IStandardLogDecisionService>(sp => new StandardLogDecisionService(
             sp.GetRequiredService<IWorkItemPersistence>(),

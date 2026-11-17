@@ -118,7 +118,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     // continue-review-during-duly-made is deliberately RETAINED, now dead for
     // new items but kept as the legacy escape for any item already sitting in
     // 'updated' with a duly-made origin, and as the declaration
-    // ReAccreditationUpdatedOrigin.ResolveOriginatingStateId still reads for
+    // StandardUpdatedOrigin.ResolveOriginatingStateId still reads for
     // those. Items snapshotted before v14 keep resume-during-duly-made ->
     // updated until ReAccreditationResumeDulyMadeAssessmentSnapshotMigration
     // patches their frozen snapshot.

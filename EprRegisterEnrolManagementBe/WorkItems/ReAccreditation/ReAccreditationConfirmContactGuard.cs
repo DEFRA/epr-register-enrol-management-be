@@ -22,14 +22,6 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </summary>
 internal static class ReAccreditationConfirmContactGuard
 {
-    public static readonly StandardConfirmContactStep Approval = StandardConfirmContactGuard.Approval;
-
-    public static readonly StandardConfirmContactStep Refusal = StandardConfirmContactGuard.Refusal;
-
-    /// <summary>The step that starts from <paramref name="stateId"/>, if it is a pending state.</summary>
-    public static StandardConfirmContactStep? ForPendingState(string? stateId) =>
-        StandardConfirmContactGuard.ForPendingState(stateId);
-
     /// <summary>
     /// Can step 2 apply the determination to <paramref name="workItem"/> now?
     /// Returns null when it can, or the result to hand straight back: a
@@ -72,7 +64,7 @@ internal static class ReAccreditationConfirmContactGuard
         return CheckReAccreditationRules(
             workItemId,
             workItem!,
-            step ?? ForPendingState(workItem!.StateId)!,
+            step ?? StandardConfirmContactGuard.ForPendingState(workItem!.StateId)!,
             logger
         );
     }

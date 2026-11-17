@@ -18,6 +18,18 @@ internal static class SubmissionPayload
     public const string SitesField = "sites";
     public const string SiteIdField = "siteId";
 
+    /// <summary>
+    /// RA-739: stamped on every work item a submission creates, so the work
+    /// items of one per-site submission share it.
+    /// </summary>
+    public const string SubmissionReferenceField = "submissionReference";
+
+    /// <summary>
+    /// RA-739: on each work item a per-site submission creates, that work
+    /// item's own entry from <see cref="SitesField"/>.
+    /// </summary>
+    public const string SiteField = "site";
+
     private static readonly string[] s_requiredFields =
     [
         OperatorRequestIdField,
@@ -37,6 +49,22 @@ internal static class SubmissionPayload
             : string.Empty;
         return operatorRequestId.Length > 0;
     }
+
+    /// <summary>The work item payload's <see cref="SubmissionReferenceField"/>, when it is a non-blank string.</summary>
+    public static bool TryReadSubmissionReference(BsonDocument? payload, out string submissionReference)
+    {
+        submissionReference =
+            payload is not null && IsPresentString(payload, SubmissionReferenceField)
+                ? payload[SubmissionReferenceField].AsString
+                : string.Empty;
+        return submissionReference.Length > 0;
+    }
+
+    /// <summary>The work item payload's own <see cref="SiteField"/>, or <c>null</c> when it has none.</summary>
+    public static BsonDocument? ReadSite(BsonDocument? payload) =>
+        payload is not null && payload.TryGetValue(SiteField, out var site) && site.IsBsonDocument
+            ? site.AsBsonDocument
+            : null;
 
     /// <summary>Why <paramref name="payload"/> cannot be submitted, or <c>null</c> when it can.</summary>
     public static string? Validate(BsonDocument payload)

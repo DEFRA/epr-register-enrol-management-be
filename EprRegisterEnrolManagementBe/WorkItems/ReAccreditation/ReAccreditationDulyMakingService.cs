@@ -11,7 +11,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// RA-495: duly making is the shared <see cref="StandardDulyMakingService"/>,
 /// here limited to re-accreditation (any other type is refused as before) and
 /// using re-accreditation's payload stamp
-/// (<see cref="ReAccreditationLifecycleStrategy"/>). The submitted →
+/// (<see cref="ReAccreditationDulyMakingRules"/>). The submitted →
 /// duly-made transition, the payment date on the payload, the SLA clock
 /// anchored to midnight UTC of that date, the audit entries and the
 /// post-action hooks (DulyMade email, status push) are unchanged.
@@ -30,7 +30,7 @@ internal sealed class ReAccreditationDulyMakingService(
         postActionHooks,
         timeProvider,
         logger,
-        StandardLifecycleStrategies.Of(new ReAccreditationLifecycleStrategy())
+        new StandardLifecycleStrategies<IStandardDulyMakingRules>([new ReAccreditationDulyMakingRules()])
     );
 
     public Task<WorkItemActionResult> CompleteDulyMakingAsync(

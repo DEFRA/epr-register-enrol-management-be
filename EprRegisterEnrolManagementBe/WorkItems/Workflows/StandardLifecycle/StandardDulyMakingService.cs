@@ -25,7 +25,7 @@ internal interface IStandardDulyMakingService
 /// Standard-workflow lifecycle (<see cref="IStandardLifecycleStrategy"/>);
 /// re-accreditation's RA-316 service, moved here unchanged except that the
 /// type check is now "has the type opted in" and the payload stamp is the
-/// type's own (<see cref="IStandardLifecycleStrategy.TryStampPaymentDate"/>).
+/// type's own (<see cref="IStandardDulyMakingRules.TryStampPaymentDate"/>).
 ///
 /// RA-316: replaces the task-driven auto-transition hook that previously carried an
 /// application from <c>submitted</c> to <c>duly-made</c> when its two checklist
@@ -67,7 +67,7 @@ internal sealed class StandardDulyMakingService(
     IEnumerable<IWorkItemPostActionHook> postActionHooks,
     TimeProvider timeProvider,
     ILogger logger,
-    StandardLifecycleStrategies strategies
+    StandardLifecycleStrategies<IStandardDulyMakingRules> strategies
 ) : IStandardDulyMakingService
 {
     private const int MaxAttempts = 3;

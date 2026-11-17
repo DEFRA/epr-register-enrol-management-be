@@ -25,6 +25,9 @@ internal sealed class AddOverseasSiteLifecycleStrategy(StandardDeterminationWrit
 {
     private static readonly AddOverseasSiteType s_type = new();
 
+    /// <summary>The site's charge, in pence, on <see cref="SubmissionPayload.SiteField"/>.</summary>
+    private const string SiteChargePenceField = "chargePence";
+
     public IWorkItemType Type => s_type;
 
     public IOperatorJourneyPush? OperatorJourneyPush => AddOverseasSiteOperatorJourneyPush.Instance;
@@ -32,10 +35,8 @@ internal sealed class AddOverseasSiteLifecycleStrategy(StandardDeterminationWrit
     public IStandardDeterminationSteps Determinations => determinations;
 
     public int? ReadChargePence(WorkItem workItem) =>
-        workItem.Payload is { } payload
-        && payload.TryGetValue("site", out var site)
-        && site.IsBsonDocument
-        && site.AsBsonDocument.TryGetValue("chargePence", out var charge)
+        SubmissionPayload.ReadSite(workItem.Payload) is { } site
+        && site.TryGetValue(SiteChargePenceField, out var charge)
         && BsonWholeNumber.TryGet(charge, 0, int.MaxValue, out var pence)
             ? pence
             : null;

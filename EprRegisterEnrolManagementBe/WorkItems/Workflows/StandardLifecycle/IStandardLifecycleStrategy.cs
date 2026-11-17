@@ -23,15 +23,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// after each write, and each hook reacts only to its own type, so a type
 /// whose module registers no email hook sends no email.
 /// </summary>
-internal interface IStandardLifecycleStrategy
+internal interface IStandardLifecycleStrategy : IStandardDulyMakingRules
 {
-    /// <summary>
-    /// The case type. Its <see cref="IWorkItemType.TypeId"/> is the opt-in key,
-    /// and it is the template fallback for a legacy work item with no frozen
-    /// snapshot.
-    /// </summary>
-    IWorkItemType Type { get; }
-
     /// <summary>
     /// Where the operator journey is told about this type's status
     /// changes, both the post-commit status push and the pre-commit decision
@@ -46,6 +39,22 @@ internal interface IStandardLifecycleStrategy
     /// Types with nothing bespoke use <see cref="StandardDeterminationWrites"/>.
     /// </summary>
     IStandardDeterminationSteps Determinations { get; }
+}
+
+/// <summary>
+/// RA-495: the part of a <see cref="IStandardLifecycleStrategy"/> that duly
+/// making needs (<see cref="StandardDulyMakingService"/>): the type, its
+/// charge source and its payment-date stamp. Separate so a type's own duly
+/// make route can use the shared service without the determination writes.
+/// </summary>
+internal interface IStandardDulyMakingRules
+{
+    /// <summary>
+    /// The case type. Its <see cref="IWorkItemType.TypeId"/> is the opt-in key,
+    /// and it is the template fallback for a legacy work item with no frozen
+    /// snapshot.
+    /// </summary>
+    IWorkItemType Type { get; }
 
     /// <summary>
     /// The charge, in pence, the operator paid for this work item: the charge

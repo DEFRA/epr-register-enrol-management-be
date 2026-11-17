@@ -1,6 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -29,7 +29,7 @@ internal interface IReAccreditationLogDecisionService
     /// </summary>
     Task<WorkItemActionResult> LogDecisionAsync(
         Guid workItemId,
-        ReAccreditationDecisionOutcome outcome,
+        StandardDecisionOutcome outcome,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default
     );

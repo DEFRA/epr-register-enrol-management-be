@@ -3,8 +3,9 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 /// <summary>
-/// RA-495: moved unchanged from re-accreditation so the shared duly make can
-/// use it; <c>ReAccreditationUpdatedOrigin</c> delegates here.
+/// RA-495: moved unchanged from re-accreditation (<c>ReAccreditationUpdatedOrigin</c>)
+/// so the shared duly make can use it. Re-accreditation's continue-review
+/// service and origin state resolver call it directly, so the two agree.
 ///
 /// RA-337 / RA-372: shared resolution of "where did this work item come from
 /// before it landed in <c>updated</c>, and where is it going back to".
