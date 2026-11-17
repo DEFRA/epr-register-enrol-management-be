@@ -11,6 +11,8 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using MongoDB.Bson;
+using MongoDB.Driver;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.TestSupport;
@@ -22,15 +24,25 @@ namespace EprRegisterEnrolManagementBe.Test.TestSupport;
 /// it. The operator-backend push adapter, the accreditation number adapter and
 /// the Notify client are fakes: a test reads the pushes the adapter received
 /// (every push succeeds unless told otherwise) and can assert the others are
-/// never used.
+/// never used. <see cref="ConfigureTestServices"/> adds a test's own
+/// registrations (fault injection) after all of that.
 /// </summary>
 internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
 {
     public const int SiteChargePence = 32800;
 
+    /// <summary>The payment date the lifecycle tests duly make with: three days ago.</summary>
+    public static readonly DateOnly PaymentDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-3);
+
     private readonly MongoIntegrationFixture _fixture;
 
     private readonly string _databaseName = MongoIntegrationFixture.NewDatabaseName("addors");
+
+    /// <summary>The ephemeral database this app writes to.</summary>
+    public string DatabaseName => _databaseName;
+
+    /// <summary>Runs after the factory's own service registrations.</summary>
+    public Action<IServiceCollection>? ConfigureTestServices { get; init; }
 
     public IOperatorBackendPushAdapter PushAdapter { get; } = Substitute.For<IOperatorBackendPushAdapter>();
 
@@ -57,6 +69,56 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
         var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
         return body.GetProperty("workItems").EnumerateArray().Select(w => w.GetProperty("id").GetGuid()).ToList();
     }
+
+    /// <summary>How many documents the app's database holds in <paramref name="collectionName"/>.</summary>
+    public Task<long> CountAsync(string collectionName, CancellationToken ct) =>
+        Services
+            .GetRequiredService<IMongoDbClientFactory>()
+            .GetCollection<BsonDocument>(collectionName)
+            .CountDocumentsAsync(FilterDefinition<BsonDocument>.Empty, cancellationToken: ct);
+
+    /// <summary>
+    /// A one-site submission, duly made (its post-commit push delivered) and
+    /// with its assessment started, as the front end leaves it before a
+    /// determination.
+    /// </summary>
+    public async Task<Guid> DulyMadeAndStartedAsync(HttpClient client, string operatorRequestId, CancellationToken ct)
+    {
+        var id = (await SubmitAsync(client, operatorRequestId, siteCount: 1, ct))[0];
+        Assert.Equal(HttpStatusCode.OK, (await PostDulyMakeAsync(client, id, ct)).StatusCode);
+        // The duly-made push lands in the background; let it settle first.
+        await WaitForAuditAsync(id, "status-push-sent", ct);
+        Assert.Equal(HttpStatusCode.OK, (await PostStartAssessmentAsync(client, id, ct)).StatusCode);
+        return id;
+    }
+
+    /// <summary><c>POST /work-items/{id}/duly-make</c> with <see cref="PaymentDate"/>.</summary>
+    public static Task<HttpResponseMessage> PostDulyMakeAsync(HttpClient client, Guid id, CancellationToken ct) =>
+        PostDulyMakeAsync(client, id, PaymentDate.ToString("yyyy-MM-dd"), ct);
+
+    /// <summary><c>POST /work-items/{id}/duly-make</c> with the payment date as sent.</summary>
+    public static Task<HttpResponseMessage> PostDulyMakeAsync(
+        HttpClient client,
+        Guid id,
+        string? paymentDate,
+        CancellationToken ct
+    ) => client.PostAsJsonAsync($"/work-items/{id}/duly-make", new { paymentDate }, ct);
+
+    /// <summary><c>POST /work-items/{id}/actions/start-assessment</c>.</summary>
+    public static Task<HttpResponseMessage> PostStartAssessmentAsync(HttpClient client, Guid id, CancellationToken ct) =>
+        client.PostAsync($"/work-items/{id}/actions/start-assessment", content: null, ct);
+
+    /// <summary><c>POST /work-items/{id}/decision</c> with <paramref name="outcome"/>.</summary>
+    public static Task<HttpResponseMessage> PostDecisionAsync(
+        HttpClient client,
+        Guid id,
+        string outcome,
+        CancellationToken ct
+    ) => client.PostAsJsonAsync($"/work-items/{id}/decision", new { outcome }, ct);
+
+    /// <summary><c>POST /work-items/{id}/confirm-contact</c>.</summary>
+    public static Task<HttpResponseMessage> PostConfirmContactAsync(HttpClient client, Guid id, CancellationToken ct) =>
+        client.PostAsync($"/work-items/{id}/confirm-contact", content: null, ct);
 
     public AddOverseasSiteAppFactory(MongoIntegrationFixture fixture, params OperatorBackendPushResult[] decisionResults)
     {
@@ -135,6 +197,7 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
             services.AddSingleton(NumberAdapter);
             services.RemoveAll<INotifyClient>();
             services.AddSingleton(NotifyClient);
+            ConfigureTestServices?.Invoke(services);
         });
     }
 

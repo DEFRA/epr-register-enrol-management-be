@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -15,10 +16,6 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 /// </summary>
 public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixture fixture)
 {
-    private const int SiteChargePence = AddOverseasSiteAppFactory.SiteChargePence;
-
-    private static readonly DateOnly s_paymentDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-3);
-
     [Fact]
     public async Task Duly_making_one_site_moves_only_that_work_item_to_duly_made_on_the_payment_date_clock()
     {
@@ -27,7 +24,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-1", siteCount: 2, ct);
 
-        var response = await PostDulyMakeAsync(client, ids[0], s_paymentDate.ToString("yyyy-MM-dd"), ct);
+        var response = await PostDulyMakeAsync(client, ids[0], PaymentDate.ToString("yyyy-MM-dd"), ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
@@ -35,8 +32,8 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
 
         var dulyMade = await factory.Persistence.GetByIdAsync(ids[0], ct);
         Assert.Equal("duly-made", dulyMade!.StateId);
-        Assert.Equal(s_paymentDate.ToString("yyyy-MM-dd"), dulyMade.Payload["paymentDate"].AsString);
-        Assert.Equal(s_paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), dulyMade.SlaClock!.StartedAt);
+        Assert.Equal(PaymentDate.ToString("yyyy-MM-dd"), dulyMade.Payload["paymentDate"].AsString);
+        Assert.Equal(PaymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc), dulyMade.SlaClock!.StartedAt);
         Assert.Equal(TimeSpan.FromDays(84), dulyMade.SlaClock.TargetDuration);
         var applied = Assert.Single(dulyMade.AuditLog, a => a.Action == "action-applied");
         Assert.Equal("duly-make", applied.Details["actionId"]);
@@ -81,14 +78,14 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-twice", siteCount: 1, ct);
-        var first = await PostDulyMakeAsync(client, ids[0], s_paymentDate.ToString("yyyy-MM-dd"), ct);
+        var first = await PostDulyMakeAsync(client, ids[0], PaymentDate.ToString("yyyy-MM-dd"), ct);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
 
-        var second = await PostDulyMakeAsync(client, ids[0], s_paymentDate.AddDays(-1).ToString("yyyy-MM-dd"), ct);
+        var second = await PostDulyMakeAsync(client, ids[0], PaymentDate.AddDays(-1).ToString("yyyy-MM-dd"), ct);
 
         Assert.Equal(HttpStatusCode.Conflict, second.StatusCode);
         var persisted = await factory.Persistence.GetByIdAsync(ids[0], ct);
-        Assert.Equal(s_paymentDate.ToString("yyyy-MM-dd"), persisted!.Payload["paymentDate"].AsString);
+        Assert.Equal(PaymentDate.ToString("yyyy-MM-dd"), persisted!.Payload["paymentDate"].AsString);
         Assert.Single(persisted.AuditLog, a => a.Action == "action-applied");
     }
 
@@ -113,7 +110,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-1", siteCount: 3, ct);
         await factory.SubmitAsync(client, "related-other-submission", siteCount: 2, ct);
-        var dulyMade = await PostDulyMakeAsync(client, ids[1], s_paymentDate.ToString("yyyy-MM-dd"), ct);
+        var dulyMade = await PostDulyMakeAsync(client, ids[1], PaymentDate.ToString("yyyy-MM-dd"), ct);
         Assert.Equal(HttpStatusCode.OK, dulyMade.StatusCode);
 
         var details = await client.GetFromJsonAsync<JsonElement>($"/work-items/{ids[0]}/duly-make", ct);
@@ -150,11 +147,4 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
 
         Assert.Empty(details.GetProperty("relatedWorkItems").EnumerateArray());
     }
-
-    private static Task<HttpResponseMessage> PostDulyMakeAsync(
-        HttpClient client,
-        Guid id,
-        string? paymentDate,
-        CancellationToken ct
-    ) => client.PostAsJsonAsync($"/work-items/{id}/duly-make", new { paymentDate }, ct);
 }

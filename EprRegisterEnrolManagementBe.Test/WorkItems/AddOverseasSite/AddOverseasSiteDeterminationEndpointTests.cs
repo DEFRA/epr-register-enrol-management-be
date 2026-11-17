@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using NSubstitute;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -18,15 +19,13 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 /// </summary>
 public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFixture fixture)
 {
-    private static readonly DateOnly s_paymentDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-3);
-
     [Fact]
     public async Task Approving_then_confirming_contact_grants_the_site_without_minting_a_number_or_sending_an_email()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var id = await DulyMadeAndStartedAsync(factory, client, "determine-approve", ct);
+        var id = await factory.DulyMadeAndStartedAsync(client, "determine-approve", ct);
 
         var determination = await PostDecisionAsync(client, id, "approved", ct);
 
@@ -54,7 +53,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var id = await DulyMadeAndStartedAsync(factory, client, "determine-refuse", ct);
+        var id = await factory.DulyMadeAndStartedAsync(client, "determine-refuse", ct);
 
         var determination = await PostDecisionAsync(client, id, "rejected", ct);
 
@@ -80,7 +79,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var id = await DulyMadeAndStartedAsync(factory, client, $"determine-final-{outcome}", ct);
+        var id = await factory.DulyMadeAndStartedAsync(client, $"determine-final-{outcome}", ct);
         Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, outcome, ct)).StatusCode);
         var other = outcome == "approved" ? "rejected" : "approved";
 
@@ -117,7 +116,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var id = await DulyMadeAndStartedAsync(factory, client, "confirm-too-early", ct);
+        var id = await factory.DulyMadeAndStartedAsync(client, "confirm-too-early", ct);
 
         var response = await PostConfirmContactAsync(client, id, ct);
 
@@ -135,7 +134,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var id = await DulyMadeAndStartedAsync(factory, client, $"closed-assign-{outcome}", ct);
+        var id = await factory.DulyMadeAndStartedAsync(client, $"closed-assign-{outcome}", ct);
         Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, outcome, ct)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await PostConfirmContactAsync(client, id, ct)).StatusCode);
         var closed = await factory.Persistence.GetByIdAsync(id, ct);
@@ -153,45 +152,4 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         Assert.Equal(closed!.Version, after!.Version);
         Assert.Equal(closed.AssignedToId, after.AssignedToId);
     }
-
-    /// <summary>
-    /// A one-site submission, duly made and with its assessment started, as
-    /// the front end leaves it before posting a determination.
-    /// </summary>
-    private static async Task<Guid> DulyMadeAndStartedAsync(
-        AddOverseasSiteAppFactory factory,
-        HttpClient client,
-        string operatorRequestId,
-        CancellationToken ct
-    )
-    {
-        var id = (await factory.SubmitAsync(client, operatorRequestId, siteCount: 1, ct))[0];
-        Assert.Equal(
-            HttpStatusCode.OK,
-            (
-                await client.PostAsJsonAsync(
-                    $"/work-items/{id}/duly-make",
-                    new { paymentDate = s_paymentDate.ToString("yyyy-MM-dd") },
-                    ct
-                )
-            ).StatusCode
-        );
-        // The duly-made push lands in the background; let it settle first.
-        await factory.WaitForAuditAsync(id, "status-push-sent", ct);
-        Assert.Equal(
-            HttpStatusCode.OK,
-            (await client.PostAsync($"/work-items/{id}/actions/start-assessment", content: null, ct)).StatusCode
-        );
-        return id;
-    }
-
-    private static Task<HttpResponseMessage> PostDecisionAsync(
-        HttpClient client,
-        Guid id,
-        string outcome,
-        CancellationToken ct
-    ) => client.PostAsJsonAsync($"/work-items/{id}/decision", new { outcome }, ct);
-
-    private static Task<HttpResponseMessage> PostConfirmContactAsync(HttpClient client, Guid id, CancellationToken ct) =>
-        client.PostAsync($"/work-items/{id}/confirm-contact", content: null, ct);
 }

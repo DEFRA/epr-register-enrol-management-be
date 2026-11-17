@@ -22,8 +22,6 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
     private const string StatusPush = nameof(IOperatorBackendPushAdapter.PushChangeRequestStatusChangedAsync);
     private const string DecisionPush = nameof(IOperatorBackendPushAdapter.PushChangeRequestDecisionStatusChangedAsync);
 
-    private static readonly DateOnly s_paymentDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(-3);
-
     [Fact]
     public async Task Duly_making_is_pushed_to_the_change_request_status_route_after_it_commits()
     {
@@ -52,7 +50,7 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var id = await DulyMadeAndStartedAsync(factory, client, $"push-{outcome}", ct);
+        var id = await factory.DulyMadeAndStartedAsync(client, $"push-{outcome}", ct);
 
         Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, outcome, ct)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await PostConfirmContactAsync(client, id, ct)).StatusCode);
@@ -80,7 +78,7 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
             OperatorBackendPushResult.Success()
         );
         using var client = factory.CreateClient();
-        var id = await DulyMadeAndStartedAsync(factory, client, "push-confirm-retry", ct);
+        var id = await factory.DulyMadeAndStartedAsync(client, "push-confirm-retry", ct);
         Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, "approved", ct)).StatusCode);
 
         var failed = await PostConfirmContactAsync(client, id, ct);
@@ -105,42 +103,4 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
         );
         Assert.Equal(2, factory.Pushes.Count(p => p.Method == DecisionPush));
     }
-
-    /// <summary>
-    /// A one-site submission, duly made (its push delivered) and with its
-    /// assessment started, as the front end leaves it before a determination.
-    /// </summary>
-    private static async Task<Guid> DulyMadeAndStartedAsync(
-        AddOverseasSiteAppFactory factory,
-        HttpClient client,
-        string operatorRequestId,
-        CancellationToken ct
-    )
-    {
-        var id = (await factory.SubmitAsync(client, operatorRequestId, siteCount: 1, ct))[0];
-        Assert.Equal(HttpStatusCode.OK, (await PostDulyMakeAsync(client, id, ct)).StatusCode);
-        await factory.WaitForAuditAsync(id, "status-push-sent", ct);
-        Assert.Equal(
-            HttpStatusCode.OK,
-            (await client.PostAsync($"/work-items/{id}/actions/start-assessment", content: null, ct)).StatusCode
-        );
-        return id;
-    }
-
-    private static Task<HttpResponseMessage> PostDulyMakeAsync(HttpClient client, Guid id, CancellationToken ct) =>
-        client.PostAsJsonAsync(
-            $"/work-items/{id}/duly-make",
-            new { paymentDate = s_paymentDate.ToString("yyyy-MM-dd") },
-            ct
-        );
-
-    private static Task<HttpResponseMessage> PostDecisionAsync(
-        HttpClient client,
-        Guid id,
-        string outcome,
-        CancellationToken ct
-    ) => client.PostAsJsonAsync($"/work-items/{id}/decision", new { outcome }, ct);
-
-    private static Task<HttpResponseMessage> PostConfirmContactAsync(HttpClient client, Guid id, CancellationToken ct) =>
-        client.PostAsync($"/work-items/{id}/confirm-contact", content: null, ct);
 }
