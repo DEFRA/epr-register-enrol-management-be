@@ -79,108 +79,12 @@ public class ProblemDetailsExceptionHandlerTests
     /// member delegates so the fault is surgical: the exception handler
     /// is the only thing under test.
     /// </summary>
-    private sealed class ThrowingOnQueryPersistence(IWorkItemPersistence inner) : IWorkItemPersistence
+    private sealed class ThrowingOnQueryPersistence(IWorkItemPersistence inner)
+        : ForwardingWorkItemPersistence(inner)
     {
-        public Task<bool> SetPayloadFieldAsync(
-            Guid workItemId,
-            string fieldName,
-            BsonValue value,
-            CancellationToken cancellationToken = default) =>
-            inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
-            string typeId,
-            string fieldName,
-            string prefix,
+        public override Task<WorkItemPage> QueryAsync(
+            WorkItemQuery query,
             CancellationToken cancellationToken = default
-        ) => inner.FindByPayloadFieldPrefixAsync(typeId, fieldName, prefix, cancellationToken);
-
-        public Task<bool> CorrectPayloadFieldAsync(
-            Guid workItemId,
-            string fieldName,
-            BsonValue expectedValue,
-            BsonValue newValue,
-            WorkItemAuditEntry auditEntry,
-            CancellationToken cancellationToken = default
-        ) =>
-            inner.CorrectPayloadFieldAsync(
-                workItemId,
-                fieldName,
-                expectedValue,
-                newValue,
-                auditEntry,
-                cancellationToken
-            );
-
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
-
-            string typeId,
-
-            string fieldName,
-
-            BsonValue value,
-
-            CancellationToken cancellationToken = default
-
-        ) => inner.FindByPayloadFieldAsync(typeId, fieldName, value, cancellationToken);
-
-
-        public Task<bool> CompareAndSetPayloadFieldAsync(
-
-            Guid workItemId,
-
-            string fieldName,
-
-            BsonValue expectedValue,
-
-            BsonValue newValue,
-
-            CancellationToken cancellationToken = default
-
-        ) =>
-
-            inner.CompareAndSetPayloadFieldAsync(
-
-                workItemId,
-
-                fieldName,
-
-                expectedValue,
-
-                newValue,
-
-                cancellationToken
-
-            );
-
-        public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            inner.CreateAsync(workItem, cancellationToken);
-
-        public Task CreateAsync(
-            MongoDB.Driver.IClientSessionHandle session,
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => inner.CreateAsync(session, workItem, cancellationToken);
-
-        public Task<bool> CreateIfAbsentAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            inner.CreateIfAbsentAsync(workItem, cancellationToken);
-
-        public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
-            inner.GetByIdAsync(id, cancellationToken);
-
-        public Task<WorkItem?> FindBySubmissionKeyAsync(
-            string typeId, string payloadField, string value, CancellationToken cancellationToken = default) =>
-            inner.FindBySubmissionKeyAsync(typeId, payloadField, value, cancellationToken);
-
-        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
-            string submissionReference, CancellationToken cancellationToken = default) =>
-            inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
-
-        public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default) =>
-            throw new InvalidOperationException("boom");
-
-        public Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            inner.ReplaceAsync(workItem, cancellationToken);
+        ) => throw new InvalidOperationException("boom");
     }
 }

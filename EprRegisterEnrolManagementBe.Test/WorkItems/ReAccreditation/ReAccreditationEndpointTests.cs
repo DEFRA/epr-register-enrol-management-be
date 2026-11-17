@@ -7144,124 +7144,9 @@ public class ReAccreditationEndpointTests
         IWorkItemPersistence inner,
         Guid raceId,
         Func<Task> onBeforeReplace
-    ) : IWorkItemPersistence
+    ) : ForwardingWorkItemPersistence(inner)
     {
-        public Task<bool> SetPayloadFieldAsync(
-            Guid workItemId,
-            string fieldName,
-            BsonValue value,
-            CancellationToken cancellationToken = default
-        ) => inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
-            string typeId,
-            string fieldName,
-            string prefix,
-            CancellationToken cancellationToken = default
-        ) => inner.FindByPayloadFieldPrefixAsync(typeId, fieldName, prefix, cancellationToken);
-
-        public Task<bool> CorrectPayloadFieldAsync(
-            Guid workItemId,
-            string fieldName,
-            BsonValue expectedValue,
-            BsonValue newValue,
-            WorkItemAuditEntry auditEntry,
-            CancellationToken cancellationToken = default
-        ) =>
-            inner.CorrectPayloadFieldAsync(
-                workItemId,
-                fieldName,
-                expectedValue,
-                newValue,
-                auditEntry,
-                cancellationToken
-            );
-
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
-
-            string typeId,
-
-            string fieldName,
-
-            BsonValue value,
-
-            CancellationToken cancellationToken = default
-
-        ) => inner.FindByPayloadFieldAsync(typeId, fieldName, value, cancellationToken);
-
-
-        public Task<bool> CompareAndSetPayloadFieldAsync(
-
-            Guid workItemId,
-
-            string fieldName,
-
-            BsonValue expectedValue,
-
-            BsonValue newValue,
-
-            CancellationToken cancellationToken = default
-
-        ) =>
-
-            inner.CompareAndSetPayloadFieldAsync(
-
-                workItemId,
-
-                fieldName,
-
-                expectedValue,
-
-                newValue,
-
-                cancellationToken
-
-            );
-
-        public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            inner.CreateAsync(workItem, cancellationToken);
-
-        public Task CreateAsync(
-            MongoDB.Driver.IClientSessionHandle session,
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => inner.CreateAsync(session, workItem, cancellationToken);
-
-        public Task<bool> CreateIfAbsentAsync(
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => inner.CreateIfAbsentAsync(workItem, cancellationToken);
-
-        public Task<WorkItem?> GetByIdAsync(
-            Guid id,
-            CancellationToken cancellationToken = default
-        ) => inner.GetByIdAsync(id, cancellationToken);
-
-        public Task<WorkItem?> FindBySubmissionKeyAsync(
-            string typeId,
-            string payloadField,
-            string value,
-            CancellationToken cancellationToken = default
-        ) =>
-            inner.FindBySubmissionKeyAsync(
-                typeId,
-                payloadField,
-                value,
-                cancellationToken
-            );
-
-        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
-            string submissionReference,
-            CancellationToken cancellationToken = default
-        ) => inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
-
-        public Task<WorkItemPage> QueryAsync(
-            WorkItemQuery query,
-            CancellationToken cancellationToken = default
-        ) => inner.QueryAsync(query, cancellationToken);
-
-        public async Task ReplaceAsync(
+        public override async Task ReplaceAsync(
             WorkItem workItem,
             CancellationToken cancellationToken = default
         )
@@ -7270,7 +7155,8 @@ public class ReAccreditationEndpointTests
             {
                 await onBeforeReplace();
             }
-            await inner.ReplaceAsync(workItem, cancellationToken);
+
+            await Inner.ReplaceAsync(workItem, cancellationToken);
         }
     }
 
@@ -7284,9 +7170,9 @@ public class ReAccreditationEndpointTests
     private sealed class ThrowingSetPayloadFieldPersistence(
         IWorkItemPersistence inner,
         Guid throwId
-    ) : IWorkItemPersistence
+    ) : ForwardingWorkItemPersistence(inner)
     {
-        public Task<bool> SetPayloadFieldAsync(
+        public override Task<bool> SetPayloadFieldAsync(
             Guid workItemId,
             string fieldName,
             BsonValue value,
@@ -7294,120 +7180,7 @@ public class ReAccreditationEndpointTests
         ) =>
             workItemId == throwId
                 ? throw new InvalidOperationException("Simulated snapshot-refresh failure.")
-                : inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
-            string typeId,
-            string fieldName,
-            string prefix,
-            CancellationToken cancellationToken = default
-        ) => inner.FindByPayloadFieldPrefixAsync(typeId, fieldName, prefix, cancellationToken);
-
-        public Task<bool> CorrectPayloadFieldAsync(
-            Guid workItemId,
-            string fieldName,
-            BsonValue expectedValue,
-            BsonValue newValue,
-            WorkItemAuditEntry auditEntry,
-            CancellationToken cancellationToken = default
-        ) =>
-            inner.CorrectPayloadFieldAsync(
-                workItemId,
-                fieldName,
-                expectedValue,
-                newValue,
-                auditEntry,
-                cancellationToken
-            );
-
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
-
-            string typeId,
-
-            string fieldName,
-
-            BsonValue value,
-
-            CancellationToken cancellationToken = default
-
-        ) => inner.FindByPayloadFieldAsync(typeId, fieldName, value, cancellationToken);
-
-
-        public Task<bool> CompareAndSetPayloadFieldAsync(
-
-            Guid workItemId,
-
-            string fieldName,
-
-            BsonValue expectedValue,
-
-            BsonValue newValue,
-
-            CancellationToken cancellationToken = default
-
-        ) =>
-
-            inner.CompareAndSetPayloadFieldAsync(
-
-                workItemId,
-
-                fieldName,
-
-                expectedValue,
-
-                newValue,
-
-                cancellationToken
-
-            );
-
-        public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            inner.CreateAsync(workItem, cancellationToken);
-
-        public Task CreateAsync(
-            MongoDB.Driver.IClientSessionHandle session,
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => inner.CreateAsync(session, workItem, cancellationToken);
-
-        public Task<bool> CreateIfAbsentAsync(
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => inner.CreateIfAbsentAsync(workItem, cancellationToken);
-
-        public Task<WorkItem?> GetByIdAsync(
-            Guid id,
-            CancellationToken cancellationToken = default
-        ) => inner.GetByIdAsync(id, cancellationToken);
-
-        public Task<WorkItem?> FindBySubmissionKeyAsync(
-            string typeId,
-            string payloadField,
-            string value,
-            CancellationToken cancellationToken = default
-        ) =>
-            inner.FindBySubmissionKeyAsync(
-                typeId,
-                payloadField,
-                value,
-                cancellationToken
-            );
-
-        public Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
-            string submissionReference,
-            CancellationToken cancellationToken = default
-        ) => inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
-
-        public Task<WorkItemPage> QueryAsync(
-            WorkItemQuery query,
-            CancellationToken cancellationToken = default
-        ) => inner.QueryAsync(query, cancellationToken);
-
-        public Task ReplaceAsync(
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => inner.ReplaceAsync(workItem, cancellationToken);
+                : Inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
     }
 
     private sealed class ReAccreditationFactory : WebApplicationFactory<Program>
