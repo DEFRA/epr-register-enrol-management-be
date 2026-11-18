@@ -21,56 +21,14 @@ internal sealed class NullOperatorBackendPushAdapter : IOperatorBackendPushAdapt
         CancellationToken cancellationToken = default) =>
         Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
 
+    // epr-p86e / RA-410, RA-495: a decision push is gated on, so "disabled"
+    // must be a Skipped pass (not a Failure) — otherwise every decision in an
+    // environment that has not enabled the push would 500. The gate in
+    // StandardDecisionPush treats Skipped as "proceed".
     public Task<OperatorBackendPushResult> PushStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
-
-    // epr-p86e / RA-410: the decision push is gated on, so "disabled" must be a
-    // Skipped pass (not a Failure) — otherwise every decision in an environment
-    // that has not enabled the push would 500. The gate in
-    // StandardConfirmContactService treats Skipped as "proceed".
-    public Task<OperatorBackendPushResult> PushDecisionStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
-
-    public Task<OperatorBackendPushResult> PushChangeRequestStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        CancellationToken cancellationToken = default) =>
-        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
-
-    // RA-495: Skipped, not Failure, for the same reason as the decision push above.
-    public Task<OperatorBackendPushResult> PushChangeRequestDecisionStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
+        OperatorBackendStatusRoute route,
+        OperatorBackendPushPipeline pipeline,
+        OperatorJourneyStatusChange change,
         CancellationToken cancellationToken = default) =>
         Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
 }

@@ -67,12 +67,19 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
     {
         var ct = TestContext.Current.CancellationToken;
         var pushAdapter = PushAdapterReturning(OperatorBackendPushResult.Success());
-        var statusPushed = new TaskCompletionSource<object?[]>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var statusPushed = new TaskCompletionSource<OperatorJourneyStatusChange>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         pushAdapter
-            .PushStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
-            .ReturnsForAnyArgs(call =>
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(call =>
             {
-                statusPushed.TrySetResult(call.Args());
+                statusPushed.TrySetResult(call.ArgAt<OperatorJourneyStatusChange>(2));
                 return Task.FromResult(OperatorBackendPushResult.Success());
             });
         await using var factory = new LifecycleFactory(fixture, pushAdapter);
@@ -82,12 +89,12 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         var response = await PostDulyMakeAsync(client, id, s_paymentDate.ToString("yyyy-MM-dd"), ct);
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
 
-        var args = await statusPushed.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
-        Assert.Equal(id, args[0]);
-        Assert.Equal("submitted", args[2]);
-        Assert.Equal("duly-made", args[3]);
-        Assert.Equal("Duly made", args[4]);
-        Assert.Equal("duly-make", args[5]);
+        var change = await statusPushed.Task.WaitAsync(TimeSpan.FromSeconds(10), ct);
+        Assert.Equal(id, change.WorkItemId);
+        Assert.Equal("submitted", change.FromStateId);
+        Assert.Equal("duly-made", change.ToStateId);
+        Assert.Equal("Duly made", change.ToStateDisplayName);
+        Assert.Equal("duly-make", change.ActionId);
         await WaitForAuditAsync(factory, id, "status-push-sent", ct);
     }
 
@@ -234,12 +241,12 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         var confirmation = await PostConfirmContactAsync(client, id, ct);
 
         Assert.Equal(HttpStatusCode.OK, confirmation.StatusCode);
-        var push = Assert.Single(pushAdapter.ReceivedCalls(), IsDecisionPush).GetArguments();
-        Assert.Equal(id, push[0]);
-        Assert.Equal("approved-pending-contact", push[2]);
-        Assert.Equal("approved", push[3]);
-        Assert.Equal("Granted", push[4]);
-        Assert.Equal("confirm-contact-approved", push[5]);
+        var push = DecisionPushChange(Assert.Single(pushAdapter.ReceivedCalls(), IsDecisionPush));
+        Assert.Equal(id, push.WorkItemId);
+        Assert.Equal("approved-pending-contact", push.FromStateId);
+        Assert.Equal("approved", push.ToStateId);
+        Assert.Equal("Granted", push.ToStateDisplayName);
+        Assert.Equal("confirm-contact-approved", push.ActionId);
 
         var granted = await factory.Persistence.GetByIdAsync(id, ct);
         Assert.Equal("approved", granted!.StateId);
@@ -271,9 +278,9 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         var confirmation = await PostConfirmContactAsync(client, id, ct);
 
         Assert.Equal(HttpStatusCode.OK, confirmation.StatusCode);
-        var push = Assert.Single(pushAdapter.ReceivedCalls(), IsDecisionPush).GetArguments();
-        Assert.Equal("rejected-pending-contact", push[2]);
-        Assert.Equal("rejected", push[3]);
+        var push = DecisionPushChange(Assert.Single(pushAdapter.ReceivedCalls(), IsDecisionPush));
+        Assert.Equal("rejected-pending-contact", push.FromStateId);
+        Assert.Equal("rejected", push.ToStateId);
         var refused = await factory.Persistence.GetByIdAsync(id, ct);
         Assert.Equal("rejected", refused!.StateId);
         Assert.Contains(
@@ -379,7 +386,12 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         client.PostAsync($"/work-items/{id}/confirm-contact", content: null, ct);
 
     private static bool IsDecisionPush(NSubstitute.Core.ICall call) =>
-        call.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync);
+        call.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushStatusChangedAsync)
+        && call.GetArguments()
+            is [OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.Decision, ..];
+
+    private static OperatorJourneyStatusChange DecisionPushChange(NSubstitute.Core.ICall call) =>
+        (OperatorJourneyStatusChange)call.GetArguments()[2]!;
 
     /// <summary>
     /// The fake operator-backend push adapter: every decision push returns the
@@ -390,14 +402,24 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
     {
         var adapter = Substitute.For<IOperatorBackendPushAdapter>();
         adapter
-            .PushDecisionStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
-            .ReturnsForAnyArgs(
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(
                 Task.FromResult(decisionResults[0]),
                 decisionResults.Skip(1).Select(Task.FromResult).ToArray()
             );
         adapter
-            .PushStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
-            .ReturnsForAnyArgs(Task.FromResult(OperatorBackendPushResult.Success()));
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(OperatorBackendPushResult.Success()));
         return adapter;
     }
 
@@ -438,8 +460,8 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
     }
 
     /// <summary>
-    /// The test type's push target: the fake adapter's existing status and
-    /// decision push methods.
+    /// The test type's push target: the fake adapter's accreditation-application
+    /// route, best-effort for status pushes and the decision pipeline for decisions.
     /// </summary>
     private sealed class FakeAdapterPush : IOperatorJourneyPush
     {
@@ -449,14 +471,9 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
             CancellationToken cancellationToken
         ) =>
             adapter.PushStatusChangedAsync(
-                change.WorkItemId,
-                change.CorrelationId,
-                change.FromStateId,
-                change.ToStateId,
-                change.ToStateDisplayName,
-                change.ActionId,
-                change.ActionDisplayName,
-                change.OccurredAt,
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.BestEffort,
+                change,
                 cancellationToken
             );
 
@@ -465,15 +482,10 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
             OperatorJourneyStatusChange change,
             CancellationToken cancellationToken
         ) =>
-            adapter.PushDecisionStatusChangedAsync(
-                change.WorkItemId,
-                change.CorrelationId,
-                change.FromStateId,
-                change.ToStateId,
-                change.ToStateDisplayName,
-                change.ActionId,
-                change.ActionDisplayName,
-                change.OccurredAt,
+            adapter.PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                change,
                 cancellationToken
             );
     }

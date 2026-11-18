@@ -127,35 +127,51 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
         // Every push succeeds, except that each decision push returns the next
         // of decisionResults (the last one repeats).
         PushAdapter
-            .PushChangeRequestDecisionStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
-            .ReturnsForAnyArgs(Task.FromResult(results[0]), results.Skip(1).Select(Task.FromResult).ToArray());
+            .PushStatusChangedAsync(
+                Arg.Any<OperatorBackendStatusRoute>(),
+                Arg.Any<OperatorBackendPushPipeline>(),
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(OperatorBackendPushResult.Success()));
         PushAdapter
-            .PushChangeRequestStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
-            .ReturnsForAnyArgs(Task.FromResult(OperatorBackendPushResult.Success()));
-        PushAdapter
-            .PushDecisionStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
-            .ReturnsForAnyArgs(Task.FromResult(OperatorBackendPushResult.Success()));
-        PushAdapter
-            .PushStatusChangedAsync(default, default, default!, default!, default!, default!, default!, default, default)
-            .ReturnsForAnyArgs(Task.FromResult(OperatorBackendPushResult.Success()));
+            .PushStatusChangedAsync(
+                Arg.Is(OperatorBackendStatusRoute.ChangeRequest),
+                Arg.Is(OperatorBackendPushPipeline.Decision),
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(results[0]), results.Skip(1).Select(Task.FromResult).ToArray());
     }
 
-    /// <summary>One push the fake adapter received, by the adapter method that sent it.</summary>
-    public sealed record Push(string Method, Guid WorkItemId, string FromStateId, string ToStateId, string ActionId);
+    /// <summary>One status push the fake adapter received: its route, retry pipeline and transition.</summary>
+    public sealed record Push(
+        OperatorBackendStatusRoute Route,
+        OperatorBackendPushPipeline Pipeline,
+        Guid WorkItemId,
+        string FromStateId,
+        string ToStateId,
+        string ActionId
+    );
 
-    /// <summary>Every push the fake adapter has received, in order.</summary>
+    /// <summary>
+    /// Every push the fake adapter has received, in order. Add-ORS only ever
+    /// sends status pushes, so any other call fails the cast and the test.
+    /// </summary>
     public IReadOnlyList<Push> Pushes =>
         PushAdapter
             .ReceivedCalls()
             .Select(call =>
             {
                 var args = call.GetArguments();
+                var change = (OperatorJourneyStatusChange)args[2]!;
                 return new Push(
-                    call.GetMethodInfo().Name,
-                    (Guid)args[0]!,
-                    (string)args[2]!,
-                    (string)args[3]!,
-                    (string)args[5]!
+                    (OperatorBackendStatusRoute)args[0]!,
+                    (OperatorBackendPushPipeline)args[1]!,
+                    change.WorkItemId,
+                    change.FromStateId,
+                    change.ToStateId,
+                    change.ActionId
                 );
             })
             .ToList();

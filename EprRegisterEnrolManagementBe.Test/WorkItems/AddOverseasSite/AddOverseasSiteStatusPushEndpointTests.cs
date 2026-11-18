@@ -19,8 +19,9 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 /// </summary>
 public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixture fixture)
 {
-    private const string StatusPush = nameof(IOperatorBackendPushAdapter.PushChangeRequestStatusChangedAsync);
-    private const string DecisionPush = nameof(IOperatorBackendPushAdapter.PushChangeRequestDecisionStatusChangedAsync);
+    private const OperatorBackendStatusRoute ChangeRequest = OperatorBackendStatusRoute.ChangeRequest;
+    private const OperatorBackendPushPipeline BestEffort = OperatorBackendPushPipeline.BestEffort;
+    private const OperatorBackendPushPipeline Decision = OperatorBackendPushPipeline.Decision;
 
     [Fact]
     public async Task Duly_making_is_pushed_to_the_change_request_status_route_after_it_commits()
@@ -33,7 +34,7 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
         Assert.Equal(HttpStatusCode.OK, (await PostDulyMakeAsync(client, id, ct)).StatusCode);
 
         var pushed = await factory.WaitForAuditAsync(id, "status-push-sent", ct);
-        Assert.Equal([new Push(StatusPush, id, "submitted", "duly-made", "duly-make")], factory.Pushes);
+        Assert.Equal([new Push(ChangeRequest, BestEffort, id, "submitted", "duly-made", "duly-make")], factory.Pushes);
         var sent = Assert.Single(pushed.AuditLog, a => a.Action == "status-push-sent");
         Assert.Equal("duly-made", sent.Details["toStateId"]);
         Assert.Equal("duly-make", sent.Details["actionId"]);
@@ -61,8 +62,8 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
         // so nothing more can arrive later.
         Assert.Equal(
             [
-                new Push(StatusPush, id, "submitted", "duly-made", "duly-make"),
-                new Push(DecisionPush, id, $"{outcome}-pending-contact", outcome, confirmActionId),
+                new Push(ChangeRequest, BestEffort, id, "submitted", "duly-made", "duly-make"),
+                new Push(ChangeRequest, Decision, id, $"{outcome}-pending-contact", outcome, confirmActionId),
             ],
             factory.Pushes
         );
@@ -101,6 +102,6 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
             granted.AuditLog,
             a => a.Action == "status-push-sent" && a.Details["actionId"] == "confirm-contact-approved"
         );
-        Assert.Equal(2, factory.Pushes.Count(p => p.Method == DecisionPush));
+        Assert.Equal(2, factory.Pushes.Count(p => p is { Route: ChangeRequest, Pipeline: Decision }));
     }
 }

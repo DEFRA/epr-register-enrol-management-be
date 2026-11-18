@@ -32,80 +32,27 @@ public interface IOperatorBackendPushAdapter
     /// <summary>
     /// RA-368: push a work item's state transition to the operator backend so
     /// its own record of application progress (<c>ApplicationStatus</c>)
-    /// reflects the Case Management service's lifecycle beyond just queries. <paramref name="correlationId"/>
+    /// reflects the Case Management service's lifecycle beyond just queries.
+    /// <see cref="OperatorJourneyStatusChange.CorrelationId"/>
     /// follows the same one-per-push, cross-repo-log-joining contract as
     /// <see cref="PushQueryRaisedAsync"/>.
+    ///
+    /// Every status push has the same body and signing; it differs only in
+    /// <paramref name="route"/> (which operator-journey record it updates) and
+    /// <paramref name="pipeline"/>. <see cref="OperatorBackendPushPipeline.Decision"/>
+    /// (epr-p86e / RA-410) is for a caller that pushes <em>before</em>
+    /// persisting anything and abandons the whole decision with a 500 on
+    /// failure (<c>StandardDecisionPush</c>), so it gets a larger retry budget
+    /// (<see cref="OperatorBackendApiConfig.DecisionPushMaxRetryAttempts"/>).
+    /// Still never throws: a failure is reported as a non-success
+    /// <see cref="OperatorBackendPushResult"/>, and
+    /// <see cref="OperatorBackendPushResult.IsSkipped"/> (the push is disabled)
+    /// is a pass a gating caller must not refuse on.
     /// </summary>
     Task<OperatorBackendPushResult> PushStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// epr-p86e / RA-410: push a re-accreditation <em>decision</em> transition
-    /// to the operator backend as a hard, pre-commit gate. Identical on the wire
-    /// to <see cref="PushStatusChangedAsync"/> — same endpoint, body and signing
-    /// — but backed by a larger retry budget
-    /// (<see cref="OperatorBackendApiConfig.DecisionPushMaxRetryAttempts"/>),
-    /// because the caller (<c>StandardConfirmContactService</c>) invokes it
-    /// <em>before</em> persisting any state change and abandons the whole
-    /// decision with a 500 on failure, rather than treating the push as
-    /// fire-and-forget. Still never throws: a failure is reported as a
-    /// non-success <see cref="OperatorBackendPushResult"/>, and
-    /// <see cref="OperatorBackendPushResult.IsSkipped"/> (the push is disabled)
-    /// is a pass the caller must not gate on.
-    /// </summary>
-    Task<OperatorBackendPushResult> PushDecisionStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// RA-495: push an in-year change request's state transition to the
-    /// operator backend's change-request status route
-    /// (<c>POST api/v1/accreditation-changes/case-management/{workItemId}/status</c>).
-    /// Same body, signing and best-effort retries as
-    /// <see cref="PushStatusChangedAsync"/>, which goes to the
-    /// accreditation-application route instead.
-    /// </summary>
-    Task<OperatorBackendPushResult> PushChangeRequestStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// RA-495: the pre-commit decision push for an in-year change request, to
-    /// the same route as <see cref="PushChangeRequestStatusChangedAsync"/>
-    /// but with the strict decision retries of
-    /// <see cref="PushDecisionStatusChangedAsync"/>.
-    /// </summary>
-    Task<OperatorBackendPushResult> PushChangeRequestDecisionStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
+        OperatorBackendStatusRoute route,
+        OperatorBackendPushPipeline pipeline,
+        OperatorJourneyStatusChange change,
         CancellationToken cancellationToken = default);
 }
 
@@ -125,3 +72,52 @@ public sealed record OperatorBackendPushResult(bool IsSuccess, bool IsSkipped, s
 
     public static OperatorBackendPushResult Failure(string errorMessage) => new(false, false, errorMessage);
 }
+
+/// <summary>
+/// The operator-journey status route a status push goes to.
+/// </summary>
+public enum OperatorBackendStatusRoute
+{
+    /// <summary>
+    /// RA-368: <c>POST api/v1/accreditation-applications/case-management/{workItemId}/status</c>,
+    /// re-accreditation's route.
+    /// </summary>
+    AccreditationApplication,
+
+    /// <summary>
+    /// RA-495: <c>POST api/v1/accreditation-changes/case-management/{workItemId}/status</c>,
+    /// an in-year change request's route.
+    /// </summary>
+    ChangeRequest,
+}
+
+/// <summary>
+/// The retry budget a status push is sent with.
+/// </summary>
+public enum OperatorBackendPushPipeline
+{
+    /// <summary>The fire-and-forget post-commit push's small retry budget.</summary>
+    BestEffort,
+
+    /// <summary>
+    /// epr-p86e / RA-410: the pre-commit decision gate's larger, bounded budget.
+    /// </summary>
+    Decision,
+}
+
+/// <summary>
+/// RA-495: one status change as sent to the operator journey. The body every
+/// operator-journey status route takes: from/to state, the to-state's display name, the
+/// action and when it happened, plus the correlation id that joins the two
+/// sides' logs.
+/// </summary>
+public sealed record OperatorJourneyStatusChange(
+    Guid WorkItemId,
+    Guid CorrelationId,
+    string FromStateId,
+    string ToStateId,
+    string ToStateDisplayName,
+    string ActionId,
+    string ActionDisplayName,
+    DateTime OccurredAt
+);

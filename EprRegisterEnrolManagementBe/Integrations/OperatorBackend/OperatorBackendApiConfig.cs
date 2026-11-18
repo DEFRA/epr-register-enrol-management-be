@@ -51,7 +51,7 @@ public sealed class OperatorBackendApiConfig
 
     /// <summary>
     /// epr-p86e / RA-410: retry budget for the <em>decision</em> status push
-    /// only (<see cref="IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync"/>),
+    /// only (<see cref="OperatorBackendPushPipeline.Decision"/>),
     /// which — unlike every other best-effort push — is a hard pre-commit gate:
     /// the re-accreditation decision is abandoned with a 500 if it cannot be
     /// delivered, so it is worth trying harder than the fire-and-forget default

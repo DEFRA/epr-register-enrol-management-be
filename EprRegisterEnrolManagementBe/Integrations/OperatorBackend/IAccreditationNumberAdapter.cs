@@ -11,7 +11,7 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// here — approval genuinely depends on the number this returns, so a
 /// caller must be able to abandon the operation on failure rather than
 /// silently proceed with nothing. Still never throws, mirroring
-/// <c>PushDecisionStatusChangedAsync</c>'s "hard pre-commit gate reported as
+/// the decision status push's "hard pre-commit gate reported as
 /// a typed result" convention rather than an exception.
 /// </summary>
 public interface IAccreditationNumberAdapter

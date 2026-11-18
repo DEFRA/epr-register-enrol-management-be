@@ -54,15 +54,18 @@ public class ReAccreditationConfirmContactServiceTests
         Assert.Equal(["registration-accreditation-push", "approve"], harness.OrderedCalls);
         await harness
             .PushAdapter.Received(1)
-            .PushDecisionStatusChangedAsync(
-                harness.WorkItem.Id,
-                Arg.Any<Guid>(),
-                "approved-pending-contact",
-                "approved",
-                "Granted",
-                "confirm-contact-approved",
-                "Confirm applicant contact",
-                s_now.UtcDateTime,
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                Arg.Is<OperatorJourneyStatusChange>(c =>
+                    c.WorkItemId == harness.WorkItem.Id
+                    && c.FromStateId == "approved-pending-contact"
+                    && c.ToStateId == "approved"
+                    && c.ToStateDisplayName == "Granted"
+                    && c.ActionId == "confirm-contact-approved"
+                    && c.ActionDisplayName == "Confirm applicant contact"
+                    && c.OccurredAt == s_now.UtcDateTime
+                ),
                 ct
             );
         await harness
@@ -222,15 +225,18 @@ public class ReAccreditationConfirmContactServiceTests
         Assert.Equal(["registration-accreditation-push", "refuse"], harness.OrderedCalls);
         await harness
             .PushAdapter.Received(1)
-            .PushDecisionStatusChangedAsync(
-                harness.WorkItem.Id,
-                Arg.Any<Guid>(),
-                "rejected-pending-contact",
-                "rejected",
-                "Refused",
-                "confirm-contact-rejected",
-                "Confirm applicant contact",
-                s_now.UtcDateTime,
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                Arg.Is<OperatorJourneyStatusChange>(c =>
+                    c.WorkItemId == harness.WorkItem.Id
+                    && c.FromStateId == "rejected-pending-contact"
+                    && c.ToStateId == "rejected"
+                    && c.ToStateDisplayName == "Refused"
+                    && c.ActionId == "confirm-contact-rejected"
+                    && c.ActionDisplayName == "Confirm applicant contact"
+                    && c.OccurredAt == s_now.UtcDateTime
+                ),
                 ct
             );
         await harness
@@ -458,15 +464,10 @@ public class ReAccreditationConfirmContactServiceTests
 
             PushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
             PushAdapter
-                .PushDecisionStatusChangedAsync(
-                    Arg.Any<Guid>(),
-                    Arg.Any<Guid>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<DateTime>(),
+                .PushStatusChangedAsync(
+                    OperatorBackendStatusRoute.AccreditationApplication,
+                    OperatorBackendPushPipeline.Decision,
+                    Arg.Any<OperatorJourneyStatusChange>(),
                     Arg.Any<CancellationToken>()
                 )
                 .Returns(_ =>

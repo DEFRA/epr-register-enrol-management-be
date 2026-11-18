@@ -341,19 +341,15 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         var pushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
         pushAdapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(),
-                Arg.Any<Guid>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<DateTime>(),
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(call =>
             {
-                pushes.Add((call.ArgAt<string>(5), call.ArgAt<string>(2)));
+                var change = call.ArgAt<OperatorJourneyStatusChange>(2);
+                pushes.Add((change.ActionId, change.FromStateId));
                 // Skipped is the production default when the push is disabled,
                 // and it still writes a status-push-skipped audit entry — the
                 // out-of-band write this suite exists to keep honest.

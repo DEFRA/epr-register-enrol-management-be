@@ -22,15 +22,10 @@ internal sealed class AddOverseasSiteOperatorJourneyPush : IOperatorJourneyPush
         OperatorJourneyStatusChange change,
         CancellationToken cancellationToken
     ) =>
-        adapter.PushChangeRequestStatusChangedAsync(
-            change.WorkItemId,
-            change.CorrelationId,
-            change.FromStateId,
-            change.ToStateId,
-            change.ToStateDisplayName,
-            change.ActionId,
-            change.ActionDisplayName,
-            change.OccurredAt,
+        adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest,
+            OperatorBackendPushPipeline.BestEffort,
+            change,
             cancellationToken
         );
 
@@ -39,15 +34,10 @@ internal sealed class AddOverseasSiteOperatorJourneyPush : IOperatorJourneyPush
         OperatorJourneyStatusChange change,
         CancellationToken cancellationToken
     ) =>
-        adapter.PushChangeRequestDecisionStatusChangedAsync(
-            change.WorkItemId,
-            change.CorrelationId,
-            change.FromStateId,
-            change.ToStateId,
-            change.ToStateDisplayName,
-            change.ActionId,
-            change.ActionDisplayName,
-            change.OccurredAt,
+        adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest,
+            OperatorBackendPushPipeline.Decision,
+            change,
             cancellationToken
         );
 }

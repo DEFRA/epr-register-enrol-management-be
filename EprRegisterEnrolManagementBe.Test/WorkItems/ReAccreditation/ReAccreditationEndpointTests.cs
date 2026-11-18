@@ -3533,21 +3533,22 @@ public class ReAccreditationEndpointTests
         Assert.Equal("wrong-work-item-type", problem.GetProperty("errorCode").GetString());
     }
 
+    /// <summary>A call to the push adapter that was re-accreditation's pre-commit decision push.</summary>
+    private static bool IsDecisionPush(NSubstitute.Core.ICall call) =>
+        call.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushStatusChangedAsync)
+        && call.GetArguments()
+            is [OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.Decision, ..];
+
     private static IOperatorBackendPushAdapter DecisionPushAdapterReturning(
         params OperatorBackendPushResult[] results
     )
     {
         var adapter = Substitute.For<IOperatorBackendPushAdapter>();
         adapter
-            .PushDecisionStatusChangedAsync(
-                Arg.Any<Guid>(),
-                Arg.Any<Guid>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<string>(),
-                Arg.Any<DateTime>(),
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                Arg.Any<OperatorJourneyStatusChange>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(results[0], results[1..]);
@@ -3972,12 +3973,12 @@ public class ReAccreditationEndpointTests
         var adapter = Substitute.For<IOperatorBackendPushAdapter>();
         adapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(),
-                Arg.Any<CancellationToken>())
+                OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
-                pushed.TrySetResult((call.ArgAt<string>(5), call.ArgAt<string>(3), call.ArgAt<string>(6)));
+                var change = call.ArgAt<OperatorJourneyStatusChange>(2);
+                pushed.TrySetResult((change.ActionId, change.ToStateId, change.ActionDisplayName));
                 return Task.FromResult(OperatorBackendPushResult.Success());
             });
         return (adapter, pushed.Task);
@@ -4452,12 +4453,12 @@ public class ReAccreditationEndpointTests
             .Returns(Task.FromResult(OperatorBackendPushResult.Success()));
         adapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(),
-                Arg.Any<CancellationToken>())
+                OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(), Arg.Any<CancellationToken>())
             .Returns(call =>
             {
-                statusPushes.Enqueue((call.ArgAt<string>(5), call.ArgAt<string>(3)));
+                var change = call.ArgAt<OperatorJourneyStatusChange>(2);
+                statusPushes.Enqueue((change.ActionId, change.ToStateId));
                 return Task.FromResult(OperatorBackendPushResult.Success());
             });
         return (adapter, statusPushes);
@@ -4667,17 +4668,12 @@ public class ReAccreditationEndpointTests
         Assert.False(persisted.Payload.Contains("accreditationId"));
         Assert.Empty(persisted.AuditLog);
         await pushAdapter
-            .DidNotReceiveWithAnyArgs()
-            .PushDecisionStatusChangedAsync(
-                default,
-                default,
-                default!,
-                default!,
-                default!,
-                default!,
-                default!,
-                default,
-                cancellationToken
+            .DidNotReceive()
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
             );
     }
 
@@ -4849,30 +4845,20 @@ public class ReAccreditationEndpointTests
 
         // Nothing is applied: no push, SLA still running, no publishing, no email.
         await pushAdapter
-            .DidNotReceiveWithAnyArgs()
-            .PushDecisionStatusChangedAsync(
-                default,
-                default,
-                default!,
-                default!,
-                default!,
-                default!,
-                default!,
-                default,
-                cancellationToken
+            .DidNotReceive()
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
             );
         await pushAdapter
-            .DidNotReceiveWithAnyArgs()
+            .DidNotReceive()
             .PushStatusChangedAsync(
-                default,
-                default,
-                default!,
-                default!,
-                default!,
-                default!,
-                default!,
-                default,
-                cancellationToken
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
             );
         Assert.Null(payload.SlaClock?.StoppedAt);
         Assert.DoesNotContain(
@@ -5581,15 +5567,15 @@ public class ReAccreditationEndpointTests
         // The operator journey is told the final outcome, once.
         var push = Assert.Single(
             pushAdapter.ReceivedCalls(),
-            c => c.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync)
+            IsDecisionPush
         );
-        var pushArgs = push.GetArguments();
-        Assert.Equal(id, pushArgs[0]);
-        Assert.Equal("approved-pending-contact", pushArgs[2]);
-        Assert.Equal("approved", pushArgs[3]);
-        Assert.Equal("Granted", pushArgs[4]);
-        Assert.Equal(ReAccreditationType.ConfirmContactApprovedActionId, pushArgs[5]);
-        var occurredAt = (DateTime)pushArgs[7]!;
+        var change = (OperatorJourneyStatusChange)push.GetArguments()[2]!;
+        Assert.Equal(id, change.WorkItemId);
+        Assert.Equal("approved-pending-contact", change.FromStateId);
+        Assert.Equal("approved", change.ToStateId);
+        Assert.Equal("Granted", change.ToStateDisplayName);
+        Assert.Equal(ReAccreditationType.ConfirmContactApprovedActionId, change.ActionId);
+        var occurredAt = change.OccurredAt;
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("approved", persisted!.StateId);
@@ -5741,7 +5727,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(afterFirst.Version, persisted.Version);
         Assert.Single(
             pushAdapter.ReceivedCalls(),
-            c => c.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync)
+            IsDecisionPush
         );
     }
 
@@ -5969,15 +5955,15 @@ public class ReAccreditationEndpointTests
         // The operator journey is told the final outcome, once.
         var push = Assert.Single(
             pushAdapter.ReceivedCalls(),
-            c => c.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync)
+            IsDecisionPush
         );
-        var pushArgs = push.GetArguments();
-        Assert.Equal(id, pushArgs[0]);
-        Assert.Equal("rejected-pending-contact", pushArgs[2]);
-        Assert.Equal("rejected", pushArgs[3]);
-        Assert.Equal("Refused", pushArgs[4]);
-        Assert.Equal(ReAccreditationType.ConfirmContactRejectedActionId, pushArgs[5]);
-        Assert.NotEqual(default, (DateTime)pushArgs[7]!);
+        var change = (OperatorJourneyStatusChange)push.GetArguments()[2]!;
+        Assert.Equal(id, change.WorkItemId);
+        Assert.Equal("rejected-pending-contact", change.FromStateId);
+        Assert.Equal("rejected", change.ToStateId);
+        Assert.Equal("Refused", change.ToStateDisplayName);
+        Assert.Equal(ReAccreditationType.ConfirmContactRejectedActionId, change.ActionId);
+        Assert.NotEqual(default, change.OccurredAt);
 
         var persisted = await factory.Persistence.GetByIdAsync(id, cancellationToken);
         Assert.Equal("rejected", persisted!.StateId);
@@ -6089,7 +6075,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(afterFirst.Version, persisted.Version);
         Assert.Single(
             pushAdapter.ReceivedCalls(),
-            c => c.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushDecisionStatusChangedAsync)
+            IsDecisionPush
         );
     }
 

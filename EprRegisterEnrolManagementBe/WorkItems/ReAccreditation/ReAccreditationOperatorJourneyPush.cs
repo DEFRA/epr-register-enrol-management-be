@@ -22,14 +22,9 @@ internal sealed class ReAccreditationOperatorJourneyPush : IOperatorJourneyPush
         CancellationToken cancellationToken
     ) =>
         adapter.PushStatusChangedAsync(
-            change.WorkItemId,
-            change.CorrelationId,
-            change.FromStateId,
-            change.ToStateId,
-            change.ToStateDisplayName,
-            change.ActionId,
-            change.ActionDisplayName,
-            change.OccurredAt,
+            OperatorBackendStatusRoute.AccreditationApplication,
+            OperatorBackendPushPipeline.BestEffort,
+            change,
             cancellationToken
         );
 
@@ -38,15 +33,10 @@ internal sealed class ReAccreditationOperatorJourneyPush : IOperatorJourneyPush
         OperatorJourneyStatusChange change,
         CancellationToken cancellationToken
     ) =>
-        adapter.PushDecisionStatusChangedAsync(
-            change.WorkItemId,
-            change.CorrelationId,
-            change.FromStateId,
-            change.ToStateId,
-            change.ToStateDisplayName,
-            change.ActionId,
-            change.ActionDisplayName,
-            change.OccurredAt,
+        adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.AccreditationApplication,
+            OperatorBackendPushPipeline.Decision,
+            change,
             cancellationToken
         );
 }

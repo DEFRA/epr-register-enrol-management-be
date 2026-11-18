@@ -14,8 +14,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 ///
 /// Re-accreditation keeps its own routes
 /// (<c>/work-items/re-accreditation/{id}/duly-make|decision|confirm-contact</c>),
-/// limited to re-accreditation, which run the same shared services. The
-/// request bodies, validation and failure vocabulary are the same.
+/// limited to re-accreditation: they hand its keyed services to the handlers
+/// here (bd 3bb.42), so the request bodies, validation and failure vocabulary
+/// are the same. Only the decision's problem title differs.
 /// </summary>
 internal static class StandardLifecycleEndpoints
 {
@@ -173,19 +174,42 @@ internal static class StandardLifecycleEndpoints
     /// <c>approved</c> or <c>rejected</c>, never a state or action. A repeat
     /// of the same outcome is an idempotent replay.
     /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> LogDecision(
+    public static Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> LogDecision(
         [FromRoute] Guid id,
         [FromBody] StandardDecisionRequest? request,
         HttpContext httpContext,
         [FromServices] IStandardLogDecisionService logDecisionService,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
+    ) =>
+        LogDecisionAsync(
+            id,
+            request?.Outcome,
+            httpContext,
+            logDecisionService,
+            engine,
+            LogDecisionProblemTitle,
+            cancellationToken
+        );
+
+    /// <summary>
+    /// The body of <see cref="LogDecision"/>, taking the problem title because
+    /// re-accreditation's own route keeps its established one (bd 3bb.42).
+    /// </summary>
+    internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> LogDecisionAsync(
+        Guid id,
+        string? requestedOutcome,
+        HttpContext httpContext,
+        IStandardLogDecisionService logDecisionService,
+        IWorkItemService engine,
+        string problemTitle,
+        CancellationToken cancellationToken
     )
     {
-        if (!TryParseOutcome(request?.Outcome, out var outcome))
+        if (!TryParseOutcome(requestedOutcome, out var outcome))
         {
             return TypedResults.Problem(
-                title: LogDecisionProblemTitle,
+                title: problemTitle,
                 detail: "'outcome' is required and must be either 'approved' or 'rejected'.",
                 statusCode: StatusCodes.Status400BadRequest,
                 extensions: new Dictionary<string, object?>
@@ -202,7 +226,7 @@ internal static class StandardLifecycleEndpoints
             httpContext.User,
             cancellationToken
         );
-        return ToDecisionResult(result, httpContext, engine, LogDecisionProblemTitle);
+        return ToDecisionResult(result, httpContext, engine, problemTitle);
     }
 
     /// <summary>
@@ -249,14 +273,14 @@ internal static class StandardLifecycleEndpoints
     }
 
     /// <summary>
-    /// Binds the wire <c>outcome</c> string onto <see cref="StandardDecisionOutcome"/>
-    /// (re-accreditation's own decision route uses it too). Case-insensitive,
+    /// Binds the wire <c>outcome</c> string onto <see cref="StandardDecisionOutcome"/>.
+    /// Case-insensitive,
     /// matching the JSON enum convention used elsewhere on the wire, but
     /// strictly two-valued: <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/>
     /// alone would also accept "0"/"1" and any future member, which would let a
     /// caller reach an outcome the frontend never offers.
     /// </summary>
-    internal static bool TryParseOutcome(string? value, out StandardDecisionOutcome outcome)
+    private static bool TryParseOutcome(string? value, out StandardDecisionOutcome outcome)
     {
         switch (value?.Trim().ToLowerInvariant())
         {

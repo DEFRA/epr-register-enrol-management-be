@@ -37,19 +37,3 @@ internal interface IOperatorJourneyPush
     );
 }
 
-/// <summary>
-/// RA-495: one status change as sent to the operator journey. The body every
-/// operator-journey status route takes: from/to state, the to-state's display name, the
-/// action and when it happened, plus the correlation id that joins the two
-/// sides' logs.
-/// </summary>
-internal sealed record OperatorJourneyStatusChange(
-    Guid WorkItemId,
-    Guid CorrelationId,
-    string FromStateId,
-    string ToStateId,
-    string ToStateDisplayName,
-    string ActionId,
-    string ActionDisplayName,
-    DateTime OccurredAt
-);
