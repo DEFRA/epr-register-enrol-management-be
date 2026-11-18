@@ -103,7 +103,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     }
 
     [Fact]
-    public async Task Duly_make_details_list_the_other_work_items_from_the_same_submission_with_their_current_status()
+    public async Task Duly_make_details_list_every_work_item_from_the_same_submission_with_their_current_status()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
@@ -116,8 +116,10 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
         var details = await client.GetFromJsonAsync<JsonElement>($"/work-items/{ids[0]}/duly-make", ct);
 
         var related = details.GetProperty("relatedWorkItems").EnumerateArray().ToList();
+        // User decision 2026-11-18: the item asked about is listed too, in reference order.
         Assert.Equal(
             [
+                (ids[0], "IYC-ORS-2026-00001", "Overseas site 1", "ORS-001", "submitted"),
                 (ids[1], "IYC-ORS-2026-00002", "Overseas site 2", "ORS-002", "duly-made"),
                 (ids[2], "IYC-ORS-2026-00003", "Overseas site 3", "ORS-003", "submitted"),
             ],
@@ -136,7 +138,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     }
 
     [Fact]
-    public async Task Duly_make_details_list_no_related_work_items_for_a_single_site_submission()
+    public async Task Duly_make_details_list_only_the_work_item_itself_for_a_single_site_submission()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
@@ -145,6 +147,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
 
         var details = await client.GetFromJsonAsync<JsonElement>($"/work-items/{ids[0]}/duly-make", ct);
 
-        Assert.Empty(details.GetProperty("relatedWorkItems").EnumerateArray());
+        var related = Assert.Single(details.GetProperty("relatedWorkItems").EnumerateArray());
+        Assert.Equal(ids[0], related.GetProperty("id").GetGuid());
     }
 }

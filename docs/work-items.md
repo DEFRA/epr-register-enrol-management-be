@@ -349,7 +349,7 @@ type is configured. Every setting is code, not runtime data:
   confirm applicant contact are shared services
   (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:
   `GET|POST /work-items/{id}/duly-make` (the GET returns the type's charge and
-  `relatedWorkItems`: the other work items with the same
+  `relatedWorkItems`: every work item with the same
   `payload.submissionReference`, each with its reference, site name and ORS
   id, type, state and charge, read through
   `IWorkItemPersistence.FindBySubmissionReferenceAsync` on its own index),

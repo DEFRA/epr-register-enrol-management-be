@@ -94,11 +94,12 @@ internal static class StandardLifecycleEndpoints
     }
 
     /// <summary>
-    /// RA-495: the other work items created from the same submission as
-    /// <paramref name="workItem"/> (one per site, matched on
-    /// <c>payload.submissionReference</c>), so the caseworker can see the whole
-    /// payment. Empty for a work item with no submission reference. Each
-    /// sibling's charge comes from its own type's charge source.
+    /// RA-495: every work item created from the same submission as
+    /// <paramref name="workItem"/>, itself included (one per site, matched on
+    /// <c>payload.submissionReference</c>, in reference order), so the
+    /// caseworker can see the whole payment (user decision 2026-11-18, as in
+    /// Figma). Empty for a work item with no submission reference. Each
+    /// item's charge comes from its own type's charge source.
     /// </summary>
     private static async Task<IReadOnlyList<RelatedWorkItemResponse>> RelatedWorkItemsAsync(
         WorkItem workItem,
@@ -114,7 +115,6 @@ internal static class StandardLifecycleEndpoints
 
         var siblings = await persistence.FindBySubmissionReferenceAsync(reference, cancellationToken);
         return siblings
-            .Where(sibling => sibling.Id != workItem.Id)
             .Select(sibling => RelatedWorkItemResponse.From(sibling, strategies.Find(sibling.TypeId)))
             .ToList();
     }
@@ -306,7 +306,7 @@ internal sealed record StandardDecisionRequest(string? Outcome);
 /// <summary>
 /// RA-495: <c>GET /work-items/{id}/duly-make</c>: the charge, in pence, the
 /// caseworker matches the payment against (null when the work item carries
-/// none), and the other work items from the same submission.
+/// none), and every work item from the same submission, itself included.
 /// </summary>
 internal sealed record DulyMakeDetailsResponse(
     Guid WorkItemId,
@@ -315,7 +315,7 @@ internal sealed record DulyMakeDetailsResponse(
 );
 
 /// <summary>
-/// RA-495: another work item from the same submission, as the Duly make page's
+/// RA-495: a work item from the same submission, as the Duly make page's
 /// related change requests list shows it. The site fields are null for a work
 /// item with no <c>payload.site</c>; the charge is null when its type has not
 /// opted in to the Standard lifecycle or the work item carries none.
