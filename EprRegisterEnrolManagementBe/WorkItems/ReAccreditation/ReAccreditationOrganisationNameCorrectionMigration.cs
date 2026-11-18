@@ -95,10 +95,12 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
     internal const string RegistrationNumberField = "registrationNumber";
     internal const string OperatorOrgNumberField = "operatorOrgNumber";
 
-    // Registration and accreditation references share one shape:
-    // {R|A}{yy}{agency}R{org:D6}{sequence:D4}{material}, 17 characters.
-    // Characters 3-10 (agency, type, six-digit org) and the material are the
-    // identity; the sequence is issued per accreditation.
+    // Registration and accreditation references share one 17-character
+    // shape: {R|A}{yy}{agency}{type}{ref:D6}{sequence:D4}{material}. The
+    // agency, type, six-digit reference (not always the organisation number:
+    // the EA registration carries 500226) and material are the identity; the
+    // sequence is issued per accreditation. The offsets below are zero-based
+    // string indexes into that shape.
     private const int ReferenceLength = 17;
     private const int IdentityStart = 3;
     private const int SequenceStart = 11;
@@ -178,7 +180,7 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
 
         // Plan every candidate before writing any: an abort on the second
         // must not leave the first renamed.
-        var (toRename, abortReason) = Plan(candidates);
+        var (inScope, toRename, abortReason) = Plan(candidates);
         if (abortReason is not null)
         {
             logger.LogError("RA-764 ABORTED, nothing written: {Reason}", abortReason);
@@ -187,17 +189,21 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
 
         if (toRename.Count == 0)
         {
-            logger.LogInformation("RA-764 complete. Nothing to rename.");
+            logger.LogInformation(
+                "RA-764 complete. Nothing to rename. {Year} cases found: {FoundByRegistration}.",
+                AccreditationYear,
+                CountByRegistration(inScope)
+            );
             return RunResult.NothingToDo;
         }
 
         if (!apply)
         {
-            LogDryRun(toRename);
+            LogDryRun(inScope, toRename);
             return RunResult.DryRun;
         }
 
-        await RenameAsync(persistence, toRename, cancellationToken);
+        await RenameAsync(persistence, inScope, toRename, cancellationToken);
         return RunResult.Applied;
     }
 
@@ -246,19 +252,21 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
     }
 
     /// <summary>
-    /// The work items to rename, or why the whole run must abort. Writes
-    /// nothing.
+    /// The 2027 work items found and those to rename, or why the whole run
+    /// must abort. Writes nothing.
     /// </summary>
-    private (List<WorkItem> ToRename, string? AbortReason) Plan(List<WorkItem> candidates)
+    private (List<WorkItem> InScope, List<WorkItem> ToRename, string? AbortReason) Plan(
+        List<WorkItem> candidates
+    )
     {
         var toRename = new List<WorkItem>();
-        var inScope = 0;
+        var inScope = new List<WorkItem>();
         foreach (var item in candidates)
         {
             var (decision, abortReason) = Decide(item);
             if (abortReason is not null)
             {
-                return (toRename, abortReason);
+                return (inScope, toRename, abortReason);
             }
 
             if (decision == Decision.OtherYear)
@@ -266,22 +274,43 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
                 continue;
             }
 
-            inScope++;
+            inScope.Add(item);
             if (decision == Decision.Rename)
             {
                 toRename.Add(item);
             }
         }
 
-        return inScope == 0
+        return inScope.Count == 0
             ? (
+                inScope,
                 toRename,
                 $"expected at least one {AccreditationYear} work item with registration number "
                     + $"{string.Join(" or ", RegistrationNumbers)}, found none "
                     + $"({candidates.Count} of any year)."
             )
-            : (toRename, null);
+            : (inScope, toRename, null);
     }
+
+    /// <summary>
+    /// "R26NR5000690003GR: 1, R26ER5002260055GR: 0": every allowed
+    /// registration, zeros included, so a dry run that misses one
+    /// registration's case shows it. A missing case does not abort on its
+    /// own: a 2027 operator draft has no case-management case yet.
+    /// </summary>
+    private static string CountByRegistration(IEnumerable<WorkItem> items)
+    {
+        var registrations = items.Select(RegistrationOf).ToList();
+        return string.Join(
+            ", ",
+            RegistrationNumbers.Select(r =>
+                $"{r}: {registrations.Count(found => found == r)}"
+            )
+        );
+    }
+
+    private static string? RegistrationOf(WorkItem item) =>
+        ReadString(item.Payload, RegistrationNumberField);
 
     /// <summary>What to do with one candidate, or why the run must abort.</summary>
     private (Decision Decision, string? AbortReason) Decide(WorkItem item)
@@ -294,8 +323,9 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
         if (year != AccreditationYear)
         {
             logger.LogInformation(
-                "RA-764 work item {WorkItemId} is a {Year} application; left alone.",
+                "RA-764 work item {WorkItemId} ({RegistrationNumber}) is a {Year} application; left alone.",
                 item.Id,
+                RegistrationOf(item),
                 year
             );
             return (Decision.OtherYear, null);
@@ -311,8 +341,9 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
         if (name == NewName)
         {
             logger.LogInformation(
-                "RA-764 work item {WorkItemId} already carries {NewName}; skipping.",
+                "RA-764 work item {WorkItemId} ({RegistrationNumber}) already carries {NewName}; skipping.",
                 item.Id,
+                RegistrationOf(item),
                 NewName
             );
             return (Decision.AlreadyRenamed, null);
@@ -327,29 +358,38 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
             );
     }
 
-    private void LogDryRun(List<WorkItem> toRename)
+    private void LogDryRun(List<WorkItem> inScope, List<WorkItem> toRename)
     {
         foreach (var item in toRename)
         {
             logger.LogInformation(
-                "RA-764 DRY RUN would rename work item {WorkItemId} ({ApplicationReference}): "
-                    + "{From} → {To}",
+                "RA-764 DRY RUN would rename work item {WorkItemId} ({ApplicationReference}, "
+                    + "{RegistrationNumber}): {From} → {To}",
                 item.Id,
                 ReadString(item.Payload, "applicationReference"),
+                RegistrationOf(item),
                 OldName,
                 NewName
             );
         }
-        logger.LogInformation("RA-764 DRY RUN complete. Would rename: {Count}.", toRename.Count);
+        logger.LogInformation(
+            "RA-764 DRY RUN complete. Would rename: {Count} ({RenameByRegistration}). "
+                + "{Year} cases found: {FoundByRegistration}.",
+            toRename.Count,
+            CountByRegistration(toRename),
+            AccreditationYear,
+            CountByRegistration(inScope)
+        );
     }
 
     private async Task RenameAsync(
         IWorkItemPersistence persistence,
+        List<WorkItem> inScope,
         List<WorkItem> toRename,
         CancellationToken cancellationToken
     )
     {
-        var renamed = 0;
+        var renamed = new List<WorkItem>();
         foreach (var item in toRename)
         {
             var written = await persistence.CompareAndSetPayloadFieldAsync(
@@ -365,31 +405,43 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
                 // changed it between planning and now. Nothing was written;
                 // the next run re-plans from fresh data.
                 logger.LogWarning(
-                    "RA-764 work item {WorkItemId} no longer carries {From}; nothing written.",
+                    "RA-764 work item {WorkItemId} ({RegistrationNumber}) no longer carries {From}; "
+                        + "nothing written.",
                     item.Id,
+                    RegistrationOf(item),
                     OldName
                 );
                 continue;
             }
 
-            renamed++;
+            renamed.Add(item);
             logger.LogInformation(
-                "RA-764 renamed work item {WorkItemId} ({ApplicationReference}): {From} → {To}",
+                "RA-764 renamed work item {WorkItemId} ({ApplicationReference}, {RegistrationNumber}): "
+                    + "{From} → {To}",
                 item.Id,
                 ReadString(item.Payload, "applicationReference"),
+                RegistrationOf(item),
                 OldName,
                 NewName
             );
         }
 
-        logger.LogInformation("RA-764 APPLY complete. Renamed: {Count}.", renamed);
+        logger.LogInformation(
+            "RA-764 APPLY complete. Renamed: {Count} ({RenameByRegistration}). "
+                + "{Year} cases found: {FoundByRegistration}.",
+            renamed.Count,
+            CountByRegistration(renamed),
+            AccreditationYear,
+            CountByRegistration(inScope)
+        );
     }
 
     /// <summary>
     /// Why <paramref name="item"/> is not organisation 500069's 2027 glass
-    /// application under an allowed registration, or <c>null</c> when it is. Older submissions predate
-    /// <c>operatorOrgNumber</c>, and the accreditation number exists only once
-    /// the 2027 accreditation is issued, so each is checked only when present.
+    /// application under an allowed registration, or <c>null</c> when it is.
+    /// Older submissions predate <c>operatorOrgNumber</c>, and the
+    /// accreditation number exists only once the 2027 accreditation is
+    /// issued, so each is checked only when present.
     /// </summary>
     private static string? IdentityMismatch(WorkItem item)
     {
@@ -407,7 +459,7 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
 
         // Found by an exact match on an allowed registration, so this only
         // trips if the lookup ever returns something else: never rename it.
-        var registrationNumber = ReadString(item.Payload, RegistrationNumberField);
+        var registrationNumber = RegistrationOf(item);
         if (registrationNumber is null || !RegistrationNumbers.Contains(registrationNumber))
         {
             return $"carries registration number {registrationNumber}, which is not "
@@ -431,19 +483,18 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
     /// <summary>
     /// The 2027 accreditation number <paramref name="registrationNumber"/>'s
     /// case may carry, with its sequence as <c>####</c>: the leading
-    /// <c>R</c> becomes <c>A</c>, characters 2-3 become the year, and the
-    /// rest is copied (R26NR5000690003GR → A27NR500069####GR, R26ER5002260055GR
-    /// → A27ER500226####GR). <c>null</c> for anything but an allowed
-    /// registration.
+    /// <c>R</c> becomes <c>A</c>, the two-digit year becomes <c>27</c>, and
+    /// the agency, type, six-digit reference and material are copied
+    /// (R26NR5000690003GR → A27NR500069####GR, R26ER5002260055GR →
+    /// A27ER500226####GR). The caller has already checked the registration
+    /// is one of <see cref="RegistrationNumbers"/>.
     /// </summary>
-    internal static string? ExpectedAccreditationNumberPattern(string? registrationNumber) =>
-        registrationNumber is not null && RegistrationNumbers.Contains(registrationNumber)
-            ? "A"
-                + (AccreditationYear % 100).ToString("D2", System.Globalization.CultureInfo.InvariantCulture)
-                + registrationNumber[IdentityStart..SequenceStart]
-                + new string('#', SequenceLength)
-                + registrationNumber[(SequenceStart + SequenceLength)..]
-            : null;
+    internal static string ExpectedAccreditationNumberPattern(string registrationNumber) =>
+        "A"
+        + (AccreditationYear % 100).ToString("D2", System.Globalization.CultureInfo.InvariantCulture)
+        + registrationNumber[IdentityStart..SequenceStart]
+        + new string('#', SequenceLength)
+        + registrationNumber[(SequenceStart + SequenceLength)..];
 
     /// <summary>
     /// True when <paramref name="accreditationNumber"/> matches the pattern
@@ -453,12 +504,12 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
     /// number derived from the OTHER registration is rejected.
     /// </summary>
     internal static bool IsAllowedAccreditationNumber(
-        string? registrationNumber,
+        string registrationNumber,
         string accreditationNumber
     )
     {
         var pattern = ExpectedAccreditationNumberPattern(registrationNumber);
-        if (pattern is null || accreditationNumber.Length != ReferenceLength)
+        if (accreditationNumber.Length != ReferenceLength)
         {
             return false;
         }

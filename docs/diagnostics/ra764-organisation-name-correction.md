@@ -50,9 +50,9 @@ must also:
 - carry `operatorOrgNumber` 500069 when the field is present (older submissions
   predate it). This applies to the EA case too;
 - once the 2027 accreditation is issued, carry an accreditation number derived
-  from **its own** registration. Derivation: the leading `R` becomes `A`,
-  characters 2-3 become the year (`27`), and the rest is copied, with the
-  four-digit sequence tolerated (it is issued per accreditation; the EA
+  from **its own** registration. Derivation: the leading `R` becomes `A`, the
+  two-digit year becomes `27`, and the agency, type, six-digit reference and
+  material are copied, with the four-digit sequence tolerated (it is issued per accreditation; the EA
   registration's 2026 accreditation already has sequence `0023`, not `0055`).
   So an NIEA case accepts `A27NR500069####GR` and an EA case accepts
   `A27ER500226####GR`. The other registration's number, `GL`, a 2026 number,
@@ -71,14 +71,19 @@ checked here. Then:
 
 Every 2027 case under either registration is renamed in the same run (for
 example the NIEA and EA cases, or a withdrawn application and its
-resubmission). Expect the dry run to list at least one case per registration
-that has a 2027 application.
+resubmission).
+
+A registration with no 2027 case does **not** abort the run on its own: a 2027
+operator draft has no case-management case yet, so a missing case can be
+legitimate. The run aborts only when there is no 2027 case across both
+registrations. The per-registration counts in the summary line are how the
+spot-checker sees a missing case (see "Running it").
 
 ## The three gates
 
 | # | Config key (env var) | Effect |
 | --- | --- | --- |
-| 1 | `Migrations:Ra764OrganisationNameCorrection:Enabled` (`Migrations__Ra764OrganisationNameCorrection__Enabled`) | Off by default. On its own it is a **dry run**: logs `RA-764 DRY RUN would rename work item <id> (<ref>): Encirc Ltd → VIDRALA UK & IRELAND LIMITED` and writes nothing |
+| 1 | `Migrations:Ra764OrganisationNameCorrection:Enabled` (`Migrations__Ra764OrganisationNameCorrection__Enabled`) | Off by default. On its own it is a **dry run**: logs `RA-764 DRY RUN would rename work item <id> (<ref>, <registration>): Encirc Ltd → VIDRALA UK & IRELAND LIMITED` per case, then the per-registration summary, and writes nothing |
 | 2 | `Migrations:Ra764OrganisationNameCorrection:Apply` (`Migrations__Ra764OrganisationNameCorrection__Apply`) | With 1, writes the renames, but only when 3 is also set |
 | 3 | `Migrations:Ra764OrganisationNameCorrection:SpotCheckConfirmedBy` (`Migrations__Ra764OrganisationNameCorrection__SpotCheckConfirmedBy`) | Names whoever reviewed the dry-run output. Apply without it logs an error and stays a dry run |
 
@@ -105,6 +110,29 @@ Migrations__Ra764OrganisationNameCorrection__SpotCheckConfirmedBy=your.name
 # 3. Turn all three back off. (Leaving them on is harmless: a re-run skips
 #    the renamed case(s).)
 ```
+
+### Spot-checking the dry run
+
+Every per-case line names the registration, and the run ends with one summary
+line that lists **both** registrations, zeros included:
+
+```text
+RA-764 DRY RUN would rename work item <id> (<ref>, R26NR5000690003GR): Encirc Ltd → VIDRALA UK & IRELAND LIMITED
+RA-764 DRY RUN would rename work item <id> (<ref>, R26ER5002260055GR): Encirc Ltd → VIDRALA UK & IRELAND LIMITED
+RA-764 DRY RUN complete. Would rename: 2 (R26NR5000690003GR: 1, R26ER5002260055GR: 1). 2027 cases found: R26NR5000690003GR: 1, R26ER5002260055GR: 1.
+```
+
+Before setting `SpotCheckConfirmedBy`:
+
+- Check each registration's count against the 2027 applications the operator
+  backend's dry run reports for it. A `0` is fine only if that registration's
+  2027 application is still an operator draft (no case yet). Otherwise stop and
+  find the missing case.
+- Check each logged work item and reference against the live record.
+
+The `APPLY complete. Renamed: …` line (and `Nothing to rename. 2027 cases
+found: …` on a re-run) has the same per-registration shape, for the post-apply
+check.
 
 An `RA-764 ABORTED, nothing written` error says what was found; it needs a
 human decision, not a retry.

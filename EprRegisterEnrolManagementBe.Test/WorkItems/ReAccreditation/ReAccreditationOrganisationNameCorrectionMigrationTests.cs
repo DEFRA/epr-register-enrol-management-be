@@ -145,6 +145,28 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
         Assert.Equal(Migration.OldName, await NameOfAsync(target));
         Assert.Equal(0, (await ReloadAsync(target)).Version);
         Assert.True(Logged(LogLevel.Information, "DRY RUN would rename"));
+        Assert.True(Logged(LogLevel.Information, $"({target.Payload["applicationReference"].AsString}, R26NR5000690003GR)"));
+    }
+
+    /// <summary>
+    /// A registration with no 2027 case does not abort (a 2027 operator draft
+    /// has no case-management case yet), but the dry run's summary shows its
+    /// zero so the spot-checker sees it.
+    /// </summary>
+    [Fact]
+    public async Task A_dry_run_missing_one_registrations_case_shows_its_zero_count_and_does_not_abort()
+    {
+        await SeedAsync();
+        await SeedAsync(registrationNumber: Migration.EnglandRegistrationNumber, accreditationYear: 2026);
+
+        var result = await NewMigration(apply: false).ApplyAsync(_persistence, Ct);
+
+        Assert.Equal(Migration.RunResult.DryRun, result);
+        Assert.True(Logged(
+            LogLevel.Information,
+            "DRY RUN complete. Would rename: 1 (R26NR5000690003GR: 1, R26ER5002260055GR: 0). "
+                + "2027 cases found: R26NR5000690003GR: 1, R26ER5002260055GR: 0."
+        ));
     }
 
     [Fact]
@@ -254,7 +276,13 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
         Assert.Equal(Migration.NewName, await NameOfAsync(englandNotYetIssued));
         Assert.Equal(Migration.OldName, await NameOfAsync(england2026));
         Assert.Equal(0, (await ReloadAsync(england2026)).Version);
-        Assert.True(Logged(LogLevel.Information, "APPLY complete"));
+        Assert.True(Logged(
+            LogLevel.Information,
+            "APPLY complete. Renamed: 3 (R26NR5000690003GR: 1, R26ER5002260055GR: 2). "
+                + "2027 cases found: R26NR5000690003GR: 1, R26ER5002260055GR: 2."
+        ));
+        Assert.True(Logged(LogLevel.Information, "R26ER5002260055GR) is a 2026 application; left alone"));
+        Assert.True(Logged(LogLevel.Information, $"({england.Payload["applicationReference"].AsString}, R26ER5002260055GR): "));
     }
 
     [Theory]
@@ -329,11 +357,9 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
     [Theory]
     [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR500069####GR")]
     [InlineData(Migration.EnglandRegistrationNumber, "A27ER500226####GR")]
-    [InlineData("R26NR5000690003GL", null)]
-    [InlineData(null, null)]
     public void The_accreditation_number_pattern_is_derived_from_the_registration(
-        string? registrationNumber,
-        string? expected
+        string registrationNumber,
+        string expected
     ) => Assert.Equal(expected, Migration.ExpectedAccreditationNumberPattern(registrationNumber));
 
     [Theory]
@@ -348,10 +374,8 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
     [InlineData(Migration.NorthernIrelandRegistrationNumber, "A26NR5000690003GR", false)]
     [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR500069003GR", false)]
     [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR50006900003GR", false)]
-    [InlineData("R26NR5000690003GL", "A27NR5000690003GL", false)]
-    [InlineData(null, "A27NR5000690003GR", false)]
     public void Only_a_2027_number_derived_from_the_cases_own_registration_is_allowed(
-        string? registrationNumber,
+        string registrationNumber,
         string accreditationNumber,
         bool expected
     ) => Assert.Equal(expected, Migration.IsAllowedAccreditationNumber(registrationNumber, accreditationNumber));
@@ -398,7 +422,11 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
 
         Assert.Equal(Migration.RunResult.NothingToDo, result);
         Assert.Equal(0, (await ReloadAsync(target)).Version);
-        Assert.True(Logged(LogLevel.Information, "already carries"));
+        Assert.True(Logged(LogLevel.Information, "(R26NR5000690003GR) already carries"));
+        Assert.True(Logged(
+            LogLevel.Information,
+            "Nothing to rename. 2027 cases found: R26NR5000690003GR: 1, R26ER5002260055GR: 0."
+        ));
     }
 
     // ------------------------------- aborts -------------------------------
@@ -500,7 +528,8 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
         var result = await NewMigration().ApplyAsync(racing, Ct);
 
         Assert.Equal(Migration.RunResult.Applied, result);
-        Assert.True(Logged(LogLevel.Warning, "no longer carries"));
+        Assert.True(Logged(LogLevel.Warning, "(R26NR5000690003GR) no longer carries"));
+        Assert.True(Logged(LogLevel.Information, "Renamed: 0 (R26NR5000690003GR: 0, R26ER5002260055GR: 0)"));
     }
 
     [Fact]
