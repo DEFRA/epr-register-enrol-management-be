@@ -370,6 +370,7 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
 
         var queue = new RecordingBackgroundTaskQueue();
         var statusPushHook = new ReAccreditationStatusPushHook(
+            new WorkItemRegistry([new ReAccreditationType()]),
             queue,
             new HeaderPropagationValues(),
             NullLogger<ReAccreditationStatusPushHook>.Instance

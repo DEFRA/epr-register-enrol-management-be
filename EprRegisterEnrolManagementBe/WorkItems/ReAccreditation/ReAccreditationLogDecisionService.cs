@@ -19,6 +19,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 internal sealed class ReAccreditationLogDecisionService(
     IWorkItemPersistence persistence,
     IWorkItemService engine,
+    IWorkItemRegistry registry,
     IReAccreditationApprovalService approvalService,
     IReAccreditationRefusalService refusalService,
     ILogger<ReAccreditationLogDecisionService> logger
@@ -27,6 +28,7 @@ internal sealed class ReAccreditationLogDecisionService(
     private readonly StandardLogDecisionService _shared = new(
         persistence,
         engine,
+        registry,
         StandardLifecycleStrategies.Of(
             new ReAccreditationLifecycleStrategy(approvalService, refusalService, logger)
         ),

@@ -20,6 +20,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// log category.
 /// </summary>
 internal sealed class ReAccreditationStatusPushHook(
+    IWorkItemRegistry registry,
     IBackgroundTaskQueue backgroundTaskQueue,
     HeaderPropagationValues headerPropagationValues,
     ILogger<ReAccreditationStatusPushHook> logger) : IWorkItemPostActionHook
@@ -27,6 +28,7 @@ internal sealed class ReAccreditationStatusPushHook(
     private readonly StandardStatusPushHook _inner = new(
         new ReAccreditationType(),
         ReAccreditationOperatorJourneyPush.Instance,
+        registry,
         backgroundTaskQueue,
         headerPropagationValues,
         logger);

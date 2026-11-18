@@ -665,6 +665,7 @@ public class ReAccreditationLogDecisionServiceTests
             Service = new ReAccreditationLogDecisionService(
                 Persistence,
                 Engine,
+                new WorkItemRegistry([new ReAccreditationType()]),
                 ApprovalService,
                 RefusalService,
                 NullLogger<ReAccreditationLogDecisionService>.Instance

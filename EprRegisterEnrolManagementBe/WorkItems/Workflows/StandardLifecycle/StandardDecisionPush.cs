@@ -34,10 +34,14 @@ internal class StandardDecisionPush(
     /// Pushes the outcome to the operator journey through
     /// <paramref name="target"/>. On failure the <c>status-push-failed</c>
     /// entry is already recorded and the caller must stop.
+    /// <paramref name="template"/> is the work item's template, resolved by the
+    /// caller as the engine resolves it
+    /// (<see cref="WorkItemEngineRules.ResolveTemplate"/>); it supplies the
+    /// pushed state's label.
     /// </summary>
     public async Task<Delivery> PushAsync(
         WorkItem workItem,
-        IWorkItemTemplate fallbackTemplate,
+        IWorkItemTemplate? template,
         IOperatorJourneyPush? target,
         StandardConfirmContactStep step,
         string actionDisplayName,
@@ -58,7 +62,7 @@ internal class StandardDecisionPush(
             correlationId,
             fromStateId,
             toStateId,
-            ResolveStateDisplayName(workItem, fallbackTemplate, toStateId),
+            ResolveStateDisplayName(template, toStateId),
             actionId,
             actionDisplayName,
             occurredAt
@@ -170,19 +174,15 @@ internal class StandardDecisionPush(
     }
 
     /// <summary>
-    /// The label for <paramref name="stateId"/> from the work item's frozen
-    /// template snapshot (so historical items keep their labels), or the type
-    /// as a fallback, or the raw id.
+    /// The label for <paramref name="stateId"/> from the work item's resolved
+    /// <paramref name="template"/> (its frozen snapshot, so historical items
+    /// keep their labels, else the live registered type), or the raw id when
+    /// there is no template or it does not know the state.
     /// </summary>
-    internal static string ResolveStateDisplayName(
-        WorkItem workItem,
-        IWorkItemTemplate fallbackTemplate,
-        string stateId
-    )
+    internal static string ResolveStateDisplayName(IWorkItemTemplate? template, string stateId)
     {
-        IWorkItemTemplate template = (IWorkItemTemplate?)workItem.TemplateSnapshot ?? fallbackTemplate;
         var displayName = template
-            .States.FirstOrDefault(state =>
+            ?.States.FirstOrDefault(state =>
                 string.Equals(state.Id, stateId, StringComparison.OrdinalIgnoreCase)
             )
             ?.DisplayName;

@@ -44,6 +44,7 @@ internal interface IStandardLogDecisionService
 internal sealed class StandardLogDecisionService(
     IWorkItemPersistence persistence,
     IWorkItemService engine,
+    IWorkItemRegistry registry,
     StandardLifecycleStrategies strategies,
     ILogger logger
 ) : IStandardLogDecisionService
@@ -151,8 +152,12 @@ internal sealed class StandardLogDecisionService(
         var stepOneActionId = isApproval
             ? StandardWorkflow.MakeDeterminationApprovedActionId
             : StandardWorkflow.MakeDeterminationRejectedActionId;
-        IWorkItemTemplate template = (IWorkItemTemplate?)workItem.TemplateSnapshot ?? strategy.Type;
-        if (!template.Transitions.Any(t => Is(t.ActionId, stepOneActionId)))
+        // Resolved as the engine resolves it (frozen snapshot, else the live
+        // registered type). No template at all (an unregistered type with no
+        // snapshot) declares nothing, so it is refused the same way, as the
+        // sibling Standard* services refuse it.
+        var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
+        if (template?.Transitions.Any(t => Is(t.ActionId, stepOneActionId)) != true)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,

@@ -104,8 +104,8 @@ internal sealed class StandardConfirmContactService(
         var appliedAt = _timeProvider.GetUtcNow();
         var delivery = await decisionPush.PushAsync(
             workItem,
-            strategy!.Type,
-            strategy.OperatorJourneyPush,
+            WorkItemEngineRules.ResolveTemplate(workItem, registry),
+            strategy!.OperatorJourneyPush,
             step,
             StandardWorkflow.ConfirmContactDisplayName,
             appliedAt.UtcDateTime,

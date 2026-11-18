@@ -94,6 +94,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 internal sealed class StandardStatusPushHook(
     IWorkItemType type,
     IOperatorJourneyPush? operatorJourneyPush,
+    IWorkItemRegistry registry,
     IBackgroundTaskQueue backgroundTaskQueue,
     HeaderPropagationValues headerPropagationValues,
     ILogger logger) : IWorkItemPostActionHook
@@ -399,15 +400,17 @@ internal sealed class StandardStatusPushHook(
     /// <summary>
     /// Resolves the human-readable label for <paramref name="stateId"/> from
     /// the work item's frozen template snapshot (preferred, so historical
-    /// items keep rendering as they did when assessed) or the live type as a
-    /// fallback. Falls back to the raw state id itself if neither knows it,
+    /// items keep rendering as they did when assessed) or the live registered
+    /// type as a fallback, resolved as the engine resolves it
+    /// (<see cref="WorkItemEngineRules.ResolveTemplate"/>). Falls back to the
+    /// raw state id itself if neither knows it (or there is no template),
     /// rather than throwing — this hook must never unwind the transition it
     /// is reporting on.
     /// </summary>
     private string ResolveStateDisplayName(WorkItem workItem, string stateId)
     {
-        IWorkItemTemplate template = (IWorkItemTemplate?)workItem.TemplateSnapshot ?? type;
-        var displayName = template.States.FirstOrDefault(
+        var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
+        var displayName = template?.States.FirstOrDefault(
             state => string.Equals(state.Id, stateId, StringComparison.OrdinalIgnoreCase))?.DisplayName;
         return displayName ?? stateId;
     }

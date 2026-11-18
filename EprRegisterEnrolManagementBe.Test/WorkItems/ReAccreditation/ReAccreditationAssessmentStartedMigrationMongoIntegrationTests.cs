@@ -392,6 +392,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
         new(
             _persistence,
             engine,
+            Registry(),
             new ReAccreditationApprovalService(
                 _persistence,
                 Registry(),

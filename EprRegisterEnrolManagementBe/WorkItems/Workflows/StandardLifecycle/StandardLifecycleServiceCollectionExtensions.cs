@@ -38,6 +38,7 @@ internal static class StandardLifecycleServiceCollectionExtensions
         services.AddSingleton<IStandardLogDecisionService>(sp => new StandardLogDecisionService(
             sp.GetRequiredService<IWorkItemPersistence>(),
             sp.GetRequiredService<IWorkItemService>(),
+            sp.GetRequiredService<IWorkItemRegistry>(),
             sp.GetRequiredService<StandardLifecycleStrategies>(),
             Logger<StandardLogDecisionService>(sp)
         ));
@@ -87,6 +88,7 @@ internal static class StandardLifecycleServiceCollectionExtensions
             return new StandardStatusPushHook(
                 strategy.Type,
                 strategy.OperatorJourneyPush,
+                services.GetRequiredService<IWorkItemRegistry>(),
                 services.GetRequiredService<IBackgroundTaskQueue>(),
                 services.GetRequiredService<HeaderPropagationValues>(),
                 Logger<StandardStatusPushHook>(services)

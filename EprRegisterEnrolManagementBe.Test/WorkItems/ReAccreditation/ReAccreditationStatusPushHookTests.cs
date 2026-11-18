@@ -95,6 +95,7 @@ public class ReAccreditationStatusPushHookTests
         var queue = Substitute.For<IBackgroundTaskQueue>();
 
         var hook = new ReAccreditationStatusPushHook(
+            new WorkItemRegistry([new ReAccreditationType()]),
             queue, new HeaderPropagationValues(), NullLogger<ReAccreditationStatusPushHook>.Instance);
         return new Sut(hook, queue, adapter, auditAppender);
     }

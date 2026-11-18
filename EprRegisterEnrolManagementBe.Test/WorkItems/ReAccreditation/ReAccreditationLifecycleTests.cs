@@ -51,6 +51,7 @@ public class ReAccreditationLifecycleTests
         // now, so this walk-through test — which doesn't assert on the push
         // itself — just needs a no-op queue, not a wired-up adapter.
         var statusPushHook = new ReAccreditationStatusPushHook(
+            new WorkItemRegistry([new ReAccreditationType()]),
             Substitute.For<IBackgroundTaskQueue>(),
             new HeaderPropagationValues(),
             NullLogger<ReAccreditationStatusPushHook>.Instance
