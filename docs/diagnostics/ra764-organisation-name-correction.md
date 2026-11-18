@@ -56,8 +56,8 @@ must also:
   registration's 2026 accreditation already has sequence `0023`, not `0055`).
   So an NIEA case accepts `A27NR500069####GR` and an EA case accepts
   `A27ER500226####GR`. The other registration's number, `GL`, a 2026 number,
-  or a non-digit sequence is a mismatch. The operator backend derives the same
-  identity (prefix, material, pairing) but matches exact sequences only.
+  or a non-digit sequence is a mismatch. The operator backend applies the same
+  rule (same pairing, prefix, material and sequence tolerance).
 
 The 2026 accreditation numbers are not held on the 2027 cases, so they are not
 checked here. Then:
