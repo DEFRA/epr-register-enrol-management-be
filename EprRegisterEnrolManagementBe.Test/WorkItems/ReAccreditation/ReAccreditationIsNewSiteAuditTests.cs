@@ -11,7 +11,7 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// epr-2uxy. The discriminator under test decides whether a regulator sees a
+/// RA-794. The discriminator under test decides whether a regulator sees a
 /// genuinely new overseas site, so it gets exhaustive coverage rather than a
 /// happy path: a false negative here leaves a spurious badge (recoverable), but
 /// a false positive would let the correction migration hide a real new site
@@ -547,7 +547,7 @@ public class ReAccreditationIsNewSiteAuditTests
         // silently and in the safe direction, so a miscalibrated tell shows up
         // solely as a large refused bucket that reads as appropriate caution.
         // Without this warning the natural conclusion is "the data is too messy
-        // to remediate", and epr-2uxy gets closed as intractable when it isn't.
+        // to remediate", and RA-794 gets closed as intractable when it isn't.
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = new MongoIntegrationFixture();
         await fixture.InitializeAsync();

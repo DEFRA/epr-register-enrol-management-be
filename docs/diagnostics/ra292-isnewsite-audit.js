@@ -1,5 +1,5 @@
 /**
- * DIAGNOSTIC (READ-ONLY): size and classify the epr-2uxy wrongly-defaulted
+ * DIAGNOSTIC (READ-ONLY): size and classify the RA-794 wrongly-defaulted
  * `isNewSite=true` population in the case-management store.
  *
  * This script COUNTS AND LISTS. It does not modify anything, and it is wired so
@@ -26,7 +26,7 @@
  *   Diagnostics__Ra292DeployedAt=<RA-292 deploy time>   (required)
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * THE DEFECT (epr-2uxy)
+ * THE DEFECT (RA-794)
  *
  * Operator-side `OverseasSiteModel` gained `IsNewSite` with a `= true` property
  * initializer (423d27d, 2026-07-26). Applications are POCO-mapped, and a MISSING
@@ -292,7 +292,7 @@ const sitesCorrectable = sitesCorrupt + sitesPromoted
 
 print('')
 print('═══════════════════════════════════════════════════════════════════════')
-print(' epr-2uxy — isNewSite audit (READ-ONLY, nothing written)')
+print(' RA-794 — isNewSite audit (READ-ONLY, nothing written)')
 print('═══════════════════════════════════════════════════════════════════════')
 print(` Database     : ${TARGET_DB}.workItems`)
 print(` Window start : ${WINDOW_START.toISOString()}  (9e8e9da, first transmission)`)
@@ -313,7 +313,7 @@ print('')
 
 if (sitesCorrectable === 0 && sitesAmbiguous === 0) {
   print(' RESULT: nothing at risk in this environment.')
-  print(' Record the environment and this figure on epr-2uxy.')
+  print(' Record the environment and this figure on RA-794.')
 } else {
   if (sitesAmbiguous > sitesCorrectable) {
     print(' ⚠  MORE SITES WERE REFUSED THAN CLASSIFIED CORRECTABLE.')

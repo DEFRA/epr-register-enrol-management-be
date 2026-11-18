@@ -284,7 +284,7 @@ node --test docs/diagnostics/*.test.cjs
 
 ### Checks that don't check
 
-One failure shape turned up four times in a single story (RA-292 / epr-2uxy),
+One failure shape turned up four times in a single story (RA-292 / RA-794),
 found by four different people, and it is worth recognising on sight:
 
 > **A check that appears to exercise a path it never touches.**
