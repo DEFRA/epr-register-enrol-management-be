@@ -289,13 +289,14 @@ That is still a module-only change.
 The work item type definition (`IWorkItemType`) is the single place a case
 type is configured. Every setting is code, not runtime data:
 
-| Setting | Member | Default | Re-accreditation |
-| --- | --- | --- | --- |
-| Display label | `DisplayName` | — (required) | `"Re-accreditation"` |
-| Category | `Category` | `null` (the type is its own group) | `null` |
-| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` |
-| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` |
-| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` |
+| Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) |
+| --- | --- | --- | --- | --- |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` |
+| Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` |
+| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` |
+| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` |
+| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `AddOverseasSiteType.WorkflowDefinition`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` |
+| Template version | `TemplateVersion` | — (required) | `v19` | `v2` |
 
 - **Category** groups related types so the list can filter on the group
   without naming each type: `GET /work-items?category=in-year-change`
@@ -335,7 +336,12 @@ type is configured. Every setting is code, not runtime data:
   type's states and transitions into its template snapshot at submission (see
   [Template versioning](#template-versioning-ra-94)). Changing a shared
   workflow changes every type that references it, so each of those types
-  needs a new `TemplateVersion` and a snapshot migration.
+  needs a new `TemplateVersion` and a snapshot migration. A type that needs
+  different rules from a shared workflow derives its own instead of changing
+  the shared one: add-ORS v2 (RA-495 review) is `StandardWorkflow.Definition`
+  with its `withdraw*` transitions made `CallerInvocable: false`, because
+  withdraw is re-accreditation-only and re-accreditation still withdraws
+  through the shared workflow.
 - A workflow's transitions name its own states, so only a service reaches
   its `CallerInvocable: false` transitions. Re-accreditation's query, resume
   and continue review are its own (`/work-items/re-accreditation/{id}/...`).
@@ -368,6 +374,19 @@ type is configured. Every setting is code, not runtime data:
   same body, signing and retries as re-accreditation's route), no minting
   (`StandardDeterminationWrites`), no emails, and the site's own charge
   (`payload.site.chargePence`).
+  Query and withdraw stay re-accreditation-only. The `query-during-*`
+  transitions are already `CallerInvocable: false`; since v2 (RA-495 review)
+  add-ORS's `withdraw*` transitions are too, so
+  `POST /work-items/{id}/actions/withdraw*` returns `400` for an add-ORS item
+  and `availableActions` no longer lists them. Before that the generic route
+  could withdraw one, and the status push hook (which never pushes a move onto
+  `withdrawn`) left the site locked in the operator journey.
+  `AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigration` (registered by
+  `AddOverseasSiteModule`) brings v1 items' frozen snapshots onto v2: it sets
+  `CallerInvocable: false` on every `withdraw*` declaration and the template
+  version to `v2`, writes only `TemplateSnapshot` and `TemplateVersion`, and
+  skips an item with no caller-invocable `withdraw*` declaration. Management-fe
+  registers its add-ORS detail template for both versions.
 
 ## Conventions
 
