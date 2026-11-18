@@ -5,10 +5,14 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// epr-2uxy remediation: corrects frozen
+/// epr-2uxy remediation: corrects work-item
 /// <c>payload.overseasSites.sites[].isNewSite</c> values that are
 /// <em>provably</em> a wrongly-defaulted <c>true</c>, and refuses to touch
-/// anything else.
+/// anything else. Run it only after the operator-side correction in
+/// epr-register-enrol-backend: a query → resubmit overwrites
+/// <c>payload.overseasSites</c> with the operator database's copy
+/// (<c>ReAccreditationResumeService</c>), which would undo a correction made
+/// here first.
 ///
 /// <para>
 /// See <see cref="ReAccreditationIsNewSiteAudit"/> for the defect, the
@@ -109,10 +113,12 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             return;
         }
 
+        if (ReAccreditationIsNewSiteAudit.ReadRequiredWindowEnd(configuration, logger) is not { } windowEnd)
+        {
+            return;
+        }
+
         var apply = configuration.GetValue(ApplyConfigKey, false);
-        var windowEnd =
-            configuration.GetValue<DateTime?>(ReAccreditationIsNewSiteAudit.DeployedAtConfigKey)
-            ?? DateTime.UtcNow;
 
         logger.LogInformation(
             "epr-2uxy correction starting. Mode={Mode}. Spot-check confirmed by "

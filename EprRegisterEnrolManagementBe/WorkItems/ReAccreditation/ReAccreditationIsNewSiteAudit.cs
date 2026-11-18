@@ -1,3 +1,4 @@
+using System.Globalization;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -17,9 +18,13 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// BSON element leaves the C# initializer rather than <c>default(bool)</c> — so
 /// any overseas site persisted before that date reads back as <c>true</c>
 /// whatever it actually was. From 9e8e9da (2026-07-26, RA-294) that value began
-/// being transmitted here, where it is frozen onto the work item and never
-/// re-derived. RA-292 did not create this; it made it regulator-visible by
-/// rendering a "New" badge from the field.
+/// being transmitted here, where it is stored on the work item at submission.
+/// This service never re-derives it, but a query → resubmit of the overseas-sites
+/// or broadly-equivalent-standards section overwrites <c>payload.overseasSites</c>
+/// with the operator database's copy (<c>ReAccreditationResumeService</c>), so a
+/// correction here is durable only once the operator-side correction has run
+/// (docs/diagnostics/ra292-isnewsite-audit.md). RA-292 did not create this; it
+/// made it regulator-visible by rendering a "New" badge from the field.
 /// </para>
 ///
 /// <para>
@@ -116,8 +121,12 @@ internal static class ReAccreditationIsNewSiteAudit
     public const string EnabledConfigKey = "Diagnostics:Ra292IsNewSiteAudit";
 
     /// <summary>
-    /// Optional upper window bound (the RA-292 deploy time). Defaults to now,
-    /// which over-reports rather than under-reports.
+    /// Upper window bound (the RA-292 deploy time). REQUIRED whenever the audit
+    /// or the correction is enabled: both refuse to run, logging at Error, when
+    /// it is absent or not a date-time (<see cref="ReadRequiredWindowEnd"/>).
+    /// There is no safe default — "now" would admit post-RA-507 items, whose
+    /// ReEx-sourced sites carry an <c>orsId</c> and so would be misclassified as
+    /// operator-added.
     /// </summary>
     public const string DeployedAtConfigKey = "Diagnostics:Ra292DeployedAt";
 
@@ -448,13 +457,62 @@ internal static class ReAccreditationIsNewSiteAudit
             return;
         }
 
+        if (ReadRequiredWindowEnd(configuration, logger) is not { } windowEnd)
+        {
+            return;
+        }
+
         var collection = services
             .GetRequiredService<IMongoDbClientFactory>()
             .GetCollection<BsonDocument>("workItems");
 
-        var windowEnd = configuration.GetValue<DateTime?>(DeployedAtConfigKey) ?? DateTime.UtcNow;
-
         await RunAsync(collection, logger, windowEnd, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads <see cref="DeployedAtConfigKey"/> as a UTC instant. Returns
+    /// <c>null</c>, having logged at Error, when it is absent or not a
+    /// date-time; the caller must then refuse to run. Shared by the audit and
+    /// <see cref="ReAccreditationIsNewSiteCorrectionMigration"/> so both read the
+    /// bound identically.
+    /// </summary>
+    internal static DateTime? ReadRequiredWindowEnd(IConfiguration configuration, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var raw = configuration[DeployedAtConfigKey];
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            logger.LogError(
+                "epr-2uxy: {DeployedAtKey} is not set, so nothing will run. Set it to the RA-292 "
+                    + "deploy time (ISO 8601 UTC, on or before 2026-08-27). There is no safe "
+                    + "default: after RA-507 a ReEx-sourced site carries an orsId and would be "
+                    + "misclassified as operator-added.",
+                DeployedAtConfigKey
+            );
+            return null;
+        }
+
+        if (
+            !DateTime.TryParse(
+                raw,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                out var windowEnd
+            )
+        )
+        {
+            logger.LogError(
+                "epr-2uxy: {DeployedAtKey} is {DeployedAtValue}, which is not a date-time, so "
+                    + "nothing will run. Set it to the RA-292 deploy time (ISO 8601 UTC).",
+                DeployedAtConfigKey,
+                raw
+            );
+            return null;
+        }
+
+        return windowEnd;
     }
 
     /// <summary>

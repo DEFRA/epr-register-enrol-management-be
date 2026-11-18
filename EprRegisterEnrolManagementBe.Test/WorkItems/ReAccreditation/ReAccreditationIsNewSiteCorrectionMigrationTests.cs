@@ -49,7 +49,10 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         };
 
     private static IConfiguration Config(
-        bool? enabled = true, string? confirmedBy = "tom.halley", bool? apply = true)
+        bool? enabled = true,
+        string? confirmedBy = "tom.halley",
+        bool? apply = true,
+        string? deployedAt = "2026-08-15T00:00:00Z")
     {
         var values = new Dictionary<string, string?>();
         if (enabled is not null)
@@ -70,8 +73,10 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
                 apply.Value.ToString();
         }
 
-        // Pin the upper window bound so the tests do not drift with wall time.
-        values[ReAccreditationIsNewSiteAudit.DeployedAtConfigKey] = "2026-08-15T00:00:00Z";
+        if (deployedAt is not null)
+        {
+            values[ReAccreditationIsNewSiteAudit.DeployedAtConfigKey] = deployedAt;
+        }
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }
@@ -509,29 +514,30 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         Assert.NotEqual(default, entry.CreatedAt);
     }
 
-    [Fact]
-    public async Task ApplyAsync_defaults_the_window_end_to_now_when_no_deploy_time_is_configured()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    [InlineData("not-a-date")]
+    public async Task ApplyAsync_refuses_to_run_without_a_valid_deploy_time(string? deployedAt)
     {
-        // The deploy time is optional, and omitting it is the likely first run.
-        // Defaulting to now over-reports rather than under-reports — the safe
-        // direction — but it must still actually bound and still correct.
+        // The deploy time is required: "now" would admit post-RA-507 items, whose
+        // ReEx-sourced sites carry an orsId and would be misclassified as
+        // operator-added. Every other gate is satisfied here, so only the
+        // missing/malformed bound can be what stops the write.
         var ct = TestContext.Current.CancellationToken;
         var item = BuildItem(sites: ReExSite(isNewSite: true));
         var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(deployedAt: deployedAt), logger, new FakeTimeProvider(s_now));
 
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [ReAccreditationIsNewSiteCorrectionMigration.EnabledConfigKey] = "true",
-                [ReAccreditationIsNewSiteCorrectionMigration.SpotCheckConfirmedByConfigKey] =
-                    "tom.halley",
-                [ReAccreditationIsNewSiteCorrectionMigration.ApplyConfigKey] = "true"
-            })
-            .Build();
+        await sut.ApplyAsync(persistence, ct);
 
-        await BuildSut(configuration).ApplyAsync(persistence, ct);
-
-        Assert.False(IsNewSiteOf(item, 0));
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, ct);
+        Assert.True(IsNewSiteOf(item, 0));
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(ReAccreditationIsNewSiteAudit.DeployedAtConfigKey, error, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -600,13 +606,22 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
+        public List<string> Errors { get; } = [];
+
         public void Log<TState>(
             LogLevel logLevel,
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
-            Messages.Add(formatter(state, exception));
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            Messages.Add(message);
+            if (logLevel == LogLevel.Error)
+            {
+                Errors.Add(message);
+            }
+        }
     }
 
     [Fact]
