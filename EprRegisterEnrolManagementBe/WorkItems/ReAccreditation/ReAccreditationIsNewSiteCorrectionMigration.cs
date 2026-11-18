@@ -124,55 +124,23 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
     {
         ArgumentNullException.ThrowIfNull(persistence);
 
-        if (!configuration.GetValue(EnabledConfigKey, false))
+        if (ReadGates() is not { } gates)
         {
             return;
         }
-
-        var confirmedBy = configuration.GetValue<string?>(SpotCheckConfirmedByConfigKey);
-        if (string.IsNullOrWhiteSpace(confirmedBy))
-        {
-            logger.LogError(
-                "RA-794 correction is enabled but {SpotCheckKey} is not set, so it will not "
-                    + "run. Set it to the name of whoever spot-checked the orsId-absent "
-                    + "classification against the operator database. The check exists because orsId "
-                    + "is itself client-clobberable: if a client ever stripped it, an operator-added "
-                    + "site would masquerade as ReEx-sourced and this migration would hide a "
-                    + "genuinely new site from the regulator.",
-                SpotCheckConfirmedByConfigKey
-            );
-            return;
-        }
-
-        if (ReAccreditationIsNewSiteAudit.ReadRequiredWindowEnd(configuration, logger) is not { } windowEnd)
-        {
-            return;
-        }
-
-        if (ReadOperatorRefusedSites(configuration, logger) is not { } operatorRefused)
-        {
-            return;
-        }
-
-        var apply = configuration.GetValue(ApplyConfigKey, false);
 
         logger.LogInformation(
             "RA-794 correction starting. Mode={Mode}. Spot-check confirmed by "
                 + "{ConfirmedBy}. Window {WindowStart:o} to {WindowEnd:o}. Sites the operator-side "
                 + "correction refused: {OperatorRefusedCount}.",
-            apply ? "APPLY" : "DRY RUN (nothing will be written)",
-            confirmedBy,
+            gates.Apply ? "APPLY" : "DRY RUN (nothing will be written)",
+            gates.ConfirmedBy,
             ReAccreditationIsNewSiteAudit.WindowStart,
-            windowEnd,
-            operatorRefused.Count
+            gates.WindowEnd,
+            gates.OperatorRefused.Count
         );
 
-        var itemsChanged = 0;
-        var sitesCorrected = 0;
-        var sitesRefusedAmbiguous = 0;
-        var sitesRefusedByOperator = 0;
-        var sitesRefusedUnmatchable = 0;
-        var operatorRefusedFound = new HashSet<string>(StringComparer.Ordinal);
+        var tally = new Tally();
         var page = 1;
 
         while (true)
@@ -189,129 +157,7 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
 
             foreach (var candidate in result.Items)
             {
-                // The date bound is the primary filter. Applied here rather than
-                // in the query so it stays visibly next to the reason for it.
-                if (
-                    candidate.SubmittedAt < ReAccreditationIsNewSiteAudit.WindowStart
-                    || candidate.SubmittedAt >= windowEnd
-                )
-                {
-                    continue;
-                }
-
-                // QueryAsync excludes Notes/AuditLog — fetch the full document
-                // before mutating so a subsequent replace doesn't wipe them.
-                var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
-                if (full is null)
-                {
-                    continue;
-                }
-
-                var plan = PlanCorrections(full, operatorRefused, operatorRefusedFound);
-                var planned = plan.Corrections;
-                sitesRefusedAmbiguous += plan.Ambiguous.Count;
-                sitesRefusedByOperator += plan.RefusedByOperator.Count;
-                sitesRefusedUnmatchable += plan.Unmatchable.Count;
-                var corrected = planned.Select(p => p.Label).ToList();
-
-                foreach (var siteName in plan.Ambiguous)
-                {
-                    logger.LogWarning(
-                        "RA-794 REFUSED to correct work item {WorkItemId} site '{SiteName}': "
-                            + "orsId is missing but operator-entered detail is present, so this may "
-                            + "be an operator-added site whose orsId was stripped rather than a "
-                            + "ReEx-sourced one. Adjudicate by hand against the operator database.",
-                        full.Id,
-                        siteName
-                    );
-                }
-
-                foreach (var (label, refusedKey) in plan.RefusedByOperator)
-                {
-                    logger.LogWarning(
-                        "RA-794 REFUSED to correct work item {WorkItemId} site {SiteLabel}: the "
-                            + "operator-side correction refused {OperatorRefusedSite} (listed in "
-                            + "{OperatorRefusedKey}), so it may be a genuinely new site. Never "
-                            + "written; adjudicate by hand with the operator-backend owner.",
-                        full.Id,
-                        label,
-                        refusedKey,
-                        OperatorRefusedSitesConfigKey
-                    );
-                }
-
-                foreach (var (label, missing) in plan.Unmatchable)
-                {
-                    logger.LogError(
-                        "RA-794 REFUSED to correct work item {WorkItemId} site {SiteLabel}: it has "
-                            + "no usable {MissingId}, so it cannot be checked against the sites the "
-                            + "operator-side correction refused ({OperatorRefusedKey}). Never written; "
-                            + "adjudicate by hand with the operator-backend owner.",
-                        full.Id,
-                        label,
-                        missing,
-                        OperatorRefusedSitesConfigKey
-                    );
-                }
-
-                if (corrected.Count == 0)
-                {
-                    continue;
-                }
-
-                itemsChanged++;
-                sitesCorrected += corrected.Count;
-
-                if (!apply)
-                {
-                    logger.LogInformation(
-                        "RA-794 DRY RUN would correct work item {WorkItemId} "
-                            + "ref={ApplicationReference}: {Sites}",
-                        full.Id,
-                        full.Payload.GetValue("applicationReference", "(none)"),
-                        string.Join(", ", corrected)
-                    );
-                    continue;
-                }
-
-                // Mutation happens here and nowhere else, so a dry run cannot
-                // leave a half-corrected document behind even in memory.
-                foreach (var (site, _) in planned)
-                {
-                    site["isNewSite"] = false;
-                }
-
-                full.AuditLog.Add(
-                    new WorkItemAuditEntry
-                    {
-                        Action = AuditAction,
-                        ActionDisplayName = AuditActionDisplayName,
-                        CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
-                        CreatedBy = "migration",
-                        CreatedByName = "Migration: RA-794 isNewSite correction",
-                        Details = new Dictionary<string, string?>
-                        {
-                            ["issue"] = "RA-794",
-                            ["reason"] =
-                                "isNewSite was a wrongly-defaulted true; site has no orsId and no "
-                                + "operator-entered detail, so it is ReEx-sourced and the correct "
-                                + "value is false.",
-                            ["sites"] = string.Join(", ", corrected),
-                            ["spotCheckConfirmedBy"] = confirmedBy,
-                            ["operatorRefusedSitesListed"] = operatorRefused.Count.ToString(
-                                CultureInfo.InvariantCulture
-                            ),
-                        },
-                    }
-                );
-
-                await persistence.ReplaceAsync(full, cancellationToken);
-
-                logger.LogInformation(
-                    "RA-794 corrected work item {WorkItemId}: {Sites}",
-                    full.Id,
-                    string.Join(", ", corrected)
-                );
+                await CorrectOrReportAsync(persistence, candidate, gates, tally, cancellationToken);
             }
 
             if (result.Items.Count < WorkItemQuery.MaxPageSize)
@@ -322,27 +168,7 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             page++;
         }
 
-        // A listed site that matched nothing scanned is not necessarily wrong —
-        // the operator application may never have reached a work item in the
-        // window — but it is also what a mistyped id looks like, and a mistyped
-        // id leaves the real site unexcluded. So name each one for the
-        // spot-checker to account for in the dry run.
-        var operatorRefusedNotFound = operatorRefused
-            .Where(key => !operatorRefusedFound.Contains(key))
-            .Order(StringComparer.Ordinal)
-            .ToList();
-        if (operatorRefusedNotFound.Count > 0)
-        {
-            logger.LogWarning(
-                "RA-794: {NotFoundCount} site(s) listed in {OperatorRefusedKey} matched no site "
-                    + "on any work item in the window: {NotFoundSites}. Confirm each is genuinely "
-                    + "absent here rather than mistyped; a mistyped id leaves the real site "
-                    + "unexcluded.",
-                operatorRefusedNotFound.Count,
-                OperatorRefusedSitesConfigKey,
-                string.Join(", ", operatorRefusedNotFound)
-            );
-        }
+        LogNotFoundOperatorRefusals(gates, tally);
 
         // Each placeholder name appears exactly once. A repeated name is a
         // distinct positional slot to the structured-logging formatter, so
@@ -355,14 +181,243 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
                 + "adjudication): {SitesRefusedAmbiguous}. Sites refused because the operator side "
                 + "refused them: {SitesRefusedByOperator}. Sites refused for want of an id to match: "
                 + "{SitesRefusedUnmatchable}.",
-            apply ? "APPLY" : "DRY RUN",
-            apply ? "corrected" : "that would be corrected",
-            itemsChanged,
-            apply ? "corrected" : "that would be corrected",
-            sitesCorrected,
-            sitesRefusedAmbiguous,
-            sitesRefusedByOperator,
-            sitesRefusedUnmatchable
+            gates.Apply ? "APPLY" : "DRY RUN",
+            gates.Apply ? "corrected" : "that would be corrected",
+            tally.ItemsChanged,
+            gates.Apply ? "corrected" : "that would be corrected",
+            tally.SitesCorrected,
+            tally.SitesRefusedAmbiguous,
+            tally.SitesRefusedByOperator,
+            tally.SitesRefusedUnmatchable
+        );
+    }
+
+    /// <summary>Every gate's value, read once, after every gate has passed.</summary>
+    private sealed record Gates(
+        string ConfirmedBy,
+        DateTime WindowEnd,
+        HashSet<string> OperatorRefused,
+        bool Apply
+    );
+
+    /// <summary>Running counts for the completion summary.</summary>
+    private sealed class Tally
+    {
+        public int ItemsChanged { get; set; }
+        public int SitesCorrected { get; set; }
+        public int SitesRefusedAmbiguous { get; set; }
+        public int SitesRefusedByOperator { get; set; }
+        public int SitesRefusedUnmatchable { get; set; }
+        public HashSet<string> OperatorRefusedFound { get; } = new(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Gates 1 to 4 in order, with the deploy time read once gates 1 and 2
+    /// pass. Returns <c>null</c> when the migration must not run; every refusal
+    /// but gate 1's (off, the normal state) has logged at Error.
+    /// </summary>
+    private Gates? ReadGates()
+    {
+        if (!configuration.GetValue(EnabledConfigKey, false))
+        {
+            return null;
+        }
+
+        var confirmedBy = configuration.GetValue<string?>(SpotCheckConfirmedByConfigKey);
+        if (string.IsNullOrWhiteSpace(confirmedBy))
+        {
+            logger.LogError(
+                "RA-794 correction is enabled but {SpotCheckKey} is not set, so it will not "
+                    + "run. Set it to the name of whoever spot-checked the orsId-absent "
+                    + "classification against the operator database. The check exists because orsId "
+                    + "is itself client-clobberable: if a client ever stripped it, an operator-added "
+                    + "site would masquerade as ReEx-sourced and this migration would hide a "
+                    + "genuinely new site from the regulator.",
+                SpotCheckConfirmedByConfigKey
+            );
+            return null;
+        }
+
+        if (ReAccreditationIsNewSiteAudit.ReadRequiredWindowEnd(configuration, logger) is not { } windowEnd)
+        {
+            return null;
+        }
+
+        if (ReadOperatorRefusedSites(configuration, logger) is not { } operatorRefused)
+        {
+            return null;
+        }
+
+        return new Gates(
+            confirmedBy,
+            windowEnd,
+            operatorRefused,
+            configuration.GetValue(ApplyConfigKey, false)
+        );
+    }
+
+    private async Task CorrectOrReportAsync(
+        IWorkItemPersistence persistence,
+        WorkItem candidate,
+        Gates gates,
+        Tally tally,
+        CancellationToken cancellationToken
+    )
+    {
+        // The date bound is the primary filter. Applied here rather than
+        // in the query so it stays visibly next to the reason for it.
+        if (
+            candidate.SubmittedAt < ReAccreditationIsNewSiteAudit.WindowStart
+            || candidate.SubmittedAt >= gates.WindowEnd
+        )
+        {
+            return;
+        }
+
+        // QueryAsync excludes Notes/AuditLog — fetch the full document
+        // before mutating so a subsequent replace doesn't wipe them.
+        var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
+        if (full is null)
+        {
+            return;
+        }
+
+        var plan = PlanCorrections(full, gates.OperatorRefused, tally.OperatorRefusedFound);
+        tally.SitesRefusedAmbiguous += plan.Ambiguous.Count;
+        tally.SitesRefusedByOperator += plan.RefusedByOperator.Count;
+        tally.SitesRefusedUnmatchable += plan.Unmatchable.Count;
+        LogRefusals(full, plan);
+
+        var corrected = plan.Corrections.Select(p => p.Label).ToList();
+        if (corrected.Count == 0)
+        {
+            return;
+        }
+
+        tally.ItemsChanged++;
+        tally.SitesCorrected += corrected.Count;
+
+        if (!gates.Apply)
+        {
+            logger.LogInformation(
+                "RA-794 DRY RUN would correct work item {WorkItemId} "
+                    + "ref={ApplicationReference}: {Sites}",
+                full.Id,
+                full.Payload.GetValue("applicationReference", "(none)"),
+                string.Join(", ", corrected)
+            );
+            return;
+        }
+
+        // Mutation happens here and nowhere else, so a dry run cannot
+        // leave a half-corrected document behind even in memory.
+        foreach (var (site, _) in plan.Corrections)
+        {
+            site["isNewSite"] = false;
+        }
+
+        full.AuditLog.Add(
+            new WorkItemAuditEntry
+            {
+                Action = AuditAction,
+                ActionDisplayName = AuditActionDisplayName,
+                CreatedAt = _timeProvider.GetUtcNow().UtcDateTime,
+                CreatedBy = "migration",
+                CreatedByName = "Migration: RA-794 isNewSite correction",
+                Details = new Dictionary<string, string?>
+                {
+                    ["issue"] = "RA-794",
+                    ["reason"] =
+                        "isNewSite was a wrongly-defaulted true; site has no orsId and no "
+                        + "operator-entered detail, so it is ReEx-sourced and the correct "
+                        + "value is false.",
+                    ["sites"] = string.Join(", ", corrected),
+                    ["spotCheckConfirmedBy"] = gates.ConfirmedBy,
+                    ["operatorRefusedSitesListed"] = gates.OperatorRefused.Count.ToString(
+                        CultureInfo.InvariantCulture
+                    ),
+                },
+            }
+        );
+
+        await persistence.ReplaceAsync(full, cancellationToken);
+
+        logger.LogInformation(
+            "RA-794 corrected work item {WorkItemId}: {Sites}",
+            full.Id,
+            string.Join(", ", corrected)
+        );
+    }
+
+    private void LogRefusals(WorkItem full, SitePlan plan)
+    {
+        foreach (var siteName in plan.Ambiguous)
+        {
+            logger.LogWarning(
+                "RA-794 REFUSED to correct work item {WorkItemId} site '{SiteName}': "
+                    + "orsId is missing but operator-entered detail is present, so this may "
+                    + "be an operator-added site whose orsId was stripped rather than a "
+                    + "ReEx-sourced one. Adjudicate by hand against the operator database.",
+                full.Id,
+                siteName
+            );
+        }
+
+        foreach (var (label, refusedKey) in plan.RefusedByOperator)
+        {
+            logger.LogWarning(
+                "RA-794 REFUSED to correct work item {WorkItemId} site {SiteLabel}: the "
+                    + "operator-side correction refused {OperatorRefusedSite} (listed in "
+                    + "{OperatorRefusedKey}), so it may be a genuinely new site. Never "
+                    + "written; adjudicate by hand with the operator-backend owner.",
+                full.Id,
+                label,
+                refusedKey,
+                OperatorRefusedSitesConfigKey
+            );
+        }
+
+        foreach (var (label, missing) in plan.Unmatchable)
+        {
+            logger.LogError(
+                "RA-794 REFUSED to correct work item {WorkItemId} site {SiteLabel}: it has "
+                    + "no usable {MissingId}, so it cannot be checked against the sites the "
+                    + "operator-side correction refused ({OperatorRefusedKey}). Never written; "
+                    + "adjudicate by hand with the operator-backend owner.",
+                full.Id,
+                label,
+                missing,
+                OperatorRefusedSitesConfigKey
+            );
+        }
+    }
+
+    /// <summary>
+    /// A listed site that matched nothing scanned is not necessarily wrong —
+    /// the operator application may never have reached a work item in the
+    /// window — but it is also what a mistyped id looks like, and a mistyped
+    /// id leaves the real site unexcluded. So name each one for the
+    /// spot-checker to account for in the dry run.
+    /// </summary>
+    private void LogNotFoundOperatorRefusals(Gates gates, Tally tally)
+    {
+        var notFound = gates
+            .OperatorRefused.Where(key => !tally.OperatorRefusedFound.Contains(key))
+            .Order(StringComparer.Ordinal)
+            .ToList();
+        if (notFound.Count == 0)
+        {
+            return;
+        }
+
+        logger.LogWarning(
+            "RA-794: {NotFoundCount} site(s) listed in {OperatorRefusedKey} matched no site "
+                + "on any work item in the window: {NotFoundSites}. Confirm each is genuinely "
+                + "absent here rather than mistyped; a mistyped id leaves the real site "
+                + "unexcluded.",
+            notFound.Count,
+            OperatorRefusedSitesConfigKey,
+            string.Join(", ", notFound)
         );
     }
 
@@ -480,98 +535,26 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
     )
     {
         var plan = new SitePlan([], [], [], []);
-
-        if (
-            !item.Payload.TryGetValue("overseasSites", out var overseas)
-            || !overseas.IsBsonDocument
-            || !overseas.AsBsonDocument.TryGetValue("sites", out var sites)
-            || !sites.IsBsonArray
-        )
+        if (SitesOf(item.Payload) is not { } sites)
         {
             return plan;
         }
 
-        // The operator backend sends operatorApplicationId on every real
-        // submission (ReAccreditationPayload.OperatorApplicationId). Its absence
-        // makes a site unmatchable, never unrefused.
-        var applicationId =
-            item.Payload.TryGetValue("operatorApplicationId", out var appIdValue)
-            && appIdValue.IsString
-            && !string.IsNullOrWhiteSpace(appIdValue.AsString)
-                ? appIdValue.AsString.Trim()
-                : null;
-
+        var applicationId = OperatorApplicationIdOf(item.Payload);
         var index = 0;
-        foreach (var element in sites.AsBsonArray)
+        foreach (var element in sites)
         {
-            if (!element.IsBsonDocument)
+            if (element.IsBsonDocument)
             {
-                index++;
-                continue;
-            }
+                var site = element.AsBsonDocument;
+                var refusedKey = RefusedSiteKeyOf(applicationId, site);
+                var refusedByOperator = refusedKey is not null && operatorRefused.Contains(refusedKey);
+                if (refusedByOperator)
+                {
+                    operatorRefusedFound.Add(refusedKey!);
+                }
 
-            var site = element.AsBsonDocument;
-            // BsonValue.ToString() never returns null; the index fallback covers
-            // the case that actually occurs, siteName being absent.
-            var name =
-                site.TryGetValue("siteName", out var siteName) && !siteName.IsBsonNull
-                    ? siteName.ToString()!
-                    : $"site[{index}]";
-            var label = $"[{index}] {name}";
-
-            // OverseasSiteModel.SiteId is an int on the operator backend, so a
-            // real siteId is a BSON whole number. Anything else cannot be
-            // matched to an operator REFUSED line.
-            int? siteId =
-                site.TryGetValue("siteId", out var siteIdValue)
-                && BsonWholeNumber.TryGet(siteIdValue, int.MinValue, int.MaxValue, out var id)
-                    ? id
-                    : null;
-            var refusedKey =
-                applicationId is not null && siteId is { } knownSiteId
-                    ? RefusedSiteKey(applicationId, knownSiteId)
-                    : null;
-            var refusedByOperator = refusedKey is not null && operatorRefused.Contains(refusedKey);
-            if (refusedByOperator)
-            {
-                operatorRefusedFound.Add(refusedKey!);
-            }
-
-            switch (ReAccreditationIsNewSiteAudit.ClassifySite(site))
-            {
-                // Both correctable verdicts are ReEx-sourced. PromotedCorrectable
-                // is not a weaker case than ProvablyCorrupt — a promoted site's
-                // operator detail is explained by ApplyPromotedFields, and
-                // promoted sites are the bulk of the affected population.
-                case ReAccreditationIsNewSiteAudit.SiteVerdict.ProvablyCorrupt:
-                case ReAccreditationIsNewSiteAudit.SiteVerdict.PromotedCorrectable:
-                    if (refusedKey is null)
-                    {
-                        plan.Unmatchable.Add(
-                            (label, applicationId is null ? "operatorApplicationId" : "siteId")
-                        );
-                    }
-                    else if (refusedByOperator)
-                    {
-                        plan.RefusedByOperator.Add((label, refusedKey));
-                    }
-                    else
-                    {
-                        plan.Corrections.Add((site, label));
-                    }
-
-                    break;
-
-                case ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousRefused:
-                    plan.Ambiguous.Add(
-                        $"{name} (refusedBecause: "
-                            + $"{string.Join(", ", ReAccreditationIsNewSiteAudit.RefusalTriggers(site))})"
-                    );
-                    break;
-
-                default:
-                    // OperatorAddedCorrect / NotFlaggedNew — leave alone.
-                    break;
+                PlanSite(plan, site, index, applicationId, refusedKey, refusedByOperator);
             }
 
             index++;
@@ -579,4 +562,92 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
 
         return plan;
     }
+
+    private static void PlanSite(
+        SitePlan plan,
+        BsonDocument site,
+        int index,
+        string? applicationId,
+        string? refusedKey,
+        bool refusedByOperator
+    )
+    {
+        // BsonValue.ToString() never returns null; the index fallback covers
+        // the case that actually occurs, siteName being absent.
+        var name =
+            site.TryGetValue("siteName", out var siteName) && !siteName.IsBsonNull
+                ? siteName.ToString()!
+                : $"site[{index}]";
+        var label = $"[{index}] {name}";
+
+        switch (ReAccreditationIsNewSiteAudit.ClassifySite(site))
+        {
+            // Both correctable verdicts are ReEx-sourced. PromotedCorrectable
+            // is not a weaker case than ProvablyCorrupt — a promoted site's
+            // operator detail is explained by ApplyPromotedFields, and
+            // promoted sites are the bulk of the affected population.
+            case ReAccreditationIsNewSiteAudit.SiteVerdict.ProvablyCorrupt:
+            case ReAccreditationIsNewSiteAudit.SiteVerdict.PromotedCorrectable:
+                if (refusedKey is null)
+                {
+                    plan.Unmatchable.Add(
+                        (label, applicationId is null ? "operatorApplicationId" : "siteId")
+                    );
+                }
+                else if (refusedByOperator)
+                {
+                    plan.RefusedByOperator.Add((label, refusedKey));
+                }
+                else
+                {
+                    plan.Corrections.Add((site, label));
+                }
+
+                break;
+
+            case ReAccreditationIsNewSiteAudit.SiteVerdict.AmbiguousRefused:
+                plan.Ambiguous.Add(
+                    $"{name} (refusedBecause: "
+                        + $"{string.Join(", ", ReAccreditationIsNewSiteAudit.RefusalTriggers(site))})"
+                );
+                break;
+
+            default:
+                // OperatorAddedCorrect / NotFlaggedNew — leave alone.
+                break;
+        }
+    }
+
+    private static BsonArray? SitesOf(BsonDocument payload) =>
+        payload.TryGetValue("overseasSites", out var overseas)
+        && overseas.IsBsonDocument
+        && overseas.AsBsonDocument.TryGetValue("sites", out var sites)
+        && sites.IsBsonArray
+            ? sites.AsBsonArray
+            : null;
+
+    /// <summary>
+    /// The operator backend sends <c>operatorApplicationId</c> on every real
+    /// submission (<see cref="Models.ReAccreditationPayload.OperatorApplicationId"/>).
+    /// Its absence makes a site unmatchable, never unrefused.
+    /// </summary>
+    private static string? OperatorApplicationIdOf(BsonDocument payload) =>
+        payload.TryGetValue("operatorApplicationId", out var value)
+        && value.IsString
+        && !string.IsNullOrWhiteSpace(value.AsString)
+            ? value.AsString.Trim()
+            : null;
+
+    /// <summary>
+    /// The site's key in the operator refusals, or <c>null</c> when it cannot
+    /// have one. <c>OverseasSiteModel.SiteId</c> is an int on the operator
+    /// backend, so a real <c>siteId</c> is a BSON whole number; anything else
+    /// cannot be matched to an operator REFUSED line.
+    /// </summary>
+    private static string? RefusedSiteKeyOf(string? applicationId, BsonDocument site) =>
+        applicationId is not null
+        && site.TryGetValue("siteId", out var siteId)
+        && BsonWholeNumber.TryGet(siteId, int.MinValue, int.MaxValue, out var id)
+            ? RefusedSiteKey(applicationId, id)
+            : null;
 }
