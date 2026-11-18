@@ -44,7 +44,7 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
 
     private async Task<WorkItem> SeedAsync(
         string organisationName = Migration.OldName,
-        string registrationNumber = Migration.RegistrationNumber,
+        string registrationNumber = Migration.NorthernIrelandRegistrationNumber,
         int accreditationYear = Migration.AccreditationYear,
         Action<BsonDocument>? customise = null
     )
@@ -145,6 +145,28 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
         Assert.Equal(Migration.OldName, await NameOfAsync(target));
         Assert.Equal(0, (await ReloadAsync(target)).Version);
         Assert.True(Logged(LogLevel.Information, "DRY RUN would rename"));
+        Assert.True(Logged(LogLevel.Information, $"({target.Payload["applicationReference"].AsString}, R26NR5000690003GR)"));
+    }
+
+    /// <summary>
+    /// A registration with no 2027 case does not abort (a 2027 operator draft
+    /// has no case-management case yet), but the dry run's summary shows its
+    /// zero so the spot-checker sees it.
+    /// </summary>
+    [Fact]
+    public async Task A_dry_run_missing_one_registrations_case_shows_its_zero_count_and_does_not_abort()
+    {
+        await SeedAsync();
+        await SeedAsync(registrationNumber: Migration.EnglandRegistrationNumber, accreditationYear: 2026);
+
+        var result = await NewMigration(apply: false).ApplyAsync(_persistence, Ct);
+
+        Assert.Equal(Migration.RunResult.DryRun, result);
+        Assert.True(Logged(
+            LogLevel.Information,
+            "DRY RUN complete. Would rename: 1 (R26NR5000690003GR: 1, R26ER5002260055GR: 0). "
+                + "2027 cases found: R26NR5000690003GR: 1, R26ER5002260055GR: 0."
+        ));
     }
 
     [Fact]
@@ -165,7 +187,7 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
     public async Task Apply_renames_the_2027_case_and_changes_nothing_else()
     {
         var target = await SeedAsync(
-            customise: p => p["accreditationId"] = "A27NR5000690003GL"
+            customise: p => p["accreditationId"] = "A27NR5000690003GR"
         );
         var before = await ReloadAsync(target);
 
@@ -210,7 +232,7 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
     {
         var target = await SeedAsync();
         var sameNameOtherRegistration = await SeedAsync(
-            registrationNumber: "R26NR5000700001GL",
+            registrationNumber: "R26NR5000700001GR",
             customise: p => p["operatorOrgNumber"] = 500070
         );
         var same2026Registration = await SeedAsync(accreditationYear: 2026);
@@ -231,6 +253,134 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
     }
 
     [Fact]
+    public async Task Apply_renames_the_cases_under_both_registrations_in_one_run()
+    {
+        var northernIreland = await SeedAsync(
+            customise: p => p["accreditationId"] = "A27NR5000690003GR"
+        );
+        var england = await SeedAsync(
+            registrationNumber: Migration.EnglandRegistrationNumber,
+            customise: p => p["accreditationId"] = "A27ER5002260023GR"
+        );
+        var englandNotYetIssued = await SeedAsync(registrationNumber: Migration.EnglandRegistrationNumber);
+        var england2026 = await SeedAsync(
+            registrationNumber: Migration.EnglandRegistrationNumber,
+            accreditationYear: 2026
+        );
+
+        var result = await NewMigration().ApplyAsync(_persistence, Ct);
+
+        Assert.Equal(Migration.RunResult.Applied, result);
+        Assert.Equal(Migration.NewName, await NameOfAsync(northernIreland));
+        Assert.Equal(Migration.NewName, await NameOfAsync(england));
+        Assert.Equal(Migration.NewName, await NameOfAsync(englandNotYetIssued));
+        Assert.Equal(Migration.OldName, await NameOfAsync(england2026));
+        Assert.Equal(0, (await ReloadAsync(england2026)).Version);
+        Assert.True(Logged(
+            LogLevel.Information,
+            "APPLY complete. Renamed: 3 (R26NR5000690003GR: 1, R26ER5002260055GR: 2). "
+                + "2027 cases found: R26NR5000690003GR: 1, R26ER5002260055GR: 2."
+        ));
+        Assert.True(Logged(LogLevel.Information, "R26ER5002260055GR) is a 2026 application; left alone"));
+        Assert.True(Logged(LogLevel.Information, $"({england.Payload["applicationReference"].AsString}, R26ER5002260055GR): "));
+    }
+
+    [Theory]
+    [InlineData("A27ER5002260023GR")] // sequence of its 2026 accreditation
+    [InlineData("A27ER5002260055GR")] // sequence of its registration
+    [InlineData("A27ER5002260099GR")] // any other issued sequence
+    public async Task An_england_case_with_its_own_2027_accreditation_number_is_renamed(string accreditationNumber)
+    {
+        var england = await SeedAsync(
+            registrationNumber: Migration.EnglandRegistrationNumber,
+            customise: p => p["accreditationId"] = accreditationNumber
+        );
+
+        var result = await NewMigration().ApplyAsync(_persistence, Ct);
+
+        Assert.Equal(Migration.RunResult.Applied, result);
+        Assert.Equal(Migration.NewName, await NameOfAsync(england));
+    }
+
+    [Fact]
+    public async Task An_england_case_carrying_the_northern_ireland_accreditation_number_aborts()
+    {
+        var good = await SeedAsync();
+        var crossed = await SeedAsync(
+            registrationNumber: Migration.EnglandRegistrationNumber,
+            customise: p => p["accreditationId"] = "A27NR5000690003GR"
+        );
+
+        var result = await NewMigration().ApplyAsync(_persistence, Ct);
+
+        Assert.Equal(Migration.RunResult.Aborted, result);
+        Assert.Equal(0, (await ReloadAsync(good)).Version);
+        Assert.Equal(0, (await ReloadAsync(crossed)).Version);
+        Assert.True(Logged(LogLevel.Error, "A27ER500226####GR"));
+    }
+
+    [Fact]
+    public async Task Only_cases_under_the_tickets_wrong_GL_registration_abort_with_no_writes()
+    {
+        var wrongSuffix = await SeedAsync(registrationNumber: "R26NR5000690003GL");
+
+        var result = await NewMigration().ApplyAsync(_persistence, Ct);
+
+        Assert.Equal(Migration.RunResult.Aborted, result);
+        Assert.Equal(Migration.OldName, await NameOfAsync(wrongSuffix));
+        Assert.Equal(0, (await ReloadAsync(wrongSuffix)).Version);
+        Assert.True(Logged(LogLevel.Error, "R26NR5000690003GR or R26ER5002260055GR"));
+    }
+
+    [Fact]
+    public async Task A_candidate_under_an_unexpected_registration_aborts_before_any_write()
+    {
+        // The lookup is exact, so only a persistence that returned something
+        // else could hand the plan such a case; it must still never be renamed.
+        var good = await ReloadAsync(await SeedAsync());
+        var stray = await ReloadAsync(await SeedAsync(registrationNumber: "R26NR5000690003GL"));
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .FindByPayloadFieldAsync(ReAccreditationType.Id, "registrationNumber", Migration.NorthernIrelandRegistrationNumber, Arg.Any<CancellationToken>())
+            .Returns([good, stray]);
+        persistence
+            .FindByPayloadFieldAsync(ReAccreditationType.Id, "registrationNumber", Migration.EnglandRegistrationNumber, Arg.Any<CancellationToken>())
+            .Returns([]);
+
+        var result = await NewMigration().ApplyAsync(persistence, Ct);
+
+        Assert.Equal(Migration.RunResult.Aborted, result);
+        await persistence.DidNotReceiveWithAnyArgs()
+            .CompareAndSetPayloadFieldAsync(default, default!, default!, default!, Ct);
+    }
+
+    [Theory]
+    [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR500069####GR")]
+    [InlineData(Migration.EnglandRegistrationNumber, "A27ER500226####GR")]
+    public void The_accreditation_number_pattern_is_derived_from_the_registration(
+        string registrationNumber,
+        string expected
+    ) => Assert.Equal(expected, Migration.ExpectedAccreditationNumberPattern(registrationNumber));
+
+    [Theory]
+    [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR5000690003GR", true)]
+    [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR5000691234GR", true)]
+    [InlineData(Migration.EnglandRegistrationNumber, "A27ER5002260023GR", true)]
+    [InlineData(Migration.EnglandRegistrationNumber, "A27ER5002260055GR", true)]
+    [InlineData(Migration.EnglandRegistrationNumber, "A27NR5000690003GR", false)]
+    [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27ER5002260023GR", false)]
+    [InlineData(Migration.EnglandRegistrationNumber, "A27ER5000690023GR", false)]
+    [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR5000690003GL", false)]
+    [InlineData(Migration.NorthernIrelandRegistrationNumber, "A26NR5000690003GR", false)]
+    [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR500069003GR", false)]
+    [InlineData(Migration.NorthernIrelandRegistrationNumber, "A27NR50006900003GR", false)]
+    public void Only_a_2027_number_derived_from_the_cases_own_registration_is_allowed(
+        string registrationNumber,
+        string accreditationNumber,
+        bool expected
+    ) => Assert.Equal(expected, Migration.IsAllowedAccreditationNumber(registrationNumber, accreditationNumber));
+
+    [Fact]
     public async Task A_case_without_operatorOrgNumber_or_accreditation_number_is_matched_by_registration()
     {
         var target = await SeedAsync(customise: p => p.Remove("operatorOrgNumber"));
@@ -246,8 +396,10 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
     public async Task A_rerun_is_a_no_op()
     {
         var target = await SeedAsync();
+        var england = await SeedAsync(registrationNumber: Migration.EnglandRegistrationNumber);
         await NewMigration().ApplyAsync(_persistence, Ct);
         var afterFirst = await ReloadAsync(target);
+        var englandAfterFirst = await ReloadAsync(england);
 
         var result = await NewMigration().ApplyAsync(_persistence, Ct);
 
@@ -256,6 +408,9 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
         Assert.Equal(afterFirst.Version, afterSecond.Version);
         Assert.Equal(afterFirst.Payload, afterSecond.Payload);
         Assert.Single(afterSecond.AuditLog);
+        var englandAfterSecond = await ReloadAsync(england);
+        Assert.Equal(Migration.NewName, englandAfterSecond.Payload["organisationName"].AsString);
+        Assert.Equal(englandAfterFirst.Version, englandAfterSecond.Version);
     }
 
     [Fact]
@@ -267,7 +422,11 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
 
         Assert.Equal(Migration.RunResult.NothingToDo, result);
         Assert.Equal(0, (await ReloadAsync(target)).Version);
-        Assert.True(Logged(LogLevel.Information, "already carries"));
+        Assert.True(Logged(LogLevel.Information, "(R26NR5000690003GR) already carries"));
+        Assert.True(Logged(
+            LogLevel.Information,
+            "Nothing to rename. 2027 cases found: R26NR5000690003GR: 1, R26ER5002260055GR: 0."
+        ));
     }
 
     // ------------------------------- aborts -------------------------------
@@ -289,8 +448,13 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
         {
             { "unexpected name", p => p["organisationName"] = "Encirc Limited" },
             { "other org number", p => p["operatorOrgNumber"] = 500070 },
-            { "other org's accreditation number", p => p["accreditationId"] = "A27NR5000700003GL" },
+            { "other org's accreditation number", p => p["accreditationId"] = "A27NR5000700003GR" },
             { "other material's accreditation number", p => p["accreditationId"] = "A27NR5000690003PL" },
+            { "the ticket's wrong GL accreditation number", p => p["accreditationId"] = "A27NR5000690003GL" },
+            { "the other registration's accreditation number", p => p["accreditationId"] = "A27ER5002260023GR" },
+            { "a 2026 accreditation number", p => p["accreditationId"] = "A26NR5000690003GR" },
+            { "a non-digit sequence", p => p["accreditationId"] = "A27NR500069000XGR" },
+            { "a lower-case accreditation number", p => p["accreditationId"] = "a27nr5000690003gr" },
             { "no accreditation year", p => p.Remove("accreditationYear") },
         };
 
@@ -352,8 +516,11 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
         var planned = await ReloadAsync(await SeedAsync());
         var racing = Substitute.For<IWorkItemPersistence>();
         racing
-            .FindByPayloadFieldAsync(ReAccreditationType.Id, "registrationNumber", Migration.RegistrationNumber, Arg.Any<CancellationToken>())
+            .FindByPayloadFieldAsync(ReAccreditationType.Id, "registrationNumber", Migration.NorthernIrelandRegistrationNumber, Arg.Any<CancellationToken>())
             .Returns([planned]);
+        racing
+            .FindByPayloadFieldAsync(ReAccreditationType.Id, "registrationNumber", Migration.EnglandRegistrationNumber, Arg.Any<CancellationToken>())
+            .Returns([]);
         racing
             .CompareAndSetPayloadFieldAsync(default, default!, default!, default!, Ct)
             .ReturnsForAnyArgs(false);
@@ -361,7 +528,8 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
         var result = await NewMigration().ApplyAsync(racing, Ct);
 
         Assert.Equal(Migration.RunResult.Applied, result);
-        Assert.True(Logged(LogLevel.Warning, "no longer carries"));
+        Assert.True(Logged(LogLevel.Warning, "(R26NR5000690003GR) no longer carries"));
+        Assert.True(Logged(LogLevel.Information, "Renamed: 0 (R26NR5000690003GR: 0, R26ER5002260055GR: 0)"));
     }
 
     [Fact]
