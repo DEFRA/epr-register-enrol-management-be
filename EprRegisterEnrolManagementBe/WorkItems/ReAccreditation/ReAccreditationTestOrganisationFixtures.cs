@@ -58,15 +58,26 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     /// <summary>RA-691 fixture's number after correction (the stored value).</summary>
     public const string AccreditationNumberCorrectedTo = "A27ER9006910246PL";
 
-    /// <summary>RA-764 organisation-name-correction fixture id.</summary>
+    /// <summary>
+    /// RA-764 organisation-name-correction fixture id: the case under the
+    /// NIEA registration
+    /// <see cref="ReAccreditationOrganisationNameCorrectionMigration.NorthernIrelandRegistrationNumber"/>.
+    /// </summary>
     public const string OrganisationNameCorrectionId = "00000764-0000-4000-8000-000000000764";
 
     /// <summary>
-    /// ReEx organisation id of the RA-764 fixture. The fixture otherwise
-    /// carries the real target's identity (org number 500069, registration
-    /// <see cref="ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumber"/>,
-    /// 2027, the old name), because the migration is keyed to it; prod never
-    /// seeds fixtures.
+    /// RA-764's second fixture id: the case under the EA registration
+    /// <see cref="ReAccreditationOrganisationNameCorrectionMigration.EnglandRegistrationNumber"/>,
+    /// so the e2e suite proves both registrations' cases are renamed.
+    /// </summary>
+    public const string OrganisationNameCorrectionEnglandId = "00000764-0000-4000-8000-000000000765";
+
+    /// <summary>
+    /// ReEx organisation id of both RA-764 fixtures (one organisation, two
+    /// registrations). The fixtures otherwise carry the real target's
+    /// identity (org number 500069, its two registration numbers, 2027, the
+    /// old name), because the migration is keyed to it; prod never seeds
+    /// fixtures.
     /// </summary>
     public const string OrganisationNameCorrectionOrganisationId = "e2e-ra764-organisation-name";
 
@@ -99,7 +110,8 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         yield return BuildLegacySnapshot(now);
         yield return BuildPreYearStart(type, now);
         yield return BuildAccreditationNumberCorrected(type, now);
-        yield return BuildOrganisationNameCorrection(type, now);
+        yield return BuildOrganisationNameCorrection(type, now, s_organisationNameCorrectionNorthernIreland);
+        yield return BuildOrganisationNameCorrection(type, now, s_organisationNameCorrectionEngland);
     }
 
     /// <summary>
@@ -307,21 +319,61 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     }
 
     /// <summary>
+    /// What differs between the two RA-764 fixtures. Application reference
+    /// and operator application id are distinct because both are unique
+    /// (sparse) indexes.
+    /// </summary>
+    private sealed record OrganisationNameCorrectionCase(
+        string Id,
+        string ApplicationReference,
+        string OperatorApplicationId,
+        string RegistrationNumber,
+        string SiteAddress,
+        string SiteAddressPostcode,
+        string Nation
+    );
+
+    private static readonly OrganisationNameCorrectionCase s_organisationNameCorrectionNorthernIreland = new(
+        OrganisationNameCorrectionId,
+        "RA-900000764",
+        "e2e-app-ra764-organisation-name",
+        ReAccreditationOrganisationNameCorrectionMigration.NorthernIrelandRegistrationNumber,
+        "1 Renamed Organisation Road, Belfast",
+        "BT1 1AA",
+        "NorthernIreland"
+    );
+
+    private static readonly OrganisationNameCorrectionCase s_organisationNameCorrectionEngland = new(
+        OrganisationNameCorrectionEnglandId,
+        "RA-900000765",
+        "e2e-app-ra764-organisation-name-ea",
+        ReAccreditationOrganisationNameCorrectionMigration.EnglandRegistrationNumber,
+        "1 Renamed Organisation Road, Leeds",
+        "LS1 1AA",
+        "England"
+    );
+
+    /// <summary>
     /// RA-764: an unassigned, not-started 2027 glass application for
-    /// organisation 500069 carrying its OLD name, exactly what
+    /// organisation 500069 under one of its two registrations, carrying its
+    /// OLD name, exactly what
     /// <see cref="ReAccreditationOrganisationNameCorrectionMigration"/> renames.
     /// With the migration's keys set (the mgmt-tests compose stack) it is
     /// renamed after every reset; without them (CDP test) it keeps the old
     /// name. No audit entries, so the e2e suite can assert the rename adds
     /// none.
     /// </summary>
-    private static BsonDocument BuildOrganisationNameCorrection(IWorkItemType type, DateTime now)
+    private static BsonDocument BuildOrganisationNameCorrection(
+        IWorkItemType type,
+        DateTime now,
+        OrganisationNameCorrectionCase fixture
+    )
     {
         var submittedAt = now.AddDays(-14);
         var snapshot = WorkItemTemplateSnapshot.Capture(type);
         var item = new WorkItem
         {
-            Id = Guid.Parse(OrganisationNameCorrectionId),
+            Id = Guid.Parse(fixture.Id),
             TypeId = ReAccreditationType.Id,
             StateId = "submitted",
             SubmittedAt = submittedAt,
@@ -331,20 +383,20 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             TemplateVersion = snapshot.TemplateVersion,
             Payload = new BsonDocument
             {
-                [Field.ApplicationReference] = "RA-900000764",
+                [Field.ApplicationReference] = fixture.ApplicationReference,
                 [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = ReAccreditationOrganisationNameCorrectionMigration.OldName,
                 [Field.OperatorOrganisationId] = OrganisationNameCorrectionOrganisationId,
                 [ReAccreditationOrganisationNameCorrectionMigration.OperatorOrgNumberField] = ReAccreditationOrganisationNameCorrectionMigration.OrganisationNumber,
-                [Field.OperatorApplicationId] = "e2e-app-ra764-organisation-name",
-                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumber,
+                [Field.OperatorApplicationId] = fixture.OperatorApplicationId,
+                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = fixture.RegistrationNumber,
                 [Field.Material] = "glass",
                 [AccreditationYear.Field] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear,
                 [Field.PreviousAccreditationYear] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear - 1,
                 [Field.ComplianceIssuesReported] = 0,
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,
-                [Field.SiteAddress] = "1 Renamed Organisation Road, Belfast",
-                [Field.SiteAddressPostcode] = "BT1 1AA",
-                [Field.Nation] = "NorthernIreland",
+                [Field.SiteAddress] = fixture.SiteAddress,
+                [Field.SiteAddressPostcode] = fixture.SiteAddressPostcode,
+                [Field.Nation] = fixture.Nation,
                 [Field.ChargeAmountPence] = 218400,
             },
         };

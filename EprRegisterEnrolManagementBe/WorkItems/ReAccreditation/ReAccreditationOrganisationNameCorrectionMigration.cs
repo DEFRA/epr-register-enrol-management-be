@@ -20,18 +20,23 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <see cref="WorkItem.LastModifiedAt"/> and assignment stay as they are (see
 /// <see cref="IWorkItemPersistence.CompareAndSetPayloadFieldAsync"/>).</para>
 ///
-/// <para><strong>Matching rule.</strong> Candidates are found by their exact
-/// registration number (<see cref="RegistrationNumber"/>), not by name, and
-/// only those with <c>accreditationYear</c> <see cref="AccreditationYear"/>
-/// are in scope (any other year is left alone). Every 2027 candidate must also
-/// carry <c>operatorOrgNumber</c> <see cref="OrganisationNumber"/> (when
-/// present) and, once one is issued, a 2027 accreditation number for the same
-/// organisation and material. Its name then decides the outcome: the old name
-/// is renamed, the new name is already done (no write), and anything else, an
-/// identity mismatch, or no 2027 candidate at all ABORTS the whole run before
-/// any write. The 2026 accreditation number the ticket quotes
-/// (<c>A26NR5000690003GL</c>) is not held on the 2027 case, so it cannot be
-/// checked here.</para>
+/// <para><strong>Matching rule.</strong> Organisation 500069 holds two
+/// glass-remelt (<c>GR</c>) registrations, and the 2027 cases under both are
+/// renamed: <see cref="NorthernIrelandRegistrationNumber"/> (NIEA) and
+/// <see cref="EnglandRegistrationNumber"/> (EA; its reference carries 500226,
+/// not 500069). Candidates are found by an exact match on either registration
+/// number (<see cref="RegistrationNumbers"/>), not by name, and only those
+/// with <c>accreditationYear</c> <see cref="AccreditationYear"/> are in scope
+/// (any other year is left alone). Every 2027 candidate must also carry
+/// <c>operatorOrgNumber</c> <see cref="OrganisationNumber"/> (when present;
+/// the register lists 500069 for both registrations) and, once one is
+/// issued, a 2027 accreditation number derived from its OWN registration
+/// (<see cref="IsAllowedAccreditationNumber"/>). Its name then decides the
+/// outcome: the old name is renamed, the new name is already done (no write),
+/// and anything else, an identity mismatch, or no 2027 candidate across both
+/// registrations ABORTS the whole run before any write. The 2026 accreditation
+/// numbers (<c>A26NR5000690003GR</c>, <c>A26ER5002260023GR</c>) are not held
+/// on the 2027 cases, so they cannot be checked here.</para>
 ///
 /// <para><strong>Gates</strong> (as RA-691, keys mirroring the operator
 /// backend's RA-764 migration), all required before a single write:</para>
@@ -67,18 +72,37 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
     public const string OldName = "Encirc Ltd";
     public const string NewName = "VIDRALA UK & IRELAND LIMITED";
     public const int OrganisationNumber = 500069;
-    public const string RegistrationNumber = "R26NR5000690003GL";
+
+    /// <summary>500069's NIEA glass-remelt registration.</summary>
+    public const string NorthernIrelandRegistrationNumber = "R26NR5000690003GR";
+
+    /// <summary>
+    /// 500069's EA glass-remelt registration. The reference carries 500226,
+    /// not the organisation number.
+    /// </summary>
+    public const string EnglandRegistrationNumber = "R26ER5002260055GR";
+
+    /// <summary>Every registration whose 2027 cases are renamed.</summary>
+    internal static readonly IReadOnlyList<string> RegistrationNumbers =
+    [
+        NorthernIrelandRegistrationNumber,
+        EnglandRegistrationNumber,
+    ];
+
     public const int AccreditationYear = 2027;
 
     internal const string OrganisationNameField = "organisationName";
     internal const string RegistrationNumberField = "registrationNumber";
     internal const string OperatorOrgNumberField = "operatorOrgNumber";
 
-    // A 2027 accreditation number for this organisation and material, any
-    // sequence: A27 NR 500069 #### GL.
-    private const string AccreditationNumberPrefix = "A27NR500069";
-    private const string AccreditationNumberMaterial = "GL";
-    private const int AccreditationNumberLength = 17;
+    // Registration and accreditation references share one shape:
+    // {R|A}{yy}{agency}R{org:D6}{sequence:D4}{material}, 17 characters.
+    // Characters 3-10 (agency, type, six-digit org) and the material are the
+    // identity; the sequence is issued per accreditation.
+    private const int ReferenceLength = 17;
+    private const int IdentityStart = 3;
+    private const int SequenceStart = 11;
+    private const int SequenceLength = 4;
 
     /// <summary>What one run did. Returned for tests; the logs say the same.</summary>
     internal enum RunResult
@@ -139,12 +163,18 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
 
         var apply = ResolveApplyMode();
 
-        var candidates = await persistence.FindByPayloadFieldAsync(
-            ReAccreditationType.Id,
-            RegistrationNumberField,
-            RegistrationNumber,
-            cancellationToken
-        );
+        var candidates = new List<WorkItem>();
+        foreach (var registrationNumber in RegistrationNumbers)
+        {
+            candidates.AddRange(
+                await persistence.FindByPayloadFieldAsync(
+                    ReAccreditationType.Id,
+                    RegistrationNumberField,
+                    registrationNumber,
+                    cancellationToken
+                )
+            );
+        }
 
         // Plan every candidate before writing any: an abort on the second
         // must not leave the first renamed.
@@ -247,7 +277,8 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
             ? (
                 toRename,
                 $"expected at least one {AccreditationYear} work item with registration number "
-                    + $"{RegistrationNumber}, found none ({candidates.Count} of any year)."
+                    + $"{string.Join(" or ", RegistrationNumbers)}, found none "
+                    + $"({candidates.Count} of any year)."
             )
             : (toRename, null);
     }
@@ -356,7 +387,7 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
 
     /// <summary>
     /// Why <paramref name="item"/> is not organisation 500069's 2027 glass
-    /// application, or <c>null</c> when it is. Older submissions predate
+    /// application under an allowed registration, or <c>null</c> when it is. Older submissions predate
     /// <c>operatorOrgNumber</c>, and the accreditation number exists only once
     /// the 2027 accreditation is issued, so each is checked only when present.
     /// </summary>
@@ -374,21 +405,77 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
             return $"carries operatorOrgNumber {orgNumber}, not {OrganisationNumber}.";
         }
 
+        // Found by an exact match on an allowed registration, so this only
+        // trips if the lookup ever returns something else: never rename it.
+        var registrationNumber = ReadString(item.Payload, RegistrationNumberField);
+        if (registrationNumber is null || !RegistrationNumbers.Contains(registrationNumber))
+        {
+            return $"carries registration number {registrationNumber}, which is not "
+                + $"{string.Join(" or ", RegistrationNumbers)}.";
+        }
+
         var accreditationId = ReAccreditationAccreditationNumber.Read(item.Payload);
-        if (accreditationId is not null && !IsThisOrganisationsAccreditationNumber(accreditationId))
+        if (
+            accreditationId is not null
+            && !IsAllowedAccreditationNumber(registrationNumber, accreditationId)
+        )
         {
             return $"carries accreditation number {accreditationId}, which is not "
-                + $"{AccreditationNumberPrefix}####{AccreditationNumberMaterial}.";
+                + $"{ExpectedAccreditationNumberPattern(registrationNumber)} "
+                + $"(derived from its registration {registrationNumber}).";
         }
 
         return null;
     }
 
-    private static bool IsThisOrganisationsAccreditationNumber(string value) =>
-        value.Length == AccreditationNumberLength
-        && value.StartsWith(AccreditationNumberPrefix, StringComparison.Ordinal)
-        && value.EndsWith(AccreditationNumberMaterial, StringComparison.Ordinal)
-        && value[AccreditationNumberPrefix.Length..^AccreditationNumberMaterial.Length].All(char.IsAsciiDigit);
+    /// <summary>
+    /// The 2027 accreditation number <paramref name="registrationNumber"/>'s
+    /// case may carry, with its sequence as <c>####</c>: the leading
+    /// <c>R</c> becomes <c>A</c>, characters 2-3 become the year, and the
+    /// rest is copied (R26NR5000690003GR → A27NR500069####GR, R26ER5002260055GR
+    /// → A27ER500226####GR). <c>null</c> for anything but an allowed
+    /// registration.
+    /// </summary>
+    internal static string? ExpectedAccreditationNumberPattern(string? registrationNumber) =>
+        registrationNumber is not null && RegistrationNumbers.Contains(registrationNumber)
+            ? "A"
+                + (AccreditationYear % 100).ToString("D2", System.Globalization.CultureInfo.InvariantCulture)
+                + registrationNumber[IdentityStart..SequenceStart]
+                + new string('#', SequenceLength)
+                + registrationNumber[(SequenceStart + SequenceLength)..]
+            : null;
+
+    /// <summary>
+    /// True when <paramref name="accreditationNumber"/> matches the pattern
+    /// derived from the case's own <paramref name="registrationNumber"/>, any
+    /// four-digit sequence (the 2027 sequence is issued per accreditation, as
+    /// the EA registration's 2026 accreditation A26ER5002260023GR shows). A
+    /// number derived from the OTHER registration is rejected.
+    /// </summary>
+    internal static bool IsAllowedAccreditationNumber(
+        string? registrationNumber,
+        string accreditationNumber
+    )
+    {
+        var pattern = ExpectedAccreditationNumberPattern(registrationNumber);
+        if (pattern is null || accreditationNumber.Length != ReferenceLength)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < ReferenceLength; i++)
+        {
+            var matches = pattern[i] == '#'
+                ? char.IsAsciiDigit(accreditationNumber[i])
+                : pattern[i] == accreditationNumber[i];
+            if (!matches)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static bool TryReadYear(BsonDocument payload, out int year)
     {

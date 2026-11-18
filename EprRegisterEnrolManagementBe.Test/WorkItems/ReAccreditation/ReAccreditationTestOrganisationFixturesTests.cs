@@ -30,6 +30,9 @@ public class ReAccreditationTestOrganisationFixturesTests
     private static readonly Guid s_organisationNameCorrectionId = Guid.Parse(
         ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId
     );
+    private static readonly Guid s_organisationNameCorrectionEnglandId = Guid.Parse(
+        ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionEnglandId
+    );
 
     private readonly MongoIntegrationFixture _fixture;
 
@@ -72,6 +75,7 @@ public class ReAccreditationTestOrganisationFixturesTests
                 ReAccreditationTestOrganisationFixtures.PreYearStartId,
                 ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedId,
                 ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId,
+                ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionEnglandId,
             ],
             documents.Select(d => d["_id"].AsString)
         );
@@ -96,11 +100,10 @@ public class ReAccreditationTestOrganisationFixturesTests
     [InlineData("2031-01-01T00:00:00Z")]
     public void Both_fixtures_show_valid_registration_references(string now)
     {
-        // RA-764's fixture carries the real target's registration number
-        // verbatim (the migration is keyed to it), whose legacy "GL" glass
-        // code predates the GR/GO split this check knows.
-        var documents = BuildFixtures(new FakeTimeProvider(DateTimeOffset.Parse(now)))
-            .Where(d => d["_id"].AsString != ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId);
+        // RA-764's fixtures carry the real target's registration numbers
+        // verbatim (the migration is keyed to them); both are valid GR
+        // (glass remelt) references.
+        var documents = BuildFixtures(new FakeTimeProvider(DateTimeOffset.Parse(now)));
 
         Assert.All(
             documents,
@@ -249,17 +252,35 @@ public class ReAccreditationTestOrganisationFixturesTests
     }
 
     /// <summary>
-    /// RA-764: without the migration's keys (CDP test) the fixture keeps the
-    /// old name, as a real 2027 case would before the fix.
+    /// RA-764: without the migration's keys (CDP test) both fixtures keep the
+    /// old name, as a real 2027 case would before the fix. One per 500069
+    /// registration: NIEA and EA.
     /// </summary>
-    [Fact]
-    public async Task The_organisation_name_fixture_is_seeded_with_the_old_name_and_no_history()
+    [Theory]
+    [InlineData(
+        ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId,
+        ReAccreditationOrganisationNameCorrectionMigration.NorthernIrelandRegistrationNumber,
+        "RA-900000764",
+        "NorthernIreland"
+    )]
+    [InlineData(
+        ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionEnglandId,
+        ReAccreditationOrganisationNameCorrectionMigration.EnglandRegistrationNumber,
+        "RA-900000765",
+        "England"
+    )]
+    public async Task The_organisation_name_fixtures_are_seeded_with_the_old_name_and_no_history(
+        string id,
+        string registrationNumber,
+        string applicationReference,
+        string nation
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         using var factory = NewFactory();
         var persistence = factory.Services.GetRequiredService<IWorkItemPersistence>();
 
-        var item = await persistence.GetByIdAsync(s_organisationNameCorrectionId, ct);
+        var item = await persistence.GetByIdAsync(Guid.Parse(id), ct);
 
         Assert.NotNull(item);
         Assert.Equal("submitted", item!.StateId);
@@ -268,7 +289,13 @@ public class ReAccreditationTestOrganisationFixturesTests
             ReAccreditationOrganisationNameCorrectionMigration.OldName,
             item.Payload["organisationName"].AsString
         );
-        Assert.Equal("R26NR5000690003GL", item.Payload["registrationNumber"].AsString);
+        Assert.Equal(registrationNumber, item.Payload["registrationNumber"].AsString);
+        Assert.Equal(applicationReference, item.Payload["applicationReference"].AsString);
+        Assert.Equal(nation, item.Payload["nation"].AsString);
+        Assert.Equal(
+            ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionOrganisationId,
+            item.Payload["operatorOrganisationId"].AsString
+        );
         Assert.Equal(500069, item.Payload["operatorOrgNumber"].ToInt32());
         Assert.Equal(2027, item.Payload["accreditationYear"].ToInt32());
         Assert.Null(item.AssignedToId);
@@ -300,6 +327,7 @@ public class ReAccreditationTestOrganisationFixturesTests
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "frontend");
 
         var item = await persistence.GetByIdAsync(s_organisationNameCorrectionId, ct);
+        var england = await persistence.GetByIdAsync(s_organisationNameCorrectionEnglandId, ct);
         var byNewName = await client.GetAsync(
             "/work-items?organisation=" + Uri.EscapeDataString("VIDRALA UK & IRELAND LIMITED"),
             ct
@@ -312,16 +340,20 @@ public class ReAccreditationTestOrganisationFixturesTests
         );
         Assert.Equal("submitted", item.StateId);
         Assert.Empty(item.AuditLog);
+        Assert.Equal(
+            ReAccreditationOrganisationNameCorrectionMigration.NewName,
+            england!.Payload["organisationName"].AsString
+        );
+        Assert.Equal("submitted", england.StateId);
+        Assert.Empty(england.AuditLog);
         Assert.Equal(HttpStatusCode.OK, byNewName.StatusCode);
-        Assert.Contains(
-            ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId,
-            await byNewName.Content.ReadAsStringAsync(ct)
-        );
+        var newNameBody = await byNewName.Content.ReadAsStringAsync(ct);
+        Assert.Contains(ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId, newNameBody);
+        Assert.Contains(ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionEnglandId, newNameBody);
         Assert.Equal(HttpStatusCode.OK, byOldName.StatusCode);
-        Assert.DoesNotContain(
-            ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId,
-            await byOldName.Content.ReadAsStringAsync(ct)
-        );
+        var oldNameBody = await byOldName.Content.ReadAsStringAsync(ct);
+        Assert.DoesNotContain(ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId, oldNameBody);
+        Assert.DoesNotContain(ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionEnglandId, oldNameBody);
         Assert.Contains(
             factory.Services.GetServices<IHostedService>(),
             s => s is ReAccreditationOrganisationNameCorrectionMigration and IHostedLifecycleService
