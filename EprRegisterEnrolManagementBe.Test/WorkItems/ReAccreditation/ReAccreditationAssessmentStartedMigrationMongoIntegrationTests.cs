@@ -388,8 +388,8 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
     private WorkItemService BuildEngine() =>
         new(Registry(), _persistence, NullLogger<WorkItemService>.Instance, new WorkItemSubmissionDependencies(TestReferenceGenerators.ApplicationOnly(), TestReferenceGenerators.FixedSubmissionReference()));
 
-    private ReAccreditationLogDecisionService BuildDecisionService(WorkItemService engine) =>
-        new(
+    private IStandardLogDecisionService BuildDecisionService(WorkItemService engine) =>
+        ReAccreditationLifecycleTestServices.LogDecisionService(
             _persistence,
             engine,
             Registry(),
@@ -407,8 +407,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
                 Registry(),
                 [],
                 NullLogger<ReAccreditationRefusalService>.Instance
-            ),
-            NullLogger<ReAccreditationLogDecisionService>.Instance
+            )
         );
 
     private ReAccreditationQueryService BuildQueryService(WorkItemService engine) =>

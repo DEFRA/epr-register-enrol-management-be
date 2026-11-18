@@ -11,7 +11,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <c>[BsonRepresentation(BsonType.String)]</c> (unlike its sibling
 /// <see cref="Models.ReAccreditationPayload.GlassRecyclingProcess"/>), so every
 /// deserialize → with-mutate → <c>ToBsonDocument()</c> → merge cycle in
-/// <c>ReAccreditationApprovalService</c> / <c>ReAccreditationDulyMakingService</c>
+/// <c>ReAccreditationApprovalService</c> / <c>StandardDulyMakingService</c>
 /// re-wrote the field as the driver's default ordinal int
 /// (England=0, Scotland=1, Wales=2, NorthernIreland=3) instead of the enum member
 /// name. The payload starts out correct — a raw BSON string written by

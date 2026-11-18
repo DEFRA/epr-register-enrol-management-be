@@ -27,17 +27,18 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 /// no caller-invocable <c>withdraw*</c> declaration (or no snapshot, which the
 /// engine resolves to the live v2 type) is skipped.
 ///
-/// A small migration of its own rather than
-/// <c>ReAccreditationSnapshotMigrationBase</c>, which is re-accreditation's
-/// (a module must not depend on another module). Like it, it decides from the
-/// projected candidate, re-reads the full audit-bearing document before
-/// saving (the query projection omits <see cref="WorkItem.AuditLog"/> and
-/// <see cref="WorkItem.Notes"/>), re-checks it, and treats a concurrency
-/// conflict as another instance having migrated the item already.
+/// RA-495 review: built on the framework's
+/// <see cref="WorkItemSnapshotMigrationBase"/>, shared with
+/// re-accreditation's snapshot migrations (a module must not depend on
+/// another module): it decides from the projected candidate, re-reads the
+/// full audit-bearing document before saving (the query projection omits
+/// <see cref="WorkItem.AuditLog"/> and <see cref="WorkItem.Notes"/>),
+/// re-checks it, and treats a concurrency conflict as another instance having
+/// migrated the item already.
 /// </summary>
 internal sealed class AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigration(
     ILogger<AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigration> logger
-) : IWorkItemMigration
+) : WorkItemSnapshotMigrationBase(AddOverseasSiteType.Id, logger)
 {
     private const string TargetVersion = "v2";
 
@@ -54,66 +55,13 @@ internal sealed class AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigration
         "withdraw-during-updated",
     };
 
-    public string Name =>
+    public override string Name =>
         "AddOverseasSite: make the withdraw* transitions not caller-invocable in snapshot (v1 → v2)";
 
-    public async Task ApplyAsync(IWorkItemPersistence persistence, CancellationToken cancellationToken)
-    {
-        var migrated = 0;
-        var skipped = 0;
-
-        await WorkItemMigrationPaging.VisitAllAsync(
-            persistence,
-            AddOverseasSiteType.Id,
-            async (candidate, ct) =>
-            {
-                if (!NeedsMigration(candidate))
-                {
-                    skipped++;
-                    return;
-                }
-
-                // Re-read before saving: the candidate omits AuditLog/Notes,
-                // and another instance may have migrated it since the query.
-                var full = await persistence.GetByIdAsync(candidate.Id, ct);
-                if (full is null || !NeedsMigration(full))
-                {
-                    skipped++;
-                    return;
-                }
-
-                PatchSnapshot(full);
-
-                try
-                {
-                    await persistence.ReplaceAsync(full, ct);
-                    migrated++;
-                }
-                catch (WorkItemConcurrencyException ex)
-                {
-                    logger.LogDebug(
-                        ex,
-                        "Concurrency conflict on work item {Id}; skipping — another instance already migrated it.",
-                        full.Id
-                    );
-                    skipped++;
-                }
-            },
-            cancellationToken
-        );
-
-        logger.LogInformation(
-            "Migration '{Name}' complete: {Migrated} updated, {Skipped} already current.",
-            Name,
-            migrated,
-            skipped
-        );
-    }
-
-    private static bool NeedsMigration(WorkItem workItem) =>
+    protected override bool NeedsMigration(WorkItem workItem) =>
         workItem.TemplateSnapshot is { } snapshot && snapshot.Transitions.Any(IsCallerInvocableWithdraw);
 
-    private static void PatchSnapshot(WorkItem workItem)
+    protected override void PatchSnapshot(WorkItem workItem)
     {
         var snapshot = workItem.TemplateSnapshot!;
 

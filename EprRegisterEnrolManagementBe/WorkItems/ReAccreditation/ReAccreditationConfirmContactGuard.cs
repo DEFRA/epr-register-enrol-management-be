@@ -6,7 +6,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <summary>
 /// RA-527: the rules for step 2 of a determination ("confirm applicant
 /// contact"), for both outcomes, in one place.
-/// <see cref="ReAccreditationConfirmContactService"/> applies them BEFORE the
+/// <see cref="StandardConfirmContactService"/> applies them BEFORE the
 /// operator-journey push, so the operator is never told "Granted" or
 /// "Refused" about an item the write would then refuse, and the write itself
 /// (<see cref="ReAccreditationApprovalService.ApproveAsync"/> or

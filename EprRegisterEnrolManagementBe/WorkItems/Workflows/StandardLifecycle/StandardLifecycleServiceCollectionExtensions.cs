@@ -66,7 +66,7 @@ internal static class StandardLifecycleServiceCollectionExtensions
     {
         services.AddSingleton<TStrategy>();
         services.AddSingleton<IStandardLifecycleStrategy>(sp => sp.GetRequiredService<TStrategy>());
-        services.AddSingleton<IWorkItemPostActionHook>(sp => new DeferredStatusPushHook<TStrategy>(sp));
+        services.AddSingleton<IWorkItemPostActionHook, DeferredStatusPushHook<TStrategy>>();
         return services;
     }
 
@@ -77,9 +77,10 @@ internal static class StandardLifecycleServiceCollectionExtensions
     /// The type's <see cref="StandardStatusPushHook"/>, built on first use.
     /// A strategy's determination writes take every post-action hook, this one
     /// included, so building it from the strategy up front would be a
-    /// dependency cycle.
+    /// dependency cycle. RA-495 review: registered by type, not a factory, so a
+    /// module's hook-order tests can find it among the registrations.
     /// </summary>
-    private sealed class DeferredStatusPushHook<TStrategy>(IServiceProvider services) : IWorkItemPostActionHook
+    internal sealed class DeferredStatusPushHook<TStrategy>(IServiceProvider services) : IWorkItemPostActionHook
         where TStrategy : class, IStandardLifecycleStrategy
     {
         private readonly Lazy<StandardStatusPushHook> _hook = new(() =>

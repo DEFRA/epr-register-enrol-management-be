@@ -440,8 +440,9 @@ internal static class ReAccreditationEndpoints
     /// <summary>
     /// RA-316: complete duly making for a re-accreditation work item.
     ///
-    /// Delegates to the module-scoped <see cref="IReAccreditationDulyMakingService"/>
-    /// so the bespoke workflow — anchoring the 12-week SLA clock to the entered
+    /// Delegates to the shared <see cref="IStandardDulyMakingService"/>, limited
+    /// to re-accreditation (keyed by <see cref="ReAccreditationType.Id"/>), so
+    /// the bespoke workflow — anchoring the 12-week SLA clock to the entered
     /// payment date, stamping that date on the payload, notifying the operator
     /// and pushing the new status — runs atomically with the state transition.
     ///
@@ -458,7 +459,7 @@ internal static class ReAccreditationEndpoints
         [FromRoute] Guid id,
         HttpContext httpContext,
         [FromBody] DulyMakeRequest? request,
-        [FromServices] IReAccreditationDulyMakingService dulyMakingService,
+        [FromKeyedServices(ReAccreditationType.Id)] IStandardDulyMakingService dulyMakingService,
         [FromServices] IWorkItemService engine,
         [FromServices] TimeProvider timeProvider,
         CancellationToken cancellationToken
@@ -726,7 +727,7 @@ internal static class ReAccreditationEndpoints
     /// <c>awaiting-decision</c> to (RA-527, step 1 of two)
     /// <c>approved-pending-contact</c> / <c>rejected-pending-contact</c>,
     /// with both hops applied server-side by
-    /// <see cref="IReAccreditationLogDecisionService"/>.
+    /// <see cref="IStandardLogDecisionService"/>, limited to re-accreditation.
     ///
     /// The body names an outcome, never a state or an action id, so a caller
     /// cannot pick a destination the workflow does not allow. Validation
@@ -752,7 +753,7 @@ internal static class ReAccreditationEndpoints
         [FromRoute] Guid id,
         [FromBody] LogDecisionRequest? request,
         HttpContext httpContext,
-        [FromServices] IReAccreditationLogDecisionService logDecisionService,
+        [FromKeyedServices(ReAccreditationType.Id)] IStandardLogDecisionService logDecisionService,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )
@@ -816,7 +817,7 @@ internal static class ReAccreditationEndpoints
     > ConfirmContact(
         [FromRoute] Guid id,
         HttpContext httpContext,
-        [FromServices] IReAccreditationConfirmContactService confirmContactService,
+        [FromKeyedServices(ReAccreditationType.Id)] IStandardConfirmContactService confirmContactService,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
     )

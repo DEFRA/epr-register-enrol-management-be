@@ -21,11 +21,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   which the module registers as a post-action hook.</item>
 ///   <item>Charge source and payment-date stamp: <see cref="ReAccreditationDulyMakingRules"/>.</item>
 /// </list>
+/// RA-495 review: registered once, through
+/// <see cref="StandardLifecycleServiceCollectionExtensions.AddStandardLifecycle{TStrategy}"/>,
+/// and shared by the shared routes and re-accreditation's own.
 /// </summary>
 internal sealed class ReAccreditationLifecycleStrategy(
     IReAccreditationApprovalService approvalService,
     IReAccreditationRefusalService refusalService,
-    ILogger logger
+    ILogger<ReAccreditationLifecycleStrategy> logger
 ) : ReAccreditationDulyMakingRules, IStandardLifecycleStrategy
 {
     public IOperatorJourneyPush? OperatorJourneyPush => ReAccreditationOperatorJourneyPush.Instance;
@@ -37,10 +40,9 @@ internal sealed class ReAccreditationLifecycleStrategy(
 /// <summary>
 /// RA-495: what re-accreditation's duly make needs from the shared
 /// lifecycle: the type, the charge source (the payload's
-/// <c>chargeAmountPence</c>) and the payment-date stamp. Re-accreditation's
-/// own duly-making service (<see cref="ReAccreditationDulyMakingService"/>)
-/// uses it on its own; <see cref="ReAccreditationLifecycleStrategy"/> adds
-/// the push target and the determination writes.
+/// <c>chargeAmountPence</c>) and the payment-date stamp.
+/// <see cref="ReAccreditationLifecycleStrategy"/> adds the push target and
+/// the determination writes.
 /// </summary>
 internal class ReAccreditationDulyMakingRules : IStandardDulyMakingRules
 {

@@ -50,21 +50,18 @@ public class ReAccreditationLifecycleTests
         // RA-519: the hook only hands the push off to the background queue
         // now, so this walk-through test — which doesn't assert on the push
         // itself — just needs a no-op queue, not a wired-up adapter.
-        var statusPushHook = new ReAccreditationStatusPushHook(
+        var statusPushHook = ReAccreditationLifecycleTestServices.StatusPushHook(
             new WorkItemRegistry([new ReAccreditationType()]),
-            Substitute.For<IBackgroundTaskQueue>(),
-            new HeaderPropagationValues(),
-            NullLogger<ReAccreditationStatusPushHook>.Instance
+            Substitute.For<IBackgroundTaskQueue>()
         );
         // RA-316: duly making is an explicit regulator action carrying a payment
         // date, not a side effect of ticking a checklist, so it is driven here
         // by its own service exactly as the walk-through would drive it.
-        var dulyMakingService = new ReAccreditationDulyMakingService(
+        var dulyMakingService = ReAccreditationLifecycleTestServices.DulyMakingService(
             persistence,
             new WorkItemRegistry([type]),
             [statusPushHook],
-            TimeProvider.System,
-            NullLogger<ReAccreditationDulyMakingService>.Instance
+            TimeProvider.System
         );
         var engine = new WorkItemService(
             new WorkItemRegistry([type]),

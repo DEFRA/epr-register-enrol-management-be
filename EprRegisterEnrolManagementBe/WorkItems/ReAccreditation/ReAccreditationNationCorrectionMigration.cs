@@ -49,7 +49,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// </para>
 ///
 /// <para>
-/// Same header-propagation gotcha as <see cref="ReAccreditationStatusPushHook"/> (RA-519
+/// Same header-propagation gotcha as <see cref="Workflows.StandardLifecycle.StandardStatusPushHook"/> (RA-519
 /// follow-up), and no less real for running at boot instead of from a queued job:
 /// <see cref="IReExAccreditationClient"/>'s <c>HttpClient</c> is wired with
 /// <c>AddHeaderPropagation()</c> (see <c>HttpClientRegistrationExtension.AddHttpClientWithProxy</c>),

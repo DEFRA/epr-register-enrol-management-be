@@ -126,7 +126,7 @@ internal sealed record ReAccreditationPayload
     /// member name rather than the driver's default ordinal int — the same reasoning
     /// as <see cref="GlassRecyclingProcess"/> above. Without it, this record's
     /// deserialize → with-mutate → ToBsonDocument() → merge cycle in
-    /// ReAccreditationApprovalService/ReAccreditationDulyMakingService silently
+    /// ReAccreditationApprovalService/StandardDulyMakingService silently
     /// rewrote the field from its originally-stored string (written by
     /// ReAccreditationNationRoutingHook at submission) to an ordinal int, which
     /// then never matches the string-based <c>{"payload.nation": {"$in": [...]}}</c>
@@ -198,7 +198,7 @@ internal sealed record ReAccreditationPayload
 
     /// <summary>
     /// RA-316: the payment date the regulator entered when completing duly
-    /// making. Stamped by <c>ReAccreditationDulyMakingService</c> at that
+    /// making. Stamped by <c>StandardDulyMakingService</c> at that
     /// moment, and the value <see cref="Core.WorkItemSlaClock.StartedAt"/> is
     /// anchored to — the 12-week SLA runs from when payment was made, not from
     /// when the regulator got round to recording it.

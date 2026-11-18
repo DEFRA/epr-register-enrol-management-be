@@ -3,6 +3,7 @@ using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -72,7 +73,7 @@ public class ReAccreditationStatusPushHookTests
     }
 
     private sealed record Sut(
-        ReAccreditationStatusPushHook Hook,
+        StandardStatusPushHook Hook,
         IBackgroundTaskQueue Queue,
         IOperatorBackendPushAdapter Adapter,
         IWorkItemAuditAppender AuditAppender);
@@ -94,9 +95,10 @@ public class ReAccreditationStatusPushHookTests
 
         var queue = Substitute.For<IBackgroundTaskQueue>();
 
-        var hook = new ReAccreditationStatusPushHook(
+        var hook = ReAccreditationLifecycleTestServices.StatusPushHook(
             new WorkItemRegistry([new ReAccreditationType()]),
-            queue, new HeaderPropagationValues(), NullLogger<ReAccreditationStatusPushHook>.Instance);
+            queue
+        );
         return new Sut(hook, queue, adapter, auditAppender);
     }
 

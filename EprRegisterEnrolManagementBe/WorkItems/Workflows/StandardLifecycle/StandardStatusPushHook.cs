@@ -12,7 +12,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// Standard-workflow type, sent to that type's own push target
 /// (<see cref="IStandardLifecycleStrategy.OperatorJourneyPush"/>); a type with
 /// no push target is never pushed. Moved unchanged from re-accreditation's
-/// RA-368 hook below, which <c>ReAccreditationStatusPushHook</c> now wraps.
+/// RA-368 hook below (RA-495 review: re-accreditation now registers it
+/// through <c>AddStandardLifecycle</c> like any other opted-in type).
 ///
 /// RA-368: post-action hook that pushes every re-accreditation state
 /// transition to the operator backend, so its own record of application
@@ -42,7 +43,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// RA-527, <c>confirm-contact-approved</c> / <c>confirm-contact-rejected</c>)
 /// are also excluded — see <see cref="BuildExcludedActionIds"/>. Their
 /// operator-journey push is owned by the service that applies the outcome
-/// (<c>ReAccreditationConfirmContactService</c>), which fires it exactly
+/// (<c>StandardConfirmContactService</c>), which fires it exactly
 /// once as a pre-commit gate for the final outcome; this hook pushing again
 /// after each committed hop was the double-push that stranded applications in
 /// <c>awaiting-decision</c> when the operator journey was down.
@@ -157,10 +158,15 @@ internal sealed class StandardStatusPushHook(
         // services (adapter, audit appender) fresh, since it runs after this
         // request — and its DI scope — has ended.
         var workItemId = workItem.Id;
-        var toStateId = workItem.StateId;
-        var toStateDisplayName = ResolveStateDisplayName(workItem, toStateId);
-        var actionDisplayName = ResolveActionDisplayName(workItem, actionId);
-        var occurredAt = workItem.LastModifiedAt;
+        var change = new OperatorJourneyStatusChange(
+            workItemId,
+            correlationId,
+            fromStateId,
+            workItem.StateId,
+            ResolveStateDisplayName(workItem, workItem.StateId),
+            actionId,
+            ResolveActionDisplayName(workItem, actionId),
+            workItem.LastModifiedAt);
 
         // RA-519 follow-up: snapshot the allow-listed propagated headers
         // (tracing/correlation ids only) while still inside the request's
@@ -168,9 +174,7 @@ internal sealed class StandardStatusPushHook(
         // see the class doc comment above.
         var propagatedHeaders = headerPropagationValues.Headers;
 
-        var pushContext = new StatusPushContext(
-            workItemId, correlationId, fromStateId, toStateId, toStateDisplayName,
-            actionId, actionDisplayName, occurredAt, propagatedHeaders, user);
+        var pushContext = new StatusPushContext(change, propagatedHeaders, user);
 
         try
         {
@@ -219,12 +223,8 @@ internal sealed class StandardStatusPushHook(
 
             // RA-495: the type's own push target. Checked non-null before
             // anything was queued.
-            var result = await operatorJourneyPush!.PushStatusChangedAsync(
-                adapter,
-                new OperatorJourneyStatusChange(
-                    context.WorkItemId, context.CorrelationId, context.FromStateId, context.ToStateId,
-                    context.ToStateDisplayName, context.ActionId, context.ActionDisplayName, context.OccurredAt),
-                ct);
+            var change = context.Change;
+            var result = await operatorJourneyPush!.PushStatusChangedAsync(adapter, change, ct);
 
             // actionDisplayName/toStateDisplayName are included here (not
             // just on the wire push) because management-fe's audit-log
@@ -234,22 +234,22 @@ internal sealed class StandardStatusPushHook(
             // action-entry key set documented in docs/work-items.md.
             var details = new Dictionary<string, string?>
             {
-                ["actionId"] = context.ActionId,
-                ["actionDisplayName"] = context.ActionDisplayName,
-                ["fromStateId"] = context.FromStateId,
-                ["toStateId"] = context.ToStateId,
-                ["toStateDisplayName"] = context.ToStateDisplayName,
-                ["correlationId"] = context.CorrelationId.ToString(),
+                ["actionId"] = change.ActionId,
+                ["actionDisplayName"] = change.ActionDisplayName,
+                ["fromStateId"] = change.FromStateId,
+                ["toStateId"] = change.ToStateId,
+                ["toStateDisplayName"] = change.ToStateDisplayName,
+                ["correlationId"] = change.CorrelationId.ToString(),
             };
 
             await RecordPushOutcomeAsync(
-                result, appender, context.WorkItemId, context.CorrelationId, details, context.User, ct);
+                result, appender, change.WorkItemId, change.CorrelationId, details, context.User, ct);
         }
         catch (Exception ex)
         {
             logger.LogError(
                 ex, "Unexpected failure pushing status-changed for work item {WorkItemId} (correlation {CorrelationId}).",
-                context.WorkItemId, context.CorrelationId);
+                context.Change.WorkItemId, context.Change.CorrelationId);
         }
     }
 
@@ -257,18 +257,13 @@ internal sealed class StandardStatusPushHook(
     /// RA-519 follow-up: the deferred job's own inputs, bundled so the
     /// closure handed to <see cref="IBackgroundTaskQueue.QueueAsync"/> and
     /// <see cref="RunQueuedPushAsync"/> take a single value instead of the
-    /// ten separate plain-value parameters <see cref="OnActionAppliedAsync"/>
-    /// captures (Sonar's parameter-count gate).
+    /// separate plain-value parameters <see cref="OnActionAppliedAsync"/>
+    /// captures (Sonar's parameter-count gate). The push payload is carried as
+    /// the <see cref="OperatorJourneyStatusChange"/> itself, built while still
+    /// inside the request, so it is not restated field by field here.
     /// </summary>
     private sealed record StatusPushContext(
-        Guid WorkItemId,
-        Guid CorrelationId,
-        string FromStateId,
-        string ToStateId,
-        string ToStateDisplayName,
-        string ActionId,
-        string ActionDisplayName,
-        DateTime OccurredAt,
+        OperatorJourneyStatusChange Change,
         IDictionary<string, StringValues>? PropagatedHeaders,
         ClaimsPrincipal User);
 
@@ -384,7 +379,7 @@ internal sealed class StandardStatusPushHook(
         // epr-p86e / RA-410: the decision actions are excluded here so this
         // post-action hook never pushes for them. RA-527: the operator-journey
         // push for a final outcome is owned by
-        // ReAccreditationConfirmContactService (step 2, confirm-contact-approved
+        // StandardConfirmContactService (step 2, confirm-contact-approved
         // / confirm-contact-rejected), which fires it exactly ONCE as a
         // pre-commit gate, before anything is persisted. Left in, this hook
         // would push again after the committed transition — the double-push

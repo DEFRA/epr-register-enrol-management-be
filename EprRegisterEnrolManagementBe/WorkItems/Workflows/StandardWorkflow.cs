@@ -94,7 +94,7 @@ public static class StandardWorkflow
     // reads "Duly made", exactly like 'duly-made', because starting a case is
     // not a response to anything: "Updated" is kept for a query response or a
     // deadline change. It is internal to the Case Management service —
-    // ReAccreditationStatusPushHook never pushes a move onto it, so the
+    // StandardStatusPushHook never pushes a move onto it, so the
     // operator stays DulyMade. Declared straight after 'duly-made' because the
     // status sort rank is the declaration order (WorkItemSort.StatusRank).
     private static readonly WorkItemState s_assessmentStarted = new(
@@ -183,7 +183,7 @@ public static class StandardWorkflow
     private static readonly IReadOnlyCollection<WorkItemTransition> s_transitions =
     [
         // RA-316: duly making. Handled exclusively by
-        // ReAccreditationDulyMakingService via
+        // StandardDulyMakingService via
         // POST /work-items/re-accreditation/{id}/duly-make.
         //
         // CallerInvocable is false for the same reason approve is not
@@ -206,7 +206,7 @@ public static class StandardWorkflow
         // is sent. Replaced payment-received (removed at v16).
         // RA-527 follow-up (v18): lands on 'assessment-started' ("Duly made"),
         // not 'assessment-in-progress' ("Updated"), and is not pushed to the
-        // operator journey (ReAccreditationStatusPushHook excludes any move
+        // operator journey (StandardStatusPushHook excludes any move
         // onto 'assessment-started'), so the operator stays DulyMade.
         new WorkItemTransition(
             "start-assessment",
@@ -243,7 +243,7 @@ public static class StandardWorkflow
         // 'assessment-in-progress' ("Updated"), not a self-loop, so both the
         // regulator and the operator see that something changed. Same action
         // id as the self-loops above. SlaService.ExtendAsync applies it in the
-        // same write as the deadline change, and ReAccreditationStatusPushHook
+        // same write as the deadline change, and StandardStatusPushHook
         // then pushes 'assessment-in-progress' (Updated) to the operator.
         // CallerInvocable is false so the generic action route cannot move a
         // started case to Updated without a deadline change.
@@ -304,7 +304,7 @@ public static class StandardWorkflow
         // the same write. CallerInvocable is false for the same reason as
         // reject above: the generic action route would move the item without
         // a number. Nothing is pushed to the operator journey for it (see
-        // ReAccreditationStatusPushHook) and no email is sent.
+        // StandardStatusPushHook) and no email is sent.
         new WorkItemTransition(
             MakeDeterminationApprovedActionId,
             MakeDeterminationApprovedDisplayName,
@@ -332,7 +332,7 @@ public static class StandardWorkflow
         // number is minted. CallerInvocable is false so the generic action
         // route cannot record a determination without its audit entry.
         // Nothing is pushed to the operator journey for it (see
-        // ReAccreditationStatusPushHook) and no email is sent.
+        // StandardStatusPushHook) and no email is sent.
         new WorkItemTransition(
             MakeDeterminationRejectedActionId,
             MakeDeterminationRejectedDisplayName,

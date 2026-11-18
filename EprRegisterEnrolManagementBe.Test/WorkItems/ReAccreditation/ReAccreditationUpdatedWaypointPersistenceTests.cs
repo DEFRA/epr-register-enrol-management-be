@@ -5,6 +5,7 @@ using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -35,7 +36,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// ONE save, and the save happens before any push.
 ///
 /// RA-316 moved this contract from the deleted <c>ReAccreditationDulyMadeHook</c>
-/// to <see cref="ReAccreditationDulyMakingService"/>. The trigger changed from
+/// to <see cref="StandardDulyMakingService"/>. The trigger changed from
 /// "the last submitted-state task was ticked" to "the regulator pressed Duly
 /// make and gave a payment date", but the persistence hazard is identical and so
 /// is the declared path through the state machine.
@@ -306,7 +307,7 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
     }
 
     private sealed record Sut(
-        ReAccreditationDulyMakingService Service,
+        IStandardDulyMakingService Service,
         RecordingBackgroundTaskQueue Queue,
         IServiceProvider ScopedServices);
 
@@ -369,11 +370,9 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
         );
 
         var queue = new RecordingBackgroundTaskQueue();
-        var statusPushHook = new ReAccreditationStatusPushHook(
+        var statusPushHook = ReAccreditationLifecycleTestServices.StatusPushHook(
             new WorkItemRegistry([new ReAccreditationType()]),
-            queue,
-            new HeaderPropagationValues(),
-            NullLogger<ReAccreditationStatusPushHook>.Instance
+            queue
         );
 
         // The DI scope the deferred job resolves its adapter/appender from —
@@ -385,12 +384,11 @@ public class ReAccreditationUpdatedWaypointPersistenceTests
             .AddSingleton(new HeaderPropagationValues())
             .BuildServiceProvider();
 
-        var service = new ReAccreditationDulyMakingService(
+        var service = ReAccreditationLifecycleTestServices.DulyMakingService(
             _persistence,
             new WorkItemRegistry([new ReAccreditationType()]),
             [notificationHook, statusPushHook],
-            TimeProvider.System,
-            NullLogger<ReAccreditationDulyMakingService>.Instance
+            TimeProvider.System
         );
 
         return new Sut(service, queue, scopedServices);

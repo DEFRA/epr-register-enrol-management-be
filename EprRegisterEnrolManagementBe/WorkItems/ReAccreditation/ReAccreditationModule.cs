@@ -38,10 +38,14 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddSingleton<IWorkItemPostActionHook, ReAccreditationQueryPushHook>();
         // RA-368: pushes every other state transition to the operator backend.
         // RA-316: no longer needs the extra self-registration it once had —
-        // ReAccreditationDulyMakingService reaches it through the ordinary
-        // IWorkItemPostActionHook fan-out like every other caller, rather than
-        // injecting the concrete type to call it directly.
-        services.AddSingleton<IWorkItemPostActionHook, ReAccreditationStatusPushHook>();
+        // duly making reaches it through the ordinary IWorkItemPostActionHook
+        // fan-out like every other caller, rather than injecting the concrete
+        // type to call it directly.
+        // RA-495: re-accreditation opts in to the shared Standard-workflow
+        // lifecycle (/work-items/{id}/duly-make|decision|confirm-contact)
+        // here, so the one strategy instance is registered once and its status
+        // push hook keeps this place in the hook order, before the email hook.
+        services.AddStandardLifecycle<ReAccreditationLifecycleStrategy>();
         // RA-422: outbound Case Management service email + every notification-* audit entry flow
         // through this one hook, so gating its registration on the central
         // Notify:Enabled flag is the single chokepoint for both concerns. When
@@ -224,20 +228,9 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         services.AddHostedService<ReAccreditationOrganisationNameCorrectionMigration>();
         // RA-132: module-scoped approval service that owns the bespoke
         // approval workflow (id issuance, SLA clock stop, queued publishing).
-        // RA-410: module-scoped service that owns the single-call decision
-        // hop. Registered after the approval service it delegates approvals to.
-        services.AddSingleton<
-            IReAccreditationLogDecisionService,
-            ReAccreditationLogDecisionService
-        >();
-        // RA-527: step 2 of the two-step determination ("confirm applicant
-        // contact"): pre-commit operator-journey push, then the approval or
-        // refusal service's single write.
-        services.AddSingleton<ReAccreditationDecisionPush>();
-        services.AddSingleton<
-            IReAccreditationConfirmContactService,
-            ReAccreditationConfirmContactService
-        >();
+        // RA-410 / RA-527 / RA-316: re-accreditation's own /decision,
+        // /confirm-contact and /duly-make routes.
+        AddReAccreditationLifecycleServices(services);
         // RA-448 phase 2: the locally-fabricated accreditation id generator
         // (AccreditationIdGenerator/AccreditationIdLookup) and its
         // ULID-format backfill migration are gone. ReAccreditationApprovalService
@@ -259,28 +252,10 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             HttpOverseasSiteRecyclingOperationsAdapter
         >();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
-        // RA-495: opts re-accreditation in to the shared Standard-workflow
-        // lifecycle routes (/work-items/{id}/duly-make|decision|confirm-contact)
-        // alongside its own. Registered directly rather than through
-        // AddStandardLifecycle: its status push hook is
-        // ReAccreditationStatusPushHook above, already in its place in the
-        // hook order.
-        services.AddSingleton<IStandardLifecycleStrategy>(sp => new ReAccreditationLifecycleStrategy(
-            sp.GetRequiredService<IReAccreditationApprovalService>(),
-            sp.GetRequiredService<IReAccreditationRefusalService>(),
-            sp.GetRequiredService<ILoggerFactory>().CreateLogger<ReAccreditationLifecycleStrategy>()
-        ));
         // RA-527: both steps of a refusal (the counterpart of the approval
         // service): step 1 for the log-decision service, step 2 for the
         // confirm-contact service.
         services.AddSingleton<IReAccreditationRefusalService, ReAccreditationRefusalService>();
-        // RA-316: bespoke duly-making workflow. Owns the submitted → duly-made
-        // transition and the side effect the generic engine cannot perform —
-        // anchoring the 12-week SLA clock to the regulator-entered payment date.
-        services.AddSingleton<
-            IReAccreditationDulyMakingService,
-            ReAccreditationDulyMakingService
-        >();
         // RA-576: corrects the payment date recorded at duly making without
         // touching state or the SLA clock.
         services.AddSingleton<
@@ -324,4 +299,62 @@ internal sealed class ReAccreditationModule : IWorkItemModule
     {
         endpoints.MapReAccreditationEndpoints();
     }
+
+    /// <summary>
+    /// RA-495 review: re-accreditation's own lifecycle routes are the shared
+    /// Standard-workflow services limited to re-accreditation alone, so any
+    /// other type is refused there as a type mismatch naming
+    /// re-accreditation, exactly as before. They are keyed by the type id
+    /// (<see cref="ReAccreditationType.Id"/>) so they cannot collide with the
+    /// unkeyed all-types services behind the shared routes, and they share
+    /// the one registered <see cref="ReAccreditationLifecycleStrategy"/>.
+    /// </summary>
+    private static void AddReAccreditationLifecycleServices(IServiceCollection services)
+    {
+        // RA-316: the submitted → duly-made transition and the side effect the
+        // generic engine cannot perform — anchoring the 12-week SLA clock to
+        // the regulator-entered payment date.
+        services.AddKeyedSingleton<IStandardDulyMakingService>(
+            ReAccreditationType.Id,
+            (sp, _) => new StandardDulyMakingService(
+                sp.GetRequiredService<IWorkItemPersistence>(),
+                sp.GetRequiredService<IWorkItemRegistry>(),
+                sp.GetServices<IWorkItemPostActionHook>(),
+                sp.GetRequiredService<TimeProvider>(),
+                Logger<StandardDulyMakingService>(sp),
+                new StandardLifecycleStrategies<IStandardDulyMakingRules>([Strategy(sp)])
+            )
+        );
+        // RA-410: the single-call decision hop (step 1 of a determination).
+        services.AddKeyedSingleton<IStandardLogDecisionService>(
+            ReAccreditationType.Id,
+            (sp, _) => new StandardLogDecisionService(
+                sp.GetRequiredService<IWorkItemPersistence>(),
+                sp.GetRequiredService<IWorkItemService>(),
+                sp.GetRequiredService<IWorkItemRegistry>(),
+                StandardLifecycleStrategies.Of(Strategy(sp)),
+                Logger<StandardLogDecisionService>(sp)
+            )
+        );
+        // RA-527: step 2 ("confirm applicant contact"): pre-commit
+        // operator-journey push, then the approval or refusal service's single
+        // write.
+        services.AddKeyedSingleton<IStandardConfirmContactService>(
+            ReAccreditationType.Id,
+            (sp, _) => new StandardConfirmContactService(
+                sp.GetRequiredService<IWorkItemPersistence>(),
+                sp.GetRequiredService<IWorkItemRegistry>(),
+                StandardLifecycleStrategies.Of(Strategy(sp)),
+                sp.GetRequiredService<StandardDecisionPush>(),
+                Logger<StandardConfirmContactService>(sp),
+                sp.GetRequiredService<TimeProvider>()
+            )
+        );
+    }
+
+    private static ReAccreditationLifecycleStrategy Strategy(IServiceProvider sp) =>
+        sp.GetRequiredService<ReAccreditationLifecycleStrategy>();
+
+    private static ILogger Logger<T>(IServiceProvider sp) =>
+        sp.GetRequiredService<ILoggerFactory>().CreateLogger<T>();
 }

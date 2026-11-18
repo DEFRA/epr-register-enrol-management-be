@@ -167,7 +167,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     // submit-for-decision from 'assessment-started' (reusing the action id,
     // still CallerInvocable: false) so Make determination works from a
     // started case. Nothing but start-assessment enters the new state.
-    // ReAccreditationStatusPushHook never pushes a move onto it. Added
+    // StandardStatusPushHook never pushes a move onto it. Added
     // sla-extend from 'assessment-started' to 'assessment-in-progress'
     // (CallerInvocable: false, applied by SlaService.ExtendAsync), so a
     // deadline change on a started case still ends at "Updated" on both sides.

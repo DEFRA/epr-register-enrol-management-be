@@ -36,7 +36,7 @@ internal sealed class NullOperatorBackendPushAdapter : IOperatorBackendPushAdapt
     // epr-p86e / RA-410: the decision push is gated on, so "disabled" must be a
     // Skipped pass (not a Failure) — otherwise every decision in an environment
     // that has not enabled the push would 500. The gate in
-    // ReAccreditationLogDecisionService treats Skipped as "proceed".
+    // StandardConfirmContactService treats Skipped as "proceed".
     public Task<OperatorBackendPushResult> PushDecisionStatusChangedAsync(
         Guid workItemId,
         Guid correlationId,

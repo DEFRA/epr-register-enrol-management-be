@@ -53,7 +53,7 @@ public interface IOperatorBackendPushAdapter
     /// to <see cref="PushStatusChangedAsync"/> — same endpoint, body and signing
     /// — but backed by a larger retry budget
     /// (<see cref="OperatorBackendApiConfig.DecisionPushMaxRetryAttempts"/>),
-    /// because the caller (<c>ReAccreditationLogDecisionService</c>) invokes it
+    /// because the caller (<c>StandardConfirmContactService</c>) invokes it
     /// <em>before</em> persisting any state change and abandons the whole
     /// decision with a 500 on failure, rather than treating the push as
     /// fire-and-forget. Still never throws: a failure is reported as a

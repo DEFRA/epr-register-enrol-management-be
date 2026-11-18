@@ -1287,7 +1287,7 @@ internal sealed class ReAccreditationSeeder(INationResolver nationResolver) : IW
             // — differs from its UTC date whenever that time falls in the
             // 23:00-24:00 UTC hour during BST. A fixture that exists to pin the
             // floor cannot be right for 23 hours a day, so it passes midnight
-            // UTC explicitly, the way ReAccreditationDulyMakingService stamps
+            // UTC explicitly, the way StandardDulyMakingService stamps
             // the clock for a real duly-made item.
             SlaClock =
                 stateId == SubmittedStateId

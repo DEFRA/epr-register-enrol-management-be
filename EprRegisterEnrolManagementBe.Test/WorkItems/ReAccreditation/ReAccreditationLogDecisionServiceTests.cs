@@ -662,13 +662,12 @@ public class ReAccreditationLogDecisionServiceTests
             }
             User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
 
-            Service = new ReAccreditationLogDecisionService(
+            Service = ReAccreditationLifecycleTestServices.LogDecisionService(
                 Persistence,
                 Engine,
                 new WorkItemRegistry([new ReAccreditationType()]),
                 ApprovalService,
-                RefusalService,
-                NullLogger<ReAccreditationLogDecisionService>.Instance
+                RefusalService
             );
         }
 
@@ -678,7 +677,7 @@ public class ReAccreditationLogDecisionServiceTests
         public IReAccreditationApprovalService ApprovalService { get; }
         public IReAccreditationRefusalService RefusalService { get; }
         public ClaimsPrincipal User { get; }
-        public ReAccreditationLogDecisionService Service { get; }
+        public IStandardLogDecisionService Service { get; }
         public List<string> AppliedActionIds { get; } = [];
         public List<string> OrderedCalls { get; } = [];
         public AccreditationNumberResult? LastRecordedNumberArgument { get; private set; }

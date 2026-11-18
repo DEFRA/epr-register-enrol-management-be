@@ -19,7 +19,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// separate one, because <c>ReplaceAsync</c> is version-guarded and an out-of-band
 /// append between load and save would make the save throw.
 ///
-/// Concurrency is handled as in <see cref="ReAccreditationDulyMakingService"/>:
+/// Concurrency is handled as in <see cref="Workflows.StandardLifecycle.StandardDulyMakingService"/>:
 /// reload and re-validate on a <see cref="WorkItemConcurrencyException"/>, up to
 /// <see cref="MaxAttempts"/> times.
 /// </summary>

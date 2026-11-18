@@ -2,6 +2,7 @@ using EprRegisterEnrolManagementBe.Notifications;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace EprRegisterEnrolManagementBe.Test.Notifications;
@@ -95,7 +96,10 @@ public class NotifyApiKeyRegistrationTests
 
         Assert.Contains(hooks, h => h is ReAccreditationNationRoutingHook);
         Assert.Contains(hooks, h => h is ReAccreditationQueryPushHook);
-        Assert.Contains(hooks, h => h is ReAccreditationStatusPushHook);
+        Assert.Contains(
+            hooks,
+            h => h is StandardLifecycleServiceCollectionExtensions.DeferredStatusPushHook<ReAccreditationLifecycleStrategy>
+        );
     }
 
     private static IReadOnlyList<IWorkItemPostActionHook> Hooks(EphemeralMongoTestFactory factory) =>

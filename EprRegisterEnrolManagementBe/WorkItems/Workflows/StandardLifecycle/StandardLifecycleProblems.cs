@@ -24,25 +24,8 @@ internal static class StandardLifecycleProblems
     /// produces is a type mismatch, which gets an <c>errorCode</c> so the
     /// frontend never parses prose.
     /// </summary>
-    public static ProblemHttpResult ServiceFailure(WorkItemActionResult result, string title)
-    {
-        var status = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.InvalidTransition
-            or WorkItemActionFailureCode.TerminalState
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            WorkItemActionFailureCode.TemplateUnavailable => StatusCodes.Status500InternalServerError,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        return TypedResults.Problem(
-            title: title,
-            detail: result.Message,
-            statusCode: status,
-            extensions: WrongTypeExtensions(result)
-        );
-    }
+    public static ProblemHttpResult ServiceFailure(WorkItemActionResult result, string title) =>
+        Problem(result, title, ServiceStatus(result.FailureCode));
 
     /// <summary>
     /// A failed determination step (make determination, confirm contact). As
@@ -50,35 +33,46 @@ internal static class StandardLifecycleProblems
     /// 500 for an upstream dependency (the operator journey push, the
     /// accreditation-number call) that failed before anything was persisted.
     /// </summary>
-    public static ProblemHttpResult DecisionFailure(WorkItemActionResult result, string title)
-    {
-        var status = result.FailureCode switch
+    public static ProblemHttpResult DecisionFailure(WorkItemActionResult result, string title) =>
+        Problem(result, title, DecisionStatus(result.FailureCode));
+
+    private static int ServiceStatus(WorkItemActionFailureCode? code) =>
+        code switch
         {
             WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
             WorkItemActionFailureCode.InvalidTransition
             or WorkItemActionFailureCode.TerminalState
             or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            // RA-495 review: a work item whose template cannot be resolved (an
+            // unregistered type with no snapshot) is a server-side problem.
+            WorkItemActionFailureCode.TemplateUnavailable => StatusCodes.Status500InternalServerError,
+            _ => StatusCodes.Status400BadRequest,
+        };
+
+    // Only a determination step can be refused for authorisation or abandoned
+    // on an upstream call, so these codes stay 400 on the service mapping and
+    // the two mappings cannot drift apart on the codes they share.
+    private static int DecisionStatus(WorkItemActionFailureCode? code) =>
+        code switch
+        {
+            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
             // epr-p86e / RA-410: the operator journey could not be notified,
             // so the step was abandoned before anything was persisted. RA-475:
             // likewise the accreditation-number call. A server-side dependency
             // problem, not a malformed request, so a generic 500 with no
             // errorCode: the frontend shows a generic try-again.
-            // RA-495 review: likewise a work item whose template cannot be
-            // resolved (an unregistered type with no snapshot).
             WorkItemActionFailureCode.UpstreamNotificationFailed
-            or WorkItemActionFailureCode.AccreditationNumberUnavailable
-            or WorkItemActionFailureCode.TemplateUnavailable => StatusCodes.Status500InternalServerError,
-            _ => StatusCodes.Status400BadRequest,
+            or WorkItemActionFailureCode.AccreditationNumberUnavailable => StatusCodes.Status500InternalServerError,
+            _ => ServiceStatus(code),
         };
 
-        return TypedResults.Problem(
+    private static ProblemHttpResult Problem(WorkItemActionResult result, string title, int status) =>
+        TypedResults.Problem(
             title: title,
             detail: result.Message,
             statusCode: status,
             extensions: WrongTypeExtensions(result)
         );
-    }
 
     // UnknownAction is the services' "type has not opted in" failure
     // (StandardLifecycleStrategies.NotOptedIn). RA-495 review: a work item whose
