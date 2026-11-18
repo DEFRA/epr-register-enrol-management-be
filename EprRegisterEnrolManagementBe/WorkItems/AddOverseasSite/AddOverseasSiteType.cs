@@ -62,6 +62,9 @@ internal sealed class AddOverseasSiteType : IWorkItemType
     public IReadOnlyCollection<WorkItemState> States => Workflow.States;
     public IReadOnlyCollection<WorkItemTransition> Transitions => Workflow.Transitions;
 
+    // A withdraw is any move onto the Withdrawn state, not an action-id
+    // prefix: the push hook never pushes a move onto withdrawn, which is why
+    // add-ORS must not take one.
     private static bool IsWithdraw(WorkItemTransition transition) =>
-        transition.ActionId.StartsWith("withdraw", StringComparison.OrdinalIgnoreCase);
+        transition.ToStateId == StandardWorkflow.WithdrawnStateId;
 }
