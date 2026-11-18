@@ -100,6 +100,8 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         public const string ChargeAmountPence = "chargeAmountPence";
     }
 
+    private const string EnglandNation = "England";
+
     private const string SimulatedDeliveredEmail = "simulate-delivered@notifications.service.gov.uk";
 
     public string TypeId => ReAccreditationType.Id;
@@ -167,7 +169,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 [Field.ComplianceIssuesReported] = 0,
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,
                 [Field.SiteAddressPostcode] = "SW1A 1AA",
-                [Field.Nation] = "England",
+                [Field.Nation] = EnglandNation,
             },
             ["templateSnapshot"] = new BsonDocument
             {
@@ -253,7 +255,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,
                 [Field.SiteAddress] = "1 Pre Year Start Road, Leeds",
                 [Field.SiteAddressPostcode] = "LS1 4AP",
-                [Field.Nation] = "England",
+                [Field.Nation] = EnglandNation,
                 [Field.ChargeAmountPence] = 218400,
             },
         };
@@ -301,7 +303,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,
                 [Field.SiteAddress] = "1 Corrected Reference Road, Leeds",
                 [Field.SiteAddressPostcode] = "LS1 4AP",
-                [Field.Nation] = "England",
+                [Field.Nation] = EnglandNation,
                 [Field.ChargeAmountPence] = 218400,
                 [ReAccreditationAccreditationNumber.PayloadKey] = AccreditationNumberCorrectedTo,
                 ["accreditationStartDate"] = "2027-01-01",
@@ -350,7 +352,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         ReAccreditationOrganisationNameCorrectionMigration.EnglandRegistrationNumber,
         "1 Renamed Organisation Road, Leeds",
         "LS1 1AA",
-        "England"
+        EnglandNation
     );
 
     /// <summary>

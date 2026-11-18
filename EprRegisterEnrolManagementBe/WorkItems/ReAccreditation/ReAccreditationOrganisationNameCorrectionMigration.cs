@@ -249,7 +249,7 @@ internal sealed class ReAccreditationOrganisationNameCorrectionMigration(
     /// The work items to rename, or why the whole run must abort. Writes
     /// nothing.
     /// </summary>
-    private (List<WorkItem> ToRename, string? AbortReason) Plan(IReadOnlyList<WorkItem> candidates)
+    private (List<WorkItem> ToRename, string? AbortReason) Plan(List<WorkItem> candidates)
     {
         var toRename = new List<WorkItem>();
         var inScope = 0;

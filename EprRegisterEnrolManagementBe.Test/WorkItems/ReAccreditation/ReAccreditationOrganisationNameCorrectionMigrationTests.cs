@@ -323,7 +323,7 @@ public sealed class ReAccreditationOrganisationNameCorrectionMigrationTests : IA
 
         Assert.Equal(Migration.RunResult.Aborted, result);
         await persistence.DidNotReceiveWithAnyArgs()
-            .CompareAndSetPayloadFieldAsync(default, default!, default!, default!, default);
+            .CompareAndSetPayloadFieldAsync(default, default!, default!, default!, Ct);
     }
 
     [Theory]
