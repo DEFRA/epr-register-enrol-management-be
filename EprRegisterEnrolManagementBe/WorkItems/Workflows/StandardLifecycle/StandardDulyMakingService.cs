@@ -116,8 +116,10 @@ internal sealed class StandardDulyMakingService(
             var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
             if (template is null)
             {
+                // Not a type mismatch (the type has opted in), so not
+                // UnknownAction, which the endpoints label wrong-work-item-type.
                 return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.UnknownAction,
+                    WorkItemActionFailureCode.TemplateUnavailable,
                     $"Work item {workItemId} references unregistered type '{workItem.TypeId}' "
                         + "and has no stored template snapshot."
                 );

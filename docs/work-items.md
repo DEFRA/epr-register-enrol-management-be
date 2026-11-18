@@ -365,6 +365,10 @@ type is configured. Every setting is code, not runtime data:
   `ReAccreditationStatusPushHook` in its place in the hook order). Emails stay
   the module's own post-action hooks. A work item of a type
   that has not opted in gets `400` with `errorCode: wrong-work-item-type`.
+  One whose type has opted in but whose template cannot be resolved (the type
+  is not registered and the item has no snapshot) is a server-side problem,
+  not a wrong type: `WorkItemActionFailureCode.TemplateUnavailable`, a generic
+  `500` with no `errorCode` (RA-495 review).
   Re-accreditation's own routes (`/work-items/re-accreditation/{id}/duly-make`,
   `/decision`, `/confirm-contact`) are unchanged: they run the same shared
   services limited to re-accreditation.

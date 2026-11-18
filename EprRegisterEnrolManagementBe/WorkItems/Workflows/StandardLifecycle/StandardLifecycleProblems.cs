@@ -18,7 +18,9 @@ internal static class StandardLifecycleProblems
     /// A failed duly-make (or change-payment-date) service result. 401 for a
     /// missing actor; 409 for the conflicts with the resource's current state
     /// (the frontend's answer is "this application has changed, reload it",
-    /// never a field error); 400 otherwise. The only 400 a service itself
+    /// never a field error); a generic 500 with no <c>errorCode</c> for a
+    /// work item whose template cannot be resolved (a server-side
+    /// configuration problem); 400 otherwise. The only 400 a service itself
     /// produces is a type mismatch, which gets an <c>errorCode</c> so the
     /// frontend never parses prose.
     /// </summary>
@@ -30,6 +32,7 @@ internal static class StandardLifecycleProblems
             WorkItemActionFailureCode.InvalidTransition
             or WorkItemActionFailureCode.TerminalState
             or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
+            WorkItemActionFailureCode.TemplateUnavailable => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
         };
 
@@ -61,9 +64,11 @@ internal static class StandardLifecycleProblems
             // likewise the accreditation-number call. A server-side dependency
             // problem, not a malformed request, so a generic 500 with no
             // errorCode: the frontend shows a generic try-again.
+            // RA-495 review: likewise a work item whose template cannot be
+            // resolved (an unregistered type with no snapshot).
             WorkItemActionFailureCode.UpstreamNotificationFailed
-            or WorkItemActionFailureCode.AccreditationNumberUnavailable =>
-                StatusCodes.Status500InternalServerError,
+            or WorkItemActionFailureCode.AccreditationNumberUnavailable
+            or WorkItemActionFailureCode.TemplateUnavailable => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
         };
 
@@ -75,6 +80,10 @@ internal static class StandardLifecycleProblems
         );
     }
 
+    // UnknownAction is the services' "type has not opted in" failure
+    // (StandardLifecycleStrategies.NotOptedIn). RA-495 review: a work item whose
+    // template cannot be resolved fails with TemplateUnavailable instead, so it
+    // is not mislabelled as the wrong type.
     private static Dictionary<string, object?>? WrongTypeExtensions(WorkItemActionResult result) =>
         result.FailureCode == WorkItemActionFailureCode.UnknownAction
             ? new Dictionary<string, object?> { [ErrorCodeKey] = WrongWorkItemTypeErrorCode }

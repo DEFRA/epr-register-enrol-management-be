@@ -95,6 +95,19 @@ public enum WorkItemActionFailureCode
     /// since retrying the same key cannot succeed.
     /// </summary>
     SubmissionRequestIdReused,
+
+    /// <summary>
+    /// RA-495 review: the work item's rules cannot be resolved, because its
+    /// type is not registered and it has no stored template snapshot
+    /// (<see cref="WorkItemEngineRules.ResolveTemplate"/> returned
+    /// <c>null</c>). Raised by the shared Standard-lifecycle services for a
+    /// type that has opted in. A server-side configuration problem, not a
+    /// wrong type or a malformed request, so it is kept distinct from
+    /// <see cref="UnknownAction"/> (which those services' endpoints label
+    /// <c>wrong-work-item-type</c>) and maps to a generic 500 with no
+    /// <c>errorCode</c>. Nothing was changed.
+    /// </summary>
+    TemplateUnavailable,
 }
 
 /// <summary>
