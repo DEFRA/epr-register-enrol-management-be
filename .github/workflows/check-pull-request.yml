@@ -28,6 +28,12 @@ jobs:
             10.0
       - name: Lint (dotnet format)
         run: dotnet format style --verify-no-changes
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Test the mongosh diagnostic scripts (node:test)
+        run: node --test docs/diagnostics/
       - name: Test with coverage
         run: dotnet test --coverage --coverage-output-format cobertura --results-directory ./coverage
 

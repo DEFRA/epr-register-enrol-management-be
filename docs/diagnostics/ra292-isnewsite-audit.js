@@ -166,7 +166,7 @@ if (typeof RA292_DEPLOYED_AT === 'undefined' || !RA292_DEPLOYED_AT) {
 }
 const WINDOW_END = new Date(RA292_DEPLOYED_AT)
 if (Number.isNaN(WINDOW_END.getTime())) {
-  throw new Error(`RA292_DEPLOYED_AT is ${RA292_DEPLOYED_AT}, which is not a date-time.`)
+  throw new TypeError(`RA292_DEPLOYED_AT is ${RA292_DEPLOYED_AT}, which is not a date-time.`)
 }
 
 // Detail fields that neither MapOverseasSite nor promotion accounts for.
