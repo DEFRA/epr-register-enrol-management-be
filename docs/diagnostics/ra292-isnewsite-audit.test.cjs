@@ -6,7 +6,7 @@
 // `RA292_DEPLOYED_AT`, so each test installs stand-ins for those and loads a
 // fresh copy of it.
 //
-//   node --test docs/diagnostics/
+//   node --test docs/diagnostics/*.test.cjs
 
 const { test, afterEach } = require('node:test')
 const assert = require('node:assert/strict')

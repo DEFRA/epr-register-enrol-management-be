@@ -29,5 +29,5 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "pre-commit: node --test docs/diagnostics/"
-node --test docs/diagnostics/
+echo "pre-commit: node --test docs/diagnostics/*.test.cjs"
+node --test docs/diagnostics/*.test.cjs

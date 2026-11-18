@@ -75,5 +75,5 @@ jobs:
           dotnet build --no-incremental
           ./.sonar/coverage/dotnet-coverage collect "dotnet test" -f xml -o "coverage.xml"
           mkdir -p js-coverage
-          node --test --experimental-test-coverage --test-coverage-include='docs/diagnostics/**' --test-coverage-exclude='**/node_modules/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=js-coverage/lcov.info docs/diagnostics/
+          node --test --experimental-test-coverage --test-coverage-include='docs/diagnostics/**' --test-coverage-exclude='**/node_modules/**' --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=js-coverage/lcov.info docs/diagnostics/*.test.cjs
           ./.sonar/scanner/dotnet-sonarscanner end /d:sonar.token="$SONAR_TOKEN"

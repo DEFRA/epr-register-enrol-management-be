@@ -28,14 +28,14 @@ jobs:
             10.0
       - name: Lint (dotnet format)
         run: dotnet format style --verify-no-changes
+      - name: Test with coverage
+        run: dotnet test --coverage --coverage-output-format cobertura --results-directory ./coverage
       - name: Set up Node.js
         uses: actions/setup-node@v7
         with:
           node-version: 24
       - name: Test the mongosh diagnostic scripts (node:test)
-        run: node --test docs/diagnostics/
-      - name: Test with coverage
-        run: dotnet test --coverage --coverage-output-format cobertura --results-directory ./coverage
+        run: node --test docs/diagnostics/*.test.cjs
 
       # Baseline as measured on 2026-08-19 (RA-437 branch-coverage follow-up,
       # second pass): 93.89% line / 88.24% branch. Fails the job on

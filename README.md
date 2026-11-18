@@ -279,7 +279,7 @@ The mongosh diagnostic scripts under `docs/diagnostics/` have their own
 `node:test` suite (Node 24, no dependencies), run by CI and the pre-commit hook:
 
 ```bash
-node --test docs/diagnostics/
+node --test docs/diagnostics/*.test.cjs
 ```
 
 ### Checks that don't check
