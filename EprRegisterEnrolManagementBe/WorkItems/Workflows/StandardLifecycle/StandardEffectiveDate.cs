@@ -61,6 +61,17 @@ internal static class StandardEffectiveDate
         return true;
     }
 
+    /// <summary>
+    /// The date the determination stamped on the payload, or null when it
+    /// stamped none (a type that takes no date) or the value is unreadable.
+    /// </summary>
+    public static DateOnly? ReadStamped(WorkItem workItem) =>
+        workItem.Payload.TryGetValue(Field, out var value)
+        && value.IsString
+        && TryParse(value.AsString, out var stamped)
+            ? stamped
+            : null;
+
     /// <summary>A refusal's effective date: the UK calendar date the request was submitted.</summary>
     public static DateOnly ForRefusal(WorkItem workItem) => UkCalendar.DateOf(workItem.SubmittedAt);
 

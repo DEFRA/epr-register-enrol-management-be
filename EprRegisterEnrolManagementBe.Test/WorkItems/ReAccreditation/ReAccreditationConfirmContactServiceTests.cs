@@ -65,6 +65,7 @@ public class ReAccreditationConfirmContactServiceTests
                     && c.ActionId == "confirm-contact-approved"
                     && c.ActionDisplayName == "Confirm applicant contact"
                     && c.OccurredAt == s_now.UtcDateTime
+                    && c.EffectiveDate == null
                 ),
                 ct
             );

@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
@@ -58,12 +59,23 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
 
         var closed = await factory.WaitForAuditAsync(id, "status-push-sent", ct, count: 2);
         Assert.Equal(outcome, closed.StateId);
+        // AC6: the decision carries the effective date, the one entered on approval or the
+        // submission date on refusal.
+        var effectiveDate = outcome == "approved" ? EffectiveDate : UkCalendar.DateOf(closed.SubmittedAt);
         // Starting the assessment and the pending-contact step are never queued,
         // so nothing more can arrive later.
         Assert.Equal(
             [
                 new Push(ChangeRequest, BestEffort, id, "submitted", "duly-made", "duly-make"),
-                new Push(ChangeRequest, Decision, id, $"{outcome}-pending-contact", outcome, confirmActionId),
+                new Push(
+                    ChangeRequest,
+                    Decision,
+                    id,
+                    $"{outcome}-pending-contact",
+                    outcome,
+                    confirmActionId,
+                    effectiveDate
+                ),
             ],
             factory.Pushes
         );

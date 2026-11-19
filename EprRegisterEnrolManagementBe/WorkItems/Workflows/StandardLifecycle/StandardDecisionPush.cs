@@ -21,6 +21,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// <see cref="StandardStatusPushHook"/> writes, so management-fe's audit log
 /// renders them identically.
 ///
+/// The push carries the effective date the determination stamped (RA-495 AC6,
+/// <see cref="StandardEffectiveDate"/>), so the operator journey grants an
+/// add-ORS site from the date the caseworker entered. A type that stamps none
+/// sends none.
+///
 /// A type with no push target (the operator journey cannot apply it) is never pushed: the
 /// delivery is <see cref="Delivery.NotPushed"/> and nothing is recorded.
 /// </summary>
@@ -65,7 +70,8 @@ internal class StandardDecisionPush(
             ResolveStateDisplayName(template, toStateId),
             actionId,
             actionDisplayName,
-            occurredAt
+            occurredAt,
+            StandardEffectiveDate.ReadStamped(workItem)
         );
         var pushResult = await target.PushDecisionAsync(pushAdapter, change, cancellationToken);
         var delivery = new Delivery(change, pushResult);

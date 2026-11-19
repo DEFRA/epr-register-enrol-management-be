@@ -213,7 +213,8 @@ internal sealed class HttpOperatorBackendPushAdapter(
             change.ToStateDisplayName,
             change.ActionId,
             change.ActionDisplayName,
-            change.OccurredAt
+            change.OccurredAt,
+            change.EffectiveDate
         );
         return await ExecutePushAsync(
             change.WorkItemId,
@@ -500,6 +501,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
         string ToStateDisplayName,
         string ActionId,
         string ActionDisplayName,
-        DateTime OccurredAt
+        DateTime OccurredAt,
+        DateOnly? EffectiveDate
     );
 }

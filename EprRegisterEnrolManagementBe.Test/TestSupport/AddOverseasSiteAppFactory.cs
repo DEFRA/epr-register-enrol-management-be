@@ -171,14 +171,18 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
             .Returns(Task.FromResult(results[0]), results.Skip(1).Select(Task.FromResult).ToArray());
     }
 
-    /// <summary>One status push the fake adapter received: its route, retry pipeline and transition.</summary>
+    /// <summary>
+    /// One status push the fake adapter received: its route, retry pipeline, transition and
+    /// effective date.
+    /// </summary>
     public sealed record Push(
         OperatorBackendStatusRoute Route,
         OperatorBackendPushPipeline Pipeline,
         Guid WorkItemId,
         string FromStateId,
         string ToStateId,
-        string ActionId
+        string ActionId,
+        DateOnly? EffectiveDate = null
     );
 
     /// <summary>
@@ -198,7 +202,8 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
                     change.WorkItemId,
                     change.FromStateId,
                     change.ToStateId,
-                    change.ActionId
+                    change.ActionId,
+                    change.EffectiveDate
                 );
             })
             .ToList();

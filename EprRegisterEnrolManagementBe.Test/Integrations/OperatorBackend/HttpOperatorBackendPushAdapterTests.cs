@@ -523,6 +523,24 @@ public class HttpOperatorBackendPushAdapterTests
         {
             Assert.NotEqual("workitemid", property.Name, StringComparer.OrdinalIgnoreCase);
         }
+        Assert.False(root.TryGetProperty("effectiveDate", out _));
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_body_carries_the_effective_date_as_a_calendar_date_when_there_is_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+
+        await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.Decision,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "approved-pending-contact", "approved", "Granted",
+                "confirm-contact-approved", "Confirm contact", DateTime.UtcNow, new DateOnly(2026, 3, 4)), ct);
+
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal("2026-03-04", body.RootElement.GetProperty("effectiveDate").GetString());
     }
 
     [Fact]

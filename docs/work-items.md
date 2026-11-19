@@ -378,7 +378,11 @@ type is configured. Every setting is code, not runtime data:
   (`POST api/v1/accreditation-changes/case-management/{workItemId}/status`,
   same body, signing and retries as re-accreditation's route), no minting
   (`StandardDeterminationWrites`), no emails, and the site's own charge
-  (`payload.site.chargePence`).
+  (`payload.site.chargePence`). Its confirm-contact push also carries the
+  `effectiveDate` (`yyyy-MM-dd`) the determination stamped on
+  `payload.effectiveDate` (RA-495 AC6), which the operator journey grants the
+  site from and requires on `approved`; re-accreditation stamps none, so its
+  body has no `effectiveDate`.
   Query and withdraw stay re-accreditation-only. The `query-during-*`
   transitions are already `CallerInvocable: false`; since v2 (RA-495 review)
   add-ORS's `withdraw*` transitions are too, so

@@ -109,7 +109,10 @@ public enum OperatorBackendPushPipeline
 /// RA-495: one status change as sent to the operator journey. The body every
 /// operator-journey status route takes: from/to state, the to-state's display name, the
 /// action and when it happened, plus the correlation id that joins the two
-/// sides' logs.
+/// sides' logs. <see cref="EffectiveDate"/> (RA-495 AC6) is the date a
+/// determination takes effect from, for a type that records one (add-ORS): the
+/// operator journey grants the site from it. Null is left off the wire, so
+/// every other push's body is unchanged.
 /// </summary>
 public sealed record OperatorJourneyStatusChange(
     Guid WorkItemId,
@@ -119,5 +122,6 @@ public sealed record OperatorJourneyStatusChange(
     string ToStateDisplayName,
     string ActionId,
     string ActionDisplayName,
-    DateTime OccurredAt
+    DateTime OccurredAt,
+    DateOnly? EffectiveDate = null
 );
