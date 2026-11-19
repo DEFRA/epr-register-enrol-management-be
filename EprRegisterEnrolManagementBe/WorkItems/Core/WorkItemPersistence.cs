@@ -1018,8 +1018,9 @@ public sealed class WorkItemPersistence
         // PARTIAL, not sparse. Sparse excludes only documents where the field is
         // ABSENT; a document carrying an EXPLICIT null is indexed like any other,
         // so the second one collides on the unique constraint. That is not
-        // hypothetical: StandardDulyMakingService round-trips the payload
-        // through ReAccreditationPayload and merges ToBsonDocument(), which
+        // hypothetical: duly making a re-accreditation round-trips the payload
+        // through ReAccreditationPayload and merges ToBsonDocument()
+        // (ReAccreditationLifecycleStrategy.TryStampPaymentDate), which
         // materialises every modelled-but-absent field as an explicit null,
         // accreditationId among them (it is null until approval). Under Sparse
         // that made the first duly making in a collection succeed and every one
