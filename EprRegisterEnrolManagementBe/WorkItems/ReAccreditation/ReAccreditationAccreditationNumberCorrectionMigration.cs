@@ -5,16 +5,19 @@ using MongoDB.Bson;
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-691 remediation: three approved 2027 renewals were issued accreditation
-/// numbers with a NEW sequence segment instead of keeping the one from their
-/// 2026 number (root cause RA-690, fixed separately). This one-off migration
-/// rewrites <c>payload.accreditationId</c> on exactly those three work items and
-/// records the correction in each item's audit log (Application history). It
-/// touches nothing else.
+/// RA-691 and RA-763 remediation: four approved 2027 renewals were issued
+/// accreditation numbers with a NEW sequence segment instead of keeping the one
+/// from their 2026 number. RA-691 covers three of them (root cause RA-690, fixed
+/// separately). RA-763 covers the fourth, CLEARFIELD ENVIROTECH LIMITED: its 2026
+/// accreditation predates this service, so issuance fell back to the sequence of
+/// its registration reference. This one-off migration rewrites
+/// <c>payload.accreditationId</c> on exactly those four work items and records
+/// the correction in each item's audit log (Application history), with the
+/// target's own ticket as the reason. It touches nothing else.
 ///
 /// <para><strong>Matching rule.</strong> The numeric organisation id the
-/// ticket names (500527, 500105, 500108) exists in management-be only inside the
-/// accreditation number's <c>{OrgId:D6}</c> segment —
+/// tickets name (500527, 500105, 500108, 500324) exists in management-be
+/// only inside the accreditation number's <c>{OrgId:D6}</c> segment —
 /// <c>payload.operatorOrganisationId</c> is the ReEx organisation UUID on real
 /// submissions. So each target is located by the identity segments of its
 /// number: year, agency, organisation and material
@@ -26,8 +29,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   <item>the corrected number → already done, skip (no write, no entry);</item>
 ///   <item>anything else, or zero / more than one candidate → ABORT the whole
 ///   run before writing anything. A second candidate (say, a second site
-///   for the same organisation and material) means the data is not what the ticket
-///   describes, so a human decides rather than this guessing.</item>
+///   for the same organisation and material) means the data is not what the
+///   tickets describe, so a human decides rather than this guessing.</item>
 /// </list>
 ///
 /// <para><strong>Gates</strong> (mirroring
@@ -67,16 +70,20 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
     // (asserts them on the Application history tab). Do not change one side.
     public const string AuditAction = "accreditation-number-corrected";
     public const string AuditActionDisplayName = "Accreditation number corrected";
-    public const string AuditReason = "RA-691";
     public const string AuditCreatedBy = "migration";
     public const string AuditCreatedByName = "Migration: RA-691 accreditation number correction";
 
-    /// <summary>One work item to correct, by organisation.</summary>
+    /// <summary>
+    /// One work item to correct, by organisation. <paramref name="Reason"/> is
+    /// the ticket that asked for it, recorded as the audit entry's
+    /// <c>reason</c>.
+    /// </summary>
     internal sealed record Target(
         string OrganisationName,
         string OrganisationId,
         string Incorrect,
-        string Corrected
+        string Corrected,
+        string Reason
     )
     {
         // A real-format number is A{yy}{agency:2}{org:6}{seq:4}{material:2}:
@@ -101,12 +108,16 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             );
     }
 
-    /// <summary>The three numbers RA-691 corrects. Nothing else is ever touched.</summary>
+    /// <summary>
+    /// The four numbers corrected: three for RA-691 and one for RA-763.
+    /// Nothing else is ever touched.
+    /// </summary>
     internal static readonly IReadOnlyList<Target> Targets =
     [
-        new("Infinity Plastic Solutions Ltd", "500527", "A27ER5005270322PL", "A27ER5005270246PL"),
-        new("PLASGRAN LIMITED", "500105", "A27ER5001050321PL", "A27ER5001050197PL"),
-        new("Kronospan Limited", "500108", "A27WR5001080075WO", "A27WR5001080008WO"),
+        new("Infinity Plastic Solutions Ltd", "500527", "A27ER5005270322PL", "A27ER5005270246PL", "RA-691"),
+        new("PLASGRAN LIMITED", "500105", "A27ER5001050321PL", "A27ER5001050197PL", "RA-691"),
+        new("Kronospan Limited", "500108", "A27WR5001080075WO", "A27WR5001080008WO", "RA-691"),
+        new("CLEARFIELD ENVIROTECH LIMITED", "500324", "A27ER5003240079PL", "A27ER5003240164PL", "RA-763"),
     ];
 
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
@@ -118,7 +129,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
     /// fixture (<see cref="ReAccreditationTestOrganisationFixtures"/>) so the
     /// two cannot drift.
     /// </summary>
-    internal static WorkItemAuditEntry BuildAuditEntry(string from, string to, DateTime createdAt) =>
+    internal static WorkItemAuditEntry BuildAuditEntry(string from, string to, string reason, DateTime createdAt) =>
         new()
         {
             Action = AuditAction,
@@ -130,7 +141,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             {
                 ["from"] = from,
                 ["to"] = to,
-                ["reason"] = AuditReason,
+                ["reason"] = reason,
             },
         };
 
@@ -148,7 +159,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
         if (apply && string.IsNullOrWhiteSpace(confirmedBy))
         {
             logger.LogError(
-                "RA-691 accreditation number correction: {ApplyKey} is set but {SpotCheckKey} is not, "
+                "RA-691/RA-763 accreditation number correction: {ApplyKey} is set but {SpotCheckKey} is not, "
                     + "so running as a DRY RUN. Set it to the name of whoever reviewed the dry-run "
                     + "output against the live records.",
                 ApplyConfigKey,
@@ -160,14 +171,14 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
         if (apply)
         {
             logger.LogInformation(
-                "RA-691 accreditation number correction starting. Mode=APPLY. Spot-check confirmed by {ConfirmedBy}.",
+                "RA-691/RA-763 accreditation number correction starting. Mode=APPLY. Spot-check confirmed by {ConfirmedBy}.",
                 confirmedBy
             );
         }
         else
         {
             logger.LogInformation(
-                "RA-691 accreditation number correction starting. Mode=DRY RUN (nothing will be written)."
+                "RA-691/RA-763 accreditation number correction starting. Mode=DRY RUN (nothing will be written)."
             );
         }
 
@@ -180,7 +191,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             if (plan.Outcome == Outcome.Abort)
             {
                 logger.LogError(
-                    "RA-691 ABORTED, nothing written: {Organisation} ({OrganisationId}): {Reason}",
+                    "RA-691/RA-763 ABORTED, nothing written: {Organisation} ({OrganisationId}): {Reason}",
                     target.OrganisationName,
                     target.OrganisationId,
                     plan.Reason
@@ -191,7 +202,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             if (plan.Outcome == Outcome.AlreadyCorrected)
             {
                 logger.LogInformation(
-                    "RA-691 {Organisation} ({OrganisationId}): work item {WorkItemId} already carries "
+                    "RA-691/RA-763 {Organisation} ({OrganisationId}): work item {WorkItemId} already carries "
                         + "{Corrected}; skipping.",
                     target.OrganisationName,
                     target.OrganisationId,
@@ -209,7 +220,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             foreach (var (target, item) in plans)
             {
                 logger.LogInformation(
-                    "RA-691 DRY RUN would correct {Organisation} ({OrganisationId}) work item "
+                    "RA-691/RA-763 DRY RUN would correct {Organisation} ({OrganisationId}) work item "
                         + "{WorkItemId}: {From} → {To}",
                     target.OrganisationName,
                     target.OrganisationId,
@@ -219,7 +230,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
                 );
             }
             logger.LogInformation(
-                "RA-691 DRY RUN complete. Would correct: {Count}.",
+                "RA-691/RA-763 DRY RUN complete. Would correct: {Count}.",
                 plans.Count
             );
             return;
@@ -233,7 +244,12 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
                 ReAccreditationAccreditationNumber.PayloadKey,
                 target.Incorrect,
                 target.Corrected,
-                BuildAuditEntry(target.Incorrect, target.Corrected, _timeProvider.GetUtcNow().UtcDateTime),
+                BuildAuditEntry(
+                    target.Incorrect,
+                    target.Corrected,
+                    target.Reason,
+                    _timeProvider.GetUtcNow().UtcDateTime
+                ),
                 cancellationToken
             );
             if (!written)
@@ -242,7 +258,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
                 // something changed the number between planning and now.
                 // Nothing was written; the next run re-plans from fresh data.
                 logger.LogWarning(
-                    "RA-691 {Organisation} ({OrganisationId}): work item {WorkItemId} no longer "
+                    "RA-691/RA-763 {Organisation} ({OrganisationId}): work item {WorkItemId} no longer "
                         + "carries {From}; nothing written.",
                     target.OrganisationName,
                     target.OrganisationId,
@@ -254,7 +270,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
 
             corrected++;
             logger.LogInformation(
-                "RA-691 corrected {Organisation} ({OrganisationId}) work item {WorkItemId}: {From} → {To}",
+                "RA-691/RA-763 corrected {Organisation} ({OrganisationId}) work item {WorkItemId}: {From} → {To}",
                 target.OrganisationName,
                 target.OrganisationId,
                 item.Id,
@@ -263,7 +279,7 @@ internal sealed class ReAccreditationAccreditationNumberCorrectionMigration(
             );
         }
 
-        logger.LogInformation("RA-691 APPLY complete. Corrected: {Count}.", corrected);
+        logger.LogInformation("RA-691/RA-763 APPLY complete. Corrected: {Count}.", corrected);
     }
 
     private enum Outcome
