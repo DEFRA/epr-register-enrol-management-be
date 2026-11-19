@@ -275,9 +275,16 @@ so they run end-to-end against a real (in-memory) Mongo instance:
 dotnet test
 ```
 
+The mongosh diagnostic scripts under `docs/diagnostics/` have their own
+`node:test` suite (Node 24, no dependencies), run by CI and the pre-commit hook:
+
+```bash
+node --test docs/diagnostics/*.test.cjs
+```
+
 ### Checks that don't check
 
-One failure shape turned up four times in a single story (RA-292 / epr-2uxy),
+One failure shape turned up four times in a single story (RA-292 / RA-794),
 found by four different people, and it is worth recognising on sight:
 
 > **A check that appears to exercise a path it never touches.**

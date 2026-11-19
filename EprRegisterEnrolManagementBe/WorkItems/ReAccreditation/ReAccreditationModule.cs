@@ -183,16 +183,17 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // from assessment-started, so it is the one that sets the final
         // version. Writes only the stored rules and template version.
         services.AddSingleton<IWorkItemMigration, ReAccreditationQueryNotCallerInvocableSnapshotMigration>();
-        // epr-2uxy: corrects overseas sites whose frozen isNewSite is a
-        // provably-defaulted true. Unlike every migration above it is a no-op
-        // until deliberately enabled AND a spot-check is recorded AND apply
-        // mode is set — see the type docs for why the gating is this heavy
+        // RA-794: corrects overseas sites whose frozen isNewSite is a
+        // provably-defaulted true. Unlike every migration above it does
+        // nothing until deliberately enabled AND a spot-check is recorded AND
+        // the operator side's refused sites are carried across, and writes
+        // only in apply mode — see the type docs for why the gating is this heavy
         // (a bad correction hides a genuinely new site from the regulator,
         // which is worse than the defect it fixes). Safe to register
         // unconditionally: with no configuration it returns immediately.
         services.AddSingleton<IWorkItemMigration, ReAccreditationIsNewSiteCorrectionMigration>();
         // RA-526: corrects payload.nation on work items routed by the pre-RA-526 hook, which
-        // always silently defaulted to England on real submissions. Unlike the epr-2uxy
+        // always silently defaulted to England on real submissions. Unlike the RA-794
         // migration above, the correction source is authoritative (a fresh ReEx lookup, not a
         // heuristic), so there is no spot-check gate and no enable flag either - it runs
         // unconditionally, relying on its own idempotency to make a repeat run a no-op, same
@@ -210,7 +211,7 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // own idempotency, same as every other backfill migration in this file.
         services.AddSingleton<IWorkItemMigration, ReAccreditationNationRepresentationMigration>();
         // RA-691: one-off correction of three incorrectly sequenced 2027
-        // accreditation numbers. Gated like the epr-2uxy migration above (off
+        // accreditation numbers. Gated like the RA-794 migration above (off
         // by default, spot-check required, dry run unless apply is set), so
         // it is safe to register unconditionally. Writes only
         // payload.accreditationId plus an audit entry; no state change.
