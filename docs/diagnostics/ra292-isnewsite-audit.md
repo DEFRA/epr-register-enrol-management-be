@@ -234,8 +234,8 @@ The date bound is the **primary** filter. It is applied to the work item's
 | End | RA-292 deploy | The operator model default was corrected then, so no **new** wrong value is created after it. |
 
 **The deploy time is required.** The in-app audit and the correction both
-refuse to run, logging at Error, when `Diagnostics:Ra292DeployedAt` is absent or
-not a date-time; the script throws. There is no safe default, in either
+refuse to run, logging at Error, when `Diagnostics:Ra292DeployedAt` is absent,
+not a date-time, or not after the window start; the script throws. There is no safe default, in either
 direction:
 
 - **Under-correction.** After RA-507 a ReEx-sourced site carries an `orsId`, so
@@ -288,7 +288,7 @@ analysis alone — someone has to have looked at real records first.
 
 | # | Gate | Effect |
 | --- | --- | --- |
-| 1 | `Diagnostics:Ra292CorrectIsNewSite` | Off by default — no-op in every environment until deliberately enabled |
+| 1 | `Diagnostics:Ra292CorrectIsNewSite` | Off by default — no-op in every environment until deliberately enabled. Set but not `true` or `false`, nothing runs, logging at Error (gate 4 likewise) |
 | 2 | `Diagnostics:Ra292SpotCheckConfirmedBy` | Must name the human who spot-checked the classification against the operator DB. Recorded in the audit entry |
 | 3 | `Diagnostics:Ra292OperatorRefusedSites` | The sites the operator-side correction refused, or `none`. **No default** — absent, blank or malformed, nothing runs (dry run included), logging at Error. APPLY also writes nothing while any listed pair matches no site in the window. See [The operator-side refusals](#the-operator-side-refusals) |
 | 4 | `Diagnostics:Ra292CorrectIsNewSiteApply` | **Dry run unless explicitly true** — reports exactly what it would change and writes nothing |

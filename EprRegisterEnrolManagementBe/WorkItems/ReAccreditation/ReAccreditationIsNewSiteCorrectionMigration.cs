@@ -223,11 +223,12 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
     /// <summary>
     /// Gates 1 to 4 in order, with the deploy time read once gates 1 and 2
     /// pass. Returns <c>null</c> when the migration must not run; every refusal
-    /// but gate 1's (off, the normal state) has logged at Error.
+    /// but gate 1 being off (absent or <c>false</c>, the normal state) has
+    /// logged at Error.
     /// </summary>
     private Gates? ReadGates()
     {
-        if (!configuration.GetValue(EnabledConfigKey, false))
+        if (ReAccreditationIsNewSiteAudit.ReadFlag(configuration, EnabledConfigKey, logger) is not true)
         {
             return null;
         }
@@ -257,12 +258,12 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             return null;
         }
 
-        return new Gates(
-            confirmedBy,
-            windowEnd,
-            operatorRefused,
-            configuration.GetValue(ApplyConfigKey, false)
-        );
+        if (ReAccreditationIsNewSiteAudit.ReadFlag(configuration, ApplyConfigKey, logger) is not { } apply)
+        {
+            return null;
+        }
+
+        return new Gates(confirmedBy, windowEnd, operatorRefused, apply);
     }
 
     /// <summary>

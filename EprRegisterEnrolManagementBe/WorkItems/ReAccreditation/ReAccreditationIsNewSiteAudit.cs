@@ -452,7 +452,7 @@ internal static class ReAccreditationIsNewSiteAudit
         ArgumentNullException.ThrowIfNull(logger);
 
         var configuration = services.GetRequiredService<IConfiguration>();
-        if (!configuration.GetValue(EnabledConfigKey, false))
+        if (ReadFlag(configuration, EnabledConfigKey, logger) is not true)
         {
             return;
         }
@@ -512,7 +512,52 @@ internal static class ReAccreditationIsNewSiteAudit
             return null;
         }
 
+        // A mistyped year or month can land at or before the window start. The
+        // query would then match nothing and report zero in every bucket, which
+        // reads as a clean audit.
+        if (windowEnd <= WindowStart)
+        {
+            logger.LogError(
+                "RA-794: {DeployedAtKey} is {DeployedAtValue}, which is not after the window "
+                    + "start {WindowStart:O}, so nothing will run. Set it to the RA-292 deploy time "
+                    + "(ISO 8601 UTC).",
+                DeployedAtConfigKey,
+                raw,
+                WindowStart
+            );
+            return null;
+        }
+
         return windowEnd;
+    }
+
+    /// <summary>
+    /// Reads an on/off gate. Absent is <c>false</c>. Set but not <c>true</c> or
+    /// <c>false</c> returns <c>null</c>, having logged at Error; the caller must
+    /// then refuse to run. Matches the operator backend's <c>IsNewSiteConfig.ReadFlag</c>
+    /// so both services treat the shared keys the same way.
+    /// </summary>
+    internal static bool? ReadFlag(IConfiguration configuration, string key, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var raw = configuration[key];
+        if (raw is null)
+        {
+            return false;
+        }
+
+        if (bool.TryParse(raw.Trim(), out var value))
+        {
+            return value;
+        }
+
+        logger.LogError(
+            "RA-794: {ConfigKey} is set but is not true or false, so nothing will run",
+            key
+        );
+        return null;
     }
 
     /// <summary>

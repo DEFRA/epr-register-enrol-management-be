@@ -639,6 +639,8 @@ public class ReAccreditationIsNewSiteAuditTests
     [InlineData(null)]
     [InlineData("   ")]
     [InlineData("not-a-date")]
+    [InlineData("2026-07-26T00:00:00Z")]
+    [InlineData("2025-08-11T09:00:00Z")]
     public async Task RunAsync_from_the_service_provider_refuses_to_run_without_a_valid_deploy_time(
         string? deployedAt)
     {
@@ -668,6 +670,32 @@ public class ReAccreditationIsNewSiteAuditTests
 
         var error = Assert.Single(logger.Errors);
         Assert.Contains(ReAccreditationIsNewSiteAudit.DeployedAtConfigKey, error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("yes")]
+    [InlineData("")]
+    public async Task RunAsync_from_the_service_provider_refuses_to_run_when_the_flag_is_not_true_or_false(
+        string enabled)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // No IMongoDbClientFactory registered: if the run went ahead, resolving
+        // it would throw rather than silently pass.
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [ReAccreditationIsNewSiteAudit.EnabledConfigKey] = enabled,
+                    [ReAccreditationIsNewSiteAudit.DeployedAtConfigKey] = "2026-08-15T00:00:00Z"
+                })
+                .Build())
+            .BuildServiceProvider();
+        var logger = new CollectingLogger();
+
+        await ReAccreditationIsNewSiteAudit.RunAsync(services, logger, ct);
+
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(ReAccreditationIsNewSiteAudit.EnabledConfigKey, error, StringComparison.Ordinal);
     }
 
     [Fact]

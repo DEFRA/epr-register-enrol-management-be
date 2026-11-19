@@ -68,6 +68,17 @@ test('refuses to run when RA292_DEPLOYED_AT is not a date-time', () => {
   assert.equal(state.queries.length, 0)
 })
 
+for (const deployedAt of ['2026-07-26T00:00:00Z', '2025-08-11T09:00:00Z']) {
+  test(`refuses to run when RA292_DEPLOYED_AT (${deployedAt}) is not after the window start`, () => {
+    const state = harness()
+    assert.throws(() => load(deployedAt), {
+      name: 'RangeError',
+      message: /which is not after the window start 2026-07-26T00:00:00.000Z/
+    })
+    assert.equal(state.queries.length, 0)
+  })
+}
+
 test('bounds the query at the supplied deploy time and classifies the sites', () => {
   const state = harness([
     {

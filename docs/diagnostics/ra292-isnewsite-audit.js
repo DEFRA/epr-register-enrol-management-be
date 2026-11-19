@@ -168,6 +168,14 @@ const WINDOW_END = new Date(RA292_DEPLOYED_AT)
 if (Number.isNaN(WINDOW_END.getTime())) {
   throw new TypeError(`RA292_DEPLOYED_AT is ${RA292_DEPLOYED_AT}, which is not a date-time.`)
 }
+// A mistyped year or month can land at or before the start. The query would then
+// match nothing and print zero for every bucket, which reads as a clean audit.
+if (WINDOW_END <= WINDOW_START) {
+  throw new RangeError(
+    `RA292_DEPLOYED_AT is ${RA292_DEPLOYED_AT}, which is not after the window ` +
+      `start ${WINDOW_START.toISOString()}.`
+  )
+}
 
 // Detail fields that neither MapOverseasSite nor promotion accounts for.
 //

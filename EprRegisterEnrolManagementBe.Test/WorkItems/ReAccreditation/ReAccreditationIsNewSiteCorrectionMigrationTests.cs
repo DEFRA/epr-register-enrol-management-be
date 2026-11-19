@@ -171,6 +171,40 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         Assert.True(IsNewSiteOf(item, 0));
     }
 
+    // ── Gates 1 and 4: a set but malformed on/off value ──────────────────────
+
+    [Theory]
+    [InlineData(ReAccreditationIsNewSiteCorrectionMigration.EnabledConfigKey, "yes")]
+    [InlineData(ReAccreditationIsNewSiteCorrectionMigration.EnabledConfigKey, "")]
+    [InlineData(ReAccreditationIsNewSiteCorrectionMigration.ApplyConfigKey, "yes")]
+    [InlineData(ReAccreditationIsNewSiteCorrectionMigration.ApplyConfigKey, "1")]
+    public async Task ApplyAsync_refuses_to_run_and_logs_an_error_when_a_flag_is_not_true_or_false(
+        string key,
+        string value)
+    {
+        // Same meaning as the operator side's IsNewSiteConfig.ReadFlag, so an
+        // Error-level alert set up from either runbook fires on both services.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var configuration = new ConfigurationBuilder()
+            .AddConfiguration(Config())
+            .AddInMemoryCollection(new Dictionary<string, string?> { [key] = value })
+            .Build();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            configuration, logger, new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, ct);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        Assert.True(IsNewSiteOf(item, 0));
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(key, error, StringComparison.Ordinal);
+        Assert.Contains("not true or false", error, StringComparison.Ordinal);
+    }
+
     // ── Gate 3: the operator-side refusals ───────────────────────────────────
 
     [Theory]
