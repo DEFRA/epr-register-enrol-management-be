@@ -9,7 +9,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 /// services:
 /// <list type="bullet">
 ///   <item>Push target: the operator journey's change-request status route
-///   (<see cref="AddOverseasSiteOperatorJourneyPush"/>). Transitions are
+///   (<see cref="OperatorJourneyRoutePush.ChangeRequest"/>). Transitions are
 ///   pushed after they commit, with re-accreditation's skips, and confirm
 ///   contact pushes the final decision before it commits.</item>
 ///   <item>Minting: none. The site joins an accreditation that already
@@ -33,7 +33,7 @@ internal sealed class AddOverseasSiteLifecycleStrategy(StandardDeterminationWrit
 
     public IWorkItemType Type => s_type;
 
-    public IOperatorJourneyPush? OperatorJourneyPush => AddOverseasSiteOperatorJourneyPush.Instance;
+    public IOperatorJourneyPush? OperatorJourneyPush => OperatorJourneyRoutePush.ChangeRequest;
 
     public IStandardDeterminationSteps Determinations => determinations;
 

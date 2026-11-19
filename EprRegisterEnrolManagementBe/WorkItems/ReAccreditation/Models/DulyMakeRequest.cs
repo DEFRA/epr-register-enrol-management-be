@@ -20,7 +20,7 @@ public sealed record DulyMakeRequest
     /// machine-readable code, and the case management frontend needs to tell
     /// "the regulator typed a bad date" (render a GOV.UK error summary against
     /// the date input) from "something broke" (page-level error). Taking the
-    /// raw string lets <see cref="ReAccreditationDulyMakingValidator"/> own
+    /// raw string lets <see cref="Workflows.StandardLifecycle.StandardDulyMakingValidator"/> own
     /// every failure and attach a stable <c>errorCode</c>.
     /// </summary>
     public string? PaymentDate { get; init; }

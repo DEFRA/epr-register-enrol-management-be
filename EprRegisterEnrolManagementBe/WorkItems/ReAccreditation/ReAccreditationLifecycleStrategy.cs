@@ -12,7 +12,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// lifecycle services:
 /// <list type="bullet">
 ///   <item>Push target: the accreditation-application status route
-///   (<see cref="ReAccreditationOperatorJourneyPush"/>).</item>
+///   (<see cref="OperatorJourneyRoutePush.AccreditationApplication"/>).</item>
 ///   <item>Minting: an accreditation number on approval, and the start date,
 ///   year, SLA stop and publishing at confirm contact
 ///   (<see cref="ReAccreditationApprovalService"/>), through
@@ -31,7 +31,7 @@ internal sealed class ReAccreditationLifecycleStrategy(
     ILogger<ReAccreditationLifecycleStrategy> logger
 ) : ReAccreditationDulyMakingRules, IStandardLifecycleStrategy
 {
-    public IOperatorJourneyPush? OperatorJourneyPush => ReAccreditationOperatorJourneyPush.Instance;
+    public IOperatorJourneyPush? OperatorJourneyPush => OperatorJourneyRoutePush.AccreditationApplication;
 
     public IStandardDeterminationSteps Determinations { get; } =
         new ReAccreditationDeterminationSteps(approvalService, refusalService, logger);

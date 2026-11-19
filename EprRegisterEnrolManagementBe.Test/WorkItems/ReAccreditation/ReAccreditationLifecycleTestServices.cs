@@ -20,7 +20,7 @@ internal static class ReAccreditationLifecycleTestServices
     public static StandardStatusPushHook StatusPushHook(IWorkItemRegistry registry, IBackgroundTaskQueue queue) =>
         new(
             new ReAccreditationType(),
-            ReAccreditationOperatorJourneyPush.Instance,
+            OperatorJourneyRoutePush.AccreditationApplication,
             registry,
             queue,
             new HeaderPropagationValues(),

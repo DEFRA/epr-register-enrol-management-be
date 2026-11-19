@@ -454,7 +454,7 @@ internal static class ReAccreditationEndpoints
     /// machine-readable <c>errorCode</c> and <c>field</c>, which it binds to a
     /// GOV.UK error summary against the date input. Everything else is a
     /// page-level failure on that side, so the two must stay clearly
-    /// distinguishable — see <see cref="ReAccreditationDulyMakingValidator"/> for
+    /// distinguishable — see <see cref="StandardDulyMakingValidator"/> for
     /// the code vocabulary, which is part of the wire contract with
     /// management-fe and mgmt-tests.
     ///
