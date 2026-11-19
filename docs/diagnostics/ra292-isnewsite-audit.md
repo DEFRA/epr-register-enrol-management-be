@@ -290,7 +290,7 @@ analysis alone — someone has to have looked at real records first.
 | --- | --- | --- |
 | 1 | `Diagnostics:Ra292CorrectIsNewSite` | Off by default — no-op in every environment until deliberately enabled |
 | 2 | `Diagnostics:Ra292SpotCheckConfirmedBy` | Must name the human who spot-checked the classification against the operator DB. Recorded in the audit entry |
-| 3 | `Diagnostics:Ra292OperatorRefusedSites` | The sites the operator-side correction refused, or `none`. **No default** — absent, blank or malformed, nothing runs (dry run included), logging at Error. See [The operator-side refusals](#the-operator-side-refusals) |
+| 3 | `Diagnostics:Ra292OperatorRefusedSites` | The sites the operator-side correction refused, or `none`. **No default** — absent, blank or malformed, nothing runs (dry run included), logging at Error. APPLY also writes nothing while any listed pair matches no site in the window. See [The operator-side refusals](#the-operator-side-refusals) |
 | 4 | `Diagnostics:Ra292CorrectIsNewSiteApply` | **Dry run unless explicitly true** — reports exactly what it would change and writes nothing |
 | 5 | per-site verdict | Only the two correctable buckets, and of those only sites the operator side did not refuse. AMBIGUOUS-REFUSED sites are refused **in code**, with the triggering fields named; so are operator-refused sites, and correctable sites that cannot be matched to the operator refusals |
 
@@ -318,14 +318,16 @@ here **in code**.
 
 - `none` — the operator-side correction's final APPLY run refused no site: its
   completion line (`RA-794 isNewSite correction complete. Mode=APPLY. ...`)
-  reads `Sites refused as ambiguous (adjudicate by hand): 0`. Absent or blank
+  reads `Sites refused as ambiguous (adjudicate by hand): 0`. It is also correct
+  when every pair was removed under the rule below. Absent or blank
   does **not** mean "none"; it means the list was not carried across, and the
   correction refuses to run.
 - a comma-separated list of `<ApplicationId>:<SiteId>` pairs, one for each
   `RA-794 REFUSED to correct application {ApplicationId} site {SiteId} '...'`
   Warning line of that APPLY run, copied exactly. For example
   `65f0c0ffee0000000000abcd:3,65f0c0ffee0000000000abcd:7`. The number of pairs
-  must equal that run's `Sites refused as ambiguous (adjudicate by hand)` count.
+  must equal that run's `Sites refused as ambiguous (adjudicate by hand)` count,
+  less any pair removed under the rule below.
   The operator audit's `RA-794 AMBIGUOUS-REFUSED application ...` lines name the
   same sites and are a cross-check only; the APPLY run's REFUSED lines are what
   gets carried.
@@ -348,10 +350,19 @@ Per site, the correction then:
 - refuses, at Error, every correctable site it cannot match because the work item
   has no `operatorApplicationId` or the site has no integer `siteId` (never
   written, counted as `Sites refused for want of an id to match`);
-- names, at Warning, every listed pair that matched no site on any work item in
+- logs, at Error, every listed pair that matched no site on any work item in
   the window. That can be legitimate (the application never reached a work item
-  in the window) but it is also what a mistyped id looks like, so the
-  spot-check confirmer accounts for each one before apply.
+  in the window), but it is also what a mistyped id looks like, and a mistyped
+  id leaves the real site unexcluded: that site reads as PROVABLY-CORRUPT here
+  and APPLY would clear it. So **APPLY writes nothing while any listed pair is
+  unmatched**. It first plans every work item without writing, and if any pair
+  is unmatched it logs `APPLY refused, nothing was written` at Error and stops.
+  A dry run still runs and reports, and logs `APPLY would be refused` at Error.
+
+For each unmatched pair, the spot-check confirmer either corrects the mistyped
+id, or checks that its operator application has no work item submitted in the
+window. Only after that check do they remove the pair from the list, and they
+record the removal (pair and finding) on RA-794. Then they run the dry run again.
 
 Every correction's audit entry records `operatorRefusedSitesListed`, the number
 of pairs it was checked against.
@@ -370,8 +381,10 @@ next resubmit of the overseas-sites or broadly-equivalent-standards section.
    It uses the same config keys (`Diagnostics:Ra292IsNewSiteAudit`,
    `Diagnostics:Ra292DeployedAt`, `Diagnostics:Ra292CorrectIsNewSite`,
    `Diagnostics:Ra292SpotCheckConfirmedBy`,
-   `Diagnostics:Ra292CorrectIsNewSiteApply`) and the same gate shape as below,
-   set on the operator backend's own deployment. Its bucket names are the same,
+   `Diagnostics:Ra292CorrectIsNewSiteApply`), set on the operator backend's own
+   deployment. Of the gates in [The five gates](#the-five-gates) it has 1, 2
+   and 4, and it also requires `Diagnostics:Ra292DeployedAt`. It has no
+   refused-sites gate: it is the side that produces the refusals. Its bucket names are the same,
    but its classifier is stricter: it corrects a site with no `orsId` only when
    ReEx itself returns a matching prior-year site, and refuses the rest as
    AMBIGUOUS-REFUSED. Its window bounds the application's creation time, not
@@ -387,7 +400,9 @@ next resubmit of the overseas-sites or broadly-equivalent-standards section.
    [The operator-side refusals](#the-operator-side-refusals): one
    `<ApplicationId>:<SiteId>` pair per `RA-794 REFUSED to correct application
    ...` line, or `none` when its completion line shows 0 refused. Check the
-   pair count against that completion line.
+   pair count against that completion line. A pair is removed later only under
+   the rule in [The operator-side refusals](#the-operator-side-refusals), and
+   each removal is recorded on RA-794.
 3. **Then this service:**
 
 ```bash
@@ -399,15 +414,18 @@ Diagnostics__Ra292DeployedAt=<RA-292 deploy time, ISO 8601 UTC>
 #    operator database with the operator-backend owner. Confirm they really are
 #    ReEx-sourced. Confirm too that the refused list below is complete: one pair
 #    per REFUSED line of the operator's final APPLY run, the count matching its
-#    completion line. Setting your name below attests to both.
+#    completion line less any pair removed (and recorded on RA-794) after
+#    checking its operator application has no work item in the window.
+#    Setting your name below attests to both.
 
-# 3. Dry run. Writes nothing; reports precisely what it would change, and
-#    names any listed pair that matched no site (account for each one).
+# 3. Dry run. Writes nothing; reports precisely what it would change, and logs
+#    at Error any listed pair that matched no site. APPLY refuses while any
+#    remain: fix the id, or check and remove the pair as above, then dry-run again.
 Diagnostics__Ra292CorrectIsNewSite=true
 Diagnostics__Ra292SpotCheckConfirmedBy="your.name"
 Diagnostics__Ra292OperatorRefusedSites="<ApplicationId>:<SiteId>,..."   # or none
 
-# 4. Only when the dry-run output is what you expect:
+# 4. Only when the dry-run output is what you expect and logs no unmatched pair:
 Diagnostics__Ra292CorrectIsNewSiteApply=true
 
 # 5. Turn all of it back off.

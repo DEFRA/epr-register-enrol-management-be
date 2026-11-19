@@ -258,7 +258,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
     [Theory]
     [InlineData("65f0c0ffee0000000000abcd:2")]
-    [InlineData(" 65F0C0FFEE0000000000ABCD : 2 , 65f0c0ffee0000000000beef:9")]
+    [InlineData(" 65F0C0FFEE0000000000ABCD : 2 ")]
     public async Task ApplyAsync_refuses_a_site_the_operator_side_refused(string operatorRefusedSites)
     {
         // The operator classifier refuses a no-orsId site ReEx cannot prove, so
@@ -374,12 +374,14 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
     }
 
     [Fact]
-    public async Task ApplyAsync_names_a_listed_operator_refusal_that_matched_no_site()
+    public async Task ApplyAsync_refuses_to_apply_while_a_listed_operator_refusal_matched_no_site()
     {
         // A listed site found nowhere may be legitimately absent, but it is also
-        // what a mistyped id looks like, so the run names it. One the item does
-        // hold, even under a verdict this side would not correct anyway, counts
-        // as found.
+        // what a mistyped id looks like, and a mistyped id leaves the real site
+        // unexcluded: it reads as provably corrupt here and APPLY would clear
+        // it. So APPLY writes nothing at all, not even the sites it could
+        // otherwise correct. One the item does hold, even under a verdict this
+        // side would not correct anyway, counts as found.
         var ct = TestContext.Current.CancellationToken;
         var operatorAdded = ReExSite(isNewSite: true, siteName: "Operator added");
         operatorAdded["orsId"] = 42;
@@ -393,24 +395,75 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         await sut.ApplyAsync(persistence, ct);
 
-        var notFound = Assert.Single(logger.Warnings, m => m.Contains("matched no site", StringComparison.Ordinal));
-        Assert.Contains("65f0c0ffee0000000000beef:9", notFound, StringComparison.Ordinal);
-        Assert.DoesNotContain($"{ApplicationId}:2", notFound, StringComparison.Ordinal);
+        Assert.True(IsNewSiteOf(item, 0));
+        Assert.Empty(item.AuditLog);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        var unmatched = Assert.Single(logger.Errors, m => m.Contains("matched no site on any work item", StringComparison.Ordinal)
+            && !m.Contains("APPLY", StringComparison.Ordinal));
+        Assert.Contains("65f0c0ffee0000000000beef:9", unmatched, StringComparison.Ordinal);
+        Assert.DoesNotContain(logger.Errors, m => m.Contains($"{ApplicationId}:2", StringComparison.Ordinal));
+        Assert.Contains(logger.Errors, m =>
+            m.Contains("APPLY refused, nothing was written: 1 site(s)", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Messages, m => m.Contains("correction complete", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task ApplyAsync_records_the_operator_refusal_count_on_the_audit_log()
+    public async Task ApplyAsync_reports_in_a_dry_run_while_a_listed_operator_refusal_matched_no_site()
     {
+        // The dry run is where the confirmer finds the unmatched pairs, so it
+        // still reports everything, and says APPLY would be refused.
         var ct = TestContext.Current.CancellationToken;
-        var item = BuildItem(sites: ReExSite(isNewSite: true));
+        var item = BuildItem(sites: ReExSite(isNewSite: true, siteName: "Corrupt"));
         var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(apply: false, operatorRefusedSites: "65f0c0ffee0000000000beef:9"),
+            logger,
+            new FakeTimeProvider(s_now));
 
-        await BuildSut(Config(operatorRefusedSites: "65f0c0ffee0000000000beef:9,65f0c0ffee0000000000beef:10"))
-            .ApplyAsync(persistence, ct);
+        await sut.ApplyAsync(persistence, ct);
 
+        Assert.True(IsNewSiteOf(item, 0));
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        Assert.Contains(logger.Messages, m =>
+            m.Contains("DRY RUN would correct", StringComparison.Ordinal)
+            && m.Contains("Corrupt", StringComparison.Ordinal));
+        Assert.Contains(logger.Errors, m =>
+            m.Contains("65f0c0ffee0000000000beef:9", StringComparison.Ordinal)
+            && m.Contains("matched no site", StringComparison.Ordinal));
+        Assert.Contains(logger.Errors, m => m.Contains("APPLY would be refused", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, m => m.Contains("correction complete", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_applies_and_records_the_operator_refusal_count_when_every_listed_site_matched()
+    {
+        // Two listed sites, both on the item: they are refused, the third site
+        // is corrected, and the audit entry says how many pairs it was checked
+        // against.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(
+            null,
+            ReExSite(isNewSite: true, siteName: "Corrected"),
+            ReExSite(isNewSite: true, siteName: "Refused two"),
+            ReExSite(isNewSite: true, siteName: "Refused three"));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(operatorRefusedSites: $"{ApplicationId}:2,{ApplicationId}:3"),
+            logger,
+            new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        Assert.False(IsNewSiteOf(item, 0));
+        Assert.True(IsNewSiteOf(item, 1));
+        Assert.True(IsNewSiteOf(item, 2));
+        await persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
         var entry = Assert.Single(item.AuditLog, e =>
             e.Action == ReAccreditationIsNewSiteCorrectionMigration.AuditAction);
         Assert.Equal("2", entry.Details["operatorRefusedSitesListed"]);
+        Assert.Empty(logger.Errors);
     }
 
     // ── Gate 4: dry run ──────────────────────────────────────────────────────
@@ -838,7 +891,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         var logger = new RenderingLogger();
 
         var sut = new ReAccreditationIsNewSiteCorrectionMigration(
-            Config(apply: apply, operatorRefusedSites: $"{ApplicationId}:3,65f0c0ffee0000000000beef:9"),
+            Config(apply: apply, operatorRefusedSites: $"{ApplicationId}:3"),
             logger,
             new FakeTimeProvider(s_now));
 
@@ -852,7 +905,6 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
             && m.Contains(apply ? "APPLY" : "DRY RUN", StringComparison.Ordinal));
         Assert.Contains(logger.Warnings, m => m.Contains("operator-side correction refused", StringComparison.Ordinal));
         Assert.Contains(logger.Errors, m => m.Contains("no usable siteId", StringComparison.Ordinal));
-        Assert.Contains(logger.Warnings, m => m.Contains("matched no site", StringComparison.Ordinal));
     }
 
     [Fact]

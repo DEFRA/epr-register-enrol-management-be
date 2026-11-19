@@ -54,7 +54,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   the site, because such a site may be genuinely new. Clearing the flag here
 ///   on a site the operator side refused would hide it from the regulator, and
 ///   the next resubmit would put <c>true</c> back anyway. There is no default:
-///   absent, blank or malformed, nothing runs.</item>
+///   absent, blank or malformed, nothing runs. And APPLY writes nothing while
+///   any listed site matches no site here, since that may be a mistyped id
+///   leaving the real site unexcluded.</item>
 ///   <item><see cref="ApplyConfigKey"/> — DRY RUN unless explicitly true. The
 ///   default run reports precisely what it would change and writes nothing.</item>
 ///   <item>Per site, only the two ReEx-sourced correctable verdicts
@@ -140,35 +142,42 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             gates.OperatorRefused.Count
         );
 
-        var tally = new Tally();
-        var page = 1;
-
-        while (true)
+        // A listed operator refusal that matches no site here may be a mistyped
+        // id, which would leave the real site unexcluded and let APPLY clear it.
+        // So APPLY first plans every item without writing, and writes nothing
+        // unless every listed site was found. A dry run reports regardless.
+        if (gates.Apply)
         {
-            var result = await persistence.QueryAsync(
-                new WorkItemQuery(
-                    TypeIds: [ReAccreditationType.Id],
-                    Page: page,
-                    PageSize: WorkItemQuery.MaxPageSize,
-                    IncludeArchived: true
-                ),
+            var found = new HashSet<string>(StringComparer.Ordinal);
+            await ForEachItemInWindowAsync(
+                persistence,
+                gates,
+                full =>
+                {
+                    PlanCorrections(full, gates.OperatorRefused, found);
+                    return Task.CompletedTask;
+                },
                 cancellationToken
             );
 
-            foreach (var candidate in result.Items)
+            if (LogUnmatchedOperatorRefusals(gates, found))
             {
-                await CorrectOrReportAsync(persistence, candidate, gates, tally, cancellationToken);
+                return;
             }
-
-            if (result.Items.Count < WorkItemQuery.MaxPageSize)
-            {
-                break;
-            }
-
-            page++;
         }
 
-        LogNotFoundOperatorRefusals(gates, tally);
+        var tally = new Tally();
+        await ForEachItemInWindowAsync(
+            persistence,
+            gates,
+            full => CorrectOrReportAsync(persistence, full, gates, tally, cancellationToken),
+            cancellationToken
+        );
+
+        if (!gates.Apply)
+        {
+            LogUnmatchedOperatorRefusals(gates, tally.OperatorRefusedFound);
+        }
 
         // Each placeholder name appears exactly once. A repeated name is a
         // distinct positional slot to the structured-logging formatter, so
@@ -256,32 +265,67 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
         );
     }
 
+    /// <summary>
+    /// Visits the full document of every re-accreditation work item submitted
+    /// in the window, paging through all of them.
+    /// </summary>
+    private static async Task ForEachItemInWindowAsync(
+        IWorkItemPersistence persistence,
+        Gates gates,
+        Func<WorkItem, Task> visit,
+        CancellationToken cancellationToken
+    )
+    {
+        var page = 1;
+        while (true)
+        {
+            var result = await persistence.QueryAsync(
+                new WorkItemQuery(
+                    TypeIds: [ReAccreditationType.Id],
+                    Page: page,
+                    PageSize: WorkItemQuery.MaxPageSize,
+                    IncludeArchived: true
+                ),
+                cancellationToken
+            );
+
+            foreach (var candidate in result.Items)
+            {
+                // The date bound is the primary filter. Applied here rather than
+                // in the query so it stays visibly next to the reason for it.
+                if (
+                    candidate.SubmittedAt < ReAccreditationIsNewSiteAudit.WindowStart
+                    || candidate.SubmittedAt >= gates.WindowEnd
+                )
+                {
+                    continue;
+                }
+
+                // QueryAsync excludes Notes/AuditLog — fetch the full document
+                // before mutating so a subsequent replace doesn't wipe them.
+                if (await persistence.GetByIdAsync(candidate.Id, cancellationToken) is { } full)
+                {
+                    await visit(full);
+                }
+            }
+
+            if (result.Items.Count < WorkItemQuery.MaxPageSize)
+            {
+                return;
+            }
+
+            page++;
+        }
+    }
+
     private async Task CorrectOrReportAsync(
         IWorkItemPersistence persistence,
-        WorkItem candidate,
+        WorkItem full,
         Gates gates,
         Tally tally,
         CancellationToken cancellationToken
     )
     {
-        // The date bound is the primary filter. Applied here rather than
-        // in the query so it stays visibly next to the reason for it.
-        if (
-            candidate.SubmittedAt < ReAccreditationIsNewSiteAudit.WindowStart
-            || candidate.SubmittedAt >= gates.WindowEnd
-        )
-        {
-            return;
-        }
-
-        // QueryAsync excludes Notes/AuditLog — fetch the full document
-        // before mutating so a subsequent replace doesn't wipe them.
-        var full = await persistence.GetByIdAsync(candidate.Id, cancellationToken);
-        if (full is null)
-        {
-            return;
-        }
-
         var plan = PlanCorrections(full, gates.OperatorRefused, tally.OperatorRefusedFound);
         tally.SitesRefusedAmbiguous += plan.Ambiguous.Count;
         tally.SitesRefusedByOperator += plan.RefusedByOperator.Count;
@@ -393,32 +437,46 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
     }
 
     /// <summary>
-    /// A listed site that matched nothing scanned is not necessarily wrong —
-    /// the operator application may never have reached a work item in the
-    /// window — but it is also what a mistyped id looks like, and a mistyped
-    /// id leaves the real site unexcluded. So name each one for the
-    /// spot-checker to account for in the dry run.
+    /// Logs at Error every listed operator refusal that matched no site on any
+    /// work item in the window, and returns whether there was any. Such a pair
+    /// may be legitimate (the operator application never reached a work item in
+    /// the window), but it is also what a mistyped id looks like, and a mistyped
+    /// id leaves the real site unexcluded, so APPLY refuses while any remains.
+    /// The confirmer removes a pair only after checking its application has no
+    /// work item in the window.
     /// </summary>
-    private void LogNotFoundOperatorRefusals(Gates gates, Tally tally)
+    private bool LogUnmatchedOperatorRefusals(Gates gates, HashSet<string> found)
     {
-        var notFound = gates
-            .OperatorRefused.Where(key => !tally.OperatorRefusedFound.Contains(key))
+        var unmatched = gates
+            .OperatorRefused.Where(key => !found.Contains(key))
             .Order(StringComparer.Ordinal)
             .ToList();
-        if (notFound.Count == 0)
+        if (unmatched.Count == 0)
         {
-            return;
+            return false;
         }
 
-        logger.LogWarning(
-            "RA-794: {NotFoundCount} site(s) listed in {OperatorRefusedKey} matched no site "
-                + "on any work item in the window: {NotFoundSites}. Confirm each is genuinely "
-                + "absent here rather than mistyped; a mistyped id leaves the real site "
-                + "unexcluded.",
-            notFound.Count,
-            OperatorRefusedSitesConfigKey,
-            string.Join(", ", notFound)
+        foreach (var key in unmatched)
+        {
+            logger.LogError(
+                "RA-794: {OperatorRefusedSite} is listed in {OperatorRefusedKey} but matched no "
+                    + "site on any work item in the window. If it is mistyped, the real site is "
+                    + "not excluded.",
+                key,
+                OperatorRefusedSitesConfigKey
+            );
+        }
+
+        logger.LogError(
+            "RA-794 correction: APPLY {ApplyOutcome}: {UnmatchedCount} site(s) listed in "
+                + "{OperatorRefusedKey} matched no site on any work item in the window. Fix any "
+                + "mistyped id. Remove a pair only after checking that its operator application has "
+                + "no work item in the window, and record that on RA-794. Then run again.",
+            gates.Apply ? "refused, nothing was written" : "would be refused",
+            unmatched.Count,
+            OperatorRefusedSitesConfigKey
         );
+        return true;
     }
 
     /// <summary>
