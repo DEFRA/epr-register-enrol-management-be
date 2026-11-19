@@ -356,7 +356,7 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
 
         // Mutation happens here and nowhere else, so a dry run cannot
         // leave a half-corrected document behind even in memory.
-        foreach (var (site, _) in plan.Corrections)
+        foreach (var (site, _, _) in plan.Corrections)
         {
             site["isNewSite"] = false;
         }
@@ -372,10 +372,7 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
                 Details = new Dictionary<string, string?>
                 {
                     ["issue"] = "RA-794",
-                    ["reason"] =
-                        "isNewSite was a wrongly-defaulted true; site has no orsId and no "
-                        + "operator-entered detail, so it is ReEx-sourced and the correct "
-                        + "value is false.",
+                    ["reason"] = CorrectionReason(plan.Corrections),
                     ["sites"] = string.Join(", ", corrected),
                     ["spotCheckConfirmedBy"] = gates.ConfirmedBy,
                     ["operatorRefusedSitesListed"] = gates.OperatorRefused.Count.ToString(
@@ -392,6 +389,47 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
             full.Id,
             string.Join(", ", corrected)
         );
+    }
+
+    /// <summary>Why a provably-corrupt site is ReEx-sourced.</summary>
+    internal const string ProvablyCorruptReason =
+        "no orsId and no operator-entered detail, so it is ReEx-sourced";
+
+    /// <summary>
+    /// Why a promoted site is ReEx-sourced. It does carry operator-entered
+    /// detail, so the provably-corrupt wording would be false for it.
+    /// </summary>
+    internal const string PromotedCorrectableReason =
+        "no orsId and was promoted from a registered site (registeredNowAccredited: "
+        + "true); its operator-entered detail was written by that promotion, so it is "
+        + "ReEx-sourced";
+
+    /// <summary>
+    /// The audit entry's <c>reason</c>, true for every site it covers. One
+    /// entry covers all the item's corrections, which can mix the two
+    /// correctable verdicts; when they do, each reason names its sites.
+    /// </summary>
+    private static string CorrectionReason(
+        List<(BsonDocument Site, string Label, ReAccreditationIsNewSiteAudit.SiteVerdict Verdict)> corrections
+    )
+    {
+        var groups = corrections
+            .GroupBy(c => c.Verdict)
+            .OrderBy(g => g.Key)
+            .Select(g =>
+                (
+                    Reason: g.Key == ReAccreditationIsNewSiteAudit.SiteVerdict.PromotedCorrectable
+                        ? PromotedCorrectableReason
+                        : ProvablyCorruptReason,
+                    Labels: string.Join(", ", g.Select(c => c.Label))
+                )
+            )
+            .ToList();
+
+        const string prefix = "isNewSite was a wrongly-defaulted true and the correct value is false.";
+        return groups.Count == 1
+            ? $"{prefix} The site has {groups[0].Reason}."
+            : prefix + string.Concat(groups.Select(g => $" {g.Labels}: {g.Reason}."));
     }
 
     private void LogRefusals(WorkItem full, SitePlan plan)
@@ -570,16 +608,17 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
 
     /// <summary>What <see cref="PlanCorrections"/> decided for one work item's sites.</summary>
     private sealed record SitePlan(
-        List<(BsonDocument Site, string Label)> Corrections,
+        List<(BsonDocument Site, string Label, ReAccreditationIsNewSiteAudit.SiteVerdict Verdict)> Corrections,
         List<string> Ambiguous,
         List<(string Label, string RefusedKey)> RefusedByOperator,
         List<(string Label, string MissingId)> Unmatchable
     );
 
     /// <summary>
-    /// Identify — without mutating — every provably-corrupt site on the item
-    /// that the operator side did not refuse, returning the site documents to
-    /// flip alongside a human-readable label, and separately the sites refused:
+    /// Identify — without mutating — every correctable site on the item
+    /// (provably corrupt or promoted) that the operator side did not refuse,
+    /// returning the site documents to flip alongside a human-readable label
+    /// and their verdict, and separately the sites refused:
     /// as ambiguous (no <c>orsId</c> but operator-entered detail present), as
     /// refused by the operator side, or as unmatchable because the item has no
     /// <c>operatorApplicationId</c> or the site no integer <c>siteId</c>. Every
@@ -644,7 +683,8 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
                 : $"site[{index}]";
         var label = $"[{index}] {name}";
 
-        switch (ReAccreditationIsNewSiteAudit.ClassifySite(site))
+        var verdict = ReAccreditationIsNewSiteAudit.ClassifySite(site);
+        switch (verdict)
         {
             // Both correctable verdicts are ReEx-sourced. PromotedCorrectable
             // is not a weaker case than ProvablyCorrupt — a promoted site's
@@ -664,7 +704,7 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
                 }
                 else
                 {
-                    plan.Corrections.Add((site, label));
+                    plan.Corrections.Add((site, label, verdict));
                 }
 
                 break;
