@@ -27,9 +27,14 @@ internal interface IStandardDeterminationSteps
         CancellationToken cancellationToken
     );
 
-    /// <summary>Step 1 of a refusal: <c>awaiting-decision</c> → <c>rejected-pending-contact</c>.</summary>
+    /// <summary>
+    /// Step 1 of a refusal: <c>awaiting-decision</c> → <c>rejected-pending-contact</c>.
+    /// <paramref name="effectiveDate"/> is the validated AC6 date for a type that
+    /// <see cref="IStandardLifecycleStrategy.TakesEffectiveDate"/>, else null.
+    /// </summary>
     Task<WorkItemActionResult> RecordRefusedDeterminationAsync(
         Guid workItemId,
+        DateOnly? effectiveDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     );
@@ -68,9 +73,12 @@ internal interface IStandardDeterminationSteps
 /// RA-495: step 1 of an approval, <c>awaiting-decision</c> →
 /// <c>approved-pending-contact</c>, with whatever the type prepared for it
 /// (re-accreditation: the accreditation number it minted) already bound.
+/// <c>effectiveDate</c> is the validated AC6 date for a type that
+/// <see cref="IStandardLifecycleStrategy.TakesEffectiveDate"/>, else null.
 /// </summary>
 internal delegate Task<WorkItemActionResult> StandardApprovedDeterminationWrite(
     Guid workItemId,
+    DateOnly? effectiveDate,
     ClaimsPrincipal user,
     CancellationToken cancellationToken
 );
@@ -106,11 +114,12 @@ internal sealed class StandardApprovalPreparation
     /// <summary>Step 1 of the approval. Only for a preparation that was not <see cref="Refused"/>.</summary>
     public Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
         Guid workItemId,
+        DateOnly? effectiveDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     ) =>
         (
             _recordApprovedDetermination
             ?? throw new InvalidOperationException("A refused approval has no step 1 write.")
-        )(workItemId, user, cancellationToken);
+        )(workItemId, effectiveDate, user, cancellationToken);
 }

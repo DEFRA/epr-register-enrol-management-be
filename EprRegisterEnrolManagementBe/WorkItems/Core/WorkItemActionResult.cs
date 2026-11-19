@@ -108,6 +108,15 @@ public enum WorkItemActionFailureCode
     /// <c>errorCode</c>. Nothing was changed.
     /// </summary>
     TemplateUnavailable,
+
+    /// <summary>
+    /// RA-495 AC6: the effective date sent with an add-ORS approval is
+    /// missing or earlier than the date the change request was submitted.
+    /// A client error (400) whose <see cref="WorkItemActionResult.ErrorCode"/>
+    /// names the rule, so the frontend binds it to the date field without
+    /// parsing prose. Nothing was changed.
+    /// </summary>
+    InvalidEffectiveDate,
 }
 
 /// <summary>
@@ -121,18 +130,26 @@ public sealed record WorkItemActionResult
         WorkItem? workItem,
         WorkItemActionFailureCode? failureCode,
         string? message,
-        bool isIdempotentReplay
+        bool isIdempotentReplay,
+        string? errorCode = null
     )
     {
         WorkItem = workItem;
         FailureCode = failureCode;
         Message = message;
         IsIdempotentReplay = isIdempotentReplay;
+        ErrorCode = errorCode;
     }
 
     public WorkItem? WorkItem { get; }
     public WorkItemActionFailureCode? FailureCode { get; }
     public string? Message { get; }
+
+    /// <summary>
+    /// The wire <c>errorCode</c> for a failure the frontend binds to a form
+    /// field (RA-495 AC6: the effective date). Null for every other failure.
+    /// </summary>
+    public string? ErrorCode { get; }
 
     /// <summary>
     /// True when this success is the second-or-later call that performed
@@ -157,4 +174,8 @@ public sealed record WorkItemActionResult
 
     public static WorkItemActionResult Failure(WorkItemActionFailureCode code, string message) =>
         new(workItem: null, code, message, isIdempotentReplay: false);
+
+    /// <summary>A failure carrying a wire <see cref="ErrorCode"/> the frontend binds to a field.</summary>
+    public static WorkItemActionResult Failure(WorkItemActionFailureCode code, string message, string errorCode) =>
+        new(workItem: null, code, message, isIdempotentReplay: false, errorCode);
 }

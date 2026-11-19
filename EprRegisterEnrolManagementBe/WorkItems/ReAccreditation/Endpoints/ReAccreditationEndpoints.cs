@@ -741,6 +741,7 @@ internal static class ReAccreditationEndpoints
         StandardLifecycleEndpoints.LogDecisionAsync(
             id,
             request?.Outcome,
+            requestedEffectiveDate: null,
             httpContext,
             logDecisionService,
             engine,

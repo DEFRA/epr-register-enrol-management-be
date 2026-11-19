@@ -116,19 +116,6 @@ public sealed class SlaService : ISlaService
     /// </summary>
     private const int MaxAttempts = 3;
 
-    /// <summary>
-    /// RA-611: the regulator's calendar. The deadline floor is decided on UK
-    /// local dates, not UTC — during BST a UTC comparison is an hour out either
-    /// side of midnight, which is exactly where an off-by-one-day rejection
-    /// would bite. Falls back to UTC only on a host with no time-zone database
-    /// at all (globalization-invariant mode), where every lookup fails and UTC
-    /// is the closest approximation of London available.
-    /// </summary>
-    private static readonly TimeZoneInfo s_ukTimeZone =
-        TimeZoneInfo.TryFindSystemTimeZoneById("Europe/London", out var ukZone)
-            ? ukZone
-            : TimeZoneInfo.Utc;
-
     private readonly IWorkItemPersistence _persistence;
     private readonly ILogger<SlaService> _logger;
     private readonly TimeProvider _timeProvider;
@@ -319,7 +306,7 @@ public sealed class SlaService : ISlaService
         var newDueAt = workItem.SlaClock.StartedAt + newTargetDuration;
         var utcNow = _timeProvider.GetUtcNow().UtcDateTime;
 
-        var dulyMadeDate = UkDateOf(workItem.SlaClock.StartedAt);
+        var dulyMadeDate = UkCalendar.DateOf(workItem.SlaClock.StartedAt);
         // 1 January of the CURRENT CALENDAR year, taken from the injected
         // TimeProvider and converted to a UK date the same way as the anchor
         // above, so both bounds are read off one calendar.
@@ -335,7 +322,7 @@ public sealed class SlaService : ISlaService
         // The floor is therefore time-dependent again: on New Year's Day it
         // steps forward a year, intentionally — that is what "no further back
         // than 1st Jan of current year" means.
-        var currentYearStart = new DateOnly(UkDateOf(utcNow).Year, 1, 1);
+        var currentYearStart = new DateOnly(UkCalendar.DateOf(utcNow).Year, 1, 1);
         // Whichever bound is LATER is the one that actually constrains the
         // caseworker, and the one the error message must name — telling them
         // "not before 1 January" when the real floor is a March duly-made date
@@ -345,7 +332,7 @@ public sealed class SlaService : ISlaService
         var yearStartBinds = currentYearStart >= dulyMadeDate;
         var floor = yearStartBinds ? currentYearStart : dulyMadeDate;
 
-        if (UkDateOf(newDueAt) < floor)
+        if (UkCalendar.DateOf(newDueAt) < floor)
         {
             return SlaActionResult.Failure(
                 SlaActionFailureCode.InvalidRequest,
@@ -520,17 +507,6 @@ public sealed class SlaService : ISlaService
         newTargetDuration = TimeSpan.FromTicks(sum);
         return true;
     }
-
-    /// <summary>
-    /// RA-611: the Europe/London calendar date of a UTC instant. The instant is
-    /// re-stamped as UTC first because SLA clocks deserialised from Mongo can
-    /// carry an Unspecified (or, historically, Local) kind, and
-    /// <see cref="TimeZoneInfo.ConvertTimeFromUtc"/> rejects a Local input.
-    /// </summary>
-    private static DateOnly UkDateOf(DateTime utc) =>
-        DateOnly.FromDateTime(
-            TimeZoneInfo.ConvertTimeFromUtc(
-                DateTime.SpecifyKind(utc, DateTimeKind.Utc), s_ukTimeZone));
 
     private static Dictionary<string, string?> Snapshot(WorkItemSlaClock clock) => new()
     {

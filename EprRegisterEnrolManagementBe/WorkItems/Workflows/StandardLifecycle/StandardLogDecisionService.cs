@@ -16,13 +16,28 @@ internal interface IStandardLogDecisionService
     /// applying both hops server-side. Also accepts an item already in
     /// <c>awaiting-decision</c>, so a call that failed between the hops is
     /// finished by replaying it.
+    ///
+    /// RA-495 AC6: <paramref name="effectiveDate"/> is the date an approval
+    /// takes effect from, required (and checked, <see cref="StandardEffectiveDate"/>)
+    /// when approving a type that
+    /// <see cref="IStandardLifecycleStrategy.TakesEffectiveDate"/>. A refusal of
+    /// such a type records the submission date instead; any other call ignores it.
     /// </summary>
+    Task<WorkItemActionResult> LogDecisionAsync(
+        Guid workItemId,
+        StandardDecisionOutcome outcome,
+        DateOnly? effectiveDate,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>A determination with no effective date, as every type but add-ORS records.</summary>
     Task<WorkItemActionResult> LogDecisionAsync(
         Guid workItemId,
         StandardDecisionOutcome outcome,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default
-    );
+    ) => LogDecisionAsync(workItemId, outcome, effectiveDate: null, user, cancellationToken);
 }
 
 /// <summary>
@@ -56,6 +71,7 @@ internal sealed class StandardLogDecisionService(
     public async Task<WorkItemActionResult> LogDecisionAsync(
         Guid workItemId,
         StandardDecisionOutcome outcome,
+        DateOnly? effectiveDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default
     )
@@ -146,6 +162,26 @@ internal sealed class StandardLogDecisionService(
             );
         }
 
+        // RA-495 AC6: checked before anything is written, like the template
+        // below. Only a type that takes one records a date: an approval's is
+        // the one entered; a refusal's is the submission date.
+        DateOnly? determinationEffectiveDate = null;
+        if (strategy.TakesEffectiveDate)
+        {
+            if (!isApproval)
+            {
+                determinationEffectiveDate = StandardEffectiveDate.ForRefusal(workItem);
+            }
+            else if (StandardEffectiveDate.Check(workItem, effectiveDate) is { } dateFailure)
+            {
+                return dateFailure;
+            }
+            else
+            {
+                determinationEffectiveDate = effectiveDate;
+            }
+        }
+
         // RA-527: checked here, before any mint and the hop, so an item still
         // on older rules (its snapshot not yet migrated) is refused with
         // nothing written rather than parked in 'awaiting-decision' first.
@@ -167,8 +203,22 @@ internal sealed class StandardLogDecisionService(
         }
 
         return isApproval
-            ? await RecordApprovalAsync(strategy.Determinations, workItem, needsSubmitForDecision, user, cancellationToken)
-            : await RecordRefusalAsync(strategy.Determinations, workItemId, needsSubmitForDecision, user, cancellationToken);
+            ? await RecordApprovalAsync(
+                strategy.Determinations,
+                workItem,
+                determinationEffectiveDate,
+                needsSubmitForDecision,
+                user,
+                cancellationToken
+            )
+            : await RecordRefusalAsync(
+                strategy.Determinations,
+                workItemId,
+                determinationEffectiveDate,
+                needsSubmitForDecision,
+                user,
+                cancellationToken
+            );
     }
 
     /// <summary>
@@ -180,6 +230,7 @@ internal sealed class StandardLogDecisionService(
     private async Task<WorkItemActionResult> RecordApprovalAsync(
         IStandardDeterminationSteps determinations,
         WorkItem workItem,
+        DateOnly? effectiveDate,
         bool needsSubmitForDecision,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
@@ -200,7 +251,12 @@ internal sealed class StandardLogDecisionService(
             return failed;
         }
 
-        var result = await preparation.RecordApprovedDeterminationAsync(workItemId, user, cancellationToken);
+        var result = await preparation.RecordApprovedDeterminationAsync(
+            workItemId,
+            effectiveDate,
+            user,
+            cancellationToken
+        );
 
         LogStepOne(result, workItemId, "approved", user);
         return result;
@@ -213,6 +269,7 @@ internal sealed class StandardLogDecisionService(
     private async Task<WorkItemActionResult> RecordRefusalAsync(
         IStandardDeterminationSteps determinations,
         Guid workItemId,
+        DateOnly? effectiveDate,
         bool needsSubmitForDecision,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
@@ -228,6 +285,7 @@ internal sealed class StandardLogDecisionService(
 
         var result = await determinations.RecordRefusedDeterminationAsync(
             workItemId,
+            effectiveDate,
             user,
             cancellationToken
         );

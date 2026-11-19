@@ -19,6 +19,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 ///   <item>Charge source: the site's own charge, <c>payload.site.chargePence</c>.</item>
 /// </list>
 /// The payment date is stamped as the default top-level <c>paymentDate</c>.
+/// A determination records an effective date (AC6) on the top-level
+/// <c>effectiveDate</c>: the one entered on approval, the submission date on
+/// refusal.
 /// </summary>
 internal sealed class AddOverseasSiteLifecycleStrategy(StandardDeterminationWrites determinations)
     : IStandardLifecycleStrategy
@@ -33,6 +36,9 @@ internal sealed class AddOverseasSiteLifecycleStrategy(StandardDeterminationWrit
     public IOperatorJourneyPush? OperatorJourneyPush => AddOverseasSiteOperatorJourneyPush.Instance;
 
     public IStandardDeterminationSteps Determinations => determinations;
+
+    /// <summary>RA-495 AC6: an approval names its effective date, and the site is accredited from it.</summary>
+    public bool TakesEffectiveDate => true;
 
     public int? ReadChargePence(WorkItem workItem) =>
         SubmissionPayload.ReadSite(workItem.Payload) is { } site

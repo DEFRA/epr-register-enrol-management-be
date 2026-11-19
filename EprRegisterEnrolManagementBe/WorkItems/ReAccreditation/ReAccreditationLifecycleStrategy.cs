@@ -147,14 +147,17 @@ internal sealed class ReAccreditationDeterminationSteps(
         }
 
         // Step 1 stamps exactly the number minted here; it never mints another.
+        // Re-accreditation takes no effective date, so none reaches it.
         return StandardApprovalPreparation.Ready(
-            (workItemId, user, ct) =>
+            (workItemId, _, user, ct) =>
                 approvalService.RecordApprovedDeterminationAsync(workItemId, user, accreditationNumber, ct)
         );
     }
 
+    /// <summary>Re-accreditation takes no effective date, so none reaches its refusal.</summary>
     public Task<WorkItemActionResult> RecordRefusedDeterminationAsync(
         Guid workItemId,
+        DateOnly? effectiveDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     ) => refusalService.RecordRefusedDeterminationAsync(workItemId, user, cancellationToken);

@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
 using NSubstitute;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
 
@@ -8,7 +10,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
 /// <summary>
 /// RA-495 (AC5 to AC8): a Duly made add-ORS work item takes a final
-/// determination (Approved or Refused) and then the applicant-contact
+/// determination (Approved, with the AC6 effective date, or Refused) and then the applicant-contact
 /// confirmation, through the shared Standard-lifecycle routes
 /// (<c>POST /work-items/{id}/decision</c> and <c>/confirm-contact</c>).
 /// Approval mints nothing (the accreditation already exists) and no email is
@@ -33,6 +35,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         var pending = await factory.Persistence.GetByIdAsync(id, ct);
         Assert.Equal("approved-pending-contact", pending!.StateId);
         Assert.Contains(pending.AuditLog, a => a.Action == "determination-made" && a.Details["outcome"] == "approved");
+        Assert.Equal(EffectiveDate.ToString("yyyy-MM-dd"), pending.Payload["effectiveDate"].AsString);
 
         var confirmation = await PostConfirmContactAsync(client, id, ct);
 
@@ -151,5 +154,79 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         var after = await factory.Persistence.GetByIdAsync(id, ct);
         Assert.Equal(closed!.Version, after!.Version);
         Assert.Equal(closed.AssignedToId, after.AssignedToId);
+    }
+
+    [Fact]
+    public async Task Approving_records_the_entered_effective_date_in_the_application_history()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await factory.DulyMadeAndStartedAsync(client, "effective-date-history", ct);
+        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+
+        var response = await PostDecisionAsync(client, id, "approved", today, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var pending = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(today, pending!.Payload["effectiveDate"].AsString);
+        Assert.Contains(
+            pending.AuditLog,
+            a => a.Action == "determination-made" && a.Details["effectiveDate"] == today
+        );
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("2099-01-01")]
+    public async Task Refusing_records_the_submission_date_as_the_effective_date(string? sentDate)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await factory.DulyMadeAndStartedAsync(client, $"effective-date-refusal-{sentDate ?? "absent"}", ct);
+
+        var response = await PostDecisionAsync(client, id, "rejected", sentDate, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var pending = await factory.Persistence.GetByIdAsync(id, ct);
+        var submittedOn = UkCalendar.DateOf(pending!.SubmittedAt).ToString("yyyy-MM-dd");
+        Assert.Equal(submittedOn, pending.Payload["effectiveDate"].AsString);
+        Assert.Contains(
+            pending.AuditLog,
+            a => a.Action == "determination-made" && a.Details["effectiveDate"] == submittedOn
+        );
+    }
+
+    [Theory]
+    [InlineData(null, "effective-date-required")]
+    [InlineData("", "effective-date-required")]
+    [InlineData("2026-02-30", "effective-date-invalid")]
+    [InlineData("10/12/2026", "effective-date-invalid")]
+    [InlineData("2000-01-01", "effective-date-before-submission")]
+    public async Task An_approval_needs_an_effective_date_on_or_after_the_submission_date(
+        string? effectiveDate,
+        string errorCode
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await factory.DulyMadeAndStartedAsync(
+            client,
+            $"effective-date-{errorCode}-{effectiveDate?.Replace('/', '-') ?? "absent"}",
+            ct
+        );
+
+        var response = await PostDecisionAsync(client, id, "approved", effectiveDate, ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+        Assert.Equal(errorCode, problem.GetProperty("errorCode").GetString());
+        Assert.Equal("effectiveDate", problem.GetProperty("field").GetString());
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal("assessment-started", persisted!.StateId);
+        Assert.False(persisted.Payload.Contains("effectiveDate"));
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "determination-made");
     }
 }

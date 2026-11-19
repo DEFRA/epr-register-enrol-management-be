@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
@@ -7,7 +9,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// RA-495: the determination writes for a Standard-workflow type with nothing
 /// bespoke: no accreditation number is minted (the type changes an
 /// accreditation that already exists, or has none) and the payload is not
-/// touched. Each step is one <see cref="IWorkItemPersistence.ReplaceAsync"/>
+/// touched, except that a determination stores its AC6 effective date, when
+/// it has one, on the top-level <c>effectiveDate</c>. Each step is one <see cref="IWorkItemPersistence.ReplaceAsync"/>
 /// that re-checks the item first, retried on a concurrency conflict, then
 /// fires the post-action hooks. The states, actions and audit entries are
 /// re-accreditation's (RA-527), so the history reads the same:
@@ -41,6 +44,7 @@ internal sealed class StandardDeterminationWrites(
 
     private Task<WorkItemActionResult> RecordApprovedDeterminationAsync(
         Guid workItemId,
+        DateOnly? effectiveDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     ) =>
@@ -53,13 +57,15 @@ internal sealed class StandardDeterminationWrites(
                 StandardWorkflow.ApprovedPendingContactStateId,
                 StandardWorkflow.ApprovedStateId,
                 "Determination made: Approved",
-                StandardWorkflow.ApprovedStateId
+                StandardWorkflow.ApprovedStateId,
+                effectiveDate
             ),
             cancellationToken
         );
 
     public Task<WorkItemActionResult> RecordRefusedDeterminationAsync(
         Guid workItemId,
+        DateOnly? effectiveDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     ) =>
@@ -72,7 +78,8 @@ internal sealed class StandardDeterminationWrites(
                 StandardWorkflow.RejectedPendingContactStateId,
                 StandardWorkflow.RejectedStateId,
                 "Determination made: Refused",
-                StandardWorkflow.RejectedStateId
+                StandardWorkflow.RejectedStateId,
+                effectiveDate
             ),
             cancellationToken
         );
@@ -158,14 +165,15 @@ internal sealed class StandardDeterminationWrites(
             cancellationToken
         );
 
-    /// <summary>One outcome's step 1.</summary>
+    /// <summary>One outcome's step 1, with its AC6 effective date if the type takes one.</summary>
     private sealed record Determination(
         string ActionId,
         string ActionDisplayName,
         string PendingStateId,
         string FinalStateId,
         string AuditDisplayName,
-        string Outcome
+        string Outcome,
+        DateOnly? EffectiveDate
     );
 
     private Task<WorkItemActionResult> RecordDeterminationAsync(
@@ -184,14 +192,26 @@ internal sealed class StandardDeterminationWrites(
             determination.PendingStateId,
             workItem => CheckStepOne(workItemId, workItem, determination),
             workItem =>
+            {
+                var details = new Dictionary<string, string?> { ["outcome"] = determination.Outcome };
+                if (determination.EffectiveDate is { } effectiveDate)
+                {
+                    var stamped = effectiveDate.ToString(StandardEffectiveDate.DateFormat, CultureInfo.InvariantCulture);
+                    var payload = (workItem.Payload ?? new BsonDocument()).DeepClone().AsBsonDocument;
+                    payload[StandardEffectiveDate.Field] = stamped;
+                    workItem.ReplacePayload(payload);
+                    details[StandardEffectiveDate.Field] = stamped;
+                }
+
                 AppendAudit(
                     workItem,
                     "determination-made",
                     determination.AuditDisplayName,
                     user,
                     now.UtcDateTime,
-                    new() { ["outcome"] = determination.Outcome }
-                ),
+                    details
+                );
+            },
             now,
             cancellationToken
         );
@@ -255,7 +275,7 @@ internal sealed class StandardDeterminationWrites(
         string actionDisplayName,
         string toStateId,
         Func<WorkItem?, WorkItemActionResult?> guard,
-        Action<WorkItem> appendStepAudit,
+        Action<WorkItem> applyStep,
         DateTimeOffset now,
         CancellationToken cancellationToken
     )
@@ -293,7 +313,7 @@ internal sealed class StandardDeterminationWrites(
                     ["toStateId"] = workItem.StateId,
                 }
             );
-            appendStepAudit(workItem);
+            applyStep(workItem);
 
             try
             {

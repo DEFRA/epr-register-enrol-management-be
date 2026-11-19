@@ -172,7 +172,9 @@ internal static class StandardLifecycleEndpoints
     /// <summary>
     /// Record the determination (step 1 of two). The body names an outcome,
     /// <c>approved</c> or <c>rejected</c>, never a state or action. A repeat
-    /// of the same outcome is an idempotent replay.
+    /// of the same outcome is an idempotent replay. RA-495 AC6: an approval of
+    /// a type that takes one (add-ORS) also names its <c>effectiveDate</c>
+    /// (<c>yyyy-MM-dd</c>).
     /// </summary>
     public static Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> LogDecision(
         [FromRoute] Guid id,
@@ -185,6 +187,7 @@ internal static class StandardLifecycleEndpoints
         LogDecisionAsync(
             id,
             request?.Outcome,
+            request?.EffectiveDate,
             httpContext,
             logDecisionService,
             engine,
@@ -199,6 +202,7 @@ internal static class StandardLifecycleEndpoints
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> LogDecisionAsync(
         Guid id,
         string? requestedOutcome,
+        string? requestedEffectiveDate,
         HttpContext httpContext,
         IStandardLogDecisionService logDecisionService,
         IWorkItemService engine,
@@ -220,9 +224,24 @@ internal static class StandardLifecycleEndpoints
             );
         }
 
+        if (!StandardEffectiveDate.TryParse(requestedEffectiveDate, out var effectiveDate))
+        {
+            return TypedResults.Problem(
+                title: problemTitle,
+                detail: $"'{StandardEffectiveDate.Field}' must be a real {StandardEffectiveDate.DateFormat} date.",
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    [StandardLifecycleProblems.ErrorCodeKey] = StandardEffectiveDate.CodeInvalid,
+                    [StandardLifecycleProblems.FieldKey] = StandardEffectiveDate.Field,
+                }
+            );
+        }
+
         var result = await logDecisionService.LogDecisionAsync(
             id,
             outcome,
+            effectiveDate,
             httpContext.User,
             cancellationToken
         );
@@ -300,8 +319,11 @@ internal static class StandardLifecycleEndpoints
 /// <summary>RA-495: <c>POST /work-items/{id}/duly-make</c> body.</summary>
 internal sealed record StandardDulyMakeRequest(string? PaymentDate);
 
-/// <summary>RA-495: <c>POST /work-items/{id}/decision</c> body.</summary>
-internal sealed record StandardDecisionRequest(string? Outcome);
+/// <summary>
+/// RA-495: <c>POST /work-items/{id}/decision</c> body. <c>EffectiveDate</c>
+/// (AC6, <c>yyyy-MM-dd</c>) is for an approval of a type that takes one (add-ORS).
+/// </summary>
+internal sealed record StandardDecisionRequest(string? Outcome, string? EffectiveDate = null);
 
 /// <summary>
 /// RA-495: <c>GET /work-items/{id}/duly-make</c>: the charge, in pence, the

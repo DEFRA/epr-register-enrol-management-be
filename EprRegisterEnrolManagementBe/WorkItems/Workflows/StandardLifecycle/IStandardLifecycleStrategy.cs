@@ -39,6 +39,15 @@ internal interface IStandardLifecycleStrategy : IStandardDulyMakingRules
     /// Types with nothing bespoke use <see cref="StandardDeterminationWrites"/>.
     /// </summary>
     IStandardDeterminationSteps Determinations { get; }
+
+    /// <summary>
+    /// RA-495 AC6: whether a determination records the date it takes effect
+    /// from (<see cref="StandardEffectiveDate"/>): entered on approval, the
+    /// submission date on refusal.
+    /// Re-accreditation's does not; its accreditation starts at confirm
+    /// contact.
+    /// </summary>
+    bool TakesEffectiveDate => false;
 }
 
 /// <summary>

@@ -108,13 +108,40 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
     public static Task<HttpResponseMessage> PostStartAssessmentAsync(HttpClient client, Guid id, CancellationToken ct) =>
         client.PostAsync($"/work-items/{id}/actions/start-assessment", content: null, ct);
 
-    /// <summary><c>POST /work-items/{id}/decision</c> with <paramref name="outcome"/>.</summary>
+    /// <summary>
+    /// RA-495 AC6: the effective date the helpers approve with. A month after
+    /// today, so it is never before the submission date (a future date is
+    /// allowed).
+    /// </summary>
+    public static readonly DateOnly EffectiveDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30);
+
+    /// <summary>
+    /// <c>POST /work-items/{id}/decision</c> with <paramref name="outcome"/>; an
+    /// approval also sends <see cref="EffectiveDate"/>, as add-ORS requires (a
+    /// refusal records the submission date instead).
+    /// </summary>
     public static Task<HttpResponseMessage> PostDecisionAsync(
         HttpClient client,
         Guid id,
         string outcome,
         CancellationToken ct
-    ) => client.PostAsJsonAsync($"/work-items/{id}/decision", new { outcome }, ct);
+    ) =>
+        PostDecisionAsync(
+            client,
+            id,
+            outcome,
+            outcome == "approved" ? EffectiveDate.ToString("yyyy-MM-dd") : null,
+            ct
+        );
+
+    /// <summary><c>POST /work-items/{id}/decision</c> with the effective date as sent.</summary>
+    public static Task<HttpResponseMessage> PostDecisionAsync(
+        HttpClient client,
+        Guid id,
+        string outcome,
+        string? effectiveDate,
+        CancellationToken ct
+    ) => client.PostAsJsonAsync($"/work-items/{id}/decision", new { outcome, effectiveDate }, ct);
 
     /// <summary><c>POST /work-items/{id}/confirm-contact</c>.</summary>
     public static Task<HttpResponseMessage> PostConfirmContactAsync(HttpClient client, Guid id, CancellationToken ct) =>
