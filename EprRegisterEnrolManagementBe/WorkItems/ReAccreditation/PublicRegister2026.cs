@@ -10,47 +10,52 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 // (material and site), and 57 orgs have more than one accredited row, so the
 // Org ID alone can't pick the right one. Org ID and business name are kept
 // alongside so a reader can see whose row it is, and so the backfill can check
-// the org it matched. A null accreditation number means the register lists the
+// the org it matched (either org: an organisation can hold a registration
+// carrying another org's digits). A null accreditation number means the register lists the
 // registration with no accreditation, so the operator was registered-only in
 // 2026.
 //
-// The rows are copied as published. Six of the 394 contradict themselves, so
-// they're held back in HeldBack rather than ByRegistrationNumber, and the
-// backfill doesn't use them until someone confirms the right values.
-// PublicRegister2026Tests pins both, so a change to the data is a deliberate one.
+// The rows are copied as published and the backfill uses every one: it was agreed on
+// 19 November 2026 to treat the register as correct and put rows right one at a time
+// if they turn out not to be. Six rows look wrong, and each is commented where it is.
+// One of them, J. and A. Young's, is published without the last letter of its
+// registration number, so it is keyed by the full number (see
+// JAndAYoungPublishedRegistrationNumber). PublicRegister2026Tests pins the data, so a
+// change to it is a deliberate one.
 //
 // A point-in-time snapshot, not a live feed.
 internal static class PublicRegister2026
 {
     /// <summary>
-    /// The register's rows that contradict themselves, kept exactly as published and out of
-    /// <see cref="ByRegistrationNumber"/> until someone confirms what they should be. Once a row is confirmed,
-    /// correct it and move it into <see cref="ByRegistrationNumber"/>.
+    /// J. and A. Young's registration number as the register prints it, missing its last letter. Their
+    /// row is keyed by the full number, R26WR5000950025PL. An application still holding this one can't be
+    /// issued a 2027 number until its registration number is put right, so the backfill reports it.
     /// </summary>
-    public static readonly IReadOnlyDictionary<string, PublicRegister2026Entry> HeldBack =
-        new Dictionary<string, PublicRegister2026Entry>(StringComparer.Ordinal)
-        {
-            // The accreditation number's org segment is 500532 (Polyclear Ltd's org), not
-            // 500302. Copying it would put the wrong org into the 2027 number.
-            ["R26WR5003020027PL"] = new("A26WR5005320025PL", 500302, "JP RECYCLING LTD"),
-            // The accreditation number ends GL, which isn't a material code. The
-            // registration is GO, so derivation would reject it.
-            ["R26SR5005410022GO"] = new("A26SR5005410022GL", 500541, "Comhairle Nan Eilean Siar"),
-            // The Org ID column says 500069, but both numbers' org is 500226. The
-            // accreditation number is consistent with the registration.
-            ["R26ER5002260055GR"] = new("A26ER5002260023GR", 500069, "Encirc Ltd"),
-            // The Org ID column says 500263, but both numbers' org is 500236. The
-            // accreditation number is consistent with the registration.
-            ["R26WX5002360007ST"] = new("A26WX5002360016ST", 500263, "REDDY PAI METALS LTD"),
-            ["R26WX5002360008AL"] = new("A26WX5002360017AL", 500263, "REDDY PAI METALS LTD"),
-            // The registration number is missing its last character, and the row has no
-            // accreditation, so it can never match an application.
-            ["R26WR5000950025P"] = new(null, 500095, "J. AND A. YOUNG (LEICESTER) LTD"),
-        };
+    public const string JAndAYoungPublishedRegistrationNumber = "R26WR5000950025P";
 
     public static readonly IReadOnlyDictionary<string, PublicRegister2026Entry> ByRegistrationNumber =
         new Dictionary<string, PublicRegister2026Entry>(StringComparer.Ordinal)
         {
+            // Rows that look wrong but are used as published (agreed 19 November 2026).
+            //
+            // The accreditation number's org is 500532 (Polyclear Ltd's), not 500302, so the 2027
+            // renewal keeps 500532.
+            ["R26WR5003020027PL"] = new("A26WR5005320025PL", 500302, "JP RECYCLING LTD"),
+            // The accreditation number ends GL, as 2026 glass numbers from ReEx do. The 2027
+            // number takes its material code from the application instead (RA-783).
+            ["R26SR5005410022GO"] = new("A26SR5005410022GL", 500541, "Comhairle Nan Eilean Siar"),
+            // The Org ID column says 500069, but both numbers carry 500226. Org 500069 does hold
+            // this registration (RA-764), so the backfill accepts either org.
+            ["R26ER5002260055GR"] = new("A26ER5002260023GR", 500069, "Encirc Ltd"),
+            // The Org ID column says 500263, but both numbers carry 500236. The backfill accepts
+            // either org, as above.
+            ["R26WX5002360007ST"] = new("A26WX5002360016ST", 500263, "REDDY PAI METALS LTD"),
+            ["R26WX5002360008AL"] = new("A26WX5002360017AL", 500263, "REDDY PAI METALS LTD"),
+            // Published as R26WR5000950025P (JAndAYoungPublishedRegistrationNumber), missing
+            // its last letter. Registered only, with no accreditation.
+            ["R26WR5000950025PL"] = new(null, 500095, "J. AND A. YOUNG (LEICESTER) LTD"),
+            //
+            // Every other row.
             ["R26ER5000270036WO"] = new("A26ER5000270063WO", 500027, "Egger (UK) Limited"),
             ["R26ER5000340182PL"] = new("A26ER5000340160PL", 500034, "Isher hangers"),
             ["R26ER5000370026PL"] = new("A26ER5000370050PL", 500037, "D L PLASTICS LIMITED"),
