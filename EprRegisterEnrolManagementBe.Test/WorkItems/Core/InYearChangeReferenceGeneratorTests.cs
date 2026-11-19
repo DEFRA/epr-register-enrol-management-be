@@ -7,8 +7,8 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// <summary>
 /// RA-492: the in-year change reference format. The Jira comment of 10 Nov 2026
 /// fixes <c>IYC-{code}-{year}-{5-digit sequence}</c> with one sequence per change
-/// type per year. RA-492 also decided that the year is mandatory, each counter
-/// starts at 00000, and the sequence wraps to 00000 after 99999.
+/// type per year. RA-492 also decided that the year is mandatory. RA-739 moved
+/// the start: each counter starts at 00001 and wraps back to 00001 after 99999.
 /// </summary>
 public sealed class InYearChangeReferenceGeneratorTests
 {
@@ -17,7 +17,7 @@ public sealed class InYearChangeReferenceGeneratorTests
 
     public InYearChangeReferenceGeneratorTests()
     {
-        _store.NextAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(0L);
+        _store.NextAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(1L);
         _generator = new InYearChangeReferenceGenerator(_store);
     }
 
@@ -59,13 +59,17 @@ public sealed class InYearChangeReferenceGeneratorTests
         await _store.Received(1).NextAsync("IYC-ORS-2027", Arg.Any<CancellationToken>());
     }
 
+    // RA-739: the store hands out 1, 2, 3, ... per key. The reference shows
+    // 00001 to 99999, then wraps back to 00001; 00000 is never shown.
     [Theory]
-    [InlineData(0L, "IYC-ORS-2026-00000")]
     [InlineData(1L, "IYC-ORS-2026-00001")]
+    [InlineData(2L, "IYC-ORS-2026-00002")]
     [InlineData(99999L, "IYC-ORS-2026-99999")]
-    [InlineData(100000L, "IYC-ORS-2026-00000")]
-    [InlineData(100001L, "IYC-ORS-2026-00001")]
-    public async Task GenerateAsync_starts_at_00000_and_wraps_to_00000_after_99999(
+    [InlineData(100000L, "IYC-ORS-2026-00001")]
+    [InlineData(100001L, "IYC-ORS-2026-00002")]
+    [InlineData(199998L, "IYC-ORS-2026-99999")]
+    [InlineData(199999L, "IYC-ORS-2026-00001")]
+    public async Task GenerateAsync_starts_at_00001_and_wraps_to_00001_after_99999(
         long sequence,
         string expected
     )

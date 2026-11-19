@@ -32,6 +32,8 @@ public class WorkItemEndpointsTests
     private static readonly string[] s_expectedCapturedTypeIds = ["re-accreditation", "other-type"];
     private static readonly string[] s_expectedStampedPayloadFields =
     [
+        "submissionReference",
+        "submissionSize",
         "applicationReference",
         "paymentReference",
     ];
@@ -382,7 +384,8 @@ public class WorkItemEndpointsTests
         // RA-219: even with no client payload the engine stamps the
         // server-generated applicationReference, so the payload is no longer
         // empty. RA-447/CM3: it also stamps paymentReference (the same
-        // value) at creation, so exactly those two fields are present.
+        // value) at creation. RA-739: and the submission reference with a
+        // submission size of 1, so exactly those four fields are present.
         Assert.Equal(
             s_expectedStampedPayloadFields,
             persisted!.Payload.Names);
@@ -571,14 +574,7 @@ public class WorkItemEndpointsTests
         var registry = new WorkItemRegistry([type]);
         var engine = Substitute.For<IWorkItemService>();
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.ApplicationReferenceExhausted,
@@ -622,14 +618,7 @@ public class WorkItemEndpointsTests
         var registry = new WorkItemRegistry([type]);
         var engine = Substitute.For<IWorkItemService>();
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.InvalidSubmissionPayload,
@@ -718,14 +707,7 @@ public class WorkItemEndpointsTests
             SubmittedBy = "test-client",
         };
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(WorkItemActionResult.Success(submittedWorkItem));
         engine
             .Project(Arg.Any<WorkItem>())
@@ -782,14 +764,7 @@ public class WorkItemEndpointsTests
         var registry = new WorkItemRegistry([type]);
         var engine = Substitute.For<IWorkItemService>();
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<WorkItemActionResult>(new InvalidOperationException("boom")));
 
         var body = JsonDocument.Parse($"{{\"typeId\":\"{TypeId}\"}}").RootElement;
@@ -869,14 +844,7 @@ public class WorkItemEndpointsTests
         var registry = new WorkItemRegistry([type]);
         var engine = Substitute.For<IWorkItemService>();
         engine
-            .SubmitAsync(
-                Arg.Any<IWorkItemType>(),
-                Arg.Any<MongoDB.Bson.BsonDocument>(),
-                Arg.Any<string?>(),
-                Arg.Any<System.Security.Claims.ClaimsPrincipal>(),
-                Arg.Any<IReadOnlyDictionary<string, string?>?>(),
-                Arg.Any<CancellationToken>()
-            )
+            .SubmitAsync(Arg.Any<WorkItemSubmissionRequest>(), Arg.Any<CancellationToken>())
             .Returns(
                 WorkItemActionResult.Failure(
                     WorkItemActionFailureCode.UnknownAction,
@@ -2131,6 +2099,12 @@ public class WorkItemEndpointsTests
 
         public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             Inner.CreateAsync(workItem, cancellationToken);
+
+        public Task CreateAsync(
+            MongoDB.Driver.IClientSessionHandle session,
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => Inner.CreateAsync(session, workItem, cancellationToken);
 
         public Task<bool> CreateIfAbsentAsync(
             WorkItem workItem,

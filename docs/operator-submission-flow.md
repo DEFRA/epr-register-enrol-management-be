@@ -181,9 +181,11 @@ spoof or collide a reference.
   keyed on `payload.operatorRequestId` (unique index): a resubmit of one
   already on file, for example the operator backend retrying after a timeout,
   returns the original work item as an idempotent replay and allocates no
-  number. Applications are keyed the same way on `operatorApplicationId`. No such
-  type is registered yet: `add-overseas-site` arrives with the
-  case-management story. See `docs/work-items.md` "Application reference".
+  number. Applications are keyed the same way on `operatorApplicationId`.
+  `add-overseas-site` (RA-739) is split into one work item per site and keyed
+  on its `submissions` record instead, written in one transaction with its
+  work items. See `docs/work-items.md` "Split submissions" and "Application
+  reference".
 - Builds a `WorkItem` document:
   - `TypeId = "re-accreditation"`, `StateId = {type's initial state}`
   - `SubmittedAt / LastModifiedAt` from the injected `TimeProvider` (not

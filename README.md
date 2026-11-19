@@ -24,7 +24,8 @@ service.
 - [.NET SDK 10.0](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Docker](https://www.docker.com/) and Docker Compose (for the Docker workflow)
 - [MongoDB 7+](https://www.mongodb.com/docs/manual/installation/) running
-  locally on `mongodb://127.0.0.1:27017` (or use the Docker Compose stack)
+  locally on `mongodb://127.0.0.1:27017` as a replica set (or use the Docker
+  Compose stack, which runs one)
 
 ## Local development
 
@@ -100,6 +101,24 @@ the Compose stack:
 ```bash
 docker compose up -d mongodb
 ```
+
+The Compose `mongodb` service runs as a **single-node replica set** (`rs0`)
+(RA-739), because in-year change submissions are written all-or-nothing in a
+multi-document transaction, which MongoDB only supports on a replica set. Its
+healthcheck initiates the set on first start and is a no-op afterwards; an
+existing `mongodb-data` volume keeps its data. From the host, connect with
+`directConnection=true`, because the set advertises its member as
+`mongodb:27017`, which only resolves inside the Compose network:
+
+```bash
+mongosh "mongodb://127.0.0.1:27017/?directConnection=true"
+```
+
+`appsettings.Development.json` already does this. A locally installed
+standalone `mongod` still works for everything except transactions. At startup
+the service runs a **transaction smoke test** and logs one line:
+`Mongo transaction smoke test supported=true`, or an error with
+`supported=false` when the server cannot run transactions.
 
 ## Running with Docker Compose
 
@@ -223,7 +242,7 @@ Notify-testing walkthrough.
 
 | Variable | Secret? | Description |
 | --- | --- | --- |
-| `Mongo__DatabaseUri` | No | MongoDB connection string (default `mongodb://127.0.0.1:27017`; IAM auth in deployed environments) |
+| `Mongo__DatabaseUri` | No | MongoDB connection string (default `mongodb://127.0.0.1:27017/?directConnection=true`; IAM auth in deployed environments). Must reach a replica set for transactions |
 | `Mongo__DatabaseName` | No | MongoDB database name (default `epr-register-case-management`) |
 | `OPERATOR_SERVICE_BASE_URL` | No | Public frontend URL, used for the "back to your application" link in query-notification emails |
 | `Cors__AllowedOrigins` | No | CORS allow-list (array). Empty = deny-all |
@@ -360,12 +379,17 @@ i.e. after every hosted service has started, and so after the host has begun
 serving traffic. The reason is ordering: the work-item migration runner starts
 before `TestOrganisationFixtureHostedService` resets the journey-test fixtures,
 so a rename made there would be undone on the e2e stack on every boot, and the
-RA-764 e2e fixture could never show the renamed state. Running after the host
+RA-764 e2e fixtures could never show the renamed state. Running after the host
 starts is safe for this one: it is off by default, idempotent, and each write is
 a single compare-and-set on the old name, so a request racing it reads either
 the old or the new name and a concurrent writer cannot be overwritten. Prod runs
-the same code path as e2e; only configuration gates it. It goes when RA-764 has
-run (see `docs/diagnostics/ra764-organisation-name-correction.md`).
+the same code path as e2e; only configuration gates it. It renames
+organisation 500069's 2027 cases under **both** its glass-remelt registrations,
+`R26NR5000690003GR` (NIEA) and `R26ER5002260055GR` (EA), accepting a 2027
+accreditation number derived from each case's own registration
+(`A27NR500069####GR` / `A27ER500226####GR`); two e2e fixtures (`…0764`, `…0765`)
+cover one registration each. It goes when RA-764 has run (see
+`docs/diagnostics/ra764-organisation-name-correction.md`).
 
 **Migrations are temporary.** Once a migration has run in every environment,
 delete it (and its registration) but leave the harness in place for the next

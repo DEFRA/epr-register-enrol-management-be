@@ -1,4 +1,5 @@
 using EprRegisterEnrolManagementBe.Config;
+using EprRegisterEnrolManagementBe.Utils.Mongo;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
@@ -32,6 +33,11 @@ public static class WorkItemModuleExtensions
         // generators are registered alongside the engine they back. RA-492
         // adds the in-year change generator and its Mongo sequence store.
         services.AddWorkItemReferenceGenerators();
+        // RA-739: a submission (its record, work items and sequence numbers)
+        // commits in one transaction, and its record is the replay guard.
+        services.AddSingleton<ISubmissionStore, MongoSubmissionStore>();
+        services.AddSingleton<IMongoTransactionRunner, MongoTransactionRunner>();
+        services.AddSingleton<WorkItemSubmissionDependencies>();
         services.AddHostedService<WorkItemMigrationHostedService>();
         return services;
     }

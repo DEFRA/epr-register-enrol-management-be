@@ -23,7 +23,9 @@ Defined in `EprRegisterEnrolManagementBe/WorkItems/Core/`:
 | `WorkItemState` | Identifier + display name for a state. `IsTerminal` marks completion states (e.g. approved/rejected). |
 | `WorkItemTask` | Identifier + display name for a unit of work to be completed in a state. |
 | `WorkItemTransition` | A named action (`approve`, `reject`, `withdraw`) that moves a work item from one state to another. `CallerInvocable` (default `true`) decides whether the generic action endpoint may select it by id, or whether it is reachable only through a module's own service resolving it server-side. |
-| `IWorkItemType` | Declares a type's `TypeId`, `DisplayName`, `InitialState`, `States`, `GetTasksForState(stateId)` and `Transitions`. Pure & side-effect free. |
+| `IWorkItemType` | The case type configuration (RA-739): `TypeId`, display label (`DisplayName`), `Category`, `InYearChangeCode`, `SplitsSubmissionPerSite` and `Workflow`, plus the `InitialState`, `States` and `Transitions` the engine reads (taken from the workflow). Pure & side-effect free. See [Case type configuration](#case-type-configuration-ra-739). |
+| `WorkItemWorkflow` | A reusable state machine (RA-739): `Id`, `InitialState`, `States` and `Transitions`. `WorkItemRegistry` rejects, at startup, a type whose `InitialState`, `States` or `Transitions` differ from its `Workflow`'s. Shared definitions live in `WorkItems/Workflows/` (`StandardWorkflow`). |
+| `WorkItemCategories` | The category values a type can declare (RA-739): `in-year-change`. |
 | `IWorkItemModule` | A module's entry point. Exposes the `Type` and contributes `RegisterServices(services)` and `MapEndpoints(endpoints)`. |
 | `IWorkItemOriginStateResolver` | Optional, module-supplied. Lets a type say "this item is in a waypoint and will return to some *other* state" — see [Waypoint origin state](#waypoint-origin-state-ra-410). |
 | `IWorkItemRegistry` | DI-resolvable lookup of every registered type. |
@@ -45,10 +47,96 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 
 | Method | Route | Description |
 | --- | --- | --- |
-| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`. |
+| `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`, except a split submission (below), which has no `Location` because it creates one work item per site. |
 | `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with the actions the engine will currently allow. |
 | `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state; `400` for unknown actions, transitions whose from-state does not match, and transitions declared `CallerInvocable: false`. The `CallerInvocable` check and the engine resolve the transition with the same `WorkItemEngineRules.ResolveTransition` lookup (ids match case-insensitively; the declaration for the item's current state wins, else the first), so the guard always checks the transition the engine would apply. |
+
+**Split submissions (RA-739).** For a type that declares
+`SplitsSubmissionPerSite` (add-ORS, `add-overseas-site`), `POST /work-items`
+splits the payload's `sites[]` into one work item per site. Each work item's
+payload is the shared request fields (organisation, `material`, `nation`,
+`accreditationYear` and so on, which the list's filters read as for
+re-accreditation) plus a single `site`, its own
+`applicationReference` (`IYC-ORS-{yyyy}-{seq:D5}`), the shared
+`submissionReference` (`SUB-{yyyy}-{seq:D4}`, one counter per year in
+`referenceSequences` keyed `SUB-{yyyy}`, starting at `0001` and growing past
+`9999`), `submissionSize` and `paymentReference`. The response is `201` with
+`{ "submissionReference": "SUB-2026-0001", "workItems": [{ "siteId", "id",
+"applicationReference" }] }`. `siteId` is echoed as sent: the operator backend
+sends a number. The unique index on `payload.operatorRequestId`
+is now on (`payload.operatorRequestId`, `payload.site.siteId`); startup drops
+the RA-492 single-field index. Re-accreditation's request and response are
+unchanged, but its single work item also gets a `submissionReference` from the
+same counter, keyed on the payload's `accreditationYear` (or the submission
+date's year without one), with `submissionSize` 1. It is allocated after the
+replay check, outside a transaction, so a failed write skips that number.
+
+**The add-ORS site.** Each `sites[]` entry, and so each work item's `site`, is
+in re-accreditation's overseas site shape (the operator backend shares one
+projection between the two), so both case types can use the same site helpers:
+
+- `siteId`, `orsId`, `siteName`
+- `siteAddress`, `addressLine1`, `addressLine2`, `townOrCity`, `country`,
+  `coordinates`
+- `contactName`, `contactEmail`, `contactPhone`
+- `operationCodes`, `code1`–`code3`, `repatriatedLoads`, `conditionsOfExport`
+- `isEu`, `isOecd`
+- `interimSites`: every interim site, withdrawn ones included with `removedAt`
+- `besEvidence: { files: [...] }`, each file with `fileId`, `filename`,
+  `contentType`, `uploadedAt`, `scanStatus`, `besEvidenceValidFromDate`,
+  `besEvidenceExpiryDate`, `s3Key` and `s3Bucket`
+- `suppliedFields`: the fields the operator answered because the ORS had no
+  value. `country`, `coordinates`, `operationCodes` and `conditionsOfExport`
+  are the values in force for the request: the operator's answer where the ORS
+  had none, otherwise the ORS's.
+- `chargePence`: this site's own charge (the per-site in-year ORS fee). The
+  payload's shared `chargePence` stays the submission's total.
+
+Re-accreditation's site adds `selected`, `isNewSite`,
+`registeredNowAccredited` and the `interimSite` mirror; add-ORS sites don't
+carry them. The service validates only `siteId`, `orsId` and `siteName` and
+stores the rest of the site as sent.
+
+- **Validation (400, nothing created).** `SubmissionPayload.Validate` requires
+  `operatorRequestId`, `operatorOrganisationId`, `organisationName`,
+  `material` and `paymentReference` (non-blank strings), a 4-digit
+  `accreditationYear`, and at least one site, each with a `siteId` (string or
+  whole number), `orsId` and `siteName`. `siteId`s must be unique within the
+  submission (`7` and `"7"` are different sites, as in a Mongo index). Every
+  other field is optional.
+- **All or nothing.** One transaction (`IMongoTransactionRunner`, the driver's
+  `WithTransactionAsync`, which retries write conflicts) holds both sequence
+  increments, every work item and the submission record. Any failure aborts
+  it: nothing is created, no number is used, and the caller gets an error.
+  Submit hooks run per work item only after the commit. `submissions` and
+  `referenceSequences` are created when their stores are constructed
+  (`MongoService`), never inside the transaction, since creating a collection
+  in a transaction is not supported on every Mongo deployment.
+- **Replay guard.** The `submissions` collection (`MongoSubmissionStore`)
+  holds one document per POST: `_id` = `operatorRequestId`, `typeId`,
+  `submissionReference`, `workItems: [{ siteId, workItemId,
+  applicationReference }]` and `submittedAt`. A sequential replay finds it
+  before validation or allocation and gets the stored body back with
+  `X-Idempotent-Replay: true`. A concurrent duplicate either sees the
+  winner's record when its transaction retries after a write conflict, or
+  collides on `_id`; either way it returns the winner's response. A replay
+  with a different payload returns the stored submission and ignores the
+  edits, as RA-492 documents below.
+- **Collisions inside the transaction.** A duplicate key aborts the whole
+  transaction. An `applicationReference` collision (only once an IYC
+  sequence has wrapped) fails with `503` (`ApplicationReferenceExhausted`),
+  because the aborted increment means a retry would collide again. Any other
+  duplicate key (two first-ever allocations racing to create a counter) is
+  retried whole, up to `MaxSubmissionAttempts`.
+
+**Release.** Deploy management-be and management-fe before the operator
+backend (`epr-register-enrol-backend`). With
+`AccreditationChanges__SubmitToCaseManagement` on, the operator backend sends
+the add-overseas-site shape above and parses the split response, which an
+older management-be does not have. The flag is off in every CDP environment
+(cdp-app-config) until it is switched on for dev and test; keep it off in
+prod.
 
 All three endpoints require authentication via the CDP client id
 header (`x-cdp-client-id`) per RA-89/RA-85b.
@@ -73,10 +161,9 @@ and `WorkItemReferenceGenerator` picks one from the type's
 - **The type declares its code.** `IWorkItemType.InYearChangeCode` is a
   default interface member that returns `null`. An in-year change type
   overrides it in its own module folder, so Core never lists module type ids.
-  **Contract for the case-management story:** the `add-overseas-site` type
-  must set `InYearChangeCode => "ORS"`. That type is **not registered yet**,
-  so today `POST /work-items` rejects `typeId: "add-overseas-site"` as an
-  unknown type, and the IYC path has no production caller.
+  The `add-overseas-site` type (RA-739, `WorkItems/AddOverseasSite/`) sets
+  `InYearChangeCode => "ORS"`, and each work item a submission is split into
+  gets its own IYC reference (see [Ingestion API](#ingestion-api)).
 - **What regulators agreed (Jira comment, 10 Nov 2026):** the shape
   `IYC-<type code>-<year>-<5-digit sequence>`, with one sequence per change
   type per year.
@@ -89,24 +176,32 @@ and `WorkItemReferenceGenerator` picks one from the type's
     stricter than asked but harmless, because the operator backend sends an int.
     The AP format reads the year through the same `AccreditationYear` reader,
     but keeps its fallback to the current year.
-  - **Each counter starts at `00000`.**
-  - **The sequence wraps after `99999`** back to `00000`. The stored counter
-    only grows; the reference shows it modulo 100000.
+  - **The sequence wraps after `99999`.** The stored counter only grows.
+- **Changed on RA-739:** each counter starts at **`00001`**, not `00000`, and
+  wraps after `99999` back to `00001`, so `00000` is never shown. The store
+  hands out 1, 2, 3, ... and the reference shows `(n - 1) mod 99999 + 1`. No
+  production data used the old start, so nothing was migrated. A counter
+  created before the change simply skips one number.
 - **The wrap acts as a cap (accepted, not fixed).**
   - A counter is keyed `IYC-{code}-{yyyy}`, so every number in one counter has
     the same change type and the same year.
   - After a wrap, the reference for the next number already exists with that
     same type and year. The `applicationReference` unique index makes each
     retry take the next number, and every one collides.
-  - So once one type passes 100,000 changes in a year, every later
+  - So once one type passes 99,999 changes in a year, every later
     submission of that type fails with `503` (`ApplicationReferenceExhausted`,
     labelled transient) until the year changes.
-  - RA-492 judged 100,000 changes of one type in one year unrealistic.
+  - RA-492 judged that many changes of one type in one year unrealistic.
 - **Sequence storage.** Counters live in the `referenceSequences` collection
   as `{ _id: "IYC-ORS-2026", seq: <long> }`, where `seq` is how many numbers
-  have been allocated for the key. They are allocated atomically by
-  `MongoReferenceSequenceStore` (`$inc` with upsert). A number can be skipped
-  but is never reused:
+  have been allocated for the key, which is also the last number handed out.
+  They are allocated atomically by `MongoReferenceSequenceStore` (`$inc` with
+  upsert). A caller can pass its own session (RA-739): inside a transaction
+  the increment commits or aborts with it, so an aborted transaction leaves no
+  gap. Run such a transaction with `WithTransactionAsync`, because two
+  transactions allocating from one key write-conflict and the loser must be
+  retried whole. Outside a transaction a number can be skipped but is never
+  reused:
   - Concurrent submits with one submission key (below) each allocate a number
     before all but one return the winner as a replay.
   - An insert failure after allocation also leaves a gap.
@@ -140,13 +235,11 @@ and `WorkItemReferenceGenerator` picks one from the type's
 - **Collisions.** On an `applicationReference` unique-index collision the
   engine regenerates, up to `MaxApplicationReferenceAttempts`. An IYC retry
   takes the next number. An AP retry appends a disambiguator character.
-- **Pinning the code.** Nothing in this repo enforces `ORS` until the
-  case-management story adds the type, so that story must add a test
-  asserting the registered `add-overseas-site` type's
-  `InYearChangeCode == "ORS"`.
+- **Pinning the code.** `AddOverseasSiteTypeTests` asserts the
+  `add-overseas-site` type's `InYearChangeCode == "ORS"`.
 - **Wiring.** `AddWorkItemReferenceGenerators()` (in
-  `WorkItemReferenceGenerator.cs`) registers the chooser, both generators and
-  the sequence store.
+  `WorkItemReferenceGenerator.cs`) registers the chooser, both generators,
+  the RA-739 `SubmissionReferenceGenerator` and the sequence store.
 
 ## Adding a new work item type
 
@@ -161,10 +254,13 @@ and `WorkItemReferenceGenerator` picks one from the type's
      Models/              // module-scoped models
    ```
 
-2. **Implement `IWorkItemType`**, declaring states and transitions. Make
-   the static structure obvious from a glance; if transitions depend on data, return
-   a dynamically-built collection from `GetTasksForState` — but keep the
-   declaration co-located with the type.
+2. **Implement `IWorkItemType`** with the type's case type configuration
+   (see [Case type configuration](#case-type-configuration-ra-739)). A type
+   that follows an existing workflow references it rather than redeclaring
+   states and transitions. A type with a lifecycle of its own declares a new
+   `WorkItemWorkflow`. Make the static structure obvious at a glance and keep
+   the declaration co-located with the type (or, if shared, in
+   `WorkItems/Workflows/`).
 
 3. **Implement `IWorkItemModule`** to register the module's services and
    endpoints. Mount endpoints under `/work-items/<type-id>/...` to keep
@@ -187,6 +283,64 @@ That is the complete list of changes required outside the new module folder.
 An in-year change type sets `InYearChangeCode` on its `IWorkItemType` inside
 the module folder (see [Application reference](#application-reference-ra-219-ra-492)).
 That is still a module-only change.
+
+### Case type configuration (RA-739)
+
+The work item type definition (`IWorkItemType`) is the single place a case
+type is configured. Every setting is code, not runtime data:
+
+| Setting | Member | Default | Re-accreditation |
+| --- | --- | --- | --- |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` |
+| Category | `Category` | `null` (the type is its own group) | `null` |
+| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` |
+| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` |
+| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` |
+
+- **Category** groups related types so the list can filter on the group
+  without naming each type: `GET /work-items?category=in-year-change`
+  (repeatable, and unioned with any `typeId`). In-year change types (add-ORS now; update ORS and
+  tonnage band upgrade later) declare `WorkItemCategories.InYearChange`
+  (`in-year-change`). Each change type still has its own `TypeId`, so a
+  type's workflow can change on its own.
+- **Splits a submission per site** marks types whose `sites[]` is split into
+  one work item per site, all sharing the submission's
+  `SUB-{yyyy}-{sequence}` reference (see
+  [Ingestion API](#ingestion-api)). A type without it (re-accreditation)
+  still gets a submission reference, on its single work item.
+- **Workflow** is a `WorkItemWorkflow`: the states (in status sort order),
+  their labels, the transitions and the initial state. `StandardWorkflow`
+  (`WorkItems/Workflows/StandardWorkflow.cs`) is re-accreditation's lifecycle
+  (duly making, assessment, query and response, two-step determination,
+  withdrawal), defined once so any type can reference it. A type that
+  references a workflow takes its states from it (the registry rejects a type whose states differ from its workflow's at startup):
+
+  ```csharp
+  internal sealed class MyType : IWorkItemType
+  {
+      public string TypeId => "my-type";
+      public string DisplayName => "My type";
+      public string? Category => WorkItemCategories.InYearChange;
+      public string? InYearChangeCode => "XYZ";
+      public bool SplitsSubmissionPerSite => true;
+      public string TemplateVersion => "v1";
+      public WorkItemWorkflow Workflow => StandardWorkflow.Definition;
+      public WorkItemState InitialState => Workflow.InitialState;
+      public IReadOnlyCollection<WorkItemState> States => Workflow.States;
+      public IReadOnlyCollection<WorkItemTransition> Transitions => Workflow.Transitions;
+  }
+  ```
+
+- **Template version stays on the type.** Each work item still freezes its
+  type's states and transitions into its template snapshot at submission (see
+  [Template versioning](#template-versioning-ra-94)). Changing a shared
+  workflow changes every type that references it, so each of those types
+  needs a new `TemplateVersion` and a snapshot migration.
+- A workflow's transitions name its own states, so re-accreditation's bespoke
+  services (duly make, decision, confirm contact, resume, continue review)
+  reach its `CallerInvocable: false` transitions. Another type on the Standard
+  workflow gets the same states and transitions but needs its own endpoints
+  before a caseworker can use those steps (add-ORS: RA-495).
 
 ## Conventions
 
@@ -579,7 +733,7 @@ registration line" promise. All files live under
 
 | File | Role |
 | --- | --- |
-| `ReAccreditationType.cs` | Declares the states (`submitted`, `duly-made`, `assessment-started` (RA-527 follow-up: started, still displayed "Duly made"), `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` / `rejected-pending-contact` (RA-527: determined, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `make-determination-approved` / `-rejected`, `confirm-contact-approved` / `-rejected`, `query-during-*` (RA-000), `resume-during-*`, `continue-review-during-*` and the moving `sla-extend` (below) are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. Template version v19 (RA-000): the five `query-during-*` declarations (`-duly-making` from `submitted`, `-duly-made` from `duly-made`, `-assessment` from `assessment-in-progress` and `assessment-started`, `-decision` from `awaiting-decision`) are not caller-invocable, so only `ReAccreditationQueryService` (`POST /work-items/re-accreditation/{id}/query`) applies them, with its self-assign, `currentQuery` stamp and `application-queried` audit entry; the generic action endpoint returns `400` for them and they are not in `availableActions`. Since v18 (RA-527 follow-up): `start-assessment` targets `duly-made` → `assessment-started`, the only transition into that state, so starting a case keeps it "Duly made" on both sides. Its four exits reuse existing action ids with a second from-state: `submit-for-decision` → `awaiting-decision` (a second declaration, reached only through `/decision`), `query-during-assessment` → `queried`, `withdraw-during-assessment` → `withdrawn`, and `sla-extend` → `assessment-in-progress` — a real move, unlike the `assessment-in-progress` and `queried` self-loops, which `SlaService` applies in the same write as the deadline change (resolving the template via `WorkItemEngineRules.ResolveTemplate`), so the case becomes "Updated". Only the deadline change (`POST /work-items/{id}/sla/extend`) applies that move: `POST /work-items/{id}/sla/override` (no Case Management UI or caller since RA-572) only rewrites the clock, never changes state and never pushes, so an override on a started case leaves it "Duly made". Deliberately left so while override is retired; if it is ever reinstated, it should apply the same move. |
+| `ReAccreditationType.cs` | Re-accreditation's case type configuration (RA-739): label "Re-accreditation", no category, not split per site (its single work item still gets a submission reference), and the Standard workflow (`WorkItems/Workflows/StandardWorkflow.cs`, shared so other types can reference it). That workflow declares the states (`submitted`, `duly-made`, `assessment-started` (RA-527 follow-up: started, still displayed "Duly made"), `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` / `rejected-pending-contact` (RA-527: determined, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `make-determination-approved` / `-rejected`, `confirm-contact-approved` / `-rejected`, `query-during-*` (RA-000), `resume-during-*`, `continue-review-during-*` and the moving `sla-extend` (below) are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. Template version v19 (RA-000): the five `query-during-*` declarations (`-duly-making` from `submitted`, `-duly-made` from `duly-made`, `-assessment` from `assessment-in-progress` and `assessment-started`, `-decision` from `awaiting-decision`) are not caller-invocable, so only `ReAccreditationQueryService` (`POST /work-items/re-accreditation/{id}/query`) applies them, with its self-assign, `currentQuery` stamp and `application-queried` audit entry; the generic action endpoint returns `400` for them and they are not in `availableActions`. Since v18 (RA-527 follow-up): `start-assessment` targets `duly-made` → `assessment-started`, the only transition into that state, so starting a case keeps it "Duly made" on both sides. Its four exits reuse existing action ids with a second from-state: `submit-for-decision` → `awaiting-decision` (a second declaration, reached only through `/decision`), `query-during-assessment` → `queried`, `withdraw-during-assessment` → `withdrawn`, and `sla-extend` → `assessment-in-progress` — a real move, unlike the `assessment-in-progress` and `queried` self-loops, which `SlaService` applies in the same write as the deadline change (resolving the template via `WorkItemEngineRules.ResolveTemplate`), so the case becomes "Updated". Only the deadline change (`POST /work-items/{id}/sla/extend`) applies that move: `POST /work-items/{id}/sla/override` (no Case Management UI or caller since RA-572) only rewrites the clock, never changes state and never pushes, so an override on a started case leaves it "Duly made". Deliberately left so while override is retired; if it is ever reinstated, it should apply the same move. |
 | `ReAccreditationStatusPushHook.cs` | Pushes each applied transition's target state to the operator journey, except a *move* (self-loops are never excluded) onto `queried`, `withdrawn`, either pending-contact state or (RA-527 follow-up) `assessment-started`, plus the decision actions whose push is owned by the confirm-contact service. A start therefore pushes nothing and writes no `status-push-*` entry, so the operator stays DulyMade; a deadline change from `assessment-started` pushes `assessment-in-progress` (Updated). |
 | `ReAccreditationAssessmentStartedSnapshotMigration.cs` | v18 snapshot migration, registered straight before the v19 one. Adds `assessment-started` (after `duly-made`) to every re-accreditation case's frozen snapshot, retargets `start-assessment` and adds the four exits. Writes only `TemplateSnapshot` and `TemplateVersion` — it never moves a case, so a case already in `assessment-in-progress` stays "Updated" — and skips an item whose snapshot already matches. |
 | `ReAccreditationQueryNotCallerInvocableSnapshotMigration.cs` | v19 snapshot migration (RA-000), registered last of the snapshot migrations so it sets the final version. Sets `CallerInvocable: false` on every `query-during-*` declaration in each case's frozen snapshot, so the generic action endpoint (which checks the item's own snapshot) rejects them for cases submitted before v19 too. Writes only `TemplateSnapshot` and `TemplateVersion` and skips an item with no caller-invocable `query-during-*` declaration. The v18 migration treats the v19 form of its `query-during-assessment` declaration as already present, so the two never undo each other. |
