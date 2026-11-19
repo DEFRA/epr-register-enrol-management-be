@@ -402,8 +402,14 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
             && !m.Contains("APPLY", StringComparison.Ordinal));
         Assert.Contains("65f0c0ffee0000000000beef:9", unmatched, StringComparison.Ordinal);
         Assert.DoesNotContain(logger.Errors, m => m.Contains($"{ApplicationId}:2", StringComparison.Ordinal));
+        // The guidance must allow the legitimate unmatched case, a site the
+        // operator correction refused but which is unselected and so never
+        // reached the work item, or a correctly refused list could never run.
         Assert.Contains(logger.Errors, m =>
-            m.Contains("APPLY refused, nothing was written: 1 site(s)", StringComparison.Ordinal));
+            m.Contains("APPLY refused, nothing was written: 1 site(s)", StringComparison.Ordinal)
+            && m.Contains("hold no site with that siteId", StringComparison.Ordinal)
+            && m.Contains("the site is unselected on the operator side", StringComparison.Ordinal)
+            && m.Contains("record the pair and finding on RA-794", StringComparison.Ordinal));
         Assert.DoesNotContain(logger.Messages, m => m.Contains("correction complete", StringComparison.Ordinal));
     }
 

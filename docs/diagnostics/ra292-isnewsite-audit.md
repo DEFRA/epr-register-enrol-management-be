@@ -351,8 +351,8 @@ Per site, the correction then:
   has no `operatorApplicationId` or the site has no integer `siteId` (never
   written, counted as `Sites refused for want of an id to match`);
 - logs, at Error, every listed pair that matched no site on any work item in
-  the window. That can be legitimate (the application never reached a work item
-  in the window), but it is also what a mistyped id looks like, and a mistyped
+  the window. That can be legitimate (the application has no work item in the
+  window, or the site is unselected on the operator side), but it is also what a mistyped id looks like, and a mistyped
   id leaves the real site unexcluded: that site reads as PROVABLY-CORRUPT here
   and APPLY would clear it. So **APPLY writes nothing while any listed pair is
   unmatched**. It first plans every work item without writing, and if any pair
@@ -360,9 +360,13 @@ Per site, the correction then:
   A dry run still runs and reports, and logs `APPLY would be refused` at Error.
 
 For each unmatched pair, the spot-check confirmer either corrects the mistyped
-id, or checks that its operator application has no work item submitted in the
-window. Only after that check do they remove the pair from the list, and they
-record the removal (pair and finding) on RA-794. Then they run the dry run again.
+id, or checks that the operator application's work items in the window hold no
+site with that `siteId`. That is the case when the application has no work item
+in the window, or when the site is unselected on the operator side: the operator
+correction scans every site on the application, but
+`HttpCaseWorkingApiAdapter.BuildOverseasSitesArray` sends only selected sites to
+the work item. Only after that check do they remove the pair from the list, and
+they record the pair and finding on RA-794. Then they run the dry run again.
 
 Every correction's audit entry records `operatorRefusedSitesListed`, the number
 of pairs it was checked against.
@@ -382,10 +386,11 @@ next resubmit of the overseas-sites or broadly-equivalent-standards section.
    `Diagnostics:Ra292DeployedAt`, `Diagnostics:Ra292CorrectIsNewSite`,
    `Diagnostics:Ra292SpotCheckConfirmedBy`,
    `Diagnostics:Ra292CorrectIsNewSiteApply`), set on the operator backend's own
-   deployment. Of the gates in [The five gates](#the-five-gates) it has 1, 2
-   and 4, and it also requires `Diagnostics:Ra292DeployedAt`. It has no
-   refused-sites gate: it is the side that produces the refusals. Its bucket names are the same,
-   but its classifier is stricter: it corrects a site with no `orsId` only when
+   deployment. Of the gates in [The five gates](#the-five-gates) it has 1, 2,
+   4 and 5 (5 being its own per-site gate 4), and it also requires
+   `Diagnostics:Ra292DeployedAt`. It has no refused-sites gate: it is the side
+   that produces the refusals. Its bucket names are the same, but its classifier
+   is stricter: it corrects a site with no `orsId` only when
    ReEx itself returns a matching prior-year site, and refuses the rest as
    AMBIGUOUS-REFUSED. Its window bounds the application's creation time, not
    the work item's submission time.
@@ -415,7 +420,8 @@ Diagnostics__Ra292DeployedAt=<RA-292 deploy time, ISO 8601 UTC>
 #    ReEx-sourced. Confirm too that the refused list below is complete: one pair
 #    per REFUSED line of the operator's final APPLY run, the count matching its
 #    completion line less any pair removed (and recorded on RA-794) after
-#    checking its operator application has no work item in the window.
+#    checking that its application's in-window work items hold no site with
+#    that siteId (e.g. no work item in the window, or the site is unselected).
 #    Setting your name below attests to both.
 
 # 3. Dry run. Writes nothing; reports precisely what it would change, and logs

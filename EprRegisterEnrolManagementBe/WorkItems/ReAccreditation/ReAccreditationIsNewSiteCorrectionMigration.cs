@@ -439,11 +439,14 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
     /// <summary>
     /// Logs at Error every listed operator refusal that matched no site on any
     /// work item in the window, and returns whether there was any. Such a pair
-    /// may be legitimate (the operator application never reached a work item in
-    /// the window), but it is also what a mistyped id looks like, and a mistyped
-    /// id leaves the real site unexcluded, so APPLY refuses while any remains.
-    /// The confirmer removes a pair only after checking its application has no
-    /// work item in the window.
+    /// may be legitimate: the operator application has no work item in the
+    /// window, or the site is unselected on the operator side (the operator
+    /// correction scans every site, but only selected sites reach the work item,
+    /// per <c>HttpCaseWorkingApiAdapter.BuildOverseasSitesArray</c>). It is also
+    /// what a mistyped id looks like, and a mistyped id leaves the real site
+    /// unexcluded, so APPLY refuses while any remains. The confirmer removes a
+    /// pair only after checking that the application's in-window work items hold
+    /// no site with that <c>siteId</c>, and records the pair and finding on RA-794.
     /// </summary>
     private bool LogUnmatchedOperatorRefusals(Gates gates, HashSet<string> found)
     {
@@ -470,8 +473,10 @@ internal sealed class ReAccreditationIsNewSiteCorrectionMigration(
         logger.LogError(
             "RA-794 correction: APPLY {ApplyOutcome}: {UnmatchedCount} site(s) listed in "
                 + "{OperatorRefusedKey} matched no site on any work item in the window. Fix any "
-                + "mistyped id. Remove a pair only after checking that its operator application has "
-                + "no work item in the window, and record that on RA-794. Then run again.",
+                + "mistyped id. Remove a pair only after checking that its operator application's "
+                + "work items in the window hold no site with that siteId (for example it has no "
+                + "work item in the window, or the site is unselected on the operator side), and "
+                + "record the pair and finding on RA-794. Then run again.",
             gates.Apply ? "refused, nothing was written" : "would be refused",
             unmatched.Count,
             OperatorRefusedSitesConfigKey
