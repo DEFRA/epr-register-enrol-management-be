@@ -35,6 +35,9 @@ internal class StandardDecisionPush(
     ILogger logger
 )
 {
+    /// <summary>What a push is recorded as: the action's display name and when it happened.</summary>
+    public readonly record struct PushDetails(string ActionDisplayName, DateTime OccurredAt);
+
     /// <summary>
     /// Pushes the outcome to the operator journey through
     /// <paramref name="target"/>. On failure the <c>status-push-failed</c>
@@ -49,8 +52,7 @@ internal class StandardDecisionPush(
         IWorkItemTemplate? template,
         IOperatorJourneyPush? target,
         StandardConfirmContactStep step,
-        string actionDisplayName,
-        DateTime occurredAt,
+        PushDetails details,
         ClaimsPrincipal user,
         CancellationToken cancellationToken
     )
@@ -69,8 +71,8 @@ internal class StandardDecisionPush(
             toStateId,
             ResolveStateDisplayName(template, toStateId),
             actionId,
-            actionDisplayName,
-            occurredAt,
+            details.ActionDisplayName,
+            details.OccurredAt,
             StandardEffectiveDate.ReadStamped(workItem)
         );
         var pushResult = await target.PushDecisionAsync(pushAdapter, change, cancellationToken);

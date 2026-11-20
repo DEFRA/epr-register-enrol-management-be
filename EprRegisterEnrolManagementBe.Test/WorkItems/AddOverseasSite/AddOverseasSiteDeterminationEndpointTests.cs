@@ -46,7 +46,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         Assert.Contains(granted.AuditLog, a => a.Action == "sla-clock-stopped");
         Assert.False(granted.Payload.Contains("accreditationId"));
 
-        await factory.NumberAdapter.DidNotReceiveWithAnyArgs().GenerateOrUpdateAccreditationNumberAsync(default!, default);
+        await factory.NumberAdapter.DidNotReceiveWithAnyArgs().GenerateOrUpdateAccreditationNumberAsync(default!, TestContext.Current.CancellationToken);
         Assert.Empty(factory.NotifyClient.ReceivedCalls());
     }
 

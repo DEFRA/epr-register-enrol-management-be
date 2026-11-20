@@ -110,49 +110,8 @@ internal sealed class StandardLogDecisionService(
             : StandardWorkflow.RejectedPendingContactStateId;
         var finalStateId = isApproval ? StandardWorkflow.ApprovedStateId : StandardWorkflow.RejectedStateId;
 
-        // A double-click, or a client retrying a response it never received,
-        // must not fail. Only a replay of the SAME outcome is a no-op (on its
-        // pending-contact or its final state); an item already decided the
-        // other way is a genuine conflict, because silently succeeding would
-        // tell a caseworker their Refuse landed when the application is in
-        // fact approved.
-        if (Is(workItem.StateId, targetStateId) || Is(workItem.StateId, finalStateId))
-        {
-            logger.LogInformation(
-                "Log-decision for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
-                workItemId,
-                workItem.StateId
-            );
-            return WorkItemActionResult.IdempotentReplay(workItem);
-        }
-
-        // Enumerated rather than read off the template: a decision must be
-        // refused on a closed application even when its frozen snapshot is too
-        // old to carry terminal metadata.
-        if (
-            Is(workItem.StateId, StandardWorkflow.ApprovedStateId)
-            || Is(workItem.StateId, StandardWorkflow.RejectedStateId)
-            || Is(workItem.StateId, StandardWorkflow.WithdrawnStateId)
-        )
-        {
-            return WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.TerminalState,
-                $"Work item {workItemId} is in terminal state '{workItem.StateId}'; no decision can be recorded."
-            );
-        }
-
-        // The accepted entry states. Both start states ('assessment-started',
-        // a started case that still reads "Duly made", and
-        // 'assessment-in-progress') take the submit-for-decision hop first.
-        // 'awaiting-decision' is accepted so an application stranded mid-hop by
-        // an earlier failure is finished by the identical call. Anything else —
-        // including the pending-contact states, whose determination is already
-        // final — is a conflict.
-        var needsSubmitForDecision =
-            Is(workItem.StateId, AssessmentStateId)
-            || Is(workItem.StateId, StandardWorkflow.AssessmentStartedStateId);
-
-        if (!needsSubmitForDecision && !Is(workItem.StateId, AwaitingDecisionStateId))
+        var entry = CheckEntryState(workItem, targetStateId, finalStateId);
+        if (entry is null)
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
@@ -162,24 +121,25 @@ internal sealed class StandardLogDecisionService(
             );
         }
 
+        if (entry.Value.Result is { } entryResult)
+        {
+            return entryResult;
+        }
+
+        var needsSubmitForDecision = entry.Value.NeedsSubmitForDecision;
+
         // RA-495 AC6: checked before anything is written, like the template
         // below. Only a type that takes one records a date: an approval's is
         // the one entered; a refusal's is the submission date.
-        DateOnly? determinationEffectiveDate = null;
-        if (strategy.TakesEffectiveDate)
+        var (dateFailure, determinationEffectiveDate) = ResolveEffectiveDate(
+            strategy,
+            workItem,
+            isApproval,
+            effectiveDate
+        );
+        if (dateFailure is not null)
         {
-            if (!isApproval)
-            {
-                determinationEffectiveDate = StandardEffectiveDate.ForRefusal(workItem);
-            }
-            else if (StandardEffectiveDate.Check(workItem, effectiveDate) is { } dateFailure)
-            {
-                return dateFailure;
-            }
-            else
-            {
-                determinationEffectiveDate = effectiveDate;
-            }
+            return dateFailure;
         }
 
         // RA-527: checked here, before any mint and the hop, so an item still
@@ -219,6 +179,93 @@ internal sealed class StandardLogDecisionService(
                 user,
                 cancellationToken
             );
+    }
+
+    /// <summary>
+    /// What <see cref="CheckEntryState"/> decided: a result to hand straight
+    /// back (an idempotent replay or a terminal-state refusal), or, when the
+    /// call may proceed, whether the <c>submit-for-decision</c> hop is still
+    /// needed.
+    /// </summary>
+    private readonly record struct EntryCheck(WorkItemActionResult? Result, bool NeedsSubmitForDecision);
+
+    /// <summary>
+    /// The entry-state checks, in order. Returns null for a state a decision
+    /// cannot be recorded from (the caller words that refusal).
+    ///
+    /// A double-click, or a client retrying a response it never received,
+    /// must not fail: only a replay of the SAME outcome is a no-op (on its
+    /// pending-contact or its final state); an item already decided the other
+    /// way is a genuine conflict. The accepted entry states are
+    /// 'assessment-started' and 'assessment-in-progress' (both take the
+    /// submit-for-decision hop first) and 'awaiting-decision' (so an
+    /// application stranded mid-hop is finished by the identical call).
+    /// </summary>
+    private EntryCheck? CheckEntryState(WorkItem workItem, string targetStateId, string finalStateId)
+    {
+        if (Is(workItem.StateId, targetStateId) || Is(workItem.StateId, finalStateId))
+        {
+            logger.LogInformation(
+                "Log-decision for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
+                workItem.Id,
+                workItem.StateId
+            );
+            return new EntryCheck(WorkItemActionResult.IdempotentReplay(workItem), false);
+        }
+
+        // Enumerated rather than read off the template: a decision must be
+        // refused on a closed application even when its frozen snapshot is too
+        // old to carry terminal metadata.
+        if (
+            Is(workItem.StateId, StandardWorkflow.ApprovedStateId)
+            || Is(workItem.StateId, StandardWorkflow.RejectedStateId)
+            || Is(workItem.StateId, StandardWorkflow.WithdrawnStateId)
+        )
+        {
+            return new EntryCheck(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.TerminalState,
+                    $"Work item {workItem.Id} is in terminal state '{workItem.StateId}'; no decision can be recorded."
+                ),
+                false
+            );
+        }
+
+        var needsSubmitForDecision =
+            Is(workItem.StateId, AssessmentStateId)
+            || Is(workItem.StateId, StandardWorkflow.AssessmentStartedStateId);
+
+        return needsSubmitForDecision || Is(workItem.StateId, AwaitingDecisionStateId)
+            ? new EntryCheck(null, needsSubmitForDecision)
+            : null;
+    }
+
+    /// <summary>
+    /// RA-495 AC6: the effective date to record. Only a type that takes one
+    /// records a date: an approval's is the one entered (checked here); a
+    /// refusal's is the submission date. Returns a failure to hand back, or
+    /// the date (null for a type that takes none).
+    /// </summary>
+    private static (WorkItemActionResult? Failure, DateOnly? EffectiveDate) ResolveEffectiveDate(
+        IStandardLifecycleStrategy strategy,
+        WorkItem workItem,
+        bool isApproval,
+        DateOnly? enteredDate
+    )
+    {
+        if (!strategy.TakesEffectiveDate)
+        {
+            return (null, null);
+        }
+
+        if (!isApproval)
+        {
+            return (null, StandardEffectiveDate.ForRefusal(workItem));
+        }
+
+        return StandardEffectiveDate.Check(workItem, enteredDate) is { } dateFailure
+            ? (dateFailure, null)
+            : (null, enteredDate);
     }
 
     /// <summary>

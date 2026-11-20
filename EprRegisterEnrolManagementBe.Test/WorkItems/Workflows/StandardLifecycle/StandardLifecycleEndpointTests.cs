@@ -258,7 +258,7 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         Assert.Contains("sla-clock-stopped", actions);
         Assert.False(granted.Payload.Contains("accreditationId"));
 
-        await numberAdapter.DidNotReceiveWithAnyArgs().GenerateOrUpdateAccreditationNumberAsync(default!, default);
+        await numberAdapter.DidNotReceiveWithAnyArgs().GenerateOrUpdateAccreditationNumberAsync(default!, TestContext.Current.CancellationToken);
         Assert.Empty(notifyClient.ReceivedCalls());
     }
 

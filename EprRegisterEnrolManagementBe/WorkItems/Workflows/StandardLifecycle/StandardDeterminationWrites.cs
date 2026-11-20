@@ -100,9 +100,11 @@ internal sealed class StandardDeterminationWrites(
         WriteAsync(
             workItemId,
             user,
-            StandardConfirmContactGuard.Approval.ActionId,
-            StandardWorkflow.ConfirmContactDisplayName,
-            StandardConfirmContactGuard.Approval.TerminalStateId,
+            new StepTransition(
+                StandardConfirmContactGuard.Approval.ActionId,
+                StandardWorkflow.ConfirmContactDisplayName,
+                StandardConfirmContactGuard.Approval.TerminalStateId
+            ),
             workItem =>
                 StandardConfirmContactGuard.Check(
                     workItemId,
@@ -142,9 +144,11 @@ internal sealed class StandardDeterminationWrites(
         WriteAsync(
             workItemId,
             user,
-            StandardConfirmContactGuard.Refusal.ActionId,
-            StandardWorkflow.ConfirmContactDisplayName,
-            StandardConfirmContactGuard.Refusal.TerminalStateId,
+            new StepTransition(
+                StandardConfirmContactGuard.Refusal.ActionId,
+                StandardWorkflow.ConfirmContactDisplayName,
+                StandardConfirmContactGuard.Refusal.TerminalStateId
+            ),
             workItem =>
                 StandardConfirmContactGuard.Check(
                     workItemId,
@@ -176,6 +180,9 @@ internal sealed class StandardDeterminationWrites(
         DateOnly? EffectiveDate
     );
 
+    /// <summary>The transition a write applies: its action, that action's display name and the state it lands in.</summary>
+    private readonly record struct StepTransition(string ActionId, string ActionDisplayName, string ToStateId);
+
     private Task<WorkItemActionResult> RecordDeterminationAsync(
         Guid workItemId,
         ClaimsPrincipal user,
@@ -187,9 +194,7 @@ internal sealed class StandardDeterminationWrites(
         return WriteAsync(
             workItemId,
             user,
-            determination.ActionId,
-            determination.ActionDisplayName,
-            determination.PendingStateId,
+            new StepTransition(determination.ActionId, determination.ActionDisplayName, determination.PendingStateId),
             workItem => CheckStepOne(workItemId, workItem, determination),
             workItem =>
             {
@@ -271,9 +276,7 @@ internal sealed class StandardDeterminationWrites(
     private async Task<WorkItemActionResult> WriteAsync(
         Guid workItemId,
         ClaimsPrincipal user,
-        string actionId,
-        string actionDisplayName,
-        string toStateId,
+        StepTransition transition,
         Func<WorkItem?, WorkItemActionResult?> guard,
         Action<WorkItem> applyStep,
         DateTimeOffset now,
@@ -296,7 +299,7 @@ internal sealed class StandardDeterminationWrites(
             }
 
             var previousState = workItem!.StateId;
-            workItem.StateId = toStateId;
+            workItem.StateId = transition.ToStateId;
             workItem.LastModifiedAt = now.UtcDateTime;
 
             AppendAudit(
@@ -307,8 +310,8 @@ internal sealed class StandardDeterminationWrites(
                 now.UtcDateTime,
                 new()
                 {
-                    ["actionId"] = actionId,
-                    ["actionDisplayName"] = actionDisplayName,
+                    ["actionId"] = transition.ActionId,
+                    ["actionDisplayName"] = transition.ActionDisplayName,
                     ["fromStateId"] = previousState,
                     ["toStateId"] = workItem.StateId,
                 }
@@ -329,7 +332,7 @@ internal sealed class StandardDeterminationWrites(
                     ex,
                     "Determination step {ActionId} for work item {WorkItemId} abandoned after {Attempts} "
                         + "attempts due to repeated concurrency conflicts.",
-                    actionId,
+                    transition.ActionId,
                     workItemId,
                     MaxAttempts
                 );
@@ -344,14 +347,14 @@ internal sealed class StandardDeterminationWrites(
                 workItem.Id,
                 workItem.TypeId,
                 workItem.StateId,
-                actionId,
+                transition.ActionId,
                 user.FindFirstValue("user:id")
             );
 
             await StandardLifecycleAudit.InvokeActionAppliedHooksAsync(
                 _postActionHooks,
                 workItem,
-                actionId,
+                transition.ActionId,
                 previousState,
                 user,
                 logger

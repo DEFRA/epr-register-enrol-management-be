@@ -186,8 +186,7 @@ internal static class StandardLifecycleEndpoints
     ) =>
         LogDecisionAsync(
             id,
-            request?.Outcome,
-            request?.EffectiveDate,
+            request,
             httpContext,
             logDecisionService,
             engine,
@@ -201,8 +200,7 @@ internal static class StandardLifecycleEndpoints
     /// </summary>
     internal static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> LogDecisionAsync(
         Guid id,
-        string? requestedOutcome,
-        string? requestedEffectiveDate,
+        StandardDecisionRequest? request,
         HttpContext httpContext,
         IStandardLogDecisionService logDecisionService,
         IWorkItemService engine,
@@ -210,7 +208,7 @@ internal static class StandardLifecycleEndpoints
         CancellationToken cancellationToken
     )
     {
-        if (!TryParseOutcome(requestedOutcome, out var outcome))
+        if (!TryParseOutcome(request?.Outcome, out var outcome))
         {
             return TypedResults.Problem(
                 title: problemTitle,
@@ -224,7 +222,7 @@ internal static class StandardLifecycleEndpoints
             );
         }
 
-        if (!StandardEffectiveDate.TryParse(requestedEffectiveDate, out var effectiveDate))
+        if (!StandardEffectiveDate.TryParse(request?.EffectiveDate, out var effectiveDate))
         {
             return TypedResults.Problem(
                 title: problemTitle,

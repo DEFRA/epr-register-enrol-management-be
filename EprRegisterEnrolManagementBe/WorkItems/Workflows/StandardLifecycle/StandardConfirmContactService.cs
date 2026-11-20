@@ -107,8 +107,7 @@ internal sealed class StandardConfirmContactService(
             WorkItemEngineRules.ResolveTemplate(workItem, registry),
             strategy!.OperatorJourneyPush,
             step,
-            StandardWorkflow.ConfirmContactDisplayName,
-            appliedAt.UtcDateTime,
+            new StandardDecisionPush.PushDetails(StandardWorkflow.ConfirmContactDisplayName, appliedAt.UtcDateTime),
             user,
             cancellationToken
         );

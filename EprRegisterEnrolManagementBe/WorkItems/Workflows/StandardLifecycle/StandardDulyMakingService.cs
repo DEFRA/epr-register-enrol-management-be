@@ -98,189 +98,46 @@ internal sealed class StandardDulyMakingService(
 
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
-
-            if (workItem is null)
+            var loaded = await LoadAsync(workItemId, cancellationToken);
+            if (loaded.Failure is { } loadFailure)
             {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.WorkItemNotFound,
-                    $"No work item exists with id '{workItemId}'."
-                );
+                return loadFailure;
             }
 
-            if (strategies.Find(workItem.TypeId) is not { } strategy)
+            var workItem = loaded.WorkItem!;
+            var starting = CheckStartingPoint(workItem, loaded.Template!);
+            if (starting.Failure is { } startFailure)
             {
-                return strategies.NotOptedIn(workItemId, workItem.TypeId);
+                return startFailure;
             }
 
-            var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
-            if (template is null)
-            {
-                // Not a type mismatch (the type has opted in), so not
-                // UnknownAction, which the endpoints label wrong-work-item-type.
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.TemplateUnavailable,
-                    $"Work item {workItemId} references unregistered type '{workItem.TypeId}' "
-                        + "and has no stored template snapshot."
-                );
-            }
-
-            if (IsTerminal(template, workItem.StateId))
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.TerminalState,
-                    $"Work item {workItemId} is in terminal state '{workItem.StateId}'; "
-                        + "no actions are allowed."
-                );
-            }
-
-            // Two legitimate starting points, and only two.
-            //
-            //  1. 'submitted' — the ordinary path.
-            //  2. 'updated' — but ONLY when the query that put it there was
-            //     raised during duly making. An item in 'updated' having been
-            //     queried from assessment or decision is mid-review; duly making
-            //     it would skip whole stages.
-            //
-            // ResolveOriginatingStateId reads the item's own audit history and
-            // resolves it through the item's own frozen template, so an item
-            // whose snapshot lacks the continue-review edge yields null and is
-            // refused here rather than being carried across an edge its
-            // template does not declare.
-            var needsWaypointDischarge = false;
-            if (!string.Equals(workItem.StateId, FromStateId, StringComparison.OrdinalIgnoreCase))
-            {
-                var originStateId = string.Equals(workItem.StateId, StandardUpdatedOrigin.StateId, StringComparison.OrdinalIgnoreCase)
-                    ? StandardUpdatedOrigin.ResolveOriginatingStateId(workItem, template)
-                    : null;
-
-                if (!string.Equals(originStateId, FromStateId, StringComparison.OrdinalIgnoreCase))
-                {
-                    return WorkItemActionResult.Failure(
-                        WorkItemActionFailureCode.InvalidTransition,
-                        $"Action '{ActionId}' moves work items from '{FromStateId}', "
-                            + $"but {workItemId} is in '{workItem.StateId}'."
-                    );
-                }
-
-                needsWaypointDischarge = true;
-            }
-
-            // The duly-make transition must be declared by the item's OWN
-            // template, not merely by the live type. Template versioning is the
-            // framework's hard rule: an in-flight v10 item is evaluated under
-            // v10 rules. A snapshot migration (re-accreditation: ReAccreditationDulyMakeSnapshotMigration) adds the
-            // transition to every pre-v11 snapshot at startup and retries on
-            // each boot until it succeeds, so this refusal is a transient
-            // "migration has not caught up yet", never a permanent dead end.
             if (
-                !template.Transitions.Any(t =>
-                    string.Equals(t.ActionId, ActionId, StringComparison.OrdinalIgnoreCase)
-                )
+                ApplyDulyMake(
+                    workItem,
+                    loaded.Strategy!,
+                    paymentDate,
+                    user,
+                    starting.NeedsWaypointDischarge
+                ) is
+                { } applyFailure
             )
             {
-                logger.LogWarning(
-                    "Work item {WorkItemId} cannot be duly made: its template snapshot "
-                        + "({TemplateVersion}) does not declare the '{ActionId}' transition. "
-                        + "Its snapshot migration has not yet patched it.",
-                    workItem.Id,
-                    template.TemplateVersion,
-                    ActionId
-                );
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.InvalidTransition,
-                    $"Work item '{workItemId}' was submitted under template version "
-                        + $"'{template.TemplateVersion}', which does not support the "
-                        + $"'{ActionId}' action. Retry shortly; if this persists, the "
-                        + "snapshot migration needs investigating."
-                );
+                return applyFailure;
             }
-
-            var now = timeProvider.GetUtcNow().UtcDateTime;
-
-            // Everything below mutates the loaded instance in memory and is
-            // committed by the SINGLE ReplaceAsync at the end. That is a hard
-            // constraint inherited from the hook this service replaces, not a
-            // style choice: ReplaceAsync is guarded by an optimistic-concurrency
-            // check on WorkItem.Version, and anything that writes out of band
-            // between our load and our save (an audit append, a status push)
-            // advances the stored version and makes our save throw. Splitting
-            // the waypoint discharge into its own write is what previously left
-            // applications stranded in 'submitted' behind a 500.
-            if (needsWaypointDischarge)
-            {
-                DischargeUpdatedWaypoint(workItem, user, now);
-            }
-
-            if (!strategy.TryStampPaymentDate(workItem, paymentDate, logger))
-            {
-                return WorkItemActionResult.Failure(
-                    WorkItemActionFailureCode.InvalidTransition,
-                    $"Work item '{workItemId}' payload is corrupt and cannot be read. "
-                        + "Inspect the server logs for details; a manual data repair may be required."
-                );
-            }
-
-            var previousState = workItem.StateId;
-            workItem.StateId = ToStateId;
-            workItem.LastModifiedAt = now;
-
-            // AC06: the clock is anchored to the entered payment date, NOT to
-            // now. Midnight UTC of that date is the earliest instant consistent
-            // with it, which keeps the regulator's 12 weeks from being
-            // shortened by whatever part of the day the payment landed in.
-            var slaStartedAt = paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
-            var slaClock = new WorkItemSlaClock { StartedAt = slaStartedAt };
-            workItem.SlaClock = slaClock;
-
-            AppendAudit(
-                workItem,
-                "action-applied",
-                "Action applied",
-                user,
-                now,
-                new Dictionary<string, string?>
-                {
-                    ["actionId"] = ActionId,
-                    ["actionDisplayName"] = ActionDisplayName,
-                    ["fromStateId"] = previousState,
-                    ["toStateId"] = workItem.StateId,
-                    // AC08: the entered date is part of the auditable record of
-                    // what the regulator did, not just an input to the clock.
-                    ["paymentDate"] = paymentDate.ToString("yyyy-MM-dd"),
-                }
-            );
-            AppendAudit(
-                workItem,
-                "sla-clock-started",
-                "SLA clock started",
-                user,
-                now,
-                new Dictionary<string, string?>
-                {
-                    ["startedAt"] = slaStartedAt.ToString("O"),
-                    ["targetDays"] = slaClock.TargetDuration.TotalDays.ToString(
-                        CultureInfo.InvariantCulture
-                    ),
-                    // Stated explicitly so the audit trail shows the clock was
-                    // back-dated on purpose rather than looking like a bug to
-                    // whoever reads it months later.
-                    ["anchoredTo"] = "payment-date",
-                }
-            );
 
             try
             {
                 await persistence.ReplaceAsync(workItem, cancellationToken);
                 dulyMade = workItem;
-                dischargedWaypoint = needsWaypointDischarge;
+                dischargedWaypoint = starting.NeedsWaypointDischarge;
                 break;
             }
-            catch (WorkItemConcurrencyException)
+            catch (WorkItemConcurrencyException ex)
             {
                 if (attempt == MaxAttempts)
                 {
                     logger.LogError(
+                        ex,
                         "Duly making of work item {WorkItemId} abandoned after {Attempts} attempts "
                             + "due to repeated concurrency conflicts.",
                         workItemId,
@@ -319,6 +176,239 @@ internal sealed class StandardDulyMakingService(
         await InvokeActionAppliedHooksAsync(persisted, ActionId, FromStateId, user);
 
         return WorkItemActionResult.Success(persisted);
+    }
+
+    /// <summary>
+    /// One attempt's freshly loaded inputs: the work item, its opted-in
+    /// strategy and the template it is evaluated under, or the failure to
+    /// hand back instead.
+    /// </summary>
+    private readonly record struct Loaded(
+        WorkItemActionResult? Failure,
+        WorkItem? WorkItem,
+        IStandardDulyMakingRules? Strategy,
+        IWorkItemTemplate? Template
+    );
+
+    private async Task<Loaded> LoadAsync(Guid workItemId, CancellationToken cancellationToken)
+    {
+        var workItem = await persistence.GetByIdAsync(workItemId, cancellationToken);
+
+        if (workItem is null)
+        {
+            return new Loaded(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.WorkItemNotFound,
+                    $"No work item exists with id '{workItemId}'."
+                ),
+                null,
+                null,
+                null
+            );
+        }
+
+        if (strategies.Find(workItem.TypeId) is not { } strategy)
+        {
+            return new Loaded(strategies.NotOptedIn(workItemId, workItem.TypeId), null, null, null);
+        }
+
+        var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
+        if (template is null)
+        {
+            // Not a type mismatch (the type has opted in), so not
+            // UnknownAction, which the endpoints label wrong-work-item-type.
+            return new Loaded(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.TemplateUnavailable,
+                    $"Work item {workItemId} references unregistered type '{workItem.TypeId}' "
+                        + "and has no stored template snapshot."
+                ),
+                null,
+                null,
+                null
+            );
+        }
+
+        return new Loaded(null, workItem, strategy, template);
+    }
+
+    /// <summary>
+    /// Whether duly making may start from where the item is, and whether the
+    /// <c>updated</c> waypoint must be discharged first.
+    /// </summary>
+    private readonly record struct StartingPoint(WorkItemActionResult? Failure, bool NeedsWaypointDischarge);
+
+    private StartingPoint CheckStartingPoint(WorkItem workItem, IWorkItemTemplate template)
+    {
+        var workItemId = workItem.Id;
+
+        if (IsTerminal(template, workItem.StateId))
+        {
+            return new StartingPoint(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.TerminalState,
+                    $"Work item {workItemId} is in terminal state '{workItem.StateId}'; "
+                        + "no actions are allowed."
+                ),
+                false
+            );
+        }
+
+        // Two legitimate starting points, and only two.
+        //
+        //  1. 'submitted' — the ordinary path.
+        //  2. 'updated' — but ONLY when the query that put it there was
+        //     raised during duly making. An item in 'updated' having been
+        //     queried from assessment or decision is mid-review; duly making
+        //     it would skip whole stages.
+        //
+        // ResolveOriginatingStateId reads the item's own audit history and
+        // resolves it through the item's own frozen template, so an item
+        // whose snapshot lacks the continue-review edge yields null and is
+        // refused here rather than being carried across an edge its
+        // template does not declare.
+        var needsWaypointDischarge = false;
+        if (!string.Equals(workItem.StateId, FromStateId, StringComparison.OrdinalIgnoreCase))
+        {
+            var originStateId = string.Equals(workItem.StateId, StandardUpdatedOrigin.StateId, StringComparison.OrdinalIgnoreCase)
+                ? StandardUpdatedOrigin.ResolveOriginatingStateId(workItem, template)
+                : null;
+
+            if (!string.Equals(originStateId, FromStateId, StringComparison.OrdinalIgnoreCase))
+            {
+                return new StartingPoint(
+                    WorkItemActionResult.Failure(
+                        WorkItemActionFailureCode.InvalidTransition,
+                        $"Action '{ActionId}' moves work items from '{FromStateId}', "
+                            + $"but {workItemId} is in '{workItem.StateId}'."
+                    ),
+                    false
+                );
+            }
+
+            needsWaypointDischarge = true;
+        }
+
+        // The duly-make transition must be declared by the item's OWN
+        // template, not merely by the live type. Template versioning is the
+        // framework's hard rule: an in-flight v10 item is evaluated under
+        // v10 rules. A snapshot migration (re-accreditation: ReAccreditationDulyMakeSnapshotMigration) adds the
+        // transition to every pre-v11 snapshot at startup and retries on
+        // each boot until it succeeds, so this refusal is a transient
+        // "migration has not caught up yet", never a permanent dead end.
+        if (
+            !template.Transitions.Any(t =>
+                string.Equals(t.ActionId, ActionId, StringComparison.OrdinalIgnoreCase)
+            )
+        )
+        {
+            logger.LogWarning(
+                "Work item {WorkItemId} cannot be duly made: its template snapshot "
+                    + "({TemplateVersion}) does not declare the '{ActionId}' transition. "
+                    + "Its snapshot migration has not yet patched it.",
+                workItem.Id,
+                template.TemplateVersion,
+                ActionId
+            );
+            return new StartingPoint(
+                WorkItemActionResult.Failure(
+                    WorkItemActionFailureCode.InvalidTransition,
+                    $"Work item '{workItemId}' was submitted under template version "
+                        + $"'{template.TemplateVersion}', which does not support the "
+                        + $"'{ActionId}' action. Retry shortly; if this persists, the "
+                        + "snapshot migration needs investigating."
+                ),
+                false
+            );
+        }
+
+        return new StartingPoint(null, needsWaypointDischarge);
+    }
+
+    /// <summary>
+    /// Everything below mutates the loaded instance in memory and is
+    /// committed by the SINGLE ReplaceAsync the caller makes. That is a hard
+    /// constraint inherited from the hook this service replaces, not a
+    /// style choice: ReplaceAsync is guarded by an optimistic-concurrency
+    /// check on WorkItem.Version, and anything that writes out of band
+    /// between our load and our save (an audit append, a status push)
+    /// advances the stored version and makes our save throw. Splitting
+    /// the waypoint discharge into its own write is what previously left
+    /// applications stranded in 'submitted' behind a 500.
+    ///
+    /// Returns the failure to hand back, or null once the item is ready to save.
+    /// </summary>
+    private WorkItemActionResult? ApplyDulyMake(
+        WorkItem workItem,
+        IStandardDulyMakingRules strategy,
+        DateOnly paymentDate,
+        ClaimsPrincipal user,
+        bool needsWaypointDischarge
+    )
+    {
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+
+        if (needsWaypointDischarge)
+        {
+            DischargeUpdatedWaypoint(workItem, user, now);
+        }
+
+        if (!strategy.TryStampPaymentDate(workItem, paymentDate, logger))
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidTransition,
+                $"Work item '{workItem.Id}' payload is corrupt and cannot be read. "
+                    + "Inspect the server logs for details; a manual data repair may be required."
+            );
+        }
+
+        var previousState = workItem.StateId;
+        workItem.StateId = ToStateId;
+        workItem.LastModifiedAt = now;
+
+        // AC06: the clock is anchored to the entered payment date, NOT to
+        // now. Midnight UTC of that date is the earliest instant consistent
+        // with it, which keeps the regulator's 12 weeks from being
+        // shortened by whatever part of the day the payment landed in.
+        var slaStartedAt = paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        var slaClock = new WorkItemSlaClock { StartedAt = slaStartedAt };
+        workItem.SlaClock = slaClock;
+
+        AppendAudit(
+            workItem,
+            "action-applied",
+            "Action applied",
+            user,
+            now,
+            new Dictionary<string, string?>
+            {
+                ["actionId"] = ActionId,
+                ["actionDisplayName"] = ActionDisplayName,
+                ["fromStateId"] = previousState,
+                ["toStateId"] = workItem.StateId,
+                // AC08: the entered date is part of the auditable record of
+                // what the regulator did, not just an input to the clock.
+                ["paymentDate"] = paymentDate.ToString("yyyy-MM-dd"),
+            }
+        );
+        AppendAudit(
+            workItem,
+            "sla-clock-started",
+            "SLA clock started",
+            user,
+            now,
+            new Dictionary<string, string?>
+            {
+                ["startedAt"] = slaStartedAt.ToString("O"),
+                ["targetDays"] = slaClock.TargetDuration.TotalDays.ToString(CultureInfo.InvariantCulture),
+                // Stated explicitly so the audit trail shows the clock was
+                // back-dated on purpose rather than looking like a bug to
+                // whoever reads it months later.
+                ["anchoredTo"] = "payment-date",
+            }
+        );
+
+        return null;
     }
 
     /// <summary>
