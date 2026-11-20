@@ -293,6 +293,38 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         Assert.Contains(nameof(Migration.Outcome.RegisteredOnly), PlanLineFor(item), StringComparison.Ordinal);
     }
 
+    // A registered-only row can't confirm a number the work item already holds, so a person checks it. The issued
+    // number is checked as a renewal of the held one, because that's what the issuer would renew from.
+    [Fact]
+    public async Task A_number_already_held_against_a_registered_only_row_is_reported_and_left_alone()
+    {
+        var item = await SeedAsync(
+            DtsRegistration,
+            500237,
+            customise: p =>
+            {
+                p[Migration.PayloadKey] = new BsonDocument { ["year"] = 2026, ["accreditationNumber"] = "A26ER5002370042PL" };
+                p[ReAccreditationAccreditationNumber.PayloadKey] = "A27ER5002370119PL";
+            }
+        );
+
+        await RunAsync();
+
+        var reloaded = await ReloadAsync(item);
+        Assert.Equal("A26ER5002370042PL", LastYears(reloaded)!["accreditationNumber"].AsString);
+        Assert.Empty(reloaded.AuditLog);
+        Assert.Equal(0, reloaded.Version);
+        var line = Assert.Single(
+            _logger.Records,
+            r => r.Level == LogLevel.Warning && r.Message.Contains(item.Id.ToString(), StringComparison.Ordinal)
+        ).Message;
+        Assert.Contains(nameof(Migration.Outcome.HoldsADifferentNumber), line, StringComparison.Ordinal);
+        Assert.Contains($"register row {DtsRegistration} has no accreditation", line, StringComparison.Ordinal);
+        Assert.Contains(nameof(Migration.IssuedNumber.DoesNotFitTheRegister), line, StringComparison.Ordinal);
+        Assert.Contains("not a renewal of A26ER5002370042PL", line, StringComparison.Ordinal);
+        Assert.False(Logged(LogLevel.Information, "APPLIED"));
+    }
+
     [Fact]
     public async Task The_same_number_already_held_is_left_alone()
     {
@@ -409,6 +441,31 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
 
         Assert.Null(LastYears(await ReloadAsync(item)));
         Assert.True(Logged(LogLevel.Warning, nameof(Migration.Outcome.NotOnTheRegister)));
+    }
+
+    [Fact]
+    public async Task An_issued_number_on_an_item_not_on_the_register_is_reported_as_not_checked()
+    {
+        var item = await SeedAsync(
+            "R26ER5009990001PL",
+            500999,
+            customise: p => p[ReAccreditationAccreditationNumber.PayloadKey] = "A27ER5009990001PL"
+        );
+
+        await RunAsync();
+
+        var reloaded = await ReloadAsync(item);
+        Assert.Null(LastYears(reloaded));
+        Assert.Empty(reloaded.AuditLog);
+        Assert.Equal(0, reloaded.Version);
+        Assert.Single(
+            _logger.Records,
+            r => r.Level == LogLevel.Warning
+                && r.Message.Contains(item.Id.ToString(), StringComparison.Ordinal)
+                && r.Message.Contains(nameof(Migration.IssuedNumber.NotChecked), StringComparison.Ordinal)
+                && r.Message.Contains("could not be checked", StringComparison.Ordinal)
+        );
+        Assert.False(Logged(LogLevel.Information, "APPLIED"));
     }
 
     [Fact]
@@ -632,6 +689,109 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         Assert.True(Logged(LogLevel.Warning, "gained last year's accreditation after planning"));
         Assert.False(Logged(LogLevel.Information, "APPLIED"));
         Assert.True(Logged(LogLevel.Information, "Written: Written=0, LostTheRace=1, Failed=0"));
+    }
+
+    // The same race against real Mongo: something gives the work item a number after planning, and the real filter
+    // (the field still null or missing) stops the write and its audit entry.
+    [Fact]
+    public async Task An_item_given_a_number_after_planning_is_not_overwritten_in_mongo()
+    {
+        const string other = "A26ER5000270001WO";
+        var item = await EggerAsync();
+        var racing = new GivenANumberBeforeTheWritePersistence(_persistence, other);
+
+        var result = await NewMigration().ApplyAsync(racing, Ct);
+
+        Assert.Equal(Migration.RunResult.Applied, result);
+        var reloaded = await ReloadAsync(item);
+        Assert.Equal(other, LastYears(reloaded)!["accreditationNumber"].AsString);
+        Assert.DoesNotContain(reloaded.AuditLog, e => e.Action == Migration.AddedAuditAction);
+        Assert.True(Logged(LogLevel.Warning, "gained last year's accreditation after planning"));
+        Assert.False(Logged(LogLevel.Information, "APPLIED"));
+        Assert.True(Logged(LogLevel.Information, "Written: Written=0, LostTheRace=1, Failed=0"));
+    }
+
+    private sealed class GivenANumberBeforeTheWritePersistence(IWorkItemPersistence inner, string number)
+        : ForwardingWorkItemPersistence(inner)
+    {
+        public override async Task<bool> CorrectPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue expectedValue,
+            BsonValue newValue,
+            WorkItemAuditEntry auditEntry,
+            CancellationToken cancellationToken = default
+        )
+        {
+            await Inner.SetPayloadFieldAsync(
+                workItemId,
+                Migration.PayloadKey,
+                new BsonDocument { ["year"] = Migration.LastYear, ["accreditationNumber"] = number },
+                cancellationToken
+            );
+            return await Inner.CorrectPayloadFieldAsync(
+                workItemId,
+                fieldName,
+                expectedValue,
+                newValue,
+                auditEntry,
+                cancellationToken
+            );
+        }
+    }
+
+    // Stopped part-way (here, the host shutting down after the first write): the reports are still logged, with the
+    // writes done so far, and the cancellation carries on.
+    [Fact]
+    public async Task A_run_cancelled_part_way_still_logs_the_report()
+    {
+        var egger = await EggerAsync();
+        var jp = await SeedAsync(JpRecyclingRegistration, 500302);
+        using var stopping = CancellationTokenSource.CreateLinkedTokenSource(Ct);
+        var cancelling = new CancelAfterTheFirstWritePersistence(_persistence, stopping);
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            NewMigration().ApplyAsync(cancelling, stopping.Token)
+        );
+
+        Assert.Equal(EggerAccreditation, LastYears(await ReloadAsync(egger))!["accreditationNumber"].AsString);
+        Assert.Null(LastYears(await ReloadAsync(jp)));
+        Assert.True(Logged(LogLevel.Warning, "report: 0 2027 work items"));
+        Assert.True(Logged(LogLevel.Information, "register rows matched no 2027 work item"));
+        Assert.Single(
+            _logger.Records,
+            r => r.Message.Contains("stopped part-way", StringComparison.Ordinal)
+                && r.Message.Contains("planned: Added=2", StringComparison.Ordinal)
+                && r.Message.Contains("Written: Written=1, LostTheRace=0, Failed=0", StringComparison.Ordinal)
+        );
+    }
+
+    private sealed class CancelAfterTheFirstWritePersistence(
+        IWorkItemPersistence inner,
+        CancellationTokenSource stopping
+    ) : ForwardingWorkItemPersistence(inner)
+    {
+        public override async Task<bool> CorrectPayloadFieldAsync(
+            Guid workItemId,
+            string fieldName,
+            BsonValue expectedValue,
+            BsonValue newValue,
+            WorkItemAuditEntry auditEntry,
+            CancellationToken cancellationToken = default
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var written = await Inner.CorrectPayloadFieldAsync(
+                workItemId,
+                fieldName,
+                expectedValue,
+                newValue,
+                auditEntry,
+                cancellationToken
+            );
+            await stopping.CancelAsync();
+            return written;
+        }
     }
 
     // One work item's failed write doesn't stop the run: the rest are written and the report is still logged.

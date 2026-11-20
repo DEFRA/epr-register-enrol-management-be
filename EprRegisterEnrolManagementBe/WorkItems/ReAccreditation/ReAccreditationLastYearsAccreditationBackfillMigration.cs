@@ -36,7 +36,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   <see cref="AddedAuditAction"/> entry, where the work item holds none; left
 ///   alone where it holds the same; reported, never overwritten, where it holds
 ///   a different one. A row with no accreditation means the operator was
-///   registered only in 2026: nothing to add.</item>
+///   registered only in 2026: nothing to add. A work item that already holds a
+///   number against such a row is reported, not changed.</item>
 ///   <item>An issued <c>accreditationId</c> is checked against the register
 ///   and reported if it doesn't fit (RA-783's rules): a renewal must keep last
 ///   year's agency, process type, org and sequence; a first-time number must
@@ -46,7 +47,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///
 /// <para>The run ends with a report: every work item whose registration
 /// number isn't on the register (its org and registration number), and every
-/// register row no 2027 work item used.</para>
+/// register row no 2027 work item used. The report is logged even if the run
+/// stops part-way, with the writes done so far.</para>
 ///
 /// <para>Never creates a work item and never changes state. Every work item is
 /// planned before anything is written. Each write is one atomic update of the
@@ -238,17 +240,26 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             .ToList();
 
         var writes = new List<Write>();
-        foreach (var plan in plans)
+        var finished = false;
+        try
         {
-            if (await ReportAndApplyAsync(persistence, plan, mode, confirmedBy, cancellationToken) is { } write)
+            foreach (var plan in plans)
             {
-                writes.Add(write);
+                if (await ReportAndApplyAsync(persistence, plan, mode, confirmedBy, cancellationToken) is { } write)
+                {
+                    writes.Add(write);
+                }
             }
+            finished = true;
         }
-
-        ReportNotOnTheRegister(plans, mode);
-        ReportUnusedRegisterRows(plans, mode);
-        ReportSummary(plans, writes, mode);
+        finally
+        {
+            // Cancelled or failed part-way: the report still says what was planned and what was written so far,
+            // and the exception carries on.
+            ReportNotOnTheRegister(plans, mode);
+            ReportUnusedRegisterRows(plans, mode);
+            ReportSummary(plans, writes, mode, finished);
+        }
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
 
@@ -319,9 +330,14 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
         var (outcome, detail) = row.AccreditationNumber switch
         {
-            null => (
+            null when held is null => (
                 Outcome.RegisteredOnly,
                 $"register row {registrationNumber} has no accreditation, so the operator was registered only in {LastYear}"
+            ),
+            null => (
+                Outcome.HoldsADifferentNumber,
+                $"holds {held.Value.Year} accreditation {held.Value.Number}, but register row "
+                    + $"{registrationNumber} has no accreditation (registered only in {LastYear}); left as it is"
             ),
             var number when held is null => (
                 Outcome.Added,
@@ -338,10 +354,11 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             ),
         };
 
+        // Against a registered-only row, the issuer would renew from the number the work item holds.
         var (issued, issuedDetail) = CheckIssuedNumber(
             ReAccreditationAccreditationNumber.Read(item.Payload),
             registrationNumber,
-            row.AccreditationNumber
+            row.AccreditationNumber ?? held?.Number
         );
         return new Plan(
             item,
@@ -561,7 +578,8 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
     // Planned against actual: the outcomes are what the plan found; the writes
     // are what an APPLY run did with the Added ones (a dry run writes nothing).
-    private void ReportSummary(IReadOnlyList<Plan> plans, IReadOnlyList<Write> writes, string mode)
+    // A run that stopped part-way says so, with the writes done so far.
+    private void ReportSummary(IReadOnlyList<Plan> plans, IReadOnlyList<Write> writes, string mode, bool finished)
     {
         var written = string.Join(
             ", ",
@@ -576,8 +594,9 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             Enum.GetValues<IssuedNumber>().Select(i => $"{i}={plans.Count(p => p.Issued == i)}")
         );
         logger.LogInformation(
-            "RA-784 last year's accreditation backfill complete. Mode={Mode}, work items={Count}. "
+            "RA-784 last year's accreditation backfill {Ending}. Mode={Mode}, work items={Count}. "
                 + "Last year's accreditation planned: {Outcomes}. Written: {Written}. Issued numbers: {Issued}",
+            finished ? "complete" : "stopped part-way",
             mode,
             plans.Count,
             outcomes,
