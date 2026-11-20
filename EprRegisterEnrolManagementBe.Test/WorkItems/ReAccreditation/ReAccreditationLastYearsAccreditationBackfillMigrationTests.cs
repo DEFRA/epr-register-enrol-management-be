@@ -394,7 +394,7 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         Assert.Equal(ComhairleAccreditation, LastYears(await ReloadAsync(item))!["accreditationNumber"].AsString);
     }
 
-    // Encirc: org 500069 holds a registration carrying 500226 (RA-764).
+    // Encirc: org 500069 holds a registration carrying 500226.
     [Fact]
     public async Task An_org_holding_a_registration_carrying_another_orgs_digits_is_matched()
     {

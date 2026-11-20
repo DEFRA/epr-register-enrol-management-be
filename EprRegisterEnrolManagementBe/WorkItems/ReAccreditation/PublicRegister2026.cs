@@ -47,7 +47,7 @@ internal static class PublicRegister2026
             // application instead (RA-783).
             ["R26SR5005410022GO"] = new("A26SR5005410022GL", 500541, "Comhairle Nan Eilean Siar"),
             // The Org ID column says 500069, but both numbers carry 500226. Org 500069 does hold
-            // this registration (RA-764).
+            // this registration.
             ["R26ER5002260055GR"] = new("A26ER5002260023GR", 500069, "Encirc Ltd"),
             // The Org ID column says 500263, but both numbers carry 500236.
             ["R26WX5002360007ST"] = new("A26WX5002360016ST", 500263, "REDDY PAI METALS LTD"),
