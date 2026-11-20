@@ -1,11 +1,12 @@
 using System.Globalization;
 
-namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 /// <summary>
-/// RA-316 payment-date validation for the bespoke duly-make endpoint.
+/// RA-316 payment-date validation for the duly-make endpoints (RA-495: shared
+/// by every Standard-workflow type; re-accreditation's validator delegates here).
 ///
-/// Kept separate from <see cref="ReAccreditationDulyMakingService"/> — mirroring
+/// Kept separate from <see cref="StandardDulyMakingService"/> — mirroring
 /// <c>ReAccreditationQueryValidator</c> and <c>ReAccreditationWithdrawValidator</c>
 /// — so the rules are unit-testable without a persistence substitute.
 ///
@@ -15,7 +16,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// developer-facing only. Codes are therefore part of the wire contract and must
 /// not be renamed without telling management-fe and mgmt-tests.
 /// </summary>
-internal static class ReAccreditationDulyMakingValidator
+internal static class StandardDulyMakingValidator
 {
     /// <summary>The only accepted wire format. An ISO timestamp is rejected.</summary>
     public const string DateFormat = "yyyy-MM-dd";
@@ -51,14 +52,14 @@ internal static class ReAccreditationDulyMakingValidator
     /// <paramref name="today"/> itself is valid — a regulator recording a
     /// payment made this morning must not be turned away.
     /// </summary>
-    public static ReAccreditationDulyMakingValidationResult Validate(
+    public static StandardDulyMakingValidationResult Validate(
         string? paymentDate,
         DateOnly today
     )
     {
         if (string.IsNullOrWhiteSpace(paymentDate))
         {
-            return ReAccreditationDulyMakingValidationResult.Failure(
+            return StandardDulyMakingValidationResult.Failure(
                 CodeRequired,
                 "A payment date is required."
             );
@@ -77,7 +78,7 @@ internal static class ReAccreditationDulyMakingValidator
             )
         )
         {
-            return ReAccreditationDulyMakingValidationResult.Failure(
+            return StandardDulyMakingValidationResult.Failure(
                 CodeInvalid,
                 $"Payment date '{paymentDate}' is not a valid {DateFormat} date."
             );
@@ -85,7 +86,7 @@ internal static class ReAccreditationDulyMakingValidator
 
         if (parsed > today)
         {
-            return ReAccreditationDulyMakingValidationResult.Failure(
+            return StandardDulyMakingValidationResult.Failure(
                 CodeInFuture,
                 $"Payment date {parsed:yyyy-MM-dd} is in the future; today is {today:yyyy-MM-dd}."
             );
@@ -94,24 +95,24 @@ internal static class ReAccreditationDulyMakingValidator
         var floor = today.AddDays(-MaxAge.Days);
         if (parsed < floor)
         {
-            return ReAccreditationDulyMakingValidationResult.Failure(
+            return StandardDulyMakingValidationResult.Failure(
                 CodeTooOld,
                 $"Payment date {parsed:yyyy-MM-dd} is more than {MaxAge.Days} days ago; "
                     + $"the earliest accepted date is {floor:yyyy-MM-dd}."
             );
         }
 
-        return ReAccreditationDulyMakingValidationResult.Success(parsed);
+        return StandardDulyMakingValidationResult.Success(parsed);
     }
 }
 
 /// <summary>
-/// Outcome of <see cref="ReAccreditationDulyMakingValidator.Validate"/>: either a
+/// Outcome of <see cref="StandardDulyMakingValidator.Validate"/>: either a
 /// parsed date, or an error code plus developer-facing detail.
 /// </summary>
-internal sealed record ReAccreditationDulyMakingValidationResult
+internal sealed record StandardDulyMakingValidationResult
 {
-    private ReAccreditationDulyMakingValidationResult(
+    private StandardDulyMakingValidationResult(
         DateOnly? paymentDate,
         string? errorCode,
         string? detail
@@ -128,10 +129,10 @@ internal sealed record ReAccreditationDulyMakingValidationResult
 
     public bool IsValid => ErrorCode is null;
 
-    public static ReAccreditationDulyMakingValidationResult Success(DateOnly paymentDate) =>
+    public static StandardDulyMakingValidationResult Success(DateOnly paymentDate) =>
         new(paymentDate, null, null);
 
-    public static ReAccreditationDulyMakingValidationResult Failure(
+    public static StandardDulyMakingValidationResult Failure(
         string errorCode,
         string detail
     ) => new(null, errorCode, detail);

@@ -1,5 +1,6 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -36,6 +37,12 @@ public class ReAccreditationHookOrderTests
         var email = hooks.IndexOf(typeof(ReAccreditationNotificationHook));
         Assert.True(email >= 0, "the notification hook should be registered when Notify is enabled");
         Assert.True(hooks.IndexOf(typeof(ReAccreditationQueryPushHook)) < email);
-        Assert.True(hooks.IndexOf(typeof(ReAccreditationStatusPushHook)) < email);
+        // RA-495 review: re-accreditation's status push hook is the shared one,
+        // registered by AddStandardLifecycle.
+        var statusPush = hooks.IndexOf(
+            typeof(StandardLifecycleServiceCollectionExtensions.DeferredStatusPushHook<ReAccreditationLifecycleStrategy>)
+        );
+        Assert.True(statusPush >= 0, "the status push hook should be registered");
+        Assert.True(statusPush < email);
     }
 }

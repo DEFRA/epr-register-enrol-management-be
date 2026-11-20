@@ -1,5 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -64,7 +65,7 @@ internal sealed class ReAccreditationContinueReviewService(
 
         if (!string.Equals(
                 workItem.StateId,
-                ReAccreditationUpdatedOrigin.StateId,
+                StandardUpdatedOrigin.StateId,
                 StringComparison.OrdinalIgnoreCase))
         {
             // A genuinely concurrent/duplicate call (e.g. a double-click)
@@ -91,7 +92,7 @@ internal sealed class ReAccreditationContinueReviewService(
         // resolved from exactly the same audit history — a caseworker can
         // never be offered one state's call to action and be carried into a
         // different one.
-        var continueActionId = ReAccreditationUpdatedOrigin.ResolveContinueActionId(workItem);
+        var continueActionId = StandardUpdatedOrigin.ResolveContinueActionId(workItem);
 
         if (continueActionId is null)
         {

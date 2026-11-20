@@ -33,6 +33,8 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 ///
 /// RA-368: also posts generic state-transition pushes to
 /// <c>POST api/v1/accreditation-applications/case-management/{workItemId}/status</c>
+/// (or, RA-495, an in-year change request's
+/// <c>POST api/v1/accreditation-changes/case-management/{workItemId}/status</c>)
 /// via <see cref="PushStatusChangedAsync"/>, sharing the same signing,
 /// retry and never-throws behaviour.
 ///
@@ -41,8 +43,8 @@ namespace EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 /// the most likely first-enablement failure is a systemic auth/validation
 /// error that a retry would only amplify (MBE-F6).
 ///
-/// epr-p86e / RA-410: <see cref="PushDecisionStatusChangedAsync"/> shares the
-/// same wire contract and signing but uses its own, more aggressive pipeline
+/// epr-p86e / RA-410: a <see cref="OperatorBackendPushPipeline.Decision"/>
+/// status push shares the same wire contract and signing but uses its own, more aggressive pipeline
 /// (<see cref="BuildDecisionRetryPipeline"/>) because it is a hard pre-commit
 /// gate on the re-accreditation decision rather than a best-effort push — the
 /// decision is abandoned with a 500 if it cannot be delivered.
@@ -61,6 +63,10 @@ internal sealed class HttpOperatorBackendPushAdapter(
 
     private const string StatusRelativePathTemplate =
         "/api/v1/accreditation-applications/case-management/{0}/status";
+
+    // RA-495: an in-year change request's status route.
+    private const string ChangeRequestStatusRelativePathTemplate =
+        "/api/v1/accreditation-changes/case-management/{0}/status";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -137,74 +143,11 @@ internal sealed class HttpOperatorBackendPushAdapter(
         );
     }
 
-    public Task<OperatorBackendPushResult> PushStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
+    public async Task<OperatorBackendPushResult> PushStatusChangedAsync(
+        OperatorBackendStatusRoute route,
+        OperatorBackendPushPipeline pipeline,
+        OperatorJourneyStatusChange change,
         CancellationToken cancellationToken = default
-    ) =>
-        PushStatusInternalAsync(
-            workItemId,
-            correlationId,
-            fromStateId,
-            toStateId,
-            toStateDisplayName,
-            actionId,
-            actionDisplayName,
-            occurredAt,
-            _retryPipeline,
-            "status-changed",
-            cancellationToken
-        );
-
-    public Task<OperatorBackendPushResult> PushDecisionStatusChangedAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        CancellationToken cancellationToken = default
-    ) =>
-        PushStatusInternalAsync(
-            workItemId,
-            correlationId,
-            fromStateId,
-            toStateId,
-            toStateDisplayName,
-            actionId,
-            actionDisplayName,
-            occurredAt,
-            _decisionRetryPipeline,
-            "decision-status-changed",
-            cancellationToken
-        );
-
-    /// <summary>
-    /// Shared body for both status pushes. Identical on the wire — same
-    /// endpoint, body and signing — differing only in the resilience
-    /// <paramref name="pipeline"/> (best-effort vs the decision gate's larger
-    /// budget) and the <paramref name="operationName"/> used in logs.
-    /// </summary>
-    private async Task<OperatorBackendPushResult> PushStatusInternalAsync(
-        Guid workItemId,
-        Guid correlationId,
-        string fromStateId,
-        string toStateId,
-        string toStateDisplayName,
-        string actionId,
-        string actionDisplayName,
-        DateTime occurredAt,
-        ResiliencePipeline<HttpResponseMessage> pipeline,
-        string operationName,
-        CancellationToken cancellationToken
     )
     {
         if (string.IsNullOrWhiteSpace(_config.Url))
@@ -212,38 +155,74 @@ internal sealed class HttpOperatorBackendPushAdapter(
             return OperatorBackendPushResult.Failure("OperatorBackendApi:Url is not configured.");
         }
 
+        // The operation name is per route and pipeline so each push's log
+        // lines stay distinguishable, as they were when each was its own method.
+        (string Template, ResiliencePipeline<HttpResponseMessage> Pipeline, string OperationName)? target = (
+            route,
+            pipeline
+        ) switch
+        {
+            (OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort) => (
+                StatusRelativePathTemplate,
+                _retryPipeline,
+                "status-changed"
+            ),
+            (OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.Decision) => (
+                StatusRelativePathTemplate,
+                _decisionRetryPipeline,
+                "decision-status-changed"
+            ),
+            (OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.BestEffort) => (
+                ChangeRequestStatusRelativePathTemplate,
+                _retryPipeline,
+                "change-request-status-changed"
+            ),
+            (OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.Decision) => (
+                ChangeRequestStatusRelativePathTemplate,
+                _decisionRetryPipeline,
+                "change-request-decision-status-changed"
+            ),
+            _ => null,
+        };
+        if (target is not (var relativePathTemplate, var resiliencePipeline, var operationName))
+        {
+            // Never throws, even for a route or pipeline this adapter does not know.
+            return OperatorBackendPushResult.Failure($"Unknown status push route {route} / pipeline {pipeline}.");
+        }
+
         var relativePath = string.Format(
-            StatusRelativePathTemplate,
-            Uri.EscapeDataString(workItemId.ToString())
+            relativePathTemplate,
+            Uri.EscapeDataString(change.WorkItemId.ToString())
         );
         var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
 
         logger.LogInformation(
             "Pushing {Operation} for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); {FromStateId} -> {ToStateId} via {ActionId}",
             operationName,
-            workItemId,
+            change.WorkItemId,
             endpoint,
-            correlationId,
-            fromStateId,
-            toStateId,
-            actionId
+            change.CorrelationId,
+            change.FromStateId,
+            change.ToStateId,
+            change.ActionId
         );
 
         var body = new StatusChangedPushRequest(
-            fromStateId,
-            toStateId,
-            toStateDisplayName,
-            actionId,
-            actionDisplayName,
-            occurredAt
+            change.FromStateId,
+            change.ToStateId,
+            change.ToStateDisplayName,
+            change.ActionId,
+            change.ActionDisplayName,
+            change.OccurredAt,
+            change.EffectiveDate
         );
         return await ExecutePushAsync(
-            workItemId,
+            change.WorkItemId,
             endpoint,
-            correlationId,
+            change.CorrelationId,
             body,
             operationName,
-            pipeline,
+            resiliencePipeline,
             cancellationToken
         );
     }
@@ -522,6 +501,7 @@ internal sealed class HttpOperatorBackendPushAdapter(
         string ToStateDisplayName,
         string ActionId,
         string ActionDisplayName,
-        DateTime OccurredAt
+        DateTime OccurredAt,
+        DateOnly? EffectiveDate
     );
 }

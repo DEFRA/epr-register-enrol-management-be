@@ -2,6 +2,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
@@ -119,7 +120,7 @@ public class ReAccreditationResumeDulyMadeAssessmentSnapshotMigrationTests
     /// <summary>
     /// The legacy escape must survive: an item already parked in <c>updated</c>
     /// still needs <c>continue-review-during-duly-made</c> to move on, and
-    /// <see cref="ReAccreditationUpdatedOrigin.ResolveOriginatingStateId"/>
+    /// <see cref="StandardUpdatedOrigin.ResolveOriginatingStateId"/>
     /// reads it to resolve those items' origin.
     /// </summary>
     [Fact]

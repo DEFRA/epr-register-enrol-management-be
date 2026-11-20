@@ -2,6 +2,7 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -24,17 +25,13 @@ public class ReAccreditationConfirmContactServiceTests
     [Fact]
     public void Constructor_defaults_time_provider_when_omitted()
     {
-        var service = new ReAccreditationConfirmContactService(
+        var service = ReAccreditationLifecycleTestServices.ConfirmContactService(
             Substitute.For<IWorkItemPersistence>(),
             new WorkItemRegistry([new ReAccreditationType()]),
             Substitute.For<IReAccreditationApprovalService>(),
             Substitute.For<IReAccreditationRefusalService>(),
-            new ReAccreditationDecisionPush(
-                Substitute.For<IOperatorBackendPushAdapter>(),
-                Substitute.For<IWorkItemAuditAppender>(),
-                NullLogger<ReAccreditationDecisionPush>.Instance
-            ),
-            NullLogger<ReAccreditationConfirmContactService>.Instance
+            Substitute.For<IOperatorBackendPushAdapter>(),
+            Substitute.For<IWorkItemAuditAppender>()
         );
 
         Assert.NotNull(service);
@@ -57,15 +54,19 @@ public class ReAccreditationConfirmContactServiceTests
         Assert.Equal(["registration-accreditation-push", "approve"], harness.OrderedCalls);
         await harness
             .PushAdapter.Received(1)
-            .PushDecisionStatusChangedAsync(
-                harness.WorkItem.Id,
-                Arg.Any<Guid>(),
-                "approved-pending-contact",
-                "approved",
-                "Granted",
-                "confirm-contact-approved",
-                "Confirm applicant contact",
-                s_now.UtcDateTime,
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                Arg.Is<OperatorJourneyStatusChange>(c =>
+                    c.WorkItemId == harness.WorkItem.Id
+                    && c.FromStateId == "approved-pending-contact"
+                    && c.ToStateId == "approved"
+                    && c.ToStateDisplayName == "Granted"
+                    && c.ActionId == "confirm-contact-approved"
+                    && c.ActionDisplayName == "Confirm applicant contact"
+                    && c.OccurredAt == s_now.UtcDateTime
+                    && c.EffectiveDate == null
+                ),
                 ct
             );
         await harness
@@ -225,15 +226,18 @@ public class ReAccreditationConfirmContactServiceTests
         Assert.Equal(["registration-accreditation-push", "refuse"], harness.OrderedCalls);
         await harness
             .PushAdapter.Received(1)
-            .PushDecisionStatusChangedAsync(
-                harness.WorkItem.Id,
-                Arg.Any<Guid>(),
-                "rejected-pending-contact",
-                "rejected",
-                "Refused",
-                "confirm-contact-rejected",
-                "Confirm applicant contact",
-                s_now.UtcDateTime,
+            .PushStatusChangedAsync(
+                OperatorBackendStatusRoute.AccreditationApplication,
+                OperatorBackendPushPipeline.Decision,
+                Arg.Is<OperatorJourneyStatusChange>(c =>
+                    c.WorkItemId == harness.WorkItem.Id
+                    && c.FromStateId == "rejected-pending-contact"
+                    && c.ToStateId == "rejected"
+                    && c.ToStateDisplayName == "Refused"
+                    && c.ActionId == "confirm-contact-rejected"
+                    && c.ActionDisplayName == "Confirm applicant contact"
+                    && c.OccurredAt == s_now.UtcDateTime
+                ),
                 ct
             );
         await harness
@@ -461,15 +465,10 @@ public class ReAccreditationConfirmContactServiceTests
 
             PushAdapter = Substitute.For<IOperatorBackendPushAdapter>();
             PushAdapter
-                .PushDecisionStatusChangedAsync(
-                    Arg.Any<Guid>(),
-                    Arg.Any<Guid>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<string>(),
-                    Arg.Any<DateTime>(),
+                .PushStatusChangedAsync(
+                    OperatorBackendStatusRoute.AccreditationApplication,
+                    OperatorBackendPushPipeline.Decision,
+                    Arg.Any<OperatorJourneyStatusChange>(),
                     Arg.Any<CancellationToken>()
                 )
                 .Returns(_ =>
@@ -526,17 +525,13 @@ public class ReAccreditationConfirmContactServiceTests
             }
             User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
 
-            Service = new ReAccreditationConfirmContactService(
+            Service = ReAccreditationLifecycleTestServices.ConfirmContactService(
                 Persistence,
                 new WorkItemRegistry([type]),
                 ApprovalService,
                 RefusalService,
-                new ReAccreditationDecisionPush(
-                    PushAdapter,
-                    AuditAppender,
-                    NullLogger<ReAccreditationDecisionPush>.Instance
-                ),
-                NullLogger<ReAccreditationConfirmContactService>.Instance,
+                PushAdapter,
+                AuditAppender,
                 new FakeTimeProvider(s_now)
             );
         }
@@ -548,7 +543,7 @@ public class ReAccreditationConfirmContactServiceTests
         public IOperatorBackendPushAdapter PushAdapter { get; }
         public IWorkItemAuditAppender AuditAppender { get; }
         public ClaimsPrincipal User { get; }
-        public ReAccreditationConfirmContactService Service { get; }
+        public IStandardConfirmContactService Service { get; }
         public List<string> OrderedCalls { get; } = [];
     }
 }

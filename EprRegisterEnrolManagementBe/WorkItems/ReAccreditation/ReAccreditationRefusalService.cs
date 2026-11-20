@@ -1,6 +1,6 @@
 using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
-using static EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReAccreditationDecisionWrites;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -57,7 +57,7 @@ internal sealed class ReAccreditationRefusalService(
             ),
             workItem => ValidateStepOneTarget(workItemId, workItem),
             (workItem, now) =>
-                AppendAudit(
+                StandardLifecycleAudit.Append(
                     workItem,
                     "determination-made",
                     "Determination made: Refused",
@@ -88,11 +88,11 @@ internal sealed class ReAccreditationRefusalService(
                     workItemId,
                     workItem,
                     registry,
-                    ReAccreditationConfirmContactGuard.Refusal,
+                    StandardConfirmContactGuard.Refusal,
                     logger
                 ),
             (workItem, now) =>
-                AppendAudit(
+                StandardLifecycleAudit.Append(
                     workItem,
                     "applicant-contacted",
                     "Applicant contacted",
@@ -128,7 +128,7 @@ internal sealed class ReAccreditationRefusalService(
     {
         ArgumentNullException.ThrowIfNull(user);
 
-        if (RequireActorIdentity(user) is { } identityFailure)
+        if (StandardLifecycleAudit.RequireActorIdentity(user) is { } identityFailure)
         {
             return identityFailure;
         }
@@ -149,7 +149,7 @@ internal sealed class ReAccreditationRefusalService(
             workItem.StateId = step.ToStateId;
             workItem.LastModifiedAt = now.UtcDateTime;
 
-            AppendAudit(
+            StandardLifecycleAudit.Append(
                 workItem,
                 "action-applied",
                 "Action applied",
@@ -197,7 +197,7 @@ internal sealed class ReAccreditationRefusalService(
                 user.FindFirstValue("user:id")
             );
 
-            await InvokeActionAppliedHooksAsync(
+            await StandardLifecycleAudit.InvokeActionAppliedHooksAsync(
                 _postActionHooks,
                 workItem,
                 step.ActionId,

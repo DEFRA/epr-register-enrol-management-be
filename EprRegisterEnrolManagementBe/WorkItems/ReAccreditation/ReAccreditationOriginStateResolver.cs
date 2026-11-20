@@ -1,4 +1,5 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -43,7 +44,10 @@ internal sealed class ReAccreditationOriginStateResolver : IWorkItemOriginStateR
         // The type half of this check is now redundant with the engine's own
         // TypeId scoping, but is kept as defence in depth: this method is
         // public and exercised directly by unit tests.
-        if (!ReAccreditationUpdatedOrigin.IsUpdatedReAccreditation(workItem))
+        if (
+            !string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(workItem.StateId, StandardUpdatedOrigin.StateId, StringComparison.OrdinalIgnoreCase)
+        )
         {
             return null;
         }
@@ -54,6 +58,6 @@ internal sealed class ReAccreditationOriginStateResolver : IWorkItemOriginStateR
         // correctly refuses every origin-specific call to action, rather than
         // guessing a state and offering one that would move the application
         // backwards.
-        return ReAccreditationUpdatedOrigin.ResolveOriginatingStateId(workItem, template);
+        return StandardUpdatedOrigin.ResolveOriginatingStateId(workItem, template);
     }
 }

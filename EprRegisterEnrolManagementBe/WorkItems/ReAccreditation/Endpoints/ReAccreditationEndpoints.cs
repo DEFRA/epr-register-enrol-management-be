@@ -8,6 +8,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
 using MongoDB.Bson;
@@ -109,16 +110,18 @@ internal static class ReAccreditationEndpoints
 
     /// <summary>
     /// RA-527: ProblemDetails title for every confirm-contact failure. Constant
-    /// for the same reason as <see cref="LogDecisionProblemTitle"/>.
+    /// for the same reason as <see cref="LogDecisionProblemTitle"/>. The shared
+    /// handler's, since the route runs it (bd 3bb.42).
     /// </summary>
-    public const string ConfirmContactProblemTitle = "Could not confirm applicant contact";
+    public const string ConfirmContactProblemTitle = StandardLifecycleEndpoints.ConfirmContactProblemTitle;
 
     /// <summary>
     /// ProblemDetails title for every duly-make failure. Constant across all of
     /// them on purpose: the frontend switches on <c>errorCode</c>, never on the
-    /// title or the human-readable detail.
+    /// title or the human-readable detail. The shared handler's, since the route
+    /// runs it (bd 3bb.42).
     /// </summary>
-    public const string DulyMakeProblemTitle = "Could not complete duly making";
+    public const string DulyMakeProblemTitle = StandardLifecycleEndpoints.DulyMakeProblemTitle;
 
     /// <summary>
     /// RA-576: ProblemDetails title for every change-payment-date failure.
@@ -439,66 +442,44 @@ internal static class ReAccreditationEndpoints
     /// <summary>
     /// RA-316: complete duly making for a re-accreditation work item.
     ///
-    /// Delegates to the module-scoped <see cref="IReAccreditationDulyMakingService"/>
-    /// so the bespoke workflow — anchoring the 12-week SLA clock to the entered
+    /// Delegates to the shared <see cref="IStandardDulyMakingService"/>, limited
+    /// to re-accreditation (keyed by <see cref="ReAccreditationType.Id"/>), so
+    /// the bespoke workflow — anchoring the 12-week SLA clock to the entered
     /// payment date, stamping that date on the payload, notifying the operator
     /// and pushing the new status — runs atomically with the state transition.
     ///
-    /// Payment-date validation happens HERE rather than in the service, because
-    /// only the endpoint can shape the response the case management frontend
-    /// needs: a 400 ProblemDetails carrying a stable machine-readable
-    /// <c>errorCode</c> and <c>field</c>, which it binds to a GOV.UK error
-    /// summary against the date input. Everything else is a page-level failure
-    /// on that side, so the two must stay clearly distinguishable — see
-    /// <see cref="ReAccreditationDulyMakingValidator"/> for the code vocabulary,
-    /// which is part of the wire contract with management-fe and mgmt-tests.
+    /// Payment-date validation happens in the endpoint rather than in the
+    /// service, because only the endpoint can shape the response the case
+    /// management frontend needs: a 400 ProblemDetails carrying a stable
+    /// machine-readable <c>errorCode</c> and <c>field</c>, which it binds to a
+    /// GOV.UK error summary against the date input. Everything else is a
+    /// page-level failure on that side, so the two must stay clearly
+    /// distinguishable — see <see cref="StandardDulyMakingValidator"/> for
+    /// the code vocabulary, which is part of the wire contract with
+    /// management-fe and mgmt-tests.
+    ///
+    /// bd 3bb.42: the handler is the shared
+    /// <see cref="StandardLifecycleEndpoints.DulyMake"/>, handed the keyed
+    /// service, so the two routes cannot drift apart.
     /// </summary>
-    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> DulyMake(
+    public static Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> DulyMake(
         [FromRoute] Guid id,
         HttpContext httpContext,
         [FromBody] DulyMakeRequest? request,
-        [FromServices] IReAccreditationDulyMakingService dulyMakingService,
+        [FromKeyedServices(ReAccreditationType.Id)] IStandardDulyMakingService dulyMakingService,
         [FromServices] IWorkItemService engine,
         [FromServices] TimeProvider timeProvider,
         CancellationToken cancellationToken
-    )
-    {
-        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
-        var validation = ReAccreditationDulyMakingValidator.Validate(request?.PaymentDate, today);
-
-        if (!validation.IsValid)
-        {
-            return TypedResults.Problem(
-                title: DulyMakeProblemTitle,
-                detail: validation.Detail,
-                statusCode: StatusCodes.Status400BadRequest,
-                extensions: new Dictionary<string, object?>
-                {
-                    [ErrorCodeKey] = validation.ErrorCode,
-                    [FieldKey] = ReAccreditationDulyMakingValidator.Field,
-                }
-            );
-        }
-
-        var result = await dulyMakingService.CompleteDulyMakingAsync(
+    ) =>
+        StandardLifecycleEndpoints.DulyMake(
             id,
-            validation.PaymentDate!.Value,
-            httpContext.User,
+            httpContext,
+            new StandardDulyMakeRequest(request?.PaymentDate),
+            dulyMakingService,
+            engine,
+            timeProvider,
             cancellationToken
         );
-
-        if (result.IsSuccess)
-        {
-            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
-        }
-
-        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
-        {
-            return TypedResults.NotFound();
-        }
-
-        return ToServiceFailureProblem(result, DulyMakeProblemTitle);
-    }
 
     /// <summary>
     /// RA-766 (temporary): set the charge held on a re-accreditation work item.
@@ -635,9 +616,9 @@ internal static class ReAccreditationEndpoints
     }
 
     /// <summary>
-    /// Map a failed duly-make / change-payment-date service result to its
-    /// ProblemDetails. Shared because both endpoints speak the same failure
-    /// vocabulary to the frontend.
+    /// Map a failed change-payment-date / charge service result to its
+    /// ProblemDetails. The same failure vocabulary as duly making, so the
+    /// frontend reads them alike.
     ///
     /// 401 for a missing actor; 409 for the three conflicts with the resource's
     /// current state (the frontend's answer is "this application has changed,
@@ -648,29 +629,7 @@ internal static class ReAccreditationEndpoints
     private static ProblemHttpResult ToServiceFailureProblem(
         WorkItemActionResult result,
         string title
-    )
-    {
-        var status = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.InvalidTransition
-            or WorkItemActionFailureCode.TerminalState
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        var extensions =
-            result.FailureCode == WorkItemActionFailureCode.UnknownAction
-                ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
-                : null;
-
-        return TypedResults.Problem(
-            title: title,
-            detail: result.Message,
-            statusCode: status,
-            extensions: extensions
-        );
-    }
+    ) => StandardLifecycleProblems.ServiceFailure(result, title);
 
     /// <summary>
     /// Return live prior-year accreditation data from ReEx for the given
@@ -747,7 +706,7 @@ internal static class ReAccreditationEndpoints
     /// <c>awaiting-decision</c> to (RA-527, step 1 of two)
     /// <c>approved-pending-contact</c> / <c>rejected-pending-contact</c>,
     /// with both hops applied server-side by
-    /// <see cref="IReAccreditationLogDecisionService"/>.
+    /// <see cref="IStandardLogDecisionService"/>, limited to re-accreditation.
     ///
     /// The body names an outcome, never a state or an action id, so a caller
     /// cannot pick a destination the workflow does not allow. Validation
@@ -766,56 +725,28 @@ internal static class ReAccreditationEndpoints
     ///
     /// RA-527: nothing is pushed to the operator journey here; the pre-commit
     /// status push (epr-p86e) belongs to <see cref="ConfirmContact"/>.
+    ///
+    /// bd 3bb.42: the handler is the shared
+    /// <see cref="StandardLifecycleEndpoints.LogDecisionAsync"/>, handed the
+    /// keyed service and this route's own problem title.
     /// </summary>
-    public static async Task<
-        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
-    > LogDecision(
+    public static Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> LogDecision(
         [FromRoute] Guid id,
         [FromBody] LogDecisionRequest? request,
         HttpContext httpContext,
-        [FromServices] IReAccreditationLogDecisionService logDecisionService,
+        [FromKeyedServices(ReAccreditationType.Id)] IStandardLogDecisionService logDecisionService,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
-    )
-    {
-        if (!TryParseOutcome(request?.Outcome, out var outcome))
-        {
-            return TypedResults.Problem(
-                title: LogDecisionProblemTitle,
-                detail: "'outcome' is required and must be either 'approved' or 'rejected'.",
-                statusCode: StatusCodes.Status400BadRequest,
-                extensions: new Dictionary<string, object?>
-                {
-                    [ErrorCodeKey] = "invalid-outcome",
-                    [FieldKey] = "outcome",
-                }
-            );
-        }
-
-        var result = await logDecisionService.LogDecisionAsync(
+    ) =>
+        StandardLifecycleEndpoints.LogDecisionAsync(
             id,
-            outcome,
-            httpContext.User,
+            new StandardDecisionRequest(request?.Outcome),
+            httpContext,
+            logDecisionService,
+            engine,
+            LogDecisionProblemTitle,
             cancellationToken
         );
-
-        if (result.IsIdempotentReplay)
-        {
-            httpContext.Response.Headers[WorkItemEndpoints.IdempotentReplayHeader] = "true";
-        }
-
-        if (result.IsSuccess)
-        {
-            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
-        }
-
-        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
-        {
-            return TypedResults.NotFound();
-        }
-
-        return DecisionProblem(result, LogDecisionProblemTitle);
-    }
 
     /// <summary>
     /// RA-527: confirm that the applicant has been contacted about the
@@ -831,112 +762,18 @@ internal static class ReAccreditationEndpoints
     /// replay (200 + the replay header). Any other state is a 409; a missing
     /// item is a 404 and another type a 400 with
     /// <c>errorCode: wrong-work-item-type</c>, as for <see cref="LogDecision"/>.
+    ///
+    /// bd 3bb.42: the handler is the shared
+    /// <see cref="StandardLifecycleEndpoints.ConfirmContact"/>, handed the keyed
+    /// service.
     /// </summary>
-    public static async Task<
-        Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>
-    > ConfirmContact(
+    public static Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> ConfirmContact(
         [FromRoute] Guid id,
         HttpContext httpContext,
-        [FromServices] IReAccreditationConfirmContactService confirmContactService,
+        [FromKeyedServices(ReAccreditationType.Id)] IStandardConfirmContactService confirmContactService,
         [FromServices] IWorkItemService engine,
         CancellationToken cancellationToken
-    )
-    {
-        var result = await confirmContactService.ConfirmContactAsync(
-            id,
-            httpContext.User,
-            cancellationToken
-        );
-
-        if (result.IsIdempotentReplay)
-        {
-            httpContext.Response.Headers[WorkItemEndpoints.IdempotentReplayHeader] = "true";
-        }
-
-        if (result.IsSuccess)
-        {
-            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
-        }
-
-        if (result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound)
-        {
-            return TypedResults.NotFound();
-        }
-
-        return DecisionProblem(result, ConfirmContactProblemTitle);
-    }
-
-    /// <summary>
-    /// The ProblemDetails for a failed determination step (RA-410 /decision,
-    /// RA-527 /confirm-contact). Both share one failure vocabulary.
-    /// </summary>
-    private static ProblemHttpResult DecisionProblem(WorkItemActionResult result, string title)
-    {
-        var decisionStatus = result.FailureCode switch
-        {
-            WorkItemActionFailureCode.MissingActorIdentity => StatusCodes.Status401Unauthorized,
-            WorkItemActionFailureCode.NotAuthorized => StatusCodes.Status403Forbidden,
-            // All three are conflicts with the resource's current state rather
-            // than malformed requests: the frontend's correct response is "this
-            // application has changed, reload it", never a field-level error.
-            WorkItemActionFailureCode.InvalidTransition
-            or WorkItemActionFailureCode.TerminalState
-            or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
-            // epr-p86e / RA-410: the operator journey could not be notified, so
-            // the decision was abandoned before anything was persisted. The
-            // request itself was well-formed — this is a server-side dependency
-            // being unreachable — so it maps to a generic 500, not a 4xx. No
-            // errorCode is attached: the frontend shows a generic try-again.
-            WorkItemActionFailureCode.UpstreamNotificationFailed =>
-                StatusCodes.Status500InternalServerError,
-            // RA-475: the backend accreditation-number call failed (or timed
-            // out) before anything was persisted — a server-side dependency
-            // problem, not a malformed request, so a generic 500 rather than
-            // the 400 management-fe reads as a client validation problem.
-            WorkItemActionFailureCode.AccreditationNumberUnavailable =>
-                StatusCodes.Status500InternalServerError,
-            _ => StatusCodes.Status400BadRequest,
-        };
-
-        // The only 400 the service itself can produce is a type mismatch. Give
-        // it an errorCode too so the frontend never has to parse prose to work
-        // out whether a 400 belongs against the outcome input.
-        var decisionExtensions =
-            result.FailureCode == WorkItemActionFailureCode.UnknownAction
-                ? new Dictionary<string, object?> { [ErrorCodeKey] = "wrong-work-item-type" }
-                : null;
-
-        return TypedResults.Problem(
-            title: title,
-            detail: result.Message,
-            statusCode: decisionStatus,
-            extensions: decisionExtensions
-        );
-    }
-
-    /// <summary>
-    /// Bind the wire <c>outcome</c> string onto
-    /// <see cref="ReAccreditationDecisionOutcome"/>. Case-insensitive, matching
-    /// the JSON enum convention used elsewhere on the wire, but strictly
-    /// two-valued: <see cref="Enum.TryParse{TEnum}(string, bool, out TEnum)"/>
-    /// alone would also accept "0"/"1" and any future member, which would let a
-    /// caller reach an outcome the frontend never offers.
-    /// </summary>
-    private static bool TryParseOutcome(string? value, out ReAccreditationDecisionOutcome outcome)
-    {
-        switch (value?.Trim().ToLowerInvariant())
-        {
-            case "approved":
-                outcome = ReAccreditationDecisionOutcome.Approved;
-                return true;
-            case "rejected":
-                outcome = ReAccreditationDecisionOutcome.Rejected;
-                return true;
-            default:
-                outcome = default;
-                return false;
-        }
-    }
+    ) => StandardLifecycleEndpoints.ConfirmContact(id, httpContext, confirmContactService, engine, cancellationToken);
 
     /// <summary>
     /// RA-291: raise a query against a re-accreditation application. The

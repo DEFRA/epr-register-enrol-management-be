@@ -1,10 +1,12 @@
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
+
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
 /// RA-576 validation for the bespoke change-payment-date endpoint.
 ///
 /// The date rules are exactly the duly-making rules
-/// (<see cref="ReAccreditationDulyMakingValidator"/>): a corrected payment date
+/// (<see cref="StandardDulyMakingValidator"/>): a corrected payment date
 /// is held to the same standard as the one it replaces. This type adds the
 /// mandatory reason (AC03).
 ///
@@ -27,13 +29,13 @@ internal static class ReAccreditationChangePaymentDateValidator
         DateOnly today
     )
     {
-        var date = ReAccreditationDulyMakingValidator.Validate(paymentDate, today);
+        var date = StandardDulyMakingValidator.Validate(paymentDate, today);
         if (!date.IsValid)
         {
             return ReAccreditationChangePaymentDateValidationResult.Failure(
                 date.ErrorCode!,
                 date.Detail!,
-                ReAccreditationDulyMakingValidator.Field
+                StandardDulyMakingValidator.Field
             );
         }
 

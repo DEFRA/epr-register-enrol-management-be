@@ -3,6 +3,7 @@ using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -72,7 +73,7 @@ public class ReAccreditationStatusPushHookTests
     }
 
     private sealed record Sut(
-        ReAccreditationStatusPushHook Hook,
+        StandardStatusPushHook Hook,
         IBackgroundTaskQueue Queue,
         IOperatorBackendPushAdapter Adapter,
         IWorkItemAuditAppender AuditAppender);
@@ -82,8 +83,8 @@ public class ReAccreditationStatusPushHookTests
         var adapter = Substitute.For<IOperatorBackendPushAdapter>();
         adapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+                OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Success());
         var auditAppender = Substitute.For<IWorkItemAuditAppender>();
         auditAppender
@@ -94,8 +95,10 @@ public class ReAccreditationStatusPushHookTests
 
         var queue = Substitute.For<IBackgroundTaskQueue>();
 
-        var hook = new ReAccreditationStatusPushHook(
-            queue, new HeaderPropagationValues(), NullLogger<ReAccreditationStatusPushHook>.Instance);
+        var hook = ReAccreditationLifecycleTestServices.StatusPushHook(
+            new WorkItemRegistry([new ReAccreditationType()]),
+            queue
+        );
         return new Sut(hook, queue, adapter, auditAppender);
     }
 
@@ -158,8 +161,14 @@ public class ReAccreditationStatusPushHookTests
             sut, () => sut.Hook.OnActionAppliedAsync(workItem, actionId, fromStateId, s_user, ct), ct);
 
         await sut.Adapter.Received(1).PushStatusChangedAsync(
-            workItem.Id, Arg.Any<Guid>(), fromStateId, toStateId, Arg.Any<string>(),
-            actionId, Arg.Any<string>(), s_lastModifiedAt, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            Arg.Is<OperatorJourneyStatusChange>(c =>
+                c.WorkItemId == workItem.Id
+                && c.FromStateId == fromStateId
+                && c.ToStateId == toStateId
+                && c.ActionId == actionId
+                && c.OccurredAt == s_lastModifiedAt),
+            ct);
     }
 
     [Fact]
@@ -179,8 +188,9 @@ public class ReAccreditationStatusPushHookTests
 
         await sut.Queue.Received(1).QueueAsync(
             Arg.Any<Func<IServiceProvider, CancellationToken, Task>>(), ct);
-        await sut.Adapter.DidNotReceiveWithAnyArgs().PushStatusChangedAsync(
-            default, default, default!, default!, default!, default!, default!, default, ct);
+        await sut.Adapter.DidNotReceive().PushStatusChangedAsync(
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            Arg.Any<OperatorJourneyStatusChange>(), Arg.Any<CancellationToken>());
     }
 
     [Theory]
@@ -316,8 +326,16 @@ public class ReAccreditationStatusPushHookTests
             sut, () => sut.Hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct), ct);
 
         await sut.Adapter.Received(1).PushStatusChangedAsync(
-            workItem.Id, Arg.Any<Guid>(), "submitted", "duly-made", "Duly made",
-            "duly-make", "Mark as duly made", s_lastModifiedAt, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            Arg.Is<OperatorJourneyStatusChange>(c =>
+                c.WorkItemId == workItem.Id
+                && c.FromStateId == "submitted"
+                && c.ToStateId == "duly-made"
+                && c.ToStateDisplayName == "Duly made"
+                && c.ActionId == "duly-make"
+                && c.ActionDisplayName == "Mark as duly made"
+                && c.OccurredAt == s_lastModifiedAt),
+            ct);
     }
 
     [Fact]
@@ -335,8 +353,11 @@ public class ReAccreditationStatusPushHookTests
             sut, () => sut.Hook.OnActionAppliedAsync(workItem, "duly-make", "submitted", s_user, ct), ct);
 
         await sut.Adapter.Received(1).PushStatusChangedAsync(
-            workItem.Id, Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<string>(), "Mark as duly made", Arg.Any<DateTime>(), ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            Arg.Is<OperatorJourneyStatusChange>(c =>
+                c.WorkItemId == workItem.Id
+                && c.ActionDisplayName == "Mark as duly made"),
+            ct);
     }
 
     [Fact]
@@ -356,8 +377,16 @@ public class ReAccreditationStatusPushHookTests
             sut, () => sut.Hook.OnActionAppliedAsync(workItem, "some-unknown-action", "submitted", s_user, ct), ct);
 
         await sut.Adapter.Received(1).PushStatusChangedAsync(
-            workItem.Id, Arg.Any<Guid>(), "submitted", "some-unknown-state", "some-unknown-state",
-            "some-unknown-action", "some-unknown-action", s_lastModifiedAt, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            Arg.Is<OperatorJourneyStatusChange>(c =>
+                c.WorkItemId == workItem.Id
+                && c.FromStateId == "submitted"
+                && c.ToStateId == "some-unknown-state"
+                && c.ToStateDisplayName == "some-unknown-state"
+                && c.ActionId == "some-unknown-action"
+                && c.ActionDisplayName == "some-unknown-action"
+                && c.OccurredAt == s_lastModifiedAt),
+            ct);
     }
 
     [Fact]
@@ -389,8 +418,8 @@ public class ReAccreditationStatusPushHookTests
         var sut = BuildSut();
         sut.Adapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+                OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
         var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 
@@ -414,8 +443,8 @@ public class ReAccreditationStatusPushHookTests
         var sut = BuildSut();
         sut.Adapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+                OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(), Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Failure("connection refused"));
         var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 
@@ -437,9 +466,9 @@ public class ReAccreditationStatusPushHookTests
         Guid? correlationIdPassedToAdapter = null;
         sut.Adapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Do<Guid>(id => correlationIdPassedToAdapter = id),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+                OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+                Arg.Do<OperatorJourneyStatusChange>(change => correlationIdPassedToAdapter = change.CorrelationId),
+                Arg.Any<CancellationToken>())
             .Returns(OperatorBackendPushResult.Success());
 
         await ActAndRunQueuedJobAsync(
@@ -460,8 +489,8 @@ public class ReAccreditationStatusPushHookTests
         var sut = BuildSut();
         sut.Adapter
             .PushStatusChangedAsync(
-                Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
-                Arg.Any<string>(), Arg.Any<string>(), Arg.Any<DateTime>(), Arg.Any<CancellationToken>())
+                OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+                Arg.Any<OperatorJourneyStatusChange>(), Arg.Any<CancellationToken>())
             .Returns<OperatorBackendPushResult>(_ => throw new InvalidOperationException("boom"));
         var workItem = BuildWorkItem("duly-made", "duly-make", "Mark as duly made", "submitted");
 

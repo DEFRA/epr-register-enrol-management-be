@@ -6,7 +6,8 @@ namespace EprRegisterEnrolManagementBe.Test.TestSupport;
 /// RA-739: a <c>POST /work-items</c> body for an add-ORS submission, in the
 /// shape the operator backend sends: material as its enum name
 /// (<c>"Plastic"</c>, where re-accreditation sends lowercase) and
-/// <c>nation</c> only when the accreditation has one.
+/// <c>nation</c> only when the accreditation has one. RA-495: each site
+/// carries <c>chargePence</c> when <c>siteChargePence</c> is given.
 /// </summary>
 internal static class AddOverseasSiteSubmissions
 {
@@ -18,7 +19,8 @@ internal static class AddOverseasSiteSubmissions
         int siteCount = 3,
         string organisationName = "Acme Recycling Ltd",
         string material = "Plastic",
-        string? nation = null
+        string? nation = null,
+        int? siteChargePence = null
     )
     {
         var payload = new JsonObject
@@ -45,6 +47,14 @@ internal static class AddOverseasSiteSubmissions
                                 ["country"] = "France",
                             }
                     )
+                    .Select(site =>
+                    {
+                        if (siteChargePence is not null)
+                        {
+                            site["chargePence"] = siteChargePence;
+                        }
+                        return site;
+                    })
                     .ToArray()
             ),
         };

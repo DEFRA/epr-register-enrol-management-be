@@ -118,7 +118,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     // continue-review-during-duly-made is deliberately RETAINED, now dead for
     // new items but kept as the legacy escape for any item already sitting in
     // 'updated' with a duly-made origin, and as the declaration
-    // ReAccreditationUpdatedOrigin.ResolveOriginatingStateId still reads for
+    // StandardUpdatedOrigin.ResolveOriginatingStateId still reads for
     // those. Items snapshotted before v14 keep resume-during-duly-made ->
     // updated until ReAccreditationResumeDulyMadeAssessmentSnapshotMigration
     // patches their frozen snapshot.
@@ -167,7 +167,7 @@ internal sealed class ReAccreditationType : IWorkItemType
     // submit-for-decision from 'assessment-started' (reusing the action id,
     // still CallerInvocable: false) so Make determination works from a
     // started case. Nothing but start-assessment enters the new state.
-    // ReAccreditationStatusPushHook never pushes a move onto it. Added
+    // StandardStatusPushHook never pushes a move onto it. Added
     // sla-extend from 'assessment-started' to 'assessment-in-progress'
     // (CallerInvocable: false, applied by SlaService.ExtendAsync), so a
     // deadline change on a started case still ends at "Updated" on both sides.

@@ -143,7 +143,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_ten_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_eleven_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -160,7 +160,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(10, keyDocs.Count);
+        Assert.Equal(11, keyDocs.Count);
         Assert.Contains(
             keyDocs,
             k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1")
@@ -239,6 +239,14 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
         Assert.True(accreditationIdIndex.GetValue("unique", false).ToBoolean());
         Assert.False(accreditationIdIndex.GetValue("sparse", false).ToBoolean());
         Assert.True(accreditationIdIndex.Contains("partialFilterExpression"));
+
+        // RA-495: the work items of one per-site submission. NOT unique (one
+        // work item per site shares it) and partial on "is a string".
+        var submissionReferenceIndex = indexes.Single(i =>
+            i["key"].AsBsonDocument.Contains("payload.submissionReference")
+        );
+        Assert.False(submissionReferenceIndex.GetValue("unique", false).ToBoolean());
+        Assert.True(submissionReferenceIndex.Contains("partialFilterExpression"));
     }
 
     [Fact]

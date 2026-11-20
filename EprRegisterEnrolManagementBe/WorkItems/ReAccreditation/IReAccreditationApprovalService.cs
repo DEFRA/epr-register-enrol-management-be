@@ -11,9 +11,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// its audit entries atomically, and fans out post-action hooks plus a queued
 /// publishing job. RA-527: approval is two steps.
 /// <see cref="RecordApprovedDeterminationAsync"/> is step 1, called by
-/// <see cref="IReAccreditationLogDecisionService"/> (the /decision endpoint);
+/// <see cref="Workflows.StandardLifecycle.IStandardLogDecisionService"/> (the /decision endpoint);
 /// <see cref="ApproveAsync"/> applies the outcome and is step 2, called by
-/// <see cref="IReAccreditationConfirmContactService"/> (the /confirm-contact
+/// <see cref="Workflows.StandardLifecycle.IStandardConfirmContactService"/> (the /confirm-contact
 /// endpoint). Wrapped behind an interface so it can be substituted in tests.
 /// </summary>
 internal interface IReAccreditationApprovalService

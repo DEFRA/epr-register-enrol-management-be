@@ -5,7 +5,7 @@ using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -340,7 +340,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
         var (succeeded, message) = exit switch
         {
             "determination" => Outcome(await BuildDecisionService(engine).LogDecisionAsync(
-                item.Id, ReAccreditationDecisionOutcome.Rejected, s_user, ct)),
+                item.Id, StandardDecisionOutcome.Rejected, s_user, ct)),
             "query" => Outcome(await BuildQueryService(engine).QueryAsync(
                 item.Id, ["business-plan"], "Please confirm the tonnage figures.", s_user, ct)),
             "withdraw" => Outcome(await new ReAccreditationWithdrawService(
@@ -388,10 +388,11 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
     private WorkItemService BuildEngine() =>
         new(Registry(), _persistence, NullLogger<WorkItemService>.Instance, new WorkItemSubmissionDependencies(TestReferenceGenerators.ApplicationOnly(), TestReferenceGenerators.FixedSubmissionReference()));
 
-    private ReAccreditationLogDecisionService BuildDecisionService(WorkItemService engine) =>
-        new(
+    private IStandardLogDecisionService BuildDecisionService(WorkItemService engine) =>
+        ReAccreditationLifecycleTestServices.LogDecisionService(
             _persistence,
             engine,
+            Registry(),
             new ReAccreditationApprovalService(
                 _persistence,
                 Registry(),
@@ -406,8 +407,7 @@ public sealed class ReAccreditationAssessmentStartedMigrationMongoIntegrationTes
                 Registry(),
                 [],
                 NullLogger<ReAccreditationRefusalService>.Instance
-            ),
-            NullLogger<ReAccreditationLogDecisionService>.Instance
+            )
         );
 
     private ReAccreditationQueryService BuildQueryService(WorkItemService engine) =>

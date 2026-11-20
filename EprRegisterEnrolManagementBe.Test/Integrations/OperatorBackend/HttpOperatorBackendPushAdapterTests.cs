@@ -441,8 +441,10 @@ public class HttpOperatorBackendPushAdapterTests
         var (adapter, handler) = BuildSut(url: string.Empty);
 
         var result = await adapter.PushStatusChangedAsync(
-            Guid.NewGuid(), Guid.NewGuid(), "submitted", "duly-made", "Duly made", "duly-make", "Mark as duly made",
-            DateTime.UtcNow, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "submitted", "duly-made", "Duly made", "duly-make", "Mark as duly made",
+                DateTime.UtcNow), ct);
 
         Assert.False(result.IsSuccess);
         Assert.Null(handler.LastRequest);
@@ -457,8 +459,10 @@ public class HttpOperatorBackendPushAdapterTests
         var workItemId = Guid.NewGuid();
 
         var result = await adapter.PushStatusChangedAsync(
-            workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.True(result.IsSuccess);
         Assert.NotNull(handler.LastRequest);
@@ -477,8 +481,10 @@ public class HttpOperatorBackendPushAdapterTests
         var correlationId = Guid.NewGuid();
 
         await adapter.PushStatusChangedAsync(
-            Guid.NewGuid(), correlationId, "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), correlationId, "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.Equal(
             "epr-register-enrol-management-be",
@@ -498,8 +504,10 @@ public class HttpOperatorBackendPushAdapterTests
         var occurredAt = new DateTime(2026, 1, 15, 9, 30, 0, DateTimeKind.Utc);
 
         await adapter.PushStatusChangedAsync(
-            workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            occurredAt, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                occurredAt), ct);
 
         using var body = JsonDocument.Parse(handler.LastRequestBody!);
         var root = body.RootElement;
@@ -515,6 +523,24 @@ public class HttpOperatorBackendPushAdapterTests
         {
             Assert.NotEqual("workitemid", property.Name, StringComparer.OrdinalIgnoreCase);
         }
+        Assert.False(root.TryGetProperty("effectiveDate", out _));
+    }
+
+    [Fact]
+    public async Task PushStatusChangedAsync_body_carries_the_effective_date_as_a_calendar_date_when_there_is_one()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+
+        await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.Decision,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "approved-pending-contact", "approved", "Granted",
+                "confirm-contact-approved", "Confirm contact", DateTime.UtcNow, new DateOnly(2026, 3, 4)), ct);
+
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal("2026-03-04", body.RootElement.GetProperty("effectiveDate").GetString());
     }
 
     [Fact]
@@ -525,8 +551,10 @@ public class HttpOperatorBackendPushAdapterTests
         handler.Respond(HttpStatusCode.OK);
 
         await adapter.PushStatusChangedAsync(
-            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.True(handler.LastRequest!.Headers.Contains("x-cdp-auth-signature"));
         Assert.True(handler.LastRequest.Headers.Contains("x-cdp-auth-timestamp"));
@@ -541,8 +569,10 @@ public class HttpOperatorBackendPushAdapterTests
         handler.Respond(HttpStatusCode.InternalServerError, "boom");
 
         var result = await adapter.PushStatusChangedAsync(
-            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.False(result.IsSuccess);
         Assert.NotNull(result.ErrorMessage);
@@ -556,8 +586,10 @@ public class HttpOperatorBackendPushAdapterTests
         handler.ThrowOnSend = new HttpRequestException("connection refused");
 
         var result = await adapter.PushStatusChangedAsync(
-            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.False(result.IsSuccess);
         Assert.Equal("connection refused", result.ErrorMessage);
@@ -573,8 +605,10 @@ public class HttpOperatorBackendPushAdapterTests
             (HttpStatusCode.OK, string.Empty));
 
         var result = await adapter.PushStatusChangedAsync(
-            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(2, handler.CallCount);
@@ -588,8 +622,10 @@ public class HttpOperatorBackendPushAdapterTests
         handler.Respond(HttpStatusCode.NotFound, "not found");
 
         var result = await adapter.PushStatusChangedAsync(
-            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(1, handler.CallCount);
@@ -605,9 +641,11 @@ public class HttpOperatorBackendPushAdapterTests
         handler.Respond(HttpStatusCode.OK);
         var workItemId = Guid.NewGuid();
 
-        var result = await adapter.PushDecisionStatusChangedAsync(
-            workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+        var result = await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.Decision,
+            new OperatorJourneyStatusChange(
+                workItemId, Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.True(result.IsSuccess);
         Assert.Equal(
@@ -624,9 +662,11 @@ public class HttpOperatorBackendPushAdapterTests
         var (adapter, handler) = BuildSut();
         handler.Respond(HttpStatusCode.InternalServerError, "still down");
 
-        var result = await adapter.PushDecisionStatusChangedAsync(
-            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
-            DateTime.UtcNow, ct);
+        var result = await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.Decision,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "approved", "Granted", "approve", "Approve",
+                DateTime.UtcNow), ct);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(6, handler.CallCount);
@@ -639,9 +679,122 @@ public class HttpOperatorBackendPushAdapterTests
         var (adapter, handler) = BuildSut();
         handler.Respond(HttpStatusCode.BadRequest, "nope");
 
-        var result = await adapter.PushDecisionStatusChangedAsync(
-            Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "rejected", "Refused", "reject", "Reject",
-            DateTime.UtcNow, ct);
+        var result = await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.AccreditationApplication, OperatorBackendPushPipeline.Decision,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "awaiting-decision", "rejected", "Refused", "reject", "Reject",
+                DateTime.UtcNow), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(1, handler.CallCount);
+    }
+
+    // ------------------- RA-495: the change-request status route -------------------
+
+    [Fact]
+    public async Task PushChangeRequestStatusChangedAsync_posts_the_status_body_signed_to_the_change_request_status_endpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut(sharedSecret: "shh-its-a-secret");
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        var occurredAt = new DateTime(2026, 11, 3, 10, 15, 0, DateTimeKind.Utc);
+
+        var result = await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                workItemId, correlationId, "submitted", "duly-made", "Duly made", "duly-make", "Mark as duly made",
+                occurredAt), ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
+        Assert.Equal(
+            $"{BaseUrl}/api/v1/accreditation-changes/case-management/{workItemId}/status",
+            handler.LastRequest.RequestUri!.ToString());
+        Assert.Equal(correlationId.ToString(), handler.LastRequest.Headers.GetValues("X-Correlation-Id").Single());
+        Assert.Equal(
+            "epr-register-enrol-management-be",
+            handler.LastRequest.Headers.GetValues("x-cdp-client-id").Single());
+        Assert.True(handler.LastRequest.Headers.Contains("x-cdp-auth-signature"));
+
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        var root = body.RootElement;
+        Assert.Equal("submitted", root.GetProperty("fromStateId").GetString());
+        Assert.Equal("duly-made", root.GetProperty("toStateId").GetString());
+        Assert.Equal("Duly made", root.GetProperty("toStateDisplayName").GetString());
+        Assert.Equal("duly-make", root.GetProperty("actionId").GetString());
+        Assert.Equal("Mark as duly made", root.GetProperty("actionDisplayName").GetString());
+        Assert.Equal(occurredAt, root.GetProperty("occurredAt").GetDateTime());
+        Assert.Equal(6, root.EnumerateObject().Count());
+    }
+
+    [Fact]
+    public async Task PushChangeRequestStatusChangedAsync_gives_up_after_the_best_effort_retries()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.InternalServerError, "still down");
+
+        var result = await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.BestEffort,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "submitted", "duly-made", "Duly made", "duly-make", "Mark as duly made",
+                DateTime.UtcNow), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(3, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushChangeRequestDecisionStatusChangedAsync_posts_to_the_change_request_status_endpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+
+        var result = await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.Decision,
+            new OperatorJourneyStatusChange(
+                workItemId, Guid.NewGuid(), "approved-pending-contact", "approved", "Granted",
+                "confirm-contact-approved", "Confirm applicant contacted", DateTime.UtcNow), ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            $"{BaseUrl}/api/v1/accreditation-changes/case-management/{workItemId}/status",
+            handler.LastRequest!.RequestUri!.ToString());
+    }
+
+    [Fact]
+    public async Task PushChangeRequestDecisionStatusChangedAsync_uses_the_strict_decision_retries()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.InternalServerError, "still down");
+
+        var result = await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.Decision,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "approved-pending-contact", "approved", "Granted",
+                "confirm-contact-approved", "Confirm applicant contacted", DateTime.UtcNow), ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Equal(6, handler.CallCount);
+    }
+
+    [Fact]
+    public async Task PushChangeRequestDecisionStatusChangedAsync_does_not_retry_a_4xx_response()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.Conflict, "nothing to grant");
+
+        var result = await adapter.PushStatusChangedAsync(
+            OperatorBackendStatusRoute.ChangeRequest, OperatorBackendPushPipeline.Decision,
+            new OperatorJourneyStatusChange(
+                Guid.NewGuid(), Guid.NewGuid(), "approved-pending-contact", "approved", "Granted",
+                "confirm-contact-approved", "Confirm applicant contacted", DateTime.UtcNow), ct);
 
         Assert.False(result.IsSuccess);
         Assert.Equal(1, handler.CallCount);

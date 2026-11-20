@@ -5,6 +5,7 @@ using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Background;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.Extensions.Options;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
@@ -99,7 +100,7 @@ internal sealed class ReAccreditationApprovalService(
     {
         ArgumentNullException.ThrowIfNull(user);
 
-        if (RequireActorIdentity(user) is { } identityFailure)
+        if (StandardLifecycleAudit.RequireActorIdentity(user) is { } identityFailure)
         {
             return identityFailure;
         }
@@ -118,7 +119,7 @@ internal sealed class ReAccreditationApprovalService(
                     workItemId,
                     workItem,
                     registry,
-                    ReAccreditationConfirmContactGuard.Approval,
+                    StandardConfirmContactGuard.Approval,
                     logger
                 ) is
                 { } stop
@@ -161,7 +162,7 @@ internal sealed class ReAccreditationApprovalService(
             workItem.StateId = ToStateId;
             workItem.LastModifiedAt = appliedAtUtc;
 
-            AppendAudit(
+            StandardLifecycleAudit.Append(
                 workItem,
                 "action-applied",
                 "Action applied",
@@ -175,7 +176,7 @@ internal sealed class ReAccreditationApprovalService(
                     ["toStateId"] = workItem.StateId,
                 }
             );
-            AppendAudit(
+            StandardLifecycleAudit.Append(
                 workItem,
                 "applicant-contacted",
                 "Applicant contacted",
@@ -183,7 +184,7 @@ internal sealed class ReAccreditationApprovalService(
                 appliedAtUtc,
                 new() { ["outcome"] = "approved" }
             );
-            AppendAudit(
+            StandardLifecycleAudit.Append(
                 workItem,
                 "sla-clock-stopped",
                 "SLA clock stopped",
@@ -191,7 +192,7 @@ internal sealed class ReAccreditationApprovalService(
                 appliedAtUtc,
                 new() { ["stoppedAt"] = appliedAt.ToString("O") }
             );
-            AppendAudit(
+            StandardLifecycleAudit.Append(
                 workItem,
                 "accreditation-issued",
                 "Accreditation issued",
@@ -239,7 +240,7 @@ internal sealed class ReAccreditationApprovalService(
             );
 
             await EnqueuePublishingAuditAsync(workItem, user, cancellationToken);
-            await InvokeActionAppliedHooksAsync(
+            await StandardLifecycleAudit.InvokeActionAppliedHooksAsync(
                 _postActionHooks,
                 workItem,
                 ReAccreditationType.ConfirmContactApprovedActionId,
@@ -266,7 +267,7 @@ internal sealed class ReAccreditationApprovalService(
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(accreditationNumber);
 
-        if (RequireActorIdentity(user) is { } identityFailure)
+        if (StandardLifecycleAudit.RequireActorIdentity(user) is { } identityFailure)
         {
             return identityFailure;
         }
@@ -318,7 +319,7 @@ internal sealed class ReAccreditationApprovalService(
             workItem.StateId = ReAccreditationType.ApprovedPendingContactStateId;
             workItem.LastModifiedAt = nowUtc;
 
-            AppendAudit(
+            StandardLifecycleAudit.Append(
                 workItem,
                 "action-applied",
                 "Action applied",
@@ -332,7 +333,7 @@ internal sealed class ReAccreditationApprovalService(
                     ["toStateId"] = workItem.StateId,
                 }
             );
-            AppendAudit(
+            StandardLifecycleAudit.Append(
                 workItem,
                 "determination-made",
                 "Determination made: Approved",
@@ -374,7 +375,7 @@ internal sealed class ReAccreditationApprovalService(
                 user.FindFirstValue("user:id")
             );
 
-            await InvokeActionAppliedHooksAsync(
+            await StandardLifecycleAudit.InvokeActionAppliedHooksAsync(
                 _postActionHooks,
                 workItem,
                 ReAccreditationType.MakeDeterminationApprovedActionId,
