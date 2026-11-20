@@ -59,35 +59,14 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     public const string AccreditationNumberCorrectedTo = "A27ER9006910246PL";
 
     /// <summary>
-    /// RA-764 organisation-name-correction fixture id: the case under the
-    /// NIEA registration
-    /// <see cref="ReAccreditationOrganisationNameCorrectionMigration.NorthernIrelandRegistrationNumber"/>.
-    /// </summary>
-    public const string OrganisationNameCorrectionId = "00000764-0000-4000-8000-000000000764";
-
-    /// <summary>
-    /// RA-764's second fixture id: the case under the EA registration
-    /// <see cref="ReAccreditationOrganisationNameCorrectionMigration.EnglandRegistrationNumber"/>,
-    /// so the e2e suite proves both registrations' cases are renamed.
-    /// </summary>
-    public const string OrganisationNameCorrectionEnglandId = "00000764-0000-4000-8000-000000000765";
-
-    /// <summary>
-    /// ReEx organisation id of both RA-764 fixtures (one organisation, two
-    /// registrations). The fixtures otherwise carry the real target's
-    /// identity (org number 500069, its two registration numbers, 2027, the
-    /// old name), because the migration is keyed to it; prod never seeds
-    /// fixtures.
-    /// </summary>
-    public const string OrganisationNameCorrectionOrganisationId = "e2e-ra764-organisation-name";
-
-    /// <summary>
     /// Payload field names the fixtures share that have no existing constant
-    /// (Sonar S1192; the RA-764 fixture took each to four uses).
+    /// (Sonar S1192).
     /// </summary>
     private static class Field
     {
         public const string ApplicationReference = "applicationReference";
+        public const string OrganisationName = "organisationName";
+        public const string RegistrationNumber = "registrationNumber";
         public const string OperatorOrganisationId = "operatorOrganisationId";
         public const string Material = "material";
         public const string PreviousAccreditationYear = "previousAccreditationYear";
@@ -112,8 +91,6 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         yield return BuildLegacySnapshot(now);
         yield return BuildPreYearStart(type, now);
         yield return BuildAccreditationNumberCorrected(type, now);
-        yield return BuildOrganisationNameCorrection(type, now, s_organisationNameCorrectionNorthernIreland);
-        yield return BuildOrganisationNameCorrection(type, now, s_organisationNameCorrectionEngland);
     }
 
     /// <summary>
@@ -160,9 +137,9 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             ["payload"] = new BsonDocument
             {
                 [Field.ApplicationReference] = "AP342LEGACY01",
-                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = LegacySnapshotOrganisationName,
+                [Field.OrganisationName] = LegacySnapshotOrganisationName,
                 [Field.OperatorOrganisationId] = LegacySnapshotOrganisationId,
-                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = RegistrationReference(now, "9003420342"),
+                [Field.RegistrationNumber] = RegistrationReference(now, "9003420342"),
                 ["operatorRegistrationId"] = "reg-342",
                 [Field.Material] = "plastic",
                 [Field.PreviousAccreditationYear] = now.Year - 1,
@@ -244,10 +221,10 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             Payload = new BsonDocument
             {
                 [Field.ApplicationReference] = "RA-900000611",
-                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = PreYearStartOrganisationName,
+                [Field.OrganisationName] = PreYearStartOrganisationName,
                 [Field.OperatorOrganisationId] = PreYearStartOrganisationId,
                 [Field.OperatorApplicationId] = "e2e-app-ra611-pre-year-start",
-                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = RegistrationReference(now, "9006110611"),
+                [Field.RegistrationNumber] = RegistrationReference(now, "9006110611"),
                 [Field.Material] = "plastic",
                 [AccreditationYear.Field] = now.Year,
                 [Field.PreviousAccreditationYear] = now.Year - 1,
@@ -289,13 +266,13 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             Payload = new BsonDocument
             {
                 [Field.ApplicationReference] = "RA-900000691",
-                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = AccreditationNumberCorrectedOrganisationName,
+                [Field.OrganisationName] = AccreditationNumberCorrectedOrganisationName,
                 [Field.OperatorOrganisationId] = AccreditationNumberCorrectedOrganisationId,
                 [Field.OperatorApplicationId] = "e2e-app-ra691-accreditation-corrected",
                 // RA-690: a valid registration reference for this fixture's fixed
                 // 2026 previous accreditation year, sharing the corrected number's
                 // org id and sequence.
-                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = "R26ER9006910246PL",
+                [Field.RegistrationNumber] = "R26ER9006910246PL",
                 [Field.Material] = "plastic",
                 [AccreditationYear.Field] = 2027,
                 [Field.PreviousAccreditationYear] = 2026,
@@ -316,91 +293,6 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                     now.AddDays(-1)
                 ),
             ],
-        };
-        return item.ToBsonDocument();
-    }
-
-    /// <summary>
-    /// What differs between the two RA-764 fixtures. Application reference
-    /// and operator application id are distinct because both are unique
-    /// (sparse) indexes.
-    /// </summary>
-    private sealed record OrganisationNameCorrectionCase(
-        string Id,
-        string ApplicationReference,
-        string OperatorApplicationId,
-        string RegistrationNumber,
-        string SiteAddress,
-        string SiteAddressPostcode,
-        string Nation
-    );
-
-    private static readonly OrganisationNameCorrectionCase s_organisationNameCorrectionNorthernIreland = new(
-        OrganisationNameCorrectionId,
-        "RA-900000764",
-        "e2e-app-ra764-organisation-name",
-        ReAccreditationOrganisationNameCorrectionMigration.NorthernIrelandRegistrationNumber,
-        "1 Renamed Organisation Road, Belfast",
-        "BT1 1AA",
-        "NorthernIreland"
-    );
-
-    private static readonly OrganisationNameCorrectionCase s_organisationNameCorrectionEngland = new(
-        OrganisationNameCorrectionEnglandId,
-        "RA-900000765",
-        "e2e-app-ra764-organisation-name-ea",
-        ReAccreditationOrganisationNameCorrectionMigration.EnglandRegistrationNumber,
-        "1 Renamed Organisation Road, Leeds",
-        "LS1 1AA",
-        EnglandNation
-    );
-
-    /// <summary>
-    /// RA-764: an unassigned, not-started 2027 glass application for
-    /// organisation 500069 under one of its two registrations, carrying its
-    /// OLD name, exactly what
-    /// <see cref="ReAccreditationOrganisationNameCorrectionMigration"/> renames.
-    /// With the migration's keys set (the mgmt-tests compose stack) it is
-    /// renamed after every reset; without them (CDP test) it keeps the old
-    /// name. No audit entries, so the e2e suite can assert the rename adds
-    /// none.
-    /// </summary>
-    private static BsonDocument BuildOrganisationNameCorrection(
-        IWorkItemType type,
-        DateTime now,
-        OrganisationNameCorrectionCase fixture
-    )
-    {
-        var submittedAt = now.AddDays(-14);
-        var snapshot = WorkItemTemplateSnapshot.Capture(type);
-        var item = new WorkItem
-        {
-            Id = Guid.Parse(fixture.Id),
-            TypeId = ReAccreditationType.Id,
-            StateId = "submitted",
-            SubmittedAt = submittedAt,
-            LastModifiedAt = submittedAt,
-            SubmittedBy = "e2e-fixture",
-            TemplateSnapshot = snapshot,
-            TemplateVersion = snapshot.TemplateVersion,
-            Payload = new BsonDocument
-            {
-                [Field.ApplicationReference] = fixture.ApplicationReference,
-                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = ReAccreditationOrganisationNameCorrectionMigration.OldName,
-                [Field.OperatorOrganisationId] = OrganisationNameCorrectionOrganisationId,
-                [ReAccreditationOrganisationNameCorrectionMigration.OperatorOrgNumberField] = ReAccreditationOrganisationNameCorrectionMigration.OrganisationNumber,
-                [Field.OperatorApplicationId] = fixture.OperatorApplicationId,
-                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = fixture.RegistrationNumber,
-                [Field.Material] = "glass",
-                [AccreditationYear.Field] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear,
-                [Field.PreviousAccreditationYear] = ReAccreditationOrganisationNameCorrectionMigration.AccreditationYear - 1,
-                [Field.ComplianceIssuesReported] = 0,
-                [Field.OperatorEmail] = SimulatedDeliveredEmail,
-                [Field.SiteAddress] = fixture.SiteAddress,
-                [Field.SiteAddressPostcode] = fixture.SiteAddressPostcode,
-                [Field.Nation] = fixture.Nation,
-                [Field.ChargeAmountPence] = 218400,
-            },
         };
         return item.ToBsonDocument();
     }
