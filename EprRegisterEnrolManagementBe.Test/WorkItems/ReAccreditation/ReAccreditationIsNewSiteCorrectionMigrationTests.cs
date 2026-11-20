@@ -40,6 +40,35 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
     };
 
     /// <summary>
+    /// A promoted registered site: ReEx-sourced with no <c>orsId</c>, but
+    /// carrying the full operator-detail set <c>ApplyPromotedFields</c> writes.
+    /// </summary>
+    private static BsonDocument PromotedSite(string siteName = "Promoted Site") => new()
+    {
+        ["siteName"] = siteName,
+        ["siteAddress"] = "1 Promoted Way, Rotterdam, Netherlands",
+        ["addressLine1"] = "1 Promoted Way",
+        ["addressLine2"] = "Unit 2",
+        ["townOrCity"] = "Rotterdam",
+        ["country"] = "Netherlands",
+        ["coordinates"] = "51.9244, 4.4777",
+        ["contactName"] = "Johan de Vries",
+        ["contactEmail"] = "johan@example.com",
+        ["contactPhone"] = "+31 10 123 4567",
+        ["operationCode"] = "R3",
+        ["code1"] = "B3011",
+        ["code2"] = "GH013",
+        ["code3"] = "Y48",
+        ["repatriatedLoads"] = "3",
+        ["conditionsOfExport"] = true,
+        ["isEu"] = true,
+        ["isOecd"] = true,
+        ["selected"] = true,
+        ["registeredNowAccredited"] = true,
+        ["isNewSite"] = true
+    };
+
+    /// <summary>
     /// A work item as the operator backend submits it: with its
     /// <c>operatorApplicationId</c>, and each site carrying the integer
     /// <c>siteId</c> it numbers them by (1, 2, … unless the site sets its own).
@@ -571,30 +600,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         // to a no-op while producing a large refused bucket that looks like
         // appropriate caution.
         var ct = TestContext.Current.CancellationToken;
-        var promoted = new BsonDocument
-        {
-            ["siteName"] = "Promoted Site",
-            ["siteAddress"] = "1 Promoted Way, Rotterdam, Netherlands",
-            ["addressLine1"] = "1 Promoted Way",
-            ["addressLine2"] = "Unit 2",
-            ["townOrCity"] = "Rotterdam",
-            ["country"] = "Netherlands",
-            ["coordinates"] = "51.9244, 4.4777",
-            ["contactName"] = "Johan de Vries",
-            ["contactEmail"] = "johan@example.com",
-            ["contactPhone"] = "+31 10 123 4567",
-            ["operationCode"] = "R3",
-            ["code1"] = "B3011",
-            ["code2"] = "GH013",
-            ["code3"] = "Y48",
-            ["repatriatedLoads"] = "3",
-            ["conditionsOfExport"] = true,
-            ["isEu"] = true,
-            ["isOecd"] = true,
-            ["selected"] = true,
-            ["registeredNowAccredited"] = true,
-            ["isNewSite"] = true
-        };
+        var promoted = PromotedSite();
         var item = BuildItem(sites: promoted);
         var persistence = PersistenceWith(item);
 
@@ -733,6 +739,52 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         Assert.Equal("RA-794", entry.Details["issue"]);
         Assert.Equal("tom.halley", entry.Details["spotCheckConfirmedBy"]);
         Assert.Contains("ReEx Site", entry.Details["sites"]);
+    }
+
+    private static async Task<string?> ReasonAfterApplyingAsync(params BsonDocument[] sites)
+    {
+        var item = BuildItem(null, sites);
+        await BuildSut(Config()).ApplyAsync(PersistenceWith(item), TestContext.Current.CancellationToken);
+        return Assert.Single(item.AuditLog, e =>
+            e.Action == ReAccreditationIsNewSiteCorrectionMigration.AuditAction).Details["reason"];
+    }
+
+    [Fact]
+    public async Task ApplyAsync_gives_a_provably_corrupt_site_the_no_operator_detail_reason()
+    {
+        Assert.Equal(
+            "isNewSite was a wrongly-defaulted true and the correct value is false. "
+                + "The site has no orsId and no operator-entered detail, so it is ReEx-sourced.",
+            await ReasonAfterApplyingAsync(ReExSite(isNewSite: true)));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_does_not_claim_a_promoted_site_has_no_operator_detail()
+    {
+        // A promoted site carries the operator-detail set ApplyPromotedFields
+        // wrote, so "no operator-entered detail" would be false on its audit entry.
+        var reason = await ReasonAfterApplyingAsync(PromotedSite());
+
+        Assert.Equal(
+            "isNewSite was a wrongly-defaulted true and the correct value is false. "
+                + "The site has " + ReAccreditationIsNewSiteCorrectionMigration.PromotedCorrectableReason
+                + ".",
+            reason);
+        Assert.DoesNotContain("no operator-entered detail", reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_names_the_sites_each_reason_covers_when_an_item_mixes_verdicts()
+    {
+        var reason = await ReasonAfterApplyingAsync(
+            PromotedSite("Promoted"), ReExSite(isNewSite: true, siteName: "Clean"));
+
+        Assert.Equal(
+            "isNewSite was a wrongly-defaulted true and the correct value is false. "
+                + "[1] Clean: " + ReAccreditationIsNewSiteCorrectionMigration.ProvablyCorruptReason + ". "
+                + "[0] Promoted: " + ReAccreditationIsNewSiteCorrectionMigration.PromotedCorrectableReason
+                + ".",
+            reason);
     }
 
     // ── Idempotency ──────────────────────────────────────────────────────────
