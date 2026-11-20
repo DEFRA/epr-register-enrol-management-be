@@ -11,7 +11,7 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// epr-2uxy. The discriminator under test decides whether a regulator sees a
+/// RA-794. The discriminator under test decides whether a regulator sees a
 /// genuinely new overseas site, so it gets exhaustive coverage rather than a
 /// happy path: a false negative here leaves a spurious badge (recoverable), but
 /// a false positive would let the correction migration hide a real new site
@@ -547,7 +547,7 @@ public class ReAccreditationIsNewSiteAuditTests
         // silently and in the safe direction, so a miscalibrated tell shows up
         // solely as a large refused bucket that reads as appropriate caution.
         // Without this warning the natural conclusion is "the data is too messy
-        // to remediate", and epr-2uxy gets closed as intractable when it isn't.
+        // to remediate", and RA-794 gets closed as intractable when it isn't.
         var ct = TestContext.Current.CancellationToken;
         await using var fixture = new MongoIntegrationFixture();
         await fixture.InitializeAsync();
@@ -600,13 +600,22 @@ public class ReAccreditationIsNewSiteAuditTests
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
+        public List<string> Errors { get; } = [];
+
         public void Log<TState>(
             LogLevel logLevel,
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
-            Messages.Add(formatter(state, exception));
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            Messages.Add(message);
+            if (logLevel == LogLevel.Error)
+            {
+                Errors.Add(message);
+            }
+        }
     }
 
     [Fact]
@@ -624,6 +633,69 @@ public class ReAccreditationIsNewSiteAuditTests
         // No IMongoDbClientFactory registered: if the gate leaked, resolving it
         // would throw rather than silently pass.
         await ReAccreditationIsNewSiteAudit.RunAsync(services, NullLogger.Instance, ct);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    [InlineData("not-a-date")]
+    [InlineData("2026-07-26T00:00:00Z")]
+    [InlineData("2025-08-11T09:00:00Z")]
+    public async Task RunAsync_from_the_service_provider_refuses_to_run_without_a_valid_deploy_time(
+        string? deployedAt)
+    {
+        // There is no safe default for the upper bound: "now" would admit
+        // post-RA-507 items, whose ReEx-sourced sites carry an orsId and would be
+        // misclassified as operator-added. So a missing or malformed value must
+        // stop the run loudly, before Mongo is touched.
+        var ct = TestContext.Current.CancellationToken;
+        var values = new Dictionary<string, string?>
+        {
+            [ReAccreditationIsNewSiteAudit.EnabledConfigKey] = "true"
+        };
+        if (deployedAt is not null)
+        {
+            values[ReAccreditationIsNewSiteAudit.DeployedAtConfigKey] = deployedAt;
+        }
+
+        // No IMongoDbClientFactory registered: if the run went ahead, resolving
+        // it would throw rather than silently pass.
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(
+                new ConfigurationBuilder().AddInMemoryCollection(values).Build())
+            .BuildServiceProvider();
+        var logger = new CollectingLogger();
+
+        await ReAccreditationIsNewSiteAudit.RunAsync(services, logger, ct);
+
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(ReAccreditationIsNewSiteAudit.DeployedAtConfigKey, error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("yes")]
+    [InlineData("")]
+    public async Task RunAsync_from_the_service_provider_refuses_to_run_when_the_flag_is_not_true_or_false(
+        string enabled)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        // No IMongoDbClientFactory registered: if the run went ahead, resolving
+        // it would throw rather than silently pass.
+        var services = new ServiceCollection()
+            .AddSingleton<IConfiguration>(new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string?>
+                {
+                    [ReAccreditationIsNewSiteAudit.EnabledConfigKey] = enabled,
+                    [ReAccreditationIsNewSiteAudit.DeployedAtConfigKey] = "2026-08-15T00:00:00Z"
+                })
+                .Build())
+            .BuildServiceProvider();
+        var logger = new CollectingLogger();
+
+        await ReAccreditationIsNewSiteAudit.RunAsync(services, logger, ct);
+
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(ReAccreditationIsNewSiteAudit.EnabledConfigKey, error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -646,10 +718,8 @@ public class ReAccreditationIsNewSiteAuditTests
             .AddSingleton<IConfiguration>(new ConfigurationBuilder()
                 .AddInMemoryCollection(new Dictionary<string, string?>
                 {
-                    // Deliberately no DeployedAt: omitting it is the likely
-                    // first run, and the window end must then default to now
-                    // rather than collapsing the window to nothing.
-                    [ReAccreditationIsNewSiteAudit.EnabledConfigKey] = "true"
+                    [ReAccreditationIsNewSiteAudit.EnabledConfigKey] = "true",
+                    [ReAccreditationIsNewSiteAudit.DeployedAtConfigKey] = "2026-08-15T00:00:00Z"
                 })
                 .Build())
             .AddSingleton<IMongoDbClientFactory>(factory)

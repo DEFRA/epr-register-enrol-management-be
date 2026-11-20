@@ -23,3 +23,11 @@ echo "pre-commit: dotnet test"
 # No --nologo: under the MTP runner (global.json) dotnet test forwards it to
 # the test app, which rejects it as an unknown option (exit code 5).
 dotnet test --verbosity quiet
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "pre-commit: node not found on PATH (needed for the docs/diagnostics script tests)" >&2
+  exit 1
+fi
+
+echo "pre-commit: node --test docs/diagnostics/*.test.cjs"
+node --test docs/diagnostics/*.test.cjs

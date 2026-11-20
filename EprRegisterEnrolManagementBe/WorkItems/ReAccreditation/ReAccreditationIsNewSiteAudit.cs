@@ -1,3 +1,4 @@
+using System.Globalization;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
@@ -6,7 +7,7 @@ using MongoDB.Driver;
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// READ-ONLY diagnostic for epr-2uxy: sizes and classifies the population of
+/// READ-ONLY diagnostic for RA-794: sizes and classifies the population of
 /// work items whose frozen <c>payload.overseasSites.sites[].isNewSite</c> may
 /// carry a wrongly defaulted <c>true</c>.
 ///
@@ -17,9 +18,13 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// BSON element leaves the C# initializer rather than <c>default(bool)</c> — so
 /// any overseas site persisted before that date reads back as <c>true</c>
 /// whatever it actually was. From 9e8e9da (2026-07-26, RA-294) that value began
-/// being transmitted here, where it is frozen onto the work item and never
-/// re-derived. RA-292 did not create this; it made it regulator-visible by
-/// rendering a "New" badge from the field.
+/// being transmitted here, where it is stored on the work item at submission.
+/// This service never re-derives it, but a query → resubmit of the overseas-sites
+/// or broadly-equivalent-standards section overwrites <c>payload.overseasSites</c>
+/// with the operator database's copy (<c>ReAccreditationResumeService</c>), so a
+/// correction here is durable only once the operator-side correction has run
+/// (docs/diagnostics/ra292-isnewsite-audit.md). RA-292 did not create this; it
+/// made it regulator-visible by rendering a "New" badge from the field.
 /// </para>
 ///
 /// <para>
@@ -89,7 +94,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// <c>docs/diagnostics/ra292-isnewsite-audit.js</c> which is fine locally, but
 /// CDP gives no way to run ad-hoc mongosh against a deployed database — the same
 /// constraint that produced <see cref="Utils.StartupMigrationRunner"/>. Since
-/// the open question on epr-2uxy is precisely "did any <em>deployed</em>
+/// the open question on RA-794 is precisely "did any <em>deployed</em>
 /// environment retain affected data", the count has to be takeable from inside
 /// the app.
 /// </para>
@@ -116,8 +121,12 @@ internal static class ReAccreditationIsNewSiteAudit
     public const string EnabledConfigKey = "Diagnostics:Ra292IsNewSiteAudit";
 
     /// <summary>
-    /// Optional upper window bound (the RA-292 deploy time). Defaults to now,
-    /// which over-reports rather than under-reports.
+    /// Upper window bound (the RA-292 deploy time). REQUIRED whenever the audit
+    /// or the correction is enabled: both refuse to run, logging at Error, when
+    /// it is absent or not a date-time (<see cref="ReadRequiredWindowEnd"/>).
+    /// There is no safe default — "now" would admit post-RA-507 items, whose
+    /// ReEx-sourced sites carry an <c>orsId</c> and so would be misclassified as
+    /// operator-added.
     /// </summary>
     public const string DeployedAtConfigKey = "Diagnostics:Ra292DeployedAt";
 
@@ -173,7 +182,7 @@ internal static class ReAccreditationIsNewSiteAudit
 
     /// <summary>
     /// How one site's <c>isNewSite</c> value classifies. The names are the
-    /// bucket names used in the dry-run report, the runbook and epr-2uxy, so
+    /// bucket names used in the dry-run report, the runbook and RA-794, so
     /// they stay in step.
     /// </summary>
     internal enum SiteVerdict
@@ -323,7 +332,7 @@ internal static class ReAccreditationIsNewSiteAudit
     /// mode is silent and in the safe direction: a miscalibration refuses
     /// records rather than corrupting them, so it shows up only as a large
     /// ambiguous bucket that reads as appropriate caution — and the natural
-    /// conclusion, "the data is too messy to remediate", would close epr-2uxy as
+    /// conclusion, "the data is too messy to remediate", would close RA-794 as
     /// intractable when it is not. A reader who can see "refused because
     /// contactName, operationCode" against a promoted site can tell a
     /// miscalibrated classifier from genuinely messy data without reading any
@@ -443,7 +452,12 @@ internal static class ReAccreditationIsNewSiteAudit
         ArgumentNullException.ThrowIfNull(logger);
 
         var configuration = services.GetRequiredService<IConfiguration>();
-        if (!configuration.GetValue(EnabledConfigKey, false))
+        if (ReadFlag(configuration, EnabledConfigKey, logger) is not true)
+        {
+            return;
+        }
+
+        if (ReadRequiredWindowEnd(configuration, logger) is not { } windowEnd)
         {
             return;
         }
@@ -452,9 +466,98 @@ internal static class ReAccreditationIsNewSiteAudit
             .GetRequiredService<IMongoDbClientFactory>()
             .GetCollection<BsonDocument>("workItems");
 
-        var windowEnd = configuration.GetValue<DateTime?>(DeployedAtConfigKey) ?? DateTime.UtcNow;
-
         await RunAsync(collection, logger, windowEnd, cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads <see cref="DeployedAtConfigKey"/> as a UTC instant. Returns
+    /// <c>null</c>, having logged at Error, when it is absent or not a
+    /// date-time; the caller must then refuse to run. Shared by the audit and
+    /// <see cref="ReAccreditationIsNewSiteCorrectionMigration"/> so both read the
+    /// bound identically.
+    /// </summary>
+    internal static DateTime? ReadRequiredWindowEnd(IConfiguration configuration, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var raw = configuration[DeployedAtConfigKey];
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            logger.LogError(
+                "RA-794: {DeployedAtKey} is not set, so nothing will run. Set it to the RA-292 "
+                    + "deploy time (ISO 8601 UTC, on or before 2026-08-27). There is no safe "
+                    + "default: after RA-507 a ReEx-sourced site carries an orsId and would be "
+                    + "misclassified as operator-added.",
+                DeployedAtConfigKey
+            );
+            return null;
+        }
+
+        if (
+            !DateTime.TryParse(
+                raw,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal,
+                out var windowEnd
+            )
+        )
+        {
+            logger.LogError(
+                "RA-794: {DeployedAtKey} is {DeployedAtValue}, which is not a date-time, so "
+                    + "nothing will run. Set it to the RA-292 deploy time (ISO 8601 UTC).",
+                DeployedAtConfigKey,
+                raw
+            );
+            return null;
+        }
+
+        // A mistyped year or month can land at or before the window start. The
+        // query would then match nothing and report zero in every bucket, which
+        // reads as a clean audit.
+        if (windowEnd <= WindowStart)
+        {
+            logger.LogError(
+                "RA-794: {DeployedAtKey} is {DeployedAtValue}, which is not after the window "
+                    + "start {WindowStart:O}, so nothing will run. Set it to the RA-292 deploy time "
+                    + "(ISO 8601 UTC).",
+                DeployedAtConfigKey,
+                raw,
+                WindowStart
+            );
+            return null;
+        }
+
+        return windowEnd;
+    }
+
+    /// <summary>
+    /// Reads an on/off gate. Absent is <c>false</c>. Set but not <c>true</c> or
+    /// <c>false</c> returns <c>null</c>, having logged at Error; the caller must
+    /// then refuse to run. Matches the operator backend's <c>IsNewSiteConfig.ReadFlag</c>
+    /// so both services treat the shared keys the same way.
+    /// </summary>
+    internal static bool? ReadFlag(IConfiguration configuration, string key, ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(configuration);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        var raw = configuration[key];
+        if (raw is null)
+        {
+            return false;
+        }
+
+        if (bool.TryParse(raw.Trim(), out var value))
+        {
+            return value;
+        }
+
+        logger.LogError(
+            "RA-794: {ConfigKey} is set but is not true or false, so nothing will run",
+            key
+        );
+        return null;
     }
 
     /// <summary>
@@ -487,7 +590,7 @@ internal static class ReAccreditationIsNewSiteAudit
         // would hide the failure this classifier actually has: a miscalibrated
         // tell inflating AMBIGUOUS-REFUSED while looking like caution.
         logger.LogInformation(
-            "epr-2uxy isNewSite audit (READ-ONLY, nothing written). Window {WindowStart:o} to "
+            "RA-794 isNewSite audit (READ-ONLY, nothing written). Window {WindowStart:o} to "
                 + "{WindowEnd:o}. Scanned {ItemsScanned} in-window re-accreditation work items "
                 + "carrying overseas sites. Buckets — "
                 + "PROVABLY-CORRUPT (no orsId, unpromoted, no unexplained detail): {SitesProvablyCorrupt}; "
@@ -518,7 +621,7 @@ internal static class ReAccreditationIsNewSiteAudit
         if (result.SitesCorrectable == 0 && result.SitesAmbiguousRefused == 0)
         {
             logger.LogInformation(
-                "epr-2uxy isNewSite audit: nothing at risk in this environment; record the "
+                "RA-794 isNewSite audit: nothing at risk in this environment; record the "
                     + "figure on the issue."
             );
             return result;
@@ -532,7 +635,7 @@ internal static class ReAccreditationIsNewSiteAudit
         if (result.SitesAmbiguousRefused > result.SitesCorrectable)
         {
             logger.LogWarning(
-                "epr-2uxy isNewSite audit: MORE sites were refused ({SitesAmbiguousRefused}) "
+                "RA-794 isNewSite audit: MORE sites were refused ({SitesAmbiguousRefused}) "
                     + "than were classified correctable ({SitesCorrectable}). Treat this as a reason "
                     + "to question the classifier before concluding the data cannot be remediated. "
                     + "Check the refusedBecause fields below: if the same fields recur across many "
@@ -546,7 +649,7 @@ internal static class ReAccreditationIsNewSiteAudit
         foreach (var row in result.ItemsWithCorrectable)
         {
             logger.LogInformation(
-                "epr-2uxy CORRECTABLE {WorkItemId} ref={ApplicationReference} "
+                "RA-794 CORRECTABLE {WorkItemId} ref={ApplicationReference} "
                     + "org={OrganisationName} sites={SiteDetail}",
                 row.Id,
                 row.ApplicationReference,
@@ -560,7 +663,7 @@ internal static class ReAccreditationIsNewSiteAudit
             // Warning rather than Information: this is the set where a careless
             // correction would hide a genuinely new site from the regulator.
             logger.LogWarning(
-                "epr-2uxy AMBIGUOUS-REFUSED — no orsId, never promoted, yet carrying detail "
+                "RA-794 AMBIGUOUS-REFUSED — no orsId, never promoted, yet carrying detail "
                     + "nothing accounts for, so this may be an operator-added site whose orsId was "
                     + "stripped. Adjudicate by hand against the operator database; do NOT "
                     + "auto-correct. {WorkItemId} ref={ApplicationReference} org={OrganisationName} "

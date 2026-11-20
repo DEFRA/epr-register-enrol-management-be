@@ -10,7 +10,7 @@ using NSubstitute;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// epr-2uxy remediation gates. The failure mode here is asymmetric and that
+/// RA-794 remediation gates. The failure mode here is asymmetric and that
 /// asymmetry is the whole reason these tests exist: the defect being fixed errs
 /// toward over-showing (a spurious "New" badge is visible and traceable), while
 /// a bad correction errs toward under-showing (a fabricated <c>false</c> hides a
@@ -25,6 +25,10 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
     private static readonly DateTimeOffset s_now =
         new(2026, 8, 10, 12, 0, 0, TimeSpan.Zero);
 
+    // The operator backend's AccreditationApplicationModel.Id, which it sends as
+    // payload.operatorApplicationId and logs as {ApplicationId} on its REFUSED lines.
+    private const string ApplicationId = "65f0c0ffee0000000000abcd";
+
     private static BsonDocument ReExSite(bool isNewSite, string siteName = "ReEx Site") => new()
     {
         ["siteName"] = siteName,
@@ -35,8 +39,22 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         ["isNewSite"] = isNewSite
     };
 
-    private static WorkItem BuildItem(DateTime? submittedAt = null, params BsonDocument[] sites) =>
-        new()
+    /// <summary>
+    /// A work item as the operator backend submits it: with its
+    /// <c>operatorApplicationId</c>, and each site carrying the integer
+    /// <c>siteId</c> it numbers them by (1, 2, … unless the site sets its own).
+    /// </summary>
+    private static WorkItem BuildItem(DateTime? submittedAt = null, params BsonDocument[] sites)
+    {
+        foreach (var (site, index) in sites.Select((site, i) => (site, i)))
+        {
+            if (!site.Contains("siteId"))
+            {
+                site["siteId"] = index + 1;
+            }
+        }
+
+        return new WorkItem
         {
             TypeId = ReAccreditationType.Id,
             StateId = "submitted",
@@ -44,12 +62,18 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
             Payload = new BsonDocument
             {
                 ["applicationReference"] = "RA-100000292",
+                ["operatorApplicationId"] = ApplicationId,
                 ["overseasSites"] = new BsonDocument { ["sites"] = new BsonArray(sites) }
             }
         };
+    }
 
     private static IConfiguration Config(
-        bool? enabled = true, string? confirmedBy = "tom.halley", bool? apply = true)
+        bool? enabled = true,
+        string? confirmedBy = "tom.halley",
+        bool? apply = true,
+        string? deployedAt = "2026-08-15T00:00:00Z",
+        string? operatorRefusedSites = ReAccreditationIsNewSiteCorrectionMigration.OperatorRefusedNothing)
     {
         var values = new Dictionary<string, string?>();
         if (enabled is not null)
@@ -70,8 +94,16 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
                 apply.Value.ToString();
         }
 
-        // Pin the upper window bound so the tests do not drift with wall time.
-        values[ReAccreditationIsNewSiteAudit.DeployedAtConfigKey] = "2026-08-15T00:00:00Z";
+        if (deployedAt is not null)
+        {
+            values[ReAccreditationIsNewSiteAudit.DeployedAtConfigKey] = deployedAt;
+        }
+
+        if (operatorRefusedSites is not null)
+        {
+            values[ReAccreditationIsNewSiteCorrectionMigration.OperatorRefusedSitesConfigKey] =
+                operatorRefusedSites;
+        }
 
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }
@@ -139,7 +171,342 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         Assert.True(IsNewSiteOf(item, 0));
     }
 
-    // ── Gate 3: dry run ──────────────────────────────────────────────────────
+    // ── Gates 1 and 4: a set but malformed on/off value ──────────────────────
+
+    [Theory]
+    [InlineData(ReAccreditationIsNewSiteCorrectionMigration.EnabledConfigKey, "yes")]
+    [InlineData(ReAccreditationIsNewSiteCorrectionMigration.EnabledConfigKey, "")]
+    [InlineData(ReAccreditationIsNewSiteCorrectionMigration.ApplyConfigKey, "yes")]
+    [InlineData(ReAccreditationIsNewSiteCorrectionMigration.ApplyConfigKey, "1")]
+    public async Task ApplyAsync_refuses_to_run_and_logs_an_error_when_a_flag_is_not_true_or_false(
+        string key,
+        string value)
+    {
+        // Same meaning as the operator side's IsNewSiteConfig.ReadFlag, so an
+        // Error-level alert set up from either runbook fires on both services.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var configuration = new ConfigurationBuilder()
+            .AddConfiguration(Config())
+            .AddInMemoryCollection(new Dictionary<string, string?> { [key] = value })
+            .Build();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            configuration, logger, new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, ct);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        Assert.True(IsNewSiteOf(item, 0));
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(key, error, StringComparison.Ordinal);
+        Assert.Contains("not true or false", error, StringComparison.Ordinal);
+    }
+
+    // ── Gate 3: the operator-side refusals ───────────────────────────────────
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("", true)]
+    [InlineData("   ", true)]
+    [InlineData(null, false)]
+    public async Task ApplyAsync_refuses_to_run_without_the_operator_refused_sites(
+        string? operatorRefusedSites, bool apply)
+    {
+        // Absent is not "the operator side refused nothing": it is the list not
+        // having been carried across, and running on would clear the flag on
+        // sites the operator side refused because they may be genuinely new.
+        // The dry run refuses too, so its report never describes a write the
+        // apply run would not make.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(apply: apply, operatorRefusedSites: operatorRefusedSites),
+            logger,
+            new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, ct);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        Assert.True(IsNewSiteOf(item, 0));
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(
+            ReAccreditationIsNewSiteCorrectionMigration.OperatorRefusedSitesConfigKey,
+            error,
+            StringComparison.Ordinal);
+        Assert.Contains("RA-794 REFUSED to correct application {ApplicationId} site {SiteId}", error,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("nothing")]
+    [InlineData("65f0c0ffee0000000000abcd")]
+    [InlineData("65f0c0ffee0000000000abcd:")]
+    [InlineData("65f0c0ffee0000000000abcd:three")]
+    [InlineData("65f0c0ffee0000000000abcd:1:2")]
+    [InlineData("RA-100000292:1")]
+    [InlineData("65f0c0ffee0000000000abcd:1,")]
+    [InlineData("none,65f0c0ffee0000000000abcd:1")]
+    public async Task ApplyAsync_refuses_to_run_with_a_malformed_operator_refused_site(string operatorRefusedSites)
+    {
+        // A mistyped entry is not dropped: dropping it would leave the site it
+        // was meant to exclude unexcluded. One bad entry stops the whole run.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(operatorRefusedSites: operatorRefusedSites), logger, new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, ct);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        Assert.True(IsNewSiteOf(item, 0));
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(
+            ReAccreditationIsNewSiteCorrectionMigration.OperatorRefusedSitesConfigKey,
+            error,
+            StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData(" NONE ")]
+    public async Task ApplyAsync_corrects_when_the_operator_side_explicitly_refused_nothing(string operatorRefusedSites)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true));
+        var persistence = PersistenceWith(item);
+
+        await BuildSut(Config(operatorRefusedSites: operatorRefusedSites)).ApplyAsync(persistence, ct);
+
+        Assert.False(IsNewSiteOf(item, 0));
+        await persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("65f0c0ffee0000000000abcd:2")]
+    [InlineData(" 65F0C0FFEE0000000000ABCD : 2 ")]
+    public async Task ApplyAsync_refuses_a_site_the_operator_side_refused(string operatorRefusedSites)
+    {
+        // The operator classifier refuses a no-orsId site ReEx cannot prove, so
+        // here it reads as provably corrupt. Clearing it would hide a possibly
+        // new site and be undone by the next resubmit; the site beside it, which
+        // the operator side did not refuse, is still corrected.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(
+            null,
+            ReExSite(isNewSite: true, siteName: "Corrected"),
+            ReExSite(isNewSite: true, siteName: "Operator refused"));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(operatorRefusedSites: operatorRefusedSites), logger, new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        Assert.False(IsNewSiteOf(item, 0));
+        Assert.True(IsNewSiteOf(item, 1));
+        var entry = Assert.Single(item.AuditLog, e =>
+            e.Action == ReAccreditationIsNewSiteCorrectionMigration.AuditAction);
+        Assert.DoesNotContain("Operator refused", entry.Details["sites"], StringComparison.Ordinal);
+        Assert.Contains(logger.Warnings, m =>
+            m.Contains("Operator refused", StringComparison.Ordinal)
+            && m.Contains($"{ApplicationId}:2", StringComparison.Ordinal));
+        Assert.Empty(logger.Errors);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_leaves_an_operator_refused_site_out_of_the_dry_run_report()
+    {
+        // The spot-checker attests against the dry run, so it must describe
+        // exactly what the apply run would write.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true, siteName: "Operator refused"));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(apply: false, operatorRefusedSites: $"{ApplicationId}:1"),
+            logger,
+            new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        Assert.DoesNotContain(logger.Messages, m => m.Contains("would correct", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, m =>
+            m.Contains("Sites refused because the operator side refused them: 1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_refuses_a_site_on_an_item_with_no_operator_application_id()
+    {
+        // Without the operator's application id the site cannot be checked
+        // against the operator refusals, so it is refused rather than assumed
+        // unrefused.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true));
+        item.Payload.Remove("operatorApplicationId");
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(), logger, new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        Assert.True(IsNewSiteOf(item, 0));
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains("no usable operatorApplicationId", error, StringComparison.Ordinal);
+        Assert.Contains(item.Id.ToString(), error, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("absent")]
+    [InlineData("null")]
+    [InlineData("string")]
+    [InlineData("fraction")]
+    public async Task ApplyAsync_refuses_a_site_with_no_usable_site_id(string shape)
+    {
+        // The operator backend's SiteId is an int, so anything else cannot be
+        // matched to one of its REFUSED lines.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true));
+        var site = item.Payload["overseasSites"]["sites"][0].AsBsonDocument;
+        switch (shape)
+        {
+            case "absent":
+                site.Remove("siteId");
+                break;
+            case "null":
+                site["siteId"] = BsonNull.Value;
+                break;
+            case "string":
+                site["siteId"] = "1";
+                break;
+            default:
+                site["siteId"] = 1.5;
+                break;
+        }
+
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(), logger, new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        Assert.True(IsNewSiteOf(item, 0));
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains("no usable siteId", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ApplyAsync_refuses_to_apply_while_a_listed_operator_refusal_matched_no_site()
+    {
+        // A listed site found nowhere may be legitimately absent, but it is also
+        // what a mistyped id looks like, and a mistyped id leaves the real site
+        // unexcluded: it reads as provably corrupt here and APPLY would clear
+        // it. So APPLY writes nothing at all, not even the sites it could
+        // otherwise correct. One the item does hold, even under a verdict this
+        // side would not correct anyway, counts as found.
+        var ct = TestContext.Current.CancellationToken;
+        var operatorAdded = ReExSite(isNewSite: true, siteName: "Operator added");
+        operatorAdded["orsId"] = 42;
+        var item = BuildItem(null, ReExSite(isNewSite: true), operatorAdded);
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(operatorRefusedSites: $"{ApplicationId}:2,65f0c0ffee0000000000beef:9"),
+            logger,
+            new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        Assert.True(IsNewSiteOf(item, 0));
+        Assert.Empty(item.AuditLog);
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        var unmatched = Assert.Single(logger.Errors, m => m.Contains("matched no site on any work item", StringComparison.Ordinal)
+            && !m.Contains("APPLY", StringComparison.Ordinal));
+        Assert.Contains("65f0c0ffee0000000000beef:9", unmatched, StringComparison.Ordinal);
+        Assert.DoesNotContain(logger.Errors, m => m.Contains($"{ApplicationId}:2", StringComparison.Ordinal));
+        // The guidance must allow the legitimate unmatched case, a site the
+        // operator correction refused but which is unselected and so never
+        // reached the work item, or a correctly refused list could never run.
+        Assert.Contains(logger.Errors, m =>
+            m.Contains("APPLY refused, nothing was written: 1 site(s)", StringComparison.Ordinal)
+            && m.Contains("hold no site with that siteId", StringComparison.Ordinal)
+            && m.Contains("the site is unselected on the operator side", StringComparison.Ordinal)
+            && m.Contains("record the pair and finding on RA-794", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Messages, m => m.Contains("correction complete", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_reports_in_a_dry_run_while_a_listed_operator_refusal_matched_no_site()
+    {
+        // The dry run is where the confirmer finds the unmatched pairs, so it
+        // still reports everything, and says APPLY would be refused.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(sites: ReExSite(isNewSite: true, siteName: "Corrupt"));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(apply: false, operatorRefusedSites: "65f0c0ffee0000000000beef:9"),
+            logger,
+            new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        Assert.True(IsNewSiteOf(item, 0));
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        Assert.Contains(logger.Messages, m =>
+            m.Contains("DRY RUN would correct", StringComparison.Ordinal)
+            && m.Contains("Corrupt", StringComparison.Ordinal));
+        Assert.Contains(logger.Errors, m =>
+            m.Contains("65f0c0ffee0000000000beef:9", StringComparison.Ordinal)
+            && m.Contains("matched no site", StringComparison.Ordinal));
+        Assert.Contains(logger.Errors, m => m.Contains("APPLY would be refused", StringComparison.Ordinal));
+        Assert.Contains(logger.Messages, m => m.Contains("correction complete", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ApplyAsync_applies_and_records_the_operator_refusal_count_when_every_listed_site_matched()
+    {
+        // Two listed sites, both on the item: they are refused, the third site
+        // is corrected, and the audit entry says how many pairs it was checked
+        // against.
+        var ct = TestContext.Current.CancellationToken;
+        var item = BuildItem(
+            null,
+            ReExSite(isNewSite: true, siteName: "Corrected"),
+            ReExSite(isNewSite: true, siteName: "Refused two"),
+            ReExSite(isNewSite: true, siteName: "Refused three"));
+        var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(operatorRefusedSites: $"{ApplicationId}:2,{ApplicationId}:3"),
+            logger,
+            new FakeTimeProvider(s_now));
+
+        await sut.ApplyAsync(persistence, ct);
+
+        Assert.False(IsNewSiteOf(item, 0));
+        Assert.True(IsNewSiteOf(item, 1));
+        Assert.True(IsNewSiteOf(item, 2));
+        await persistence.Received(1).ReplaceAsync(item, Arg.Any<CancellationToken>());
+        var entry = Assert.Single(item.AuditLog, e =>
+            e.Action == ReAccreditationIsNewSiteCorrectionMigration.AuditAction);
+        Assert.Equal("2", entry.Details["operatorRefusedSitesListed"]);
+        Assert.Empty(logger.Errors);
+    }
+
+    // ── Gate 4: dry run ──────────────────────────────────────────────────────
 
     [Fact]
     public async Task ApplyAsync_defaults_to_dry_run_and_writes_nothing()
@@ -159,7 +526,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
             e.Action == ReAccreditationIsNewSiteCorrectionMigration.AuditAction);
     }
 
-    // ── Gate 4: per-site verdict ─────────────────────────────────────────────
+    // ── Gate 5: per-site verdict ─────────────────────────────────────────────
 
     [Fact]
     public async Task ApplyAsync_corrects_a_provably_corrupt_site_when_every_gate_is_satisfied()
@@ -363,7 +730,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
             e.Action == ReAccreditationIsNewSiteCorrectionMigration.AuditAction);
         Assert.Equal("migration", entry.CreatedBy);
         Assert.Equal(s_now.UtcDateTime, entry.CreatedAt);
-        Assert.Equal("epr-2uxy", entry.Details["issue"]);
+        Assert.Equal("RA-794", entry.Details["issue"]);
         Assert.Equal("tom.halley", entry.Details["spotCheckConfirmedBy"]);
         Assert.Contains("ReEx Site", entry.Details["sites"]);
     }
@@ -509,29 +876,30 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         Assert.NotEqual(default, entry.CreatedAt);
     }
 
-    [Fact]
-    public async Task ApplyAsync_defaults_the_window_end_to_now_when_no_deploy_time_is_configured()
+    [Theory]
+    [InlineData(null)]
+    [InlineData("   ")]
+    [InlineData("not-a-date")]
+    public async Task ApplyAsync_refuses_to_run_without_a_valid_deploy_time(string? deployedAt)
     {
-        // The deploy time is optional, and omitting it is the likely first run.
-        // Defaulting to now over-reports rather than under-reports — the safe
-        // direction — but it must still actually bound and still correct.
+        // The deploy time is required: "now" would admit post-RA-507 items, whose
+        // ReEx-sourced sites carry an orsId and would be misclassified as
+        // operator-added. Every other gate is satisfied here, so only the
+        // missing/malformed bound can be what stops the write.
         var ct = TestContext.Current.CancellationToken;
         var item = BuildItem(sites: ReExSite(isNewSite: true));
         var persistence = PersistenceWith(item);
+        var logger = new RenderingLogger();
+        var sut = new ReAccreditationIsNewSiteCorrectionMigration(
+            Config(deployedAt: deployedAt), logger, new FakeTimeProvider(s_now));
 
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                [ReAccreditationIsNewSiteCorrectionMigration.EnabledConfigKey] = "true",
-                [ReAccreditationIsNewSiteCorrectionMigration.SpotCheckConfirmedByConfigKey] =
-                    "tom.halley",
-                [ReAccreditationIsNewSiteCorrectionMigration.ApplyConfigKey] = "true"
-            })
-            .Build();
+        await sut.ApplyAsync(persistence, ct);
 
-        await BuildSut(configuration).ApplyAsync(persistence, ct);
-
-        Assert.False(IsNewSiteOf(item, 0));
+        await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
+        await persistence.DidNotReceiveWithAnyArgs().QueryAsync(default!, ct);
+        Assert.True(IsNewSiteOf(item, 0));
+        var error = Assert.Single(logger.Errors);
+        Assert.Contains(ReAccreditationIsNewSiteAudit.DeployedAtConfigKey, error, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -550,15 +918,22 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         var ambiguous = ReExSite(isNewSite: true, siteName: "Stripped");
         ambiguous["operationCode"] = "R3";
 
+        var noSiteId = ReExSite(isNewSite: true, siteName: "No site id");
+        noSiteId["siteId"] = "not-an-int";
+
         var item = BuildItem(
             null,
             ReExSite(isNewSite: true, siteName: "Corrupt"),
-            ambiguous);
+            ambiguous,
+            ReExSite(isNewSite: true, siteName: "Operator refused"),
+            noSiteId);
         var persistence = PersistenceWith(item);
         var logger = new RenderingLogger();
 
         var sut = new ReAccreditationIsNewSiteCorrectionMigration(
-            Config(apply: apply), logger, new FakeTimeProvider(s_now));
+            Config(apply: apply, operatorRefusedSites: $"{ApplicationId}:3"),
+            logger,
+            new FakeTimeProvider(s_now));
 
         await sut.ApplyAsync(persistence, ct);
 
@@ -568,6 +943,8 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
         Assert.Contains(logger.Messages, m =>
             m.Contains("correction complete", StringComparison.Ordinal)
             && m.Contains(apply ? "APPLY" : "DRY RUN", StringComparison.Ordinal));
+        Assert.Contains(logger.Warnings, m => m.Contains("operator-side correction refused", StringComparison.Ordinal));
+        Assert.Contains(logger.Errors, m => m.Contains("no usable siteId", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -600,13 +977,28 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
+        public List<string> Errors { get; } = [];
+
+        public List<string> Warnings { get; } = [];
+
         public void Log<TState>(
             LogLevel logLevel,
             EventId eventId,
             TState state,
             Exception? exception,
-            Func<TState, Exception?, string> formatter) =>
-            Messages.Add(formatter(state, exception));
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            Messages.Add(message);
+            if (logLevel == LogLevel.Error)
+            {
+                Errors.Add(message);
+            }
+            else if (logLevel == LogLevel.Warning)
+            {
+                Warnings.Add(message);
+            }
+        }
     }
 
     [Fact]
@@ -614,7 +1006,7 @@ public class ReAccreditationIsNewSiteCorrectionMigrationTests
     {
         // Logged at the start of every run; a future maintainer seeing it in a
         // boot log needs the issue id to find this runbook.
-        Assert.Contains("epr-2uxy", BuildSut(Config()).Name);
+        Assert.Contains("RA-794", BuildSut(Config()).Name);
     }
 
     [Fact]
