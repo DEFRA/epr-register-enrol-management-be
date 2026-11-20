@@ -1,4 +1,4 @@
-# Runbook: the `isNewSite` default defect (epr-2uxy)
+# Runbook: the `isNewSite` default defect (RA-794)
 
 Diagnostic and gated remediation for overseas sites whose frozen
 `payload.overseasSites.sites[].isNewSite` may be a wrongly-defaulted `true`.
@@ -9,17 +9,26 @@ Diagnostic and gated remediation for overseas sites whose frozen
 
 ```bash
 Diagnostics__Ra292IsNewSiteAudit=true   # boot, read the log, turn it back off
+Diagnostics__Ra292DeployedAt=2026-08-11T09:00:00Z   # required: the RA-292 deploy time
 ```
 
 **Locally, or anywhere with direct DB access:**
 
 ```bash
-mongosh "$MONGO_URI" docs/diagnostics/ra292-isnewsite-audit.js
+mongosh "$MONGO_URI" --eval "RA292_DEPLOYED_AT='2026-08-11T09:00:00Z'" \
+  docs/diagnostics/ra292-isnewsite-audit.js
 ```
+
+The deploy time is required by both; each refuses to run without it (see
+[The window](#the-window)).
 
 Both are read-only, classify identically, and print a count plus the
 identifying work-item ids. The script additionally replaces every mutating
 method on the collection handle with a throw, so it cannot write even if edited.
+
+**To correct anything, the operator backend's correction runs first** — this
+service's copy is overwritten from the operator database on the next query →
+resubmit. See [Running it](#running-it).
 
 ## What the defect is
 
@@ -30,30 +39,63 @@ and **a missing BSON element leaves the C# property initializer rather than
 as `true` whatever it actually was.
 
 From `9e8e9da` (2026-07-26, RA-294) that value began being transmitted to this
-service, which **freezes** it onto the work item and never re-derives it.
+service, which stores it on the work item at submission and never re-derives it
+itself.
 
 RA-292 did not create this. It made it regulator-visible by rendering a "New"
 badge from the field.
 
-It cannot be fixed from the operator side alone: operator-side `UpdateAsync`
-uses `ReplaceOneAsync`, so the first save after 2026-07-26 persists the wrong
-`true` permanently; and the copy frozen here was taken at submission. Correcting
-the model default stops the bleeding but repairs neither.
+Correcting the model default stops the bleeding but repairs nothing already
+stored, and the wrong value lives in **two** places:
+
+1. **The operator database.** Operator-side `UpdateAsync` uses
+   `ReplaceOneAsync`, so the first save after 2026-07-26 persisted the wrong
+   `true` permanently, and `OverseasSiteMerge` restores the stored `IsNewSite`
+   on every later PATCH.
+2. **The work-item payload here**, copied from (1) at submission.
+
+### Correcting only the payload here is not durable
+
+A query → resubmit **overwrites `payload.overseasSites` with the operator
+database's copy**. In `ReAccreditationResumeService`:
+
+- `s_canonicalPayloadFieldBySectionKey` maps both `["OverseasSites"]` and
+  `["BesEvidence"]` to `"overseasSites"`
+  (`WorkItems/ReAccreditation/ReAccreditationResumeService.cs:147-155`).
+- `StampLatestSectionsAsync` writes each such resubmitted section with
+  `persistence.SetPayloadFieldAsync` (`ReAccreditationResumeService.cs:485-494`),
+  which is a whole-field `$set` of `payload.overseasSites`
+  (`WorkItems/Core/WorkItemPersistence.cs:721-740`).
+- The operator backend builds that section's `sites[]` from its own stored sites,
+  `isNewSite = s.IsNewSite` (epr-register-enrol-backend
+  `AccreditationApplication/Adapters/HttpCaseWorkingApiAdapter.cs`,
+  `BuildOverseasSitesArray`), for both the overseas-sites and the
+  broadly-equivalent-standards sections.
+
+So if only this service's migration has run, the next resubmit of either section
+puts the wrong `true`, and the "New" badge, back on the work item. **The
+operator-side correction must run first** — see [Running it](#running-it).
 
 ## The discriminator: `orsId`
 
 Established from operator-backend git history, not inferred:
 
-- **ReEx-sourced sites have never carried an `orsId`.** `HttpReExApiAdapter` has
-  never set it in any revision (`git log -S OrsId` over that file returns zero
-  commits); nor does the stub adapter or `ApplyPromotedFields`, so even promoted
-  ReEx sites have none. It sets `IsNewSite = false` explicitly.
+- **ReEx-sourced sites carried no `orsId` until RA-507 (2026-08-27).** Before
+  then `HttpReExApiAdapter` never set it; nor does the stub adapter or
+  `ApplyPromotedFields`, so even promoted ReEx sites have none. It sets
+  `IsNewSite = false` explicitly. RA-507 made `HttpReExApiAdapter.MapOverseasSite`
+  populate `orsId` from ReEx's own ORS id, so "no `orsId`" is a ReEx signal only
+  inside the window below, which closed before RA-507 shipped.
 - **Operator-added sites always carry one.** `AddOverseasSiteRequest.OrsId` is
   `required` and validated `NotEmpty().MaximumLength(10)`.
 - The operator serialiser uses `WhenWritingNull`, so a null `orsId` is **omitted**
   rather than sent as `"orsId": null`.
 
-Those are the only creation paths. So, within the window:
+Those are the creation paths through the dedicated endpoints. Until RA-794's
+operator-backend change, a PATCH of the site list could also introduce a site
+the server had not seen before, with whatever `orsId` the client sent (see
+[The ambiguity guard](#the-ambiguity-guard-and-why-promotion-resolves-it)). So,
+within the window:
 
 | | `isNewSite: true` |
 | --- | --- |
@@ -67,7 +109,7 @@ beside it.
 ## The four buckets
 
 These names are used identically in the log output, the mongosh script, this
-runbook and `epr-2uxy`.
+runbook and `RA-794`.
 
 | Bucket | Shape | Action |
 | --- | --- | --- |
@@ -89,7 +131,7 @@ This classifier's failure mode is silent and in the *safe* direction: a
 miscalibrated tell refuses records rather than corrupting them. So it surfaces
 only as a large refused bucket that reads as appropriate caution — and the
 natural conclusion, *"the data is too messy to remediate"*, would close
-`epr-2uxy` as intractable when it is not. Both the in-app diagnostic and the
+`RA-794` as intractable when it is not. Both the in-app diagnostic and the
 script warn explicitly when the refused bucket is the larger one.
 
 **Worked example — this actually happened during this change.** The first
@@ -160,10 +202,15 @@ its `orsId` stripped would be corrected wrongly. That requires promoting a site
 that was never registered — contrived, and it is precisely what the human
 spot-check gate exists to catch.
 
-`OrsId` is now server-derived in `OverseasSiteMerge` (`8c4021e`), so from the
-RA-292 deploy onward the discriminator is a guarantee rather than a happy
-accident. That does **not** retroactively fix frozen payloads, which is exactly
-why the spot-check below is still required.
+Since `8c4021e` (RA-292), `OverseasSiteMerge` restores the stored `orsId` for a
+site the server already holds, so a PATCH can no longer strip it from an existing
+site. It did **not** make the discriminator a guarantee: until RA-794, a site
+the server had never seen was stamped `isNewSite = true` and kept whatever
+`orsId` the client sent, which could be none (epr-register-enrol-backend
+`AccreditationApplication/Services/OverseasSiteMerge.cs`). RA-794's
+operator-backend change rejects such a PATCH with a 400, but sites created that
+way before it shipped remain. That is why the spot-check below is still
+required, and why the window keeps its upper bound.
 
 ## Not affected, and deliberately not scanned
 
@@ -178,15 +225,37 @@ The entire remediation surface is ORS-level `isNewSite`.
 
 ## The window
 
-The date bound is the **primary** filter.
+The date bound is the **primary** filter. It is applied to the work item's
+`submittedAt`.
 
 | Bound | Value | Why |
 | --- | --- | --- |
 | Start | 2026-07-26 (`9e8e9da`) | First build that transmitted `isNewSite` at all. Earlier items carry none, render no badge, and are not at risk. |
-| End | RA-292 deploy | The window **closes** once the operator model default is corrected. The candidate set is finite and cannot grow. |
+| End | RA-292 deploy | The operator model default was corrected then, so no **new** wrong value is created after it. |
 
-Supply the deploy time for a precise upper bound; it defaults to *now*, which
-over-reports rather than under-reports:
+**The deploy time is required.** The in-app audit and the correction both
+refuse to run, logging at Error, when `Diagnostics:Ra292DeployedAt` is absent,
+not a date-time, or not after the window start; the script throws. There is no safe default, in either
+direction:
+
+- **Under-correction.** After RA-507 a ReEx-sourced site carries an `orsId`, so
+  a post-RA-507 item would be classified ALREADY-CORRECT purely because it has
+  one.
+- **Wrong correction.** After the RA-292 deploy, a no-`orsId` site with
+  `isNewSite: true` is no longer evidence of the defect: until RA-794's
+  operator-backend change, a site added by PATCH was stamped `true` and could
+  carry no `orsId` (see
+  [The ambiguity guard](#the-ambiguity-guard-and-why-promotion-resolves-it)). An
+  unbounded window could stamp `false` over a genuinely new site.
+
+The window does **not** make the affected set finite while the operator database
+is uncorrected. A work item **submitted after** the RA-292 deploy, from an
+application whose site was saved with the wrong `true` during the window, still
+carries that `true` — and falls outside this window, so neither the diagnostic
+nor the migration here sees it. Running the operator-side correction stops new
+ones; items already submitted between the RA-292 deploy and that correction are
+a residual this service's migration does not reach (see
+[What this does not reach](#what-this-does-not-reach)).
 
 ```bash
 # in-app
@@ -215,34 +284,154 @@ The failure directions are not symmetric.
 The second is strictly worse. So the migration must not be able to run on
 analysis alone — someone has to have looked at real records first.
 
-### The four gates
+### The five gates
 
 | # | Gate | Effect |
 | --- | --- | --- |
-| 1 | `Diagnostics:Ra292CorrectIsNewSite` | Off by default — no-op in every environment until deliberately enabled |
+| 1 | `Diagnostics:Ra292CorrectIsNewSite` | Off by default — no-op in every environment until deliberately enabled. Set but not `true` or `false`, nothing runs, logging at Error (gate 4 likewise) |
 | 2 | `Diagnostics:Ra292SpotCheckConfirmedBy` | Must name the human who spot-checked the classification against the operator DB. Recorded in the audit entry |
-| 3 | `Diagnostics:Ra292CorrectIsNewSiteApply` | **Dry run unless explicitly true** — reports exactly what it would change and writes nothing |
-| 4 | per-site verdict | Only the two correctable buckets. AMBIGUOUS-REFUSED sites are refused **in code**, with the triggering fields named |
+| 3 | `Diagnostics:Ra292OperatorRefusedSites` | The sites the operator-side correction refused, or `none`. **No default** — absent, blank or malformed, nothing runs (dry run included), logging at Error. APPLY also writes nothing while any listed pair matches no site in the window. See [The operator-side refusals](#the-operator-side-refusals) |
+| 4 | `Diagnostics:Ra292CorrectIsNewSiteApply` | **Dry run unless explicitly true** — reports exactly what it would change and writes nothing |
+| 5 | per-site verdict | Only the two correctable buckets, and of those only sites the operator side did not refuse. AMBIGUOUS-REFUSED sites are refused **in code**, with the triggering fields named; so are operator-refused sites, and correctable sites that cannot be matched to the operator refusals |
+
+Once gates 1 and 2 pass, the correction (like the audit, once enabled) refuses
+to run, logging at Error, unless `Diagnostics:Ra292DeployedAt` is a valid
+date-time — see [The window](#the-window). Gate 3 is checked next, then gate 4.
 
 Gate 2 is what makes *constructible* ≠ *safe to run unreviewed*. It is deliberately
 a name rather than a boolean, so the authorisation is auditable rather than a
 shell variable that vanishes.
 
+### The operator-side refusals
+
+The operator backend's classifier is stricter than this one. It corrects a site
+with no `orsId` only when ReEx itself returns a matching prior-year site, and
+refuses the rest as AMBIGUOUS-REFUSED, because such a site may be genuinely new
+(it may have come through the overseas-sites PATCH hole that
+epr-register-enrol-backend closed in the same change). Here the same site can
+read as PROVABLY-CORRUPT. Clearing it here would hide a possibly-new site from
+the regulator, and the next resubmit would put the operator database's `true`
+back anyway. So the operator side's refusals are carried across and refused
+here **in code**.
+
+`Diagnostics:Ra292OperatorRefusedSites` takes one of:
+
+- `none` — the operator-side correction's final APPLY run refused no site: its
+  completion line (`RA-794 isNewSite correction complete. Mode=APPLY. ...`)
+  reads `Sites refused as ambiguous (adjudicate by hand): 0`. It is also correct
+  when every pair was removed under the rule below. Absent or blank
+  does **not** mean "none"; it means the list was not carried across, and the
+  correction refuses to run.
+- a comma-separated list of `<ApplicationId>:<SiteId>` pairs, one for each
+  `RA-794 REFUSED to correct application {ApplicationId} site {SiteId} '...'`
+  Warning line of that APPLY run, copied exactly. For example
+  `65f0c0ffee0000000000abcd:3,65f0c0ffee0000000000abcd:7`. The number of pairs
+  must equal that run's `Sites refused as ambiguous (adjudicate by hand)` count,
+  less any pair removed under the rule below.
+  The operator audit's `RA-794 AMBIGUOUS-REFUSED application ...` lines name the
+  same sites and are a cross-check only; the APPLY run's REFUSED lines are what
+  gets carried.
+
+How the pairs match: `{ApplicationId}` is the operator application's 24-hex
+ObjectId, which the operator backend sends as the work item's
+`payload.operatorApplicationId` (`HttpCaseWorkingApiAdapter`,
+`operatorApplicationId = application.ApplicationId`); `{SiteId}` is its integer
+`OverseasSiteModel.SiteId`, sent as `payload.overseasSites.sites[].siteId`. The
+application id matches case-insensitively and whitespace around entries is
+ignored. Anything else in an entry (a missing part, a non-ObjectId application
+id such as an application reference, a non-integer site id, a trailing comma,
+`none` alongside pairs) stops the whole run at Error: dropping a mistyped entry
+would leave the site it was meant to exclude unexcluded.
+
+Per site, the correction then:
+
+- refuses, at Warning, every correctable site whose pair is listed (never
+  written, counted as `Sites refused because the operator side refused them`);
+- refuses, at Error, every correctable site it cannot match because the work item
+  has no `operatorApplicationId` or the site has no integer `siteId` (never
+  written, counted as `Sites refused for want of an id to match`);
+- logs, at Error, every listed pair that matched no site on any work item in
+  the window. That can be legitimate (the application has no work item in the
+  window, or the site is unselected on the operator side), but it is also what a mistyped id looks like, and a mistyped
+  id leaves the real site unexcluded: that site reads as PROVABLY-CORRUPT here
+  and APPLY would clear it. So **APPLY writes nothing while any listed pair is
+  unmatched**. It first plans every work item without writing, and if any pair
+  is unmatched it logs `APPLY refused, nothing was written` at Error and stops.
+  A dry run still runs and reports, and logs `APPLY would be refused` at Error.
+
+For each unmatched pair, the spot-check confirmer either corrects the mistyped
+id, or checks that the operator application's work items in the window hold no
+site with that `siteId`. That is the case when the application has no work item
+in the window, or when the site is unselected on the operator side: the operator
+correction scans every site on the application, but
+`HttpCaseWorkingApiAdapter.BuildOverseasSitesArray` sends only selected sites to
+the work item. Only after that check do they remove the pair from the list, and
+they record the pair and finding on RA-794. Then they run the dry run again.
+
+Every correction's audit entry records `operatorRefusedSitesListed`, the number
+of pairs it was checked against.
+
 ### Running it
 
+**Order: operator backend first, then this service.** A query → resubmit copies
+the operator database's sites over `payload.overseasSites` (see
+[Correcting only the payload here is not durable](#correcting-only-the-payload-here-is-not-durable)),
+so a correction made here before the operator database is fixed is undone by the
+next resubmit of the overseas-sites or broadly-equivalent-standards section.
+
+1. **Operator backend** (epr-register-enrol-backend): run its correction to
+   completion — audit, spot-check, dry run, apply, turn off — per its runbook,
+   [`docs/diagnostics/ra-794-isnewsite-correction.md`](https://github.com/DEFRA/epr-register-enrol-backend/blob/main/docs/diagnostics/ra-794-isnewsite-correction.md).
+   It uses the same config keys (`Diagnostics:Ra292IsNewSiteAudit`,
+   `Diagnostics:Ra292DeployedAt`, `Diagnostics:Ra292CorrectIsNewSite`,
+   `Diagnostics:Ra292SpotCheckConfirmedBy`,
+   `Diagnostics:Ra292CorrectIsNewSiteApply`), set on the operator backend's own
+   deployment. Of the gates in [The five gates](#the-five-gates) it has 1, 2,
+   4 and 5 (5 being its own per-site gate 4), and it also requires
+   `Diagnostics:Ra292DeployedAt`. It has no refused-sites gate: it is the side
+   that produces the refusals. Its bucket names are the same, but its classifier
+   is stricter: it corrects a site with no `orsId` only when
+   ReEx itself returns a matching prior-year site, and refuses the rest as
+   AMBIGUOUS-REFUSED. Its window bounds the application's creation time, not
+   the work item's submission time.
+   It has run to completion only when its final APPLY run logged no
+   `RA-794: application {ApplicationId} was not corrected: it changed after
+   planning or the write failed (...)` Error lines. Those applications still
+   hold the wrong `true`, so a resubmit would undo a correction made here; if
+   there are any, re-run the operator dry run and then apply, and only then
+   continue. They are **not** carried in the refused list.
+2. **Carry the operator refusals across.** From that final APPLY run, build
+   `Diagnostics:Ra292OperatorRefusedSites` as described in
+   [The operator-side refusals](#the-operator-side-refusals): one
+   `<ApplicationId>:<SiteId>` pair per `RA-794 REFUSED to correct application
+   ...` line, or `none` when its completion line shows 0 refused. Check the
+   pair count against that completion line. A pair is removed later only under
+   the rule in [The operator-side refusals](#the-operator-side-refusals), and
+   each removal is recorded on RA-794.
+3. **Then this service:**
+
 ```bash
-# 1. Count first (read-only).
+# 1. Count first (read-only). Always pin the window end (see "The window").
 Diagnostics__Ra292IsNewSiteAudit=true
+Diagnostics__Ra292DeployedAt=<RA-292 deploy time, ISO 8601 UTC>
 
 # 2. If non-zero, spot-check a sample of the orsId-absent sites against the
 #    operator database with the operator-backend owner. Confirm they really are
-#    ReEx-sourced.
+#    ReEx-sourced. Confirm too that the refused list below is complete: one pair
+#    per REFUSED line of the operator's final APPLY run, the count matching its
+#    completion line less any pair removed (and recorded on RA-794) after
+#    checking that its application's in-window work items hold no site with
+#    that siteId (e.g. no work item in the window, or the site is unselected).
+#    Setting your name below attests to both.
 
-# 3. Dry run. Writes nothing; reports precisely what it would change.
+# 3. Dry run. Writes nothing; reports precisely what it would change, and logs
+#    at Error any listed pair that matched no site. APPLY refuses while any
+#    remain: fix the id, or check and remove the pair as above, then dry-run again.
 Diagnostics__Ra292CorrectIsNewSite=true
 Diagnostics__Ra292SpotCheckConfirmedBy="your.name"
+Diagnostics__Ra292OperatorRefusedSites="<ApplicationId>:<SiteId>,..."   # or none
 
-# 4. Only when the dry-run output is what you expect:
+# 4. Only when the dry-run output is what you expect and logs no unmatched pair:
 Diagnostics__Ra292CorrectIsNewSiteApply=true
 
 # 5. Turn all of it back off.
@@ -255,20 +444,38 @@ itself rather than only in deploy logs.
 
 ### Ambiguous sites
 
-Never auto-corrected. Adjudicate by hand:
+Never auto-corrected: neither this side's AMBIGUOUS-REFUSED sites nor the
+operator-refused and unmatchable sites the correction refuses. Adjudicate by
+hand:
 
-1. Take the ambiguous ids from the diagnostic.
+1. Take the ambiguous ids from the diagnostic, and the refused sites from the
+   correction's REFUSED lines.
 2. Hand the per-site detail to the operator-backend owner to check against the
    operator database (`operatorApplicationId` / `operatorOrganisationId` are on
    the payload).
 3. Correct only what comes back **provably** corrupt.
-4. Record the residual on `epr-2uxy` so the decision is auditable rather than
+4. Record the residual on `RA-794` so the decision is auditable rather than
    silently dropped.
+
+### What this does not reach
+
+Work items **submitted after** the RA-292 deploy whose sites still carried the
+operator database's wrong `true` at submission. They fall outside the window
+(see [The window](#the-window)), and widening the window is not safe after
+RA-507. The operator-side correction fixes the source, so such an item is
+corrected the next time its overseas-sites or broadly-equivalent-standards
+section is resubmitted after a query — but not otherwise. Any remaining
+population needs a human decision; record it on `RA-794` rather than
+dropping it.
 
 ### If the count is zero
 
-Record the environments and figures on `epr-2uxy` and close it as prevented.
-Leave the migration disabled; it costs nothing to carry.
+A zero here says nothing about the operator database. Close `RA-794` as
+prevented only when the operator-side audit is also zero (or its correction has
+been applied) and the population in
+[What this does not reach](#what-this-does-not-reach) has been accounted for.
+Record the environments and figures from both sides on `RA-794`. Leave both
+corrections disabled; they cost nothing to carry.
 
 ### If ground truth had not been recoverable
 

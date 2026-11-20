@@ -1,18 +1,18 @@
 /**
- * DIAGNOSTIC (READ-ONLY): size and classify the epr-2uxy wrongly-defaulted
+ * DIAGNOSTIC (READ-ONLY): size and classify the RA-794 wrongly-defaulted
  * `isNewSite=true` population in the case-management store.
  *
  * This script COUNTS AND LISTS. It does not modify anything, and it is wired so
  * that it cannot — see the read-only guard below.
  *
  *   mongosh "mongodb://localhost:27017/epr-register-case-management" \
- *     docs/diagnostics/ra292-isnewsite-audit.js
- *
- * To bound the window at a known RA-292 deploy time rather than "now":
- *
- *   mongosh "$MONGO_URI" \
  *     --eval "RA292_DEPLOYED_AT='2026-08-11T09:00:00Z'" \
  *     docs/diagnostics/ra292-isnewsite-audit.js
+ *
+ * RA292_DEPLOYED_AT (the RA-292 deploy time, the window's upper bound) is
+ * REQUIRED; the script throws without it. There is no safe default: "now" would
+ * admit post-RA-507 items, whose ReEx-sourced sites carry an orsId and would be
+ * misclassified as operator-added.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ⚠  ON CDP, PREFER THE IN-APP DIAGNOSTIC.
@@ -23,17 +23,21 @@
  * identically and reports through the log pipeline:
  *
  *   Diagnostics__Ra292IsNewSiteAudit=true   (boot, read the log, turn it off)
+ *   Diagnostics__Ra292DeployedAt=<RA-292 deploy time>   (required)
  *
  * ─────────────────────────────────────────────────────────────────────────────
- * THE DEFECT (epr-2uxy)
+ * THE DEFECT (RA-794)
  *
  * Operator-side `OverseasSiteModel` gained `IsNewSite` with a `= true` property
  * initializer (423d27d, 2026-07-26). Applications are POCO-mapped, and a MISSING
  * BSON element leaves the C# initializer rather than `default(bool)` — so any
  * overseas site persisted before that date reads back as `true` regardless of
  * what it actually was. From 9e8e9da (2026-07-26, RA-294) that value began being
- * transmitted here, where it is frozen. RA-292 did not create this; it made it
- * regulator-visible by rendering a "New" badge from the field.
+ * transmitted here, where it is stored at submission — and overwritten from the
+ * operator database's copy on a query → resubmit of the overseas-sites or
+ * broadly-equivalent-standards section, so the operator-side correction must
+ * run first. RA-292 did not create this; it made it regulator-visible by
+ * rendering a "New" badge from the field.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * THE DISCRIMINATOR: `orsId`
@@ -151,14 +155,27 @@ for (const method of MUTATING_METHODS) {
 
 // Window. The date bound is the PRIMARY filter.
 //   Start: 2026-07-26 (9e8e9da) — first build that transmitted isNewSite at all.
-//   End:   the RA-292 deploy. The window CLOSES once the operator model default
-//          is corrected, so the candidate set is finite and cannot grow.
-//          Defaults to now, which over-reports rather than under-reports.
+//   End:   the RA-292 deploy, after which the operator model default no longer
+//          creates new wrong values. REQUIRED (see the header): no default.
 const WINDOW_START = new Date('2026-07-26T00:00:00Z')
-const WINDOW_END =
-  typeof RA292_DEPLOYED_AT !== 'undefined' && RA292_DEPLOYED_AT
-    ? new Date(RA292_DEPLOYED_AT)
-    : new Date()
+if (typeof RA292_DEPLOYED_AT === 'undefined' || !RA292_DEPLOYED_AT) {
+  throw new Error(
+    'RA292_DEPLOYED_AT is not set. Pass the RA-292 deploy time, e.g. ' +
+      "--eval \"RA292_DEPLOYED_AT='2026-08-11T09:00:00Z'\". There is no safe default."
+  )
+}
+const WINDOW_END = new Date(RA292_DEPLOYED_AT)
+if (Number.isNaN(WINDOW_END.getTime())) {
+  throw new TypeError(`RA292_DEPLOYED_AT is ${RA292_DEPLOYED_AT}, which is not a date-time.`)
+}
+// A mistyped year or month can land at or before the start. The query would then
+// match nothing and print zero for every bucket, which reads as a clean audit.
+if (WINDOW_END <= WINDOW_START) {
+  throw new RangeError(
+    `RA292_DEPLOYED_AT is ${RA292_DEPLOYED_AT}, which is not after the window ` +
+      `start ${WINDOW_START.toISOString()}.`
+  )
+}
 
 // Detail fields that neither MapOverseasSite nor promotion accounts for.
 //
@@ -283,15 +300,11 @@ const sitesCorrectable = sitesCorrupt + sitesPromoted
 
 print('')
 print('═══════════════════════════════════════════════════════════════════════')
-print(' epr-2uxy — isNewSite audit (READ-ONLY, nothing written)')
+print(' RA-794 — isNewSite audit (READ-ONLY, nothing written)')
 print('═══════════════════════════════════════════════════════════════════════')
 print(` Database     : ${TARGET_DB}.workItems`)
 print(` Window start : ${WINDOW_START.toISOString()}  (9e8e9da, first transmission)`)
-print(` Window end   : ${WINDOW_END.toISOString()}${
-  typeof RA292_DEPLOYED_AT !== 'undefined' && RA292_DEPLOYED_AT
-    ? '  (supplied RA-292 deploy time)'
-    : '  (now — pass RA292_DEPLOYED_AT for a precise bound)'
-}`)
+print(` Window end   : ${WINDOW_END.toISOString()}  (supplied RA-292 deploy time)`)
 print('')
 print(` In-window re-accreditation items with overseas sites : ${itemsScanned}`)
 print('')
@@ -308,7 +321,7 @@ print('')
 
 if (sitesCorrectable === 0 && sitesAmbiguous === 0) {
   print(' RESULT: nothing at risk in this environment.')
-  print(' Record the environment and this figure on epr-2uxy.')
+  print(' Record the environment and this figure on RA-794.')
 } else {
   if (sitesAmbiguous > sitesCorrectable) {
     print(' ⚠  MORE SITES WERE REFUSED THAN CLASSIFIED CORRECTABLE.')
