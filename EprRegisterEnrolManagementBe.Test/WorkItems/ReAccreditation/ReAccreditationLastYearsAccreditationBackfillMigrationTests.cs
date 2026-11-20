@@ -154,10 +154,6 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
             && r.Message.Contains(", issued number ", StringComparison.Ordinal)
         ).Message;
 
-    // A register row for a made-up registration number, its Org ID the number's own.
-    private static PublicRegister2026Entry Row(string registrationNumber) =>
-        new(null, int.Parse(registrationNumber[5..11], System.Globalization.CultureInfo.InvariantCulture), "Test Ltd");
-
     private sealed class FixedTimeProvider(DateTime now) : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => new(now);
@@ -322,25 +318,17 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         Assert.True(Logged(LogLevel.Warning, nameof(Migration.Outcome.HoldsADifferentNumber)));
     }
 
+    // The registration number is the only key: the org and material aren't compared.
     [Theory]
     [InlineData(500028, "wood")]
     [InlineData(500027, "plastic")]
-    public async Task A_register_row_that_is_not_the_items_registration_is_skipped_and_reported(
-        int orgNumber,
-        string material
-    )
+    public async Task An_item_is_matched_on_its_registration_number_alone(int orgNumber, string material)
     {
         var item = await SeedAsync(EggerRegistration, orgNumber, material);
-        var other = await SeedAsync(DtsRegistration, 500237);
-        var egger = await EggerAsync();
 
-        var result = await RunAsync();
+        await RunAsync();
 
-        Assert.Equal(Migration.RunResult.Applied, result);
-        Assert.Null(LastYears(await ReloadAsync(item)));
-        Assert.NotNull(LastYears(await ReloadAsync(egger)));
-        Assert.Contains(nameof(Migration.Outcome.IdentityMismatch), PlanLineFor(item), StringComparison.Ordinal);
-        Assert.DoesNotContain(nameof(Migration.Outcome.IdentityMismatch), PlanLineFor(other), StringComparison.Ordinal);
+        Assert.Equal(EggerAccreditation, LastYears(await ReloadAsync(item))!["accreditationNumber"].AsString);
     }
 
     // Agreed 19 November 2026: the register is used as published, even where a row looks wrong.
@@ -369,13 +357,11 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         Assert.Equal(ComhairleAccreditation, LastYears(await ReloadAsync(item))!["accreditationNumber"].AsString);
     }
 
-    // Encirc: org 500069 holds a registration carrying 500226 (RA-764), as the register's Org ID column says.
-    [Theory]
-    [InlineData(500069)]
-    [InlineData(500226)]
-    public async Task The_org_is_matched_on_the_registration_number_or_the_registers_Org_ID(int orgNumber)
+    // Encirc: org 500069 holds a registration carrying 500226 (RA-764).
+    [Fact]
+    public async Task An_org_holding_a_registration_carrying_another_orgs_digits_is_matched()
     {
-        var item = await SeedAsync(EncircRegistration, orgNumber, "glass");
+        var item = await SeedAsync(EncircRegistration, 500069, "glass");
 
         await RunAsync();
 
@@ -504,6 +490,71 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         Assert.Contains(expected, PlanLineFor(item), StringComparison.Ordinal);
     }
 
+    // ------------------------------- the end-of-run report -------------------------------
+
+    [Fact]
+    public async Task The_report_lists_each_item_not_on_the_register_with_its_org_and_registration()
+    {
+        var item = await SeedAsync(
+            "R26ER5009990001PL",
+            500999,
+            customise: p => p["organisationName"] = "Not Registered Ltd"
+        );
+        await EggerAsync();
+
+        await RunAsync(apply: false);
+
+        Assert.True(Logged(LogLevel.Warning, "report: 1 2027 work items"));
+        Assert.Single(
+            _logger.Records,
+            r => r.Level == LogLevel.Warning
+                && r.Message.Contains(
+                    "not on the register: org 500999 Not Registered Ltd, registration R26ER5009990001PL",
+                    StringComparison.Ordinal
+                )
+                && r.Message.Contains(item.Id.ToString(), StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
+    public async Task The_report_lists_every_register_row_no_item_used()
+    {
+        await EggerAsync();
+        await SeedAsync(DtsRegistration, 500237);
+
+        await RunAsync(apply: false);
+
+        var total = PublicRegister2026.ByRegistrationNumber.Count;
+        var unused = _logger.Records
+            .Where(r => r.Message.Contains("register row not used", StringComparison.Ordinal))
+            .Select(r => r.Message)
+            .ToList();
+        Assert.Equal(total - 2, unused.Count);
+        Assert.DoesNotContain(unused, m => m.Contains(EggerRegistration, StringComparison.Ordinal));
+        Assert.DoesNotContain(unused, m => m.Contains(DtsRegistration, StringComparison.Ordinal));
+        Assert.Contains(unused, m => m.Contains(ClearfieldRegistration, StringComparison.Ordinal)
+            && m.Contains(ClearfieldAccreditation, StringComparison.Ordinal));
+        Assert.Contains(unused, m => m.Contains(JAndAYoungRegistration, StringComparison.Ordinal)
+            && m.Contains("none (registered only)", StringComparison.Ordinal));
+        Assert.True(Logged(LogLevel.Information, $"{total - 2} of {total} register rows matched no 2027 work item"));
+    }
+
+    // Organisation by organisation, so the log reads one organisation at a time.
+    [Fact]
+    public async Task Items_are_reported_organisation_by_organisation()
+    {
+        var dts = await SeedAsync(DtsRegistration, 500237);
+        var egger = await EggerAsync();
+
+        await RunAsync(apply: false);
+
+        var lines = _logger.Records.Select(r => r.Message).ToList();
+        Assert.True(
+            lines.FindIndex(m => m.Contains(egger.Id.ToString(), StringComparison.Ordinal))
+                < lines.FindIndex(m => m.Contains(dts.Id.ToString(), StringComparison.Ordinal))
+        );
+    }
+
     [Fact]
     public async Task The_summary_counts_every_outcome()
     {
@@ -535,55 +586,6 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
 
         Assert.Null(LastYears(await ReloadAsync(item)));
         Assert.Contains("it holds no registration number", PlanLineFor(item), StringComparison.Ordinal);
-    }
-
-    [Theory]
-    [InlineData("R26ER5000270036ST", "steel", null)]
-    [InlineData("R26ER5000270036WO", "Wood", null)]
-    [InlineData("R26ER5000270036AL", "aluminium", null)]
-    [InlineData("R26ER5000270036FB", "fibre", null)]
-    [InlineData("R26ER5000270036PA", "paper", null)]
-    [InlineData("R26ER5000270036PL", "plastic", null)]
-    [InlineData("R26ER5000270036GR", "glass", "glass_re_melt")]
-    [InlineData("R26ER5000270036GO", "glass", "glass_other")]
-    [InlineData("R26ER5000270036GR", "glass", null)]
-    [InlineData("R26ER5000270036GO", "glass", null)]
-    public void A_material_matching_the_registration_numbers_code_is_not_a_mismatch(
-        string registrationNumber,
-        string material,
-        string? glassRecyclingProcess
-    )
-    {
-        var payload = new BsonDocument { ["material"] = material, ["operatorOrgNumber"] = 500027 };
-        if (glassRecyclingProcess is not null)
-        {
-            payload["glassRecyclingProcess"] = glassRecyclingProcess;
-        }
-
-        Assert.Null(Migration.IdentityMismatch(payload, registrationNumber, Row(registrationNumber)));
-    }
-
-    [Theory]
-    [InlineData("R26ER5000270036GO", "glass", "glass_re_melt")]
-    [InlineData("R26ER5000270036GR", "glass", "glass_other")]
-    [InlineData("R26ER5000270036PL", "concrete", null)]
-    public void A_material_that_does_not_match_the_registration_numbers_code_is_a_mismatch(
-        string registrationNumber,
-        string material,
-        string? glassRecyclingProcess
-    )
-    {
-        var payload = new BsonDocument { ["material"] = material };
-        if (glassRecyclingProcess is not null)
-        {
-            payload["glassRecyclingProcess"] = glassRecyclingProcess;
-        }
-
-        Assert.Contains(
-            "registration number's is",
-            Migration.IdentityMismatch(payload, registrationNumber, Row(registrationNumber)),
-            StringComparison.Ordinal
-        );
     }
 
     [Fact]

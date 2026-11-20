@@ -18,20 +18,20 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// leaves evidence of each change in the work item's audit log (Application
 /// history).
 ///
-/// <para><strong>For each 2027 work item:</strong></para>
+/// <para><strong>Organisation by organisation (<c>operatorOrgNumber</c>), and
+/// within one by registration number, for each 2027 work item:</strong></para>
 /// <list type="number">
 ///   <item>A work item holding J. and A. Young's registration number as the
 ///   register prints it, missing its last letter
 ///   (<see cref="PublicRegister2026.JAndAYoungPublishedRegistrationNumber"/>),
 ///   is reported: a 2027 number can't be issued until it ends PL. It is not
 ///   corrected here.</item>
-///   <item>Find its register row by <c>payload.registrationNumber</c>.</item>
-///   <item>Check the row is this work item's registration: its
-///   <c>operatorOrgNumber</c> against the org digits in the registration number
-///   or the register's Org ID column (an organisation can hold a registration
-///   carrying another org's digits, such as Encirc's 500069 holding
-///   R26ER5002260055GR), and its material code against <c>material</c>, each
-///   when present. A mismatch is reported and the work item skipped.</item>
+///   <item>Find its register row by its 2026 registration number,
+///   <c>payload.registrationNumber</c>. The registration number is the only
+///   key: the org digits in it don't always match the org that holds it
+///   (Encirc, 500069, holds R26ER5002260055GR), so nothing else is compared. A
+///   work item whose registration number isn't on the register is reported
+///   with its org.</item>
 ///   <item>Last year's number: added, with a
 ///   <see cref="AddedAuditAction"/> entry, where the work item holds none; left
 ///   alone where it holds the same; reported, never overwritten, where it holds
@@ -43,6 +43,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   keep the registration's agency, process type and org. Only reported,
 ///   never corrected.</item>
 /// </list>
+///
+/// <para>The run ends with a report: every work item whose registration
+/// number isn't on the register (its org and registration number), and every
+/// register row no 2027 work item used.</para>
 ///
 /// <para>Never creates a work item and never changes state. Every work item is
 /// planned before anything is written. Each write is one atomic update of the
@@ -97,8 +101,6 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
     internal const string RegistrationNumberField = "registrationNumber";
     internal const string OperatorOrgNumberField = "operatorOrgNumber";
-    internal const string MaterialField = "material";
-    internal const string GlassRecyclingProcessField = "glassRecyclingProcess";
     internal const string AccreditationYearField = "accreditationYear";
 
     /// <summary>What one run did. Returned for tests; the logs say the same.</summary>
@@ -115,7 +117,6 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         AlreadyHeld,
         RegisteredOnly,
         HoldsADifferentNumber,
-        IdentityMismatch,
         RegistrationNumberIncomplete,
         NotOnTheRegister,
     }
@@ -131,6 +132,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
     private sealed record Plan(
         WorkItem Item,
         Outcome Outcome,
+        string? RegisterRegistrationNumber,
         string? RegisterAccreditationNumber,
         IssuedNumber Issued,
         string Detail
@@ -215,13 +217,21 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         );
 
         // Plan every work item before writing any.
-        var plans = items.OrderBy(i => i.SubmittedAt).Select(PlanFor).ToList();
+        // Organisation by organisation; an item without its org number sorts after the rest.
+        var plans = items
+            .OrderBy(i => OrgNumberOf(i.Payload) ?? int.MaxValue)
+            .ThenBy(i => ReadString(i.Payload, RegistrationNumberField), StringComparer.Ordinal)
+            .ThenBy(i => i.SubmittedAt)
+            .Select(PlanFor)
+            .ToList();
 
         foreach (var plan in plans)
         {
             await ReportAndApplyAsync(persistence, plan, mode, confirmedBy, cancellationToken);
         }
 
+        ReportNotOnTheRegister(plans, mode);
+        ReportUnusedRegisterRows(plans, mode);
         ReportSummary(plans, mode);
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
@@ -281,11 +291,6 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             );
         }
 
-        if (IdentityMismatch(payload, registrationNumber, row) is { } mismatch)
-        {
-            return NotPlanned(item, Outcome.IdentityMismatch, mismatch);
-        }
-
         var held = ReadLastYears(payload);
         var (outcome, detail) = row.AccreditationNumber switch
         {
@@ -316,6 +321,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         return new Plan(
             item,
             outcome,
+            registrationNumber,
             row.AccreditationNumber,
             issued,
             issuedDetail is null ? detail : $"{detail}; {issuedDetail}"
@@ -326,82 +332,16 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
     {
         var issued = ReAccreditationAccreditationNumber.Read(item.Payload);
         return issued is null
-            ? new Plan(item, outcome, null, IssuedNumber.NotIssued, detail)
+            ? new Plan(item, outcome, null, null, IssuedNumber.NotIssued, detail)
             : new Plan(
                 item,
                 outcome,
+                null,
                 null,
                 IssuedNumber.NotChecked,
                 $"{detail}; issued {issued} could not be checked"
             );
     }
-
-    /// <summary>
-    /// Why the register row is not this work item's registration, or null.
-    /// The registration number carries its own identity: R + YY + agency +
-    /// R|X + org (6) + sequence (4) + material. The org is accepted from either
-    /// the registration number or the register's Org ID column: an organisation
-    /// can hold a registration carrying another org's digits. Older submissions
-    /// predate operatorOrgNumber, so each field is checked only when present.
-    /// </summary>
-    internal static string? IdentityMismatch(
-        BsonDocument payload,
-        string registrationNumber,
-        PublicRegister2026Entry row
-    )
-    {
-        var problems = new List<string>();
-        var orgDigits = registrationNumber[5..11];
-        if (
-            payload.TryGetValue(OperatorOrgNumberField, out var orgNumber)
-            && !orgNumber.IsBsonNull
-            && !(
-                BsonWholeNumber.TryGet(orgNumber, 0, 999_999, out var number)
-                && (
-                    number.ToString("D6", System.Globalization.CultureInfo.InvariantCulture) == orgDigits
-                    || number == row.OrgId
-                )
-            )
-        )
-        {
-            problems.Add(
-                $"its operatorOrgNumber is {orgNumber} but the registration number's org is {orgDigits} "
-                    + $"and the register's is {row.OrgId}"
-            );
-        }
-
-        var material = ReadString(payload, MaterialField);
-        var materialCode = registrationNumber[^2..];
-        if (material is not null && !MaterialCodesFor(material, ReadString(payload, GlassRecyclingProcessField)).Contains(materialCode))
-        {
-            problems.Add($"its material is {material} but the registration number's is {materialCode}");
-        }
-
-        return problems.Count == 0
-            ? null
-            : $"register row {registrationNumber} is not this work item's registration: "
-                + string.Join("; ", problems);
-    }
-
-    // The operator backend's material codes (RegulatoryReferenceCodes). Glass
-    // splits by recycling process; a glass item without one can be either.
-    private static string[] MaterialCodesFor(string material, string? glassRecyclingProcess) =>
-        material.ToLowerInvariant() switch
-        {
-            "steel" => ["ST"],
-            "wood" => ["WO"],
-            "aluminium" => ["AL"],
-            "fibre" => ["FB"],
-            "paper" => ["PA"],
-            "plastic" => ["PL"],
-            "glass" => glassRecyclingProcess switch
-            {
-                "glass_re_melt" => ["GR"],
-                "glass_other" => ["GO"],
-                _ => ["GR", "GO"],
-            },
-            _ => [],
-        };
 
     // RA-783's rules, for an issued number: a renewal keeps everything of last
     // year's number but the year and material code; a first-time number keeps
@@ -516,10 +456,72 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
     private static bool NeedsAPerson(Plan plan) =>
         plan.Outcome
             is Outcome.HoldsADifferentNumber
-                or Outcome.IdentityMismatch
                 or Outcome.RegistrationNumberIncomplete
                 or Outcome.NotOnTheRegister
         || plan.Issued is IssuedNumber.DoesNotFitTheRegister or IssuedNumber.NotChecked;
+
+    // The end-of-run report, part 1: every work item whose registration number
+    // isn't on the register, with the org and registration number it holds.
+    private void ReportNotOnTheRegister(IReadOnlyList<Plan> plans, string mode)
+    {
+        var missing = plans
+            .Where(p => p.Outcome is Outcome.NotOnTheRegister or Outcome.RegistrationNumberIncomplete)
+            .ToList();
+        logger.LogWarning(
+            "RA-784 {Mode} report: {Count} 2027 work items whose registration number is not on the register",
+            mode,
+            missing.Count
+        );
+        foreach (var plan in missing)
+        {
+            logger.LogWarning(
+                "RA-784 {Mode} report: not on the register: org {OrgNumber} {OrganisationName}, registration "
+                    + "{RegistrationNumber}, work item {WorkItemId} ({ApplicationReference})",
+                mode,
+                ReadOrgNumber(plan.Item.Payload),
+                ReadString(plan.Item.Payload, OrganisationNameField),
+                ReadString(plan.Item.Payload, RegistrationNumberField),
+                plan.Item.Id,
+                ReadString(plan.Item.Payload, "applicationReference")
+            );
+        }
+    }
+
+    // The end-of-run report, part 2: every register row no 2027 work item
+    // matched.
+    private void ReportUnusedRegisterRows(IReadOnlyList<Plan> plans, string mode)
+    {
+        var used = plans
+            .Select(p => p.RegisterRegistrationNumber)
+            .OfType<string>()
+            .ToHashSet(StringComparer.Ordinal);
+        var unused = PublicRegister2026
+            .ByRegistrationNumber.Where(r => !used.Contains(r.Key))
+            .OrderBy(r => r.Value.OrgId)
+            .ThenBy(r => r.Key, StringComparer.Ordinal)
+            .ToList();
+        logger.LogInformation(
+            "RA-784 {Mode} report: {Count} of {Total} register rows matched no 2027 work item "
+                + "({Accredited} accredited, {RegisteredOnly} registered only)",
+            mode,
+            unused.Count,
+            PublicRegister2026.ByRegistrationNumber.Count,
+            unused.Count(r => r.Value.AccreditationNumber is not null),
+            unused.Count(r => r.Value.AccreditationNumber is null)
+        );
+        foreach (var (registrationNumber, row) in unused)
+        {
+            logger.LogInformation(
+                "RA-784 {Mode} report: register row not used: org {OrgId} {OrganisationName}, registration "
+                    + "{RegistrationNumber}, 2026 accreditation {AccreditationNumber}",
+                mode,
+                row.OrgId,
+                row.OrganisationName,
+                registrationNumber,
+                row.AccreditationNumber ?? "none (registered only)"
+            );
+        }
+    }
 
     private void ReportSummary(IReadOnlyList<Plan> plans, string mode)
     {
@@ -560,6 +562,13 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
     // The organisation's number and name are a business's, as on the public register, so they may be logged; they
     // let whoever reviews the dry run see which organisation each line is about.
     private const string OrganisationNameField = "organisationName";
+
+    private static int? OrgNumberOf(BsonDocument? payload) =>
+        payload is not null
+        && payload.TryGetValue(OperatorOrgNumberField, out var value)
+        && BsonWholeNumber.TryGet(value, 0, 999_999, out var number)
+            ? number
+            : null;
 
     private static string? ReadOrgNumber(BsonDocument? payload) =>
         payload is not null

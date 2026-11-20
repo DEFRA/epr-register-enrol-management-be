@@ -9,11 +9,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 // Keyed on the registration number: an org has one row per registration
 // (material and site), and 57 orgs have more than one accredited row, so the
 // Org ID alone can't pick the right one. Org ID and business name are kept
-// alongside so a reader can see whose row it is, and so the backfill can check
-// the org it matched (either org: an organisation can hold a registration
-// carrying another org's digits). A null accreditation number means the register lists the
-// registration with no accreditation, so the operator was registered-only in
-// 2026.
+// alongside so a reader can see whose row it is, and for the backfill's
+// report; the backfill matches on the registration number alone. A null
+// accreditation number means the register lists the registration with no
+// accreditation, so the operator was registered-only in 2026.
 //
 // The rows are copied as published and the backfill uses every one: it was agreed on
 // 19 November 2026 to treat the register as correct and put rows right one at a time
@@ -45,10 +44,9 @@ internal static class PublicRegister2026
             // number takes its material code from the application instead (RA-783).
             ["R26SR5005410022GO"] = new("A26SR5005410022GL", 500541, "Comhairle Nan Eilean Siar"),
             // The Org ID column says 500069, but both numbers carry 500226. Org 500069 does hold
-            // this registration (RA-764), so the backfill accepts either org.
+            // this registration (RA-764).
             ["R26ER5002260055GR"] = new("A26ER5002260023GR", 500069, "Encirc Ltd"),
-            // The Org ID column says 500263, but both numbers carry 500236. The backfill accepts
-            // either org, as above.
+            // The Org ID column says 500263, but both numbers carry 500236.
             ["R26WX5002360007ST"] = new("A26WX5002360016ST", 500263, "REDDY PAI METALS LTD"),
             ["R26WX5002360008AL"] = new("A26WX5002360017AL", 500263, "REDDY PAI METALS LTD"),
             // Published as R26WR5000950025P (JAndAYoungPublishedRegistrationNumber), missing
