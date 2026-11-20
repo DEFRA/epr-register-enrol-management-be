@@ -573,9 +573,28 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
             r =>
                 r.Message.Contains("complete", StringComparison.Ordinal)
                 && r.Message.Contains("work items=3", StringComparison.Ordinal)
-                && r.Message.Contains("Added=2", StringComparison.Ordinal)
+                && r.Message.Contains("planned: Added=2", StringComparison.Ordinal)
                 && r.Message.Contains("RegisteredOnly=1", StringComparison.Ordinal)
+                && r.Message.Contains("Written: Written=0, LostTheRace=0, Failed=0", StringComparison.Ordinal)
                 && r.Message.Contains("DoesNotFitTheRegister=1", StringComparison.Ordinal)
+        );
+    }
+
+    // Planned against actual: an APPLY run's summary says how many of the planned writes happened.
+    [Fact]
+    public async Task The_summary_says_how_many_planned_writes_were_written()
+    {
+        await EggerAsync();
+        await SeedAsync(JpRecyclingRegistration, 500302);
+
+        await RunAsync();
+
+        Assert.Contains(
+            _logger.Records,
+            r =>
+                r.Message.Contains("complete", StringComparison.Ordinal)
+                && r.Message.Contains("planned: Added=2", StringComparison.Ordinal)
+                && r.Message.Contains("Written: Written=2, LostTheRace=0, Failed=0", StringComparison.Ordinal)
         );
     }
 
@@ -612,6 +631,7 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         Assert.Equal(Migration.RunResult.Applied, result);
         Assert.True(Logged(LogLevel.Warning, "gained last year's accreditation after planning"));
         Assert.False(Logged(LogLevel.Information, "APPLIED"));
+        Assert.True(Logged(LogLevel.Information, "Written: Written=0, LostTheRace=1, Failed=0"));
     }
 
     // One work item's failed write doesn't stop the run: the rest are written and the report is still logged.
@@ -625,7 +645,7 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
             .FindByPayloadFieldAsync(ReAccreditationType.Id, AccreditationYear.Field, Arg.Any<BsonValue>(), Arg.Any<CancellationToken>())
             .Returns([failing, other]);
         persistence
-            .CorrectPayloadFieldAsync(failing.Id, default!, default!, default!, default!, default)
+            .CorrectPayloadFieldAsync(failing.Id, default!, default!, default!, default!, Ct)
             .ReturnsForAnyArgs(callInfo =>
                 callInfo.ArgAt<Guid>(0) == failing.Id
                     ? throw new TimeoutException("mongo timed out")
@@ -637,7 +657,7 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         Assert.Equal(Migration.RunResult.Applied, result);
         Assert.True(Logged(LogLevel.Error, $"work item {failing.Id}: the write failed"));
         Assert.True(Logged(LogLevel.Information, $"APPLIED: work item {other.Id} ("));
-        Assert.True(Logged(LogLevel.Information, "backfill complete"));
+        Assert.True(Logged(LogLevel.Information, "Written: Written=1, LostTheRace=0, Failed=1"));
     }
 
     // A value that isn't a year and an accreditation number is reported, not overwritten.

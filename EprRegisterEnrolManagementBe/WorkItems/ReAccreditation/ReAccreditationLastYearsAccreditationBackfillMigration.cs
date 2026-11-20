@@ -133,6 +133,14 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         NotChecked,
     }
 
+    /// <summary>What happened to an Added plan's write. A dry run attempts none.</summary>
+    internal enum Write
+    {
+        Written,
+        LostTheRace,
+        Failed,
+    }
+
     private sealed record Plan(
         WorkItem Item,
         Outcome Outcome,
@@ -229,14 +237,18 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             .Select(PlanFor)
             .ToList();
 
+        var writes = new List<Write>();
         foreach (var plan in plans)
         {
-            await ReportAndApplyAsync(persistence, plan, mode, confirmedBy, cancellationToken);
+            if (await ReportAndApplyAsync(persistence, plan, mode, confirmedBy, cancellationToken) is { } write)
+            {
+                writes.Add(write);
+            }
         }
 
         ReportNotOnTheRegister(plans, mode);
         ReportUnusedRegisterRows(plans, mode);
-        ReportSummary(plans, mode);
+        ReportSummary(plans, writes, mode);
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
     }
 
@@ -392,7 +404,8 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
     // ------------------------------- reporting and writing -------------------------------
 
-    private async Task ReportAndApplyAsync(
+    // Null when no write was attempted: a dry run, or a plan that isn't Added.
+    private async Task<Write?> ReportAndApplyAsync(
         IWorkItemPersistence persistence,
         Plan plan,
         string mode,
@@ -417,14 +430,9 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             plan.Detail
         );
 
-        if (confirmedBy is null)
+        if (confirmedBy is null || plan.Outcome != Outcome.Added)
         {
-            return;
-        }
-
-        if (plan.Outcome != Outcome.Added)
-        {
-            return;
+            return null;
         }
 
         // Only an Added plan reaches here, and PlanFor only gives that outcome to a register row with a number.
@@ -451,7 +459,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
                     + "retries it.",
                 plan.Item.Id
             );
-            return;
+            return Write.Failed;
         }
 
         if (!written)
@@ -463,7 +471,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
                     + "was written to it. Re-run the dry run to see its current state.",
                 plan.Item.Id
             );
-            return;
+            return Write.LostTheRace;
         }
 
         logger.LogInformation(
@@ -478,6 +486,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             number,
             confirmedBy
         );
+        return Write.Written;
     }
 
     private static bool NeedsAPerson(Plan plan) =>
@@ -550,8 +559,14 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         }
     }
 
-    private void ReportSummary(IReadOnlyList<Plan> plans, string mode)
+    // Planned against actual: the outcomes are what the plan found; the writes
+    // are what an APPLY run did with the Added ones (a dry run writes nothing).
+    private void ReportSummary(IReadOnlyList<Plan> plans, IReadOnlyList<Write> writes, string mode)
     {
+        var written = string.Join(
+            ", ",
+            Enum.GetValues<Write>().Select(w => $"{w}={writes.Count(x => x == w)}")
+        );
         var outcomes = string.Join(
             ", ",
             Enum.GetValues<Outcome>().Select(o => $"{o}={plans.Count(p => p.Outcome == o)}")
@@ -562,10 +577,11 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         );
         logger.LogInformation(
             "RA-784 last year's accreditation backfill complete. Mode={Mode}, work items={Count}. "
-                + "Last year's accreditation: {Outcomes}. Issued numbers: {Issued}",
+                + "Last year's accreditation planned: {Outcomes}. Written: {Written}. Issued numbers: {Issued}",
             mode,
             plans.Count,
             outcomes,
+            written,
             issued
         );
     }
