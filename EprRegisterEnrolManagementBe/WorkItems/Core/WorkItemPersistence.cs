@@ -163,8 +163,8 @@ public interface IWorkItemPersistence
     /// <para>
     /// RA-764: lets a one-off correction locate its targets by an exact
     /// identity (the registration number) rather than by the value it is about
-    /// to change. RA-763 uses it the same way, to find the 2027 cases and the
-    /// holder of a corrected number. Temporary: it exists only for
+    /// to change. RA-784 uses it to find the 2027 cases by accreditation year.
+    /// Temporary: it exists only for
     /// <c>ReAccreditationOrganisationNameCorrectionMigration</c> and
     /// <c>ReAccreditationLastYearsAccreditationBackfillMigration</c>, and is
     /// removed with them. Do not use it elsewhere.

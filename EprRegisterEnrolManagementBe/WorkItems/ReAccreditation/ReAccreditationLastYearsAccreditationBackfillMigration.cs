@@ -50,8 +50,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///
 /// <para>Never creates a work item and never changes state. Every work item is
 /// planned before anything is written. Each write is one atomic update of the
-/// field and its audit entry, filtered on the field still holding what was
-/// planned from (<see cref="IWorkItemPersistence.CorrectPayloadFieldAsync"/>),
+/// field and its audit entry, filtered on the field still being empty
+/// (<see cref="IWorkItemPersistence.CorrectPayloadFieldAsync"/>),
 /// so a re-run is a no-op and an audit entry never describes a change that did
 /// not happen.</para>
 ///
@@ -101,7 +101,11 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
     internal const string RegistrationNumberField = "registrationNumber";
     internal const string OperatorOrgNumberField = "operatorOrgNumber";
-    internal const string AccreditationYearField = "accreditationYear";
+    internal const string ApplicationReferenceField = "applicationReference";
+
+    // The organisation's number and name are a business's, as on the public register, so they may be logged; they
+    // let whoever reviews the dry run see which organisation each line is about.
+    internal const string OrganisationNameField = "organisationName";
 
     /// <summary>What one run did. Returned for tests; the logs say the same.</summary>
     internal enum RunResult
@@ -162,7 +166,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         }
         catch (Exception ex)
         {
-            logger.LogWarning(
+            logger.LogError(
                 ex,
                 "RA-784 last year's accreditation backfill failed; continuing startup. Will retry on next boot."
             );
@@ -211,7 +215,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
         var items = await persistence.FindByPayloadFieldAsync(
             ReAccreditationType.Id,
-            AccreditationYearField,
+            Core.AccreditationYear.Field,
             AccreditationYear,
             cancellationToken
         );
@@ -292,6 +296,15 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         }
 
         var held = ReadLastYears(payload);
+        if (held is null && HoldsAValue(payload, PayloadKey))
+        {
+            return NotPlanned(
+                item,
+                Outcome.HoldsADifferentNumber,
+                $"its {PayloadKey} isn't a year and an accreditation number; left as it is"
+            );
+        }
+
         var (outcome, detail) = row.AccreditationNumber switch
         {
             null => (
@@ -347,7 +360,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
     // year's number but the year and material code; a first-time number keeps
     // the registration's agency, process type and org, with a random sequence.
     // The material code is the application's, so it isn't compared (a 2026
-    // glass number ends GL).
+    // glass number can end GL, as Comhairle Nan Eilean Siar's does).
     private static (IssuedNumber, string?) CheckIssuedNumber(
         string? issued,
         string registrationNumber,
@@ -395,7 +408,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
                 + "{IssuedNumber}. {Detail}",
             mode,
             plan.Item.Id,
-            ReadString(plan.Item.Payload, "applicationReference"),
+            ReadString(plan.Item.Payload, ApplicationReferenceField),
             ReadOrgNumber(plan.Item.Payload),
             ReadString(plan.Item.Payload, OrganisationNameField),
             ReadString(plan.Item.Payload, RegistrationNumberField),
@@ -409,46 +422,60 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             return;
         }
 
-        var now = _timeProvider.GetUtcNow().UtcDateTime;
-        if (plan.Outcome == Outcome.Added)
+        if (plan.Outcome != Outcome.Added)
         {
-            var number = plan.RegisterAccreditationNumber!;
-            var written = await persistence.CorrectPayloadFieldAsync(
+            return;
+        }
+
+        // Only an Added plan reaches here, and PlanFor only gives that outcome to a register row with a number.
+        var number = plan.RegisterAccreditationNumber!;
+        bool written;
+        try
+        {
+            written = await persistence.CorrectPayloadFieldAsync(
                 plan.Item.Id,
                 PayloadKey,
                 BsonNull.Value,
                 new BsonDocument { ["year"] = LastYear, ["accreditationNumber"] = number },
-                BuildAddedAuditEntry(number, now),
+                BuildAddedAuditEntry(number, _timeProvider.GetUtcNow().UtcDateTime),
                 cancellationToken
             );
-            LogWrite(written, plan, $"now holds {LastYear} accreditation {number}", confirmedBy);
         }
-    }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            // One work item's failure doesn't stop the run: the rest are still written and the report
+            // still logged. The write is atomic, so nothing was written to this one; the next run retries it.
+            logger.LogError(
+                ex,
+                "RA-784 work item {WorkItemId}: the write failed, so nothing was written to it. The next run "
+                    + "retries it.",
+                plan.Item.Id
+            );
+            return;
+        }
 
-    private void LogWrite(bool written, Plan plan, string change, string confirmedBy)
-    {
         if (!written)
         {
-            // Filtered on the planned value, so this only happens if something
-            // changed it between planning and now. Nothing was written; the
-            // next run re-plans from fresh data.
+            // Filtered on the field still being empty, so this only happens if something gave it a
+            // number between planning and now. Nothing was written; the next run re-plans from fresh data.
             logger.LogWarning(
-                "RA-784 work item {WorkItemId} changed after planning, so nothing was written to it "
-                    + "({Change}). Re-run the dry run to see its current state.",
-                plan.Item.Id,
-                change
+                "RA-784 work item {WorkItemId} gained last year's accreditation after planning, so nothing "
+                    + "was written to it. Re-run the dry run to see its current state.",
+                plan.Item.Id
             );
             return;
         }
 
         logger.LogInformation(
             "RA-784 APPLIED: work item {WorkItemId} ({ApplicationReference}, org {OrgNumber} "
-                + "{OrganisationName}) {Change}. Spot check confirmed by {ConfirmedBy}",
+                + "{OrganisationName}) now holds {Year} accreditation {AccreditationNumber}. Spot check "
+                + "confirmed by {ConfirmedBy}",
             plan.Item.Id,
-            ReadString(plan.Item.Payload, "applicationReference"),
+            ReadString(plan.Item.Payload, ApplicationReferenceField),
             ReadOrgNumber(plan.Item.Payload),
             ReadString(plan.Item.Payload, OrganisationNameField),
-            change,
+            LastYear,
+            number,
             confirmedBy
         );
     }
@@ -482,7 +509,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
                 ReadString(plan.Item.Payload, OrganisationNameField),
                 ReadString(plan.Item.Payload, RegistrationNumberField),
                 plan.Item.Id,
-                ReadString(plan.Item.Payload, "applicationReference")
+                ReadString(plan.Item.Payload, ApplicationReferenceField)
             );
         }
     }
@@ -559,9 +586,8 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         return (y, number);
     }
 
-    // The organisation's number and name are a business's, as on the public register, so they may be logged; they
-    // let whoever reviews the dry run see which organisation each line is about.
-    private const string OrganisationNameField = "organisationName";
+    private static bool HoldsAValue(BsonDocument payload, string field) =>
+        payload.TryGetValue(field, out var value) && !value.IsBsonNull;
 
     private static int? OrgNumberOf(BsonDocument? payload) =>
         payload is not null

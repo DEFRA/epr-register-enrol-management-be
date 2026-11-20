@@ -222,10 +222,11 @@ internal sealed class ReAccreditationModule : IWorkItemModule
         // it runs in StartedAsync, after TestOrganisationFixtureHostedService
         // has reset the e2e fixtures; see the class remarks. No audit entry.
         services.AddHostedService<ReAccreditationOrganisationNameCorrectionMigration>();
-        // RA-763: one-off backfill of last year's accreditation number onto 2027
-        // cases from the 2026 public register, and correction of Clearfield's
-        // 2027 number, each with an audit entry. Gated like RA-764 and, like it,
-        // a hosted lifecycle service so it runs after the e2e fixtures reset.
+        // RA-784: one-off backfill of last year's accreditation number onto 2027
+        // cases that don't hold one, from the 2026 public register, each with an
+        // audit entry. It never replaces a number already held. Gated like
+        // RA-764 and, like it, a hosted lifecycle service so it runs after the
+        // e2e fixtures reset.
         services.AddHostedService<ReAccreditationLastYearsAccreditationBackfillMigration>();
         // RA-132: module-scoped approval service that owns the bespoke
         // approval workflow (id issuance, SLA clock stop, queued publishing).

@@ -49,7 +49,7 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
 
     public ReAccreditationLastYearsAccreditationBackfillMigrationTests(MongoIntegrationFixture fixture)
     {
-        _databaseName = MongoIntegrationFixture.NewDatabaseName("ra763");
+        _databaseName = MongoIntegrationFixture.NewDatabaseName("ra784");
         _clientFactory = new TestMongoDbClientFactory(fixture.ConnectionString, _databaseName);
         _persistence = new WorkItemPersistence(_clientFactory, NullLoggerFactory.Instance);
     }
@@ -213,11 +213,16 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
     {
         var item = await EggerAsync(p => p["organisationName"] = "Egger (UK) Limited");
 
+        await RunAsync(apply: false);
         await RunAsync();
 
-        var plan = PlanLineFor(item);
-        Assert.Contains("org 500027 Egger (UK) Limited", plan, StringComparison.Ordinal);
-        Assert.Contains(EggerAccreditation, plan, StringComparison.Ordinal);
+        Assert.Contains(
+            _logger.Records,
+            r => r.Message.StartsWith("RA-784 DRY RUN", StringComparison.Ordinal)
+                && r.Message.Contains($"work item {item.Id} (", StringComparison.Ordinal)
+                && r.Message.Contains("org 500027 Egger (UK) Limited", StringComparison.Ordinal)
+                && r.Message.Contains(EggerAccreditation, StringComparison.Ordinal)
+        );
         Assert.True(Logged(LogLevel.Information, $"APPLIED: work item {item.Id} ("));
         Assert.Contains(
             _logger.Records,
@@ -436,7 +441,6 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         var reloaded = await ReloadAsync(item);
         Assert.Equal(ClearfieldIssued, ReAccreditationAccreditationNumber.Read(reloaded.Payload));
         Assert.Equal(ClearfieldAccreditation, LastYears(reloaded)!["accreditationNumber"].AsString);
-        Assert.DoesNotContain(reloaded.AuditLog, e => e.Action == "accreditation-number-corrected");
         Assert.True(Logged(LogLevel.Warning, nameof(Migration.IssuedNumber.DoesNotFitTheRegister)));
     }
 
@@ -556,7 +560,7 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
     }
 
     [Fact]
-    public async Task The_summary_counts_every_outcome()
+    public async Task The_summary_counts_the_outcomes_and_issued_numbers()
     {
         await EggerAsync();
         await SeedAsync(DtsRegistration, 500237);
@@ -597,7 +601,7 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         var planned = await ReloadAsync(await EggerAsync());
         var racing = Substitute.For<IWorkItemPersistence>();
         racing
-            .FindByPayloadFieldAsync(ReAccreditationType.Id, "accreditationYear", Arg.Any<BsonValue>(), Arg.Any<CancellationToken>())
+            .FindByPayloadFieldAsync(ReAccreditationType.Id, AccreditationYear.Field, Arg.Any<BsonValue>(), Arg.Any<CancellationToken>())
             .Returns([planned]);
         racing
             .CorrectPayloadFieldAsync(default, default!, default!, default!, default!, Ct)
@@ -606,8 +610,49 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         var result = await NewMigration().ApplyAsync(racing, Ct);
 
         Assert.Equal(Migration.RunResult.Applied, result);
-        Assert.True(Logged(LogLevel.Warning, "changed after planning"));
+        Assert.True(Logged(LogLevel.Warning, "gained last year's accreditation after planning"));
         Assert.False(Logged(LogLevel.Information, "APPLIED"));
+    }
+
+    // One work item's failed write doesn't stop the run: the rest are written and the report is still logged.
+    [Fact]
+    public async Task A_write_that_fails_is_logged_and_the_run_carries_on()
+    {
+        var failing = await ReloadAsync(await EggerAsync());
+        var other = await ReloadAsync(await SeedAsync(JpRecyclingRegistration, 500302));
+        var persistence = Substitute.For<IWorkItemPersistence>();
+        persistence
+            .FindByPayloadFieldAsync(ReAccreditationType.Id, AccreditationYear.Field, Arg.Any<BsonValue>(), Arg.Any<CancellationToken>())
+            .Returns([failing, other]);
+        persistence
+            .CorrectPayloadFieldAsync(failing.Id, default!, default!, default!, default!, default)
+            .ReturnsForAnyArgs(callInfo =>
+                callInfo.ArgAt<Guid>(0) == failing.Id
+                    ? throw new TimeoutException("mongo timed out")
+                    : Task.FromResult(true)
+            );
+
+        var result = await NewMigration().ApplyAsync(persistence, Ct);
+
+        Assert.Equal(Migration.RunResult.Applied, result);
+        Assert.True(Logged(LogLevel.Error, $"work item {failing.Id}: the write failed"));
+        Assert.True(Logged(LogLevel.Information, $"APPLIED: work item {other.Id} ("));
+        Assert.True(Logged(LogLevel.Information, "backfill complete"));
+    }
+
+    // A value that isn't a year and an accreditation number is reported, not overwritten.
+    [Fact]
+    public async Task A_malformed_last_years_number_is_reported_and_left_alone()
+    {
+        var item = await EggerAsync(p => p[Migration.PayloadKey] = "A26ER5000270063WO");
+
+        await RunAsync();
+
+        var reloaded = await ReloadAsync(item);
+        Assert.Equal("A26ER5000270063WO", reloaded.Payload[Migration.PayloadKey].AsString);
+        Assert.Empty(reloaded.AuditLog);
+        Assert.Contains(nameof(Migration.Outcome.HoldsADifferentNumber), PlanLineFor(item), StringComparison.Ordinal);
+        Assert.Contains("isn't a year and an accreditation number", PlanLineFor(item), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -635,7 +680,7 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
 
         await migration.StartedAsync(Ct);
 
-        Assert.True(Logged(LogLevel.Warning, "continuing startup"));
+        Assert.True(Logged(LogLevel.Error, "continuing startup"));
     }
 
     [Fact]

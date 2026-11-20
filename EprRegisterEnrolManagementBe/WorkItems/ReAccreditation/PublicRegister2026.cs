@@ -1,6 +1,6 @@
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
-// RA-763: the 2026 accreditation number for each 2026 registration, taken from
+// RA-784: the 2026 accreditation number for each 2026 registration, taken from
 // the public register of reprocessors and exporters exported on 5 November 2026
 // (394 rows). 2026 accreditations were granted in ReEx, not here, so this is the
 // only copy this service has of them. The backfill uses it to give existing
@@ -19,15 +19,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 // if they turn out not to be. Six rows look wrong, and each is commented where it is.
 // One of them, J. and A. Young's, is published without the last letter of its
 // registration number, so it is keyed by the full number (see
-// JAndAYoungPublishedRegistrationNumber). PublicRegister2026Tests pins the data, so a
-// change to it is a deliberate one.
+// JAndAYoungPublishedRegistrationNumber). PublicRegister2026Tests checks the row
+// counts, every row's shape and the rows named below, so most changes to it fail a test.
+// The operator backend holds the same rows (AccreditationApplication/Startup/PublicRegister2026.cs):
+// a change to one must be made to both.
 //
 // A point-in-time snapshot, not a live feed.
 internal static class PublicRegister2026
 {
     /// <summary>
     /// J. and A. Young's registration number as the register prints it, missing its last letter. Their
-    /// row is keyed by the full number, R26WR5000950025PL. An application still holding this one can't be
+    /// row is keyed by the full number, R26WR5000950025PL. A work item still holding this one can't be
     /// issued a 2027 number until its registration number is put right, so the backfill reports it.
     /// </summary>
     public const string JAndAYoungPublishedRegistrationNumber = "R26WR5000950025P";
@@ -40,8 +42,9 @@ internal static class PublicRegister2026
             // The accreditation number's org is 500532 (Polyclear Ltd's), not 500302, so the 2027
             // renewal keeps 500532.
             ["R26WR5003020027PL"] = new("A26WR5005320025PL", 500302, "JP RECYCLING LTD"),
-            // The accreditation number ends GL, as 2026 glass numbers from ReEx do. The 2027
-            // number takes its material code from the application instead (RA-783).
+            // The accreditation number ends GL, the only one in the register that does (the
+            // other glass numbers end GR or GO). The 2027 number takes its material code from the
+            // application instead (RA-783).
             ["R26SR5005410022GO"] = new("A26SR5005410022GL", 500541, "Comhairle Nan Eilean Siar"),
             // The Org ID column says 500069, but both numbers carry 500226. Org 500069 does hold
             // this registration (RA-764).
