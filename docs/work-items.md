@@ -359,6 +359,9 @@ type is configured. Every setting is code, not runtime data:
   `accreditationApplicationId` (registration-only) 404 with no operator
   call; otherwise the live read: 200, 404 (not found or not `Approved`) or
   503 (the read failed, including `OperatorBackendApi:Enabled=false`). The
+  summary carries `prns` (tonnage band, authorisers by name and email) and
+  `businessPlan` as the operator backend allow-lists them, never the per-contact
+  new marker. The
   start date is 1 January of the accreditation year.
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services

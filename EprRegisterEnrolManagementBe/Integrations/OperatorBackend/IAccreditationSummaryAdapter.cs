@@ -79,10 +79,46 @@ public sealed record OperatorAccreditationSummary(
     string Material,
     string? GlassRecyclingProcess,
     string? SiteAddress,
-    string? CompanyRegisteredAddress
+    string? CompanyRegisteredAddress,
+    OperatorSummaryPrns? Prns = null,
+    OperatorSummaryBusinessPlan? BusinessPlan = null
 )
 {
     /// <summary>Whether this is a usable summary: it has what the tab cannot do without. Not on any wire.</summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public bool IsUsable => AccreditationYear > 0 && !string.IsNullOrWhiteSpace(Material);
+}
+
+/// <summary>
+/// The PRN details of the summary: the planned tonnage band (the enum's name, e.g. <c>UpTo5000</c>) and the
+/// authorisers. Shaped like the payload's <c>prns</c>, so management-fe reads it with the code it already has.
+/// </summary>
+public sealed record OperatorSummaryPrns(
+    string? PlannedTonnageBand,
+    IReadOnlyList<OperatorSummaryAuthoriser> Authorisers
+);
+
+/// <summary>An authoriser by name and email. The operator backend never says which are new.</summary>
+public sealed record OperatorSummaryAuthoriser(string? FullName, string? Email);
+
+/// <summary>
+/// The business plan of the summary: each category's share of PRN income and narrative. Shaped like the payload's
+/// <c>businessPlan</c>.
+/// </summary>
+public sealed record OperatorSummaryBusinessPlan
+{
+    public int? NewInfrastructurePercent { get; init; }
+    public int? PriceSupportPercent { get; init; }
+    public int? BusinessCollectionsPercent { get; init; }
+    public int? CommunicationsPercent { get; init; }
+    public int? NewMarketsPercent { get; init; }
+    public int? NewUsesPercent { get; init; }
+    public int? OtherPercent { get; init; }
+    public string? NewInfrastructureDetail { get; init; }
+    public string? PriceSupportDetail { get; init; }
+    public string? BusinessCollectionsDetail { get; init; }
+    public string? CommunicationsDetail { get; init; }
+    public string? NewMarketsDetail { get; init; }
+    public string? NewUsesDetail { get; init; }
+    public string? OtherDetail { get; init; }
 }

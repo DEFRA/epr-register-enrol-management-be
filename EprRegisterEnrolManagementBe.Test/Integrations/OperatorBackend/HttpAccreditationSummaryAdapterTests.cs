@@ -30,7 +30,20 @@ public class HttpAccreditationSummaryAdapterTests
           "material": "glass",
           "glassRecyclingProcess": "glass_re_melt",
           "siteAddress": "1 High Street",
-          "companyRegisteredAddress": "2 Registered Road"
+          "companyRegisteredAddress": "2 Registered Road",
+          "prns": {
+            "plannedTonnageBand": "UpTo5000",
+            "authorisers": [
+              { "fullName": "Ada Authoriser", "email": "ada@example.com" },
+              { "fullName": "Bob Signer", "email": "bob@example.com" }
+            ]
+          },
+          "businessPlan": {
+            "newInfrastructurePercent": 60,
+            "newInfrastructureDetail": "A new sorting line",
+            "priceSupportPercent": 40,
+            "priceSupportDetail": null
+          }
         }
         """;
 
@@ -113,6 +126,27 @@ public class HttpAccreditationSummaryAdapterTests
         );
         Assert.True(request.Headers.Contains("x-cdp-auth-signature"));
         Assert.Equal("epr-register-enrol-management-be", request.Headers.GetValues("x-cdp-client-id").Single());
+    }
+
+    [Fact]
+    public async Task The_prn_details_and_business_plan_are_carried_through()
+    {
+        var (adapter, _) = BuildSut(_ => Json(HttpStatusCode.OK, UsableBody));
+
+        var result = await Read(adapter);
+
+        var prns = result.Summary!.Prns!;
+        Assert.Equal("UpTo5000", prns.PlannedTonnageBand);
+        Assert.Equal(
+            [("Ada Authoriser", "ada@example.com"), ("Bob Signer", "bob@example.com")],
+            prns.Authorisers.Select(a => (a.FullName, a.Email))
+        );
+        var plan = result.Summary.BusinessPlan!;
+        Assert.Equal(60, plan.NewInfrastructurePercent);
+        Assert.Equal("A new sorting line", plan.NewInfrastructureDetail);
+        Assert.Equal(40, plan.PriceSupportPercent);
+        Assert.Null(plan.PriceSupportDetail);
+        Assert.Null(plan.OtherPercent);
     }
 
     [Fact]

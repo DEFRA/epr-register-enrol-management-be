@@ -35,7 +35,12 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         Material: "glass",
         GlassRecyclingProcess: "glass_re_melt",
         SiteAddress: "1 High Street, Leeds, LS1 1AA",
-        CompanyRegisteredAddress: "2 Registered Road, York, YO1 1AA"
+        CompanyRegisteredAddress: "2 Registered Road, York, YO1 1AA",
+        Prns: new OperatorSummaryPrns(
+            "UpTo500",
+            [new OperatorSummaryAuthoriser("Ada Authoriser", "ada@example.com")]
+        ),
+        BusinessPlan: new OperatorSummaryBusinessPlan { OtherPercent = 100, OtherDetail = "Everything else" }
     );
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -130,9 +135,19 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
                 "glassRecyclingProcess",
                 "siteAddress",
                 "companyRegisteredAddress",
+                "prns",
+                "businessPlan",
             ],
             accreditation.EnumerateObject().Select(p => p.Name)
         );
+        var prns = accreditation.GetProperty("prns");
+        Assert.Equal("UpTo500", prns.GetProperty("plannedTonnageBand").GetString());
+        var authoriser = Assert.Single(prns.GetProperty("authorisers").EnumerateArray());
+        Assert.Equal("Ada Authoriser", authoriser.GetProperty("fullName").GetString());
+        Assert.Equal("ada@example.com", authoriser.GetProperty("email").GetString());
+        var plan = accreditation.GetProperty("businessPlan");
+        Assert.Equal(100, plan.GetProperty("otherPercent").GetInt32());
+        Assert.Equal("Everything else", plan.GetProperty("otherDetail").GetString());
         // No re-accreditation work item holds this accreditation number: 1 January of the accreditation year.
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
         await adapter
@@ -392,6 +407,13 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         Assert.Equal(2026, accreditation.GetProperty("accreditationYear").GetInt32());
         Assert.Equal("exporter", accreditation.GetProperty("wasteProcessingType").GetString());
         Assert.Equal("plastic", accreditation.GetProperty("material").GetString());
+        var stubPrns = accreditation.GetProperty("prns");
+        Assert.Equal("UpTo5000", stubPrns.GetProperty("plannedTonnageBand").GetString());
+        Assert.NotEmpty(stubPrns.GetProperty("authorisers").EnumerateArray());
+        Assert.NotEqual(
+            JsonValueKind.Null,
+            accreditation.GetProperty("businessPlan").GetProperty("newInfrastructurePercent").ValueKind
+        );
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
         await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
     }

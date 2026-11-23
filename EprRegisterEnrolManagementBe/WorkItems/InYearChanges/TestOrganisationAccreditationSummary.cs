@@ -22,6 +22,20 @@ internal static class TestOrganisationAccreditationSummary
             Material: "plastic",
             GlassRecyclingProcess: null,
             SiteAddress: "1 Test Street, Testville, TE1 1ST",
-            CompanyRegisteredAddress: "2 Registered Road, Testville, TE2 2ST"
+            CompanyRegisteredAddress: "2 Registered Road, Testville, TE2 2ST",
+            Prns: new OperatorSummaryPrns(
+                "UpTo5000",
+                [
+                    new OperatorSummaryAuthoriser("Ada Authoriser", "ada.authoriser@example.test"),
+                    new OperatorSummaryAuthoriser("Bob Signer", "bob.signer@example.test"),
+                ]
+            ),
+            BusinessPlan: new OperatorSummaryBusinessPlan
+            {
+                NewInfrastructurePercent = 60,
+                NewInfrastructureDetail = "A new sorting line",
+                PriceSupportPercent = 40,
+                PriceSupportDetail = "Support for collection prices",
+            }
         );
 }
