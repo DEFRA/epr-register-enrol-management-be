@@ -81,7 +81,8 @@ public sealed record OperatorAccreditationSummary(
     string? SiteAddress,
     string? CompanyRegisteredAddress,
     OperatorSummaryPrns? Prns = null,
-    OperatorSummaryBusinessPlan? BusinessPlan = null
+    OperatorSummaryBusinessPlan? BusinessPlan = null,
+    IReadOnlyList<OperatorSummarySite>? OverseasSites = null
 )
 {
     /// <summary>Whether this is a usable summary: it has what the tab cannot do without. Not on any wire.</summary>
@@ -122,3 +123,32 @@ public sealed record OperatorSummaryBusinessPlan
     public string? NewUsesDetail { get; init; }
     public string? OtherDetail { get; init; }
 }
+
+/// <summary>
+/// An overseas reprocessing site on the accreditation, shaped like the payload's site so management-fe reads it with
+/// the code it already has. Only selected sites are answered, in ORS id then site id order. The operator backend
+/// never says which sites are new (a site stays "new" for the year after grant), so none is marked. Interim sites and
+/// BES evidence files are added by later tasks.
+/// </summary>
+public sealed record OperatorSummarySite(
+    int SiteId,
+    string? OrsId,
+    string? SiteName,
+    string? SiteAddress,
+    string? AddressLine1,
+    string? AddressLine2,
+    string? TownOrCity,
+    string? Country,
+    string? Coordinates,
+    string? ContactName,
+    string? ContactEmail,
+    string? ContactPhone,
+    IReadOnlyList<string>? OperationCodes,
+    string? Code1,
+    string? Code2,
+    string? Code3,
+    string? RepatriatedLoads,
+    bool? ConditionsOfExport,
+    bool IsEu,
+    bool IsOecd
+);

@@ -40,7 +40,32 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
             "UpTo500",
             [new OperatorSummaryAuthoriser("Ada Authoriser", "ada@example.com")]
         ),
-        BusinessPlan: new OperatorSummaryBusinessPlan { OtherPercent = 100, OtherDetail = "Everything else" }
+        BusinessPlan: new OperatorSummaryBusinessPlan { OtherPercent = 100, OtherDetail = "Everything else" },
+        OverseasSites:
+        [
+            new OperatorSummarySite(
+                SiteId: 7,
+                OrsId: "001",
+                SiteName: "Speira GmbH",
+                SiteAddress: null,
+                AddressLine1: "1 Test Strasse",
+                AddressLine2: null,
+                TownOrCity: "Bremen",
+                Country: "Germany",
+                Coordinates: "51.847,7.123",
+                ContactName: "Hans Contact",
+                ContactEmail: "hans@example.de",
+                ContactPhone: "+49 123",
+                OperationCodes: ["R4"],
+                Code1: "B1010",
+                Code2: null,
+                Code3: null,
+                RepatriatedLoads: "As per article 18",
+                ConditionsOfExport: true,
+                IsEu: true,
+                IsOecd: true
+            ),
+        ]
     );
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -137,6 +162,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
                 "companyRegisteredAddress",
                 "prns",
                 "businessPlan",
+                "overseasSites",
             ],
             accreditation.EnumerateObject().Select(p => p.Name)
         );
@@ -148,6 +174,12 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         var plan = accreditation.GetProperty("businessPlan");
         Assert.Equal(100, plan.GetProperty("otherPercent").GetInt32());
         Assert.Equal("Everything else", plan.GetProperty("otherDetail").GetString());
+        var site = Assert.Single(accreditation.GetProperty("overseasSites").EnumerateArray());
+        Assert.Equal("001", site.GetProperty("orsId").GetString());
+        Assert.Equal("Speira GmbH", site.GetProperty("siteName").GetString());
+        Assert.Equal("Bremen", site.GetProperty("townOrCity").GetString());
+        Assert.Equal("R4", Assert.Single(site.GetProperty("operationCodes").EnumerateArray()).GetString());
+        Assert.True(site.GetProperty("isEu").GetBoolean());
         // No re-accreditation work item holds this accreditation number: 1 January of the accreditation year.
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
         await adapter
@@ -414,6 +446,15 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
             JsonValueKind.Null,
             accreditation.GetProperty("businessPlan").GetProperty("newInfrastructurePercent").ValueKind
         );
+        // Several sites, in ORS id order, none of them marked new.
+        var stubSites = accreditation.GetProperty("overseasSites").EnumerateArray().ToList();
+        Assert.True(stubSites.Count >= 3);
+        Assert.Equal(
+            stubSites.Select(s => s.GetProperty("orsId").GetString()).OrderBy(id => id, StringComparer.Ordinal),
+            stubSites.Select(s => s.GetProperty("orsId").GetString())
+        );
+        Assert.All(stubSites, s => Assert.False(string.IsNullOrWhiteSpace(s.GetProperty("siteName").GetString())));
+        Assert.DoesNotContain("isNewSite", accreditation.GetRawText(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
         await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
     }

@@ -361,7 +361,9 @@ type is configured. Every setting is code, not runtime data:
   503 (the read failed, including `OperatorBackendApi:Enabled=false`). The
   summary carries `prns` (tonnage band, authorisers by name and email) and
   `businessPlan` as the operator backend allow-lists them, never the per-contact
-  new marker. The
+  new marker. `overseasSites` are the sites the operator backend answers: selected
+  ones only (a requested ORS is absent until granted), in ORS id then site id
+  order, with no new-site markers; the `e2e-` stub has four. The
   start date is 1 January of the accreditation year.
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services

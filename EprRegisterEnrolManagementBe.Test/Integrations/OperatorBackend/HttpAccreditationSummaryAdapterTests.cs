@@ -43,7 +43,32 @@ public class HttpAccreditationSummaryAdapterTests
             "newInfrastructureDetail": "A new sorting line",
             "priceSupportPercent": 40,
             "priceSupportDetail": null
-          }
+          },
+          "overseasSites": [
+            {
+              "siteId": 7,
+              "orsId": "001",
+              "siteName": "Speira GmbH",
+              "siteAddress": "Flat line",
+              "addressLine1": "1 Test Strasse",
+              "addressLine2": "Block B",
+              "townOrCity": "Bremen",
+              "country": "Germany",
+              "coordinates": "51.847,7.123",
+              "contactName": "Hans Contact",
+              "contactEmail": "hans@example.de",
+              "contactPhone": "+49 123",
+              "operationCodes": ["R4", "R5"],
+              "code1": "B1010",
+              "code2": "B1020",
+              "code3": "B1030",
+              "repatriatedLoads": "As per article 18",
+              "conditionsOfExport": true,
+              "isEu": true,
+              "isOecd": false
+            },
+            { "siteId": 8, "orsId": "002", "siteName": "Second GmbH" }
+          ]
         }
         """;
 
@@ -147,6 +172,51 @@ public class HttpAccreditationSummaryAdapterTests
         Assert.Equal(40, plan.PriceSupportPercent);
         Assert.Null(plan.PriceSupportDetail);
         Assert.Null(plan.OtherPercent);
+    }
+
+    [Fact]
+    public async Task The_overseas_sites_are_carried_through_in_the_order_answered()
+    {
+        var (adapter, _) = BuildSut(_ => Json(HttpStatusCode.OK, UsableBody));
+
+        var result = await Read(adapter);
+
+        var sites = result.Summary!.OverseasSites!;
+        Assert.Equal(["001", "002"], sites.Select(site => site.OrsId));
+        var site = sites[0];
+        Assert.Equal(7, site.SiteId);
+        Assert.Equal("Speira GmbH", site.SiteName);
+        Assert.Equal("Flat line", site.SiteAddress);
+        Assert.Equal("1 Test Strasse", site.AddressLine1);
+        Assert.Equal("Block B", site.AddressLine2);
+        Assert.Equal("Bremen", site.TownOrCity);
+        Assert.Equal("Germany", site.Country);
+        Assert.Equal("51.847,7.123", site.Coordinates);
+        Assert.Equal("Hans Contact", site.ContactName);
+        Assert.Equal("hans@example.de", site.ContactEmail);
+        Assert.Equal("+49 123", site.ContactPhone);
+        Assert.Equal(["R4", "R5"], site.OperationCodes);
+        Assert.Equal(("B1010", "B1020", "B1030"), (site.Code1, site.Code2, site.Code3));
+        Assert.Equal("As per article 18", site.RepatriatedLoads);
+        Assert.True(site.ConditionsOfExport);
+        Assert.True(site.IsEu);
+        Assert.False(site.IsOecd);
+    }
+
+    [Fact]
+    public async Task A_body_without_overseas_sites_is_still_usable()
+    {
+        var (adapter, _) = BuildSut(_ =>
+            Json(
+                HttpStatusCode.OK,
+                """{ "accreditationYear": 2026, "material": "plastic" }"""
+            )
+        );
+
+        var result = await Read(adapter);
+
+        Assert.Equal(AccreditationSummaryReadOutcome.Success, result.Outcome);
+        Assert.Null(result.Summary!.OverseasSites);
     }
 
     [Fact]
