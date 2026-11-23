@@ -19,7 +19,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// separate one, because <c>ReplaceAsync</c> is version-guarded and an out-of-band
 /// append between load and save would make the save throw.
 ///
-/// Concurrency is handled as in <see cref="ReAccreditationDulyMakingService"/>:
+/// Concurrency is handled as in <see cref="Workflows.StandardLifecycle.StandardDulyMakingService"/>:
 /// reload and re-validate on a <see cref="WorkItemConcurrencyException"/>, up to
 /// <see cref="MaxAttempts"/> times.
 /// </summary>
@@ -33,7 +33,7 @@ internal sealed class ReAccreditationChangePaymentDateService(
     private const int MaxAttempts = 3;
     // A dedicated audit action, not `action-applied`: this is not a state
     // transition, and a transition-shaped entry would be mistaken for a resume
-    // entry by ReAccreditationUpdatedOrigin (same pattern as `sla-extended`).
+    // entry by StandardUpdatedOrigin (same pattern as `sla-extended`).
     private const string AuditAction = "payment-date-changed";
     private const string AuditActionDisplayName = "Payment date changed";
     private const string DateFormat = "yyyy-MM-dd";

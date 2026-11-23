@@ -2019,108 +2019,13 @@ public class WorkItemEndpointsTests
     /// built. Behaviour is otherwise identical to the wrapped
     /// persistence — tests still go end-to-end against ephemeral Mongo.
     /// </summary>
-    public sealed class RecordingPersistence(IWorkItemPersistence inner) : IWorkItemPersistence
+    public sealed class RecordingPersistence(IWorkItemPersistence inner) : ForwardingWorkItemPersistence(inner)
     {
-        public IWorkItemPersistence Inner { get; } = inner;
+        public new IWorkItemPersistence Inner => base.Inner;
+
         public WorkItemQuery? LastQuery { get; private set; }
 
-        public Task<bool> SetPayloadFieldAsync(
-            Guid workItemId,
-            string fieldName,
-            BsonValue value,
-            CancellationToken cancellationToken = default) =>
-            Inner.SetPayloadFieldAsync(workItemId, fieldName, value, cancellationToken);
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
-            string typeId,
-            string fieldName,
-            string prefix,
-            CancellationToken cancellationToken = default
-        ) => Inner.FindByPayloadFieldPrefixAsync(typeId, fieldName, prefix, cancellationToken);
-
-        public Task<bool> CorrectPayloadFieldAsync(
-            Guid workItemId,
-            string fieldName,
-            BsonValue expectedValue,
-            BsonValue newValue,
-            WorkItemAuditEntry auditEntry,
-            CancellationToken cancellationToken = default
-        ) =>
-            Inner.CorrectPayloadFieldAsync(
-                workItemId,
-                fieldName,
-                expectedValue,
-                newValue,
-                auditEntry,
-                cancellationToken
-            );
-
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
-
-            string typeId,
-
-            string fieldName,
-
-            BsonValue value,
-
-            CancellationToken cancellationToken = default
-
-        ) => Inner.FindByPayloadFieldAsync(typeId, fieldName, value, cancellationToken);
-
-
-        public Task<bool> CompareAndSetPayloadFieldAsync(
-
-            Guid workItemId,
-
-            string fieldName,
-
-            BsonValue expectedValue,
-
-            BsonValue newValue,
-
-            CancellationToken cancellationToken = default
-
-        ) =>
-
-            Inner.CompareAndSetPayloadFieldAsync(
-
-                workItemId,
-
-                fieldName,
-
-                expectedValue,
-
-                newValue,
-
-                cancellationToken
-
-            );
-
-        public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            Inner.CreateAsync(workItem, cancellationToken);
-
-        public Task CreateAsync(
-            MongoDB.Driver.IClientSessionHandle session,
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => Inner.CreateAsync(session, workItem, cancellationToken);
-
-        public Task<bool> CreateIfAbsentAsync(
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => Inner.CreateIfAbsentAsync(workItem, cancellationToken);
-
-        public Task<WorkItem?> GetByIdAsync(
-            Guid id,
-            CancellationToken cancellationToken = default
-        ) => Inner.GetByIdAsync(id, cancellationToken);
-
-        public Task<WorkItem?> FindBySubmissionKeyAsync(
-            string typeId, string payloadField, string value, CancellationToken cancellationToken = default
-        ) => Inner.FindBySubmissionKeyAsync(typeId, payloadField, value, cancellationToken);
-
-        public Task<WorkItemPage> QueryAsync(
+        public override Task<WorkItemPage> QueryAsync(
             WorkItemQuery query,
             CancellationToken cancellationToken = default
         )
@@ -2128,10 +2033,5 @@ public class WorkItemEndpointsTests
             LastQuery = query;
             return Inner.QueryAsync(query, cancellationToken);
         }
-
-        public Task ReplaceAsync(
-            WorkItem workItem,
-            CancellationToken cancellationToken = default
-        ) => Inner.ReplaceAsync(workItem, cancellationToken);
     }
 }

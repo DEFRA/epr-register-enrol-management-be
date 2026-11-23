@@ -5,29 +5,36 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.HeaderPropagation;
 using Microsoft.Extensions.Primitives;
 
-namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 /// <summary>
+/// RA-495: the post-commit operator-journey status push for one
+/// Standard-workflow type, sent to that type's own push target
+/// (<see cref="IStandardLifecycleStrategy.OperatorJourneyPush"/>); a type with
+/// no push target is never pushed. Moved unchanged from re-accreditation's
+/// RA-368 hook below (RA-495 review: re-accreditation now registers it
+/// through <c>AddStandardLifecycle</c> like any other opted-in type).
+///
 /// RA-368: post-action hook that pushes every re-accreditation state
 /// transition to the operator backend, so its own record of application
 /// progress reflects the Case Management service's lifecycle beyond the query/resume round-trip
-/// already covered by <see cref="ReAccreditationQueryPushHook"/>.
+/// already covered by <c>ReAccreditationQueryPushHook</c>.
 ///
 /// Fires from every generic transition (<see cref="WorkItemService.ApplyActionAsync"/>)
 /// and from any bespoke module service that invokes
 /// <see cref="IWorkItemPostActionHook.OnActionAppliedAsync"/> directly (e.g.
-/// <see cref="ReAccreditationApprovalService"/>), since it is registered like
+/// <c>ReAccreditationApprovalService</c>), since it is registered like
 /// any other <see cref="IWorkItemPostActionHook"/>. One bypass needs explicit
-/// wiring: <see cref="ReAccreditationDulyMadeHook"/> mutates state directly
+/// wiring: <c>ReAccreditationDulyMadeHook</c> mutates state directly
 /// without going through <see cref="WorkItemService.ApplyActionAsync"/>, so
 /// it calls this hook itself.
 ///
 /// Skips every action whose declared <see cref="WorkItemTransition.ToStateId"/>
 /// is <c>queried</c> (query keeps its own richer <c>/query</c> push, see
-/// <see cref="ReAccreditationQueryPushHook"/>) or <c>withdrawn</c> (withdrawal
+/// <c>ReAccreditationQueryPushHook</c>) or <c>withdrawn</c> (withdrawal
 /// is out of scope for RA-368 — the Case Management service's own caseworker-facing withdraw UI is
 /// being hidden by a separate, future ticket). Those are derived from
-/// <see cref="ReAccreditationType.Transitions"/> itself, rather than
+/// the type's own <see cref="IWorkItemTemplate.Transitions"/>, rather than
 /// restating the individual action ids, so a future query/withdraw
 /// transition is excluded automatically instead of needing this hook
 /// updated in lockstep.
@@ -36,7 +43,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// RA-527, <c>confirm-contact-approved</c> / <c>confirm-contact-rejected</c>)
 /// are also excluded — see <see cref="BuildExcludedActionIds"/>. Their
 /// operator-journey push is owned by the service that applies the outcome
-/// (<see cref="ReAccreditationConfirmContactService"/>), which fires it exactly
+/// (<c>StandardConfirmContactService</c>), which fires it exactly
 /// once as a pre-commit gate for the final outcome; this hook pushing again
 /// after each committed hop was the double-push that stranded applications in
 /// <c>awaiting-decision</c> when the operator journey was down.
@@ -45,7 +52,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// transition (the <see cref="IWorkItemPostActionHook"/> contract). Records
 /// the outcome as a <c>status-push-sent</c> / <c>status-push-skipped</c> /
 /// <c>status-push-failed</c> audit entry, mirroring
-/// <see cref="ReAccreditationQueryPushHook"/>'s own pattern (and matching the
+/// <c>ReAccreditationQueryPushHook</c>'s own pattern (and matching the
 /// <c>ACTION_DISPLAY_NAMES</c> wired up for these three actions in
 /// management-fe). <c>status-push-skipped</c> (the push is deliberately
 /// disabled, <c>OperatorBackendApi:Enabled=false</c>) is kept distinct from
@@ -63,7 +70,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// service's write to the same document and risking a lost update. So the
 /// push (and the audit entry it produces) is deferred onto
 /// <see cref="IBackgroundTaskQueue"/> — the same fire-and-forget mechanism
-/// <see cref="ReAccreditationApprovalService.EnqueuePublishingAuditAsync"/>
+/// <c>ReAccreditationApprovalService.EnqueuePublishingAuditAsync</c>
 /// uses — so this hook (and the request it runs inside) always returns
 /// before the callback fires, never blocking on or racing the Case
 /// Management service's own write.
@@ -85,41 +92,43 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// still inside the request, and written back into the queued job's own
 /// AsyncLocal context before the adapter call.
 /// </summary>
-internal sealed class ReAccreditationStatusPushHook(
+internal sealed class StandardStatusPushHook(
+    IWorkItemType type,
+    IOperatorJourneyPush? operatorJourneyPush,
+    IWorkItemRegistry registry,
     IBackgroundTaskQueue backgroundTaskQueue,
     HeaderPropagationValues headerPropagationValues,
-    ILogger<ReAccreditationStatusPushHook> logger) : IWorkItemPostActionHook
+    ILogger logger) : IWorkItemPostActionHook
 {
-    private static readonly ReAccreditationType s_type = new();
 
     /// <summary>
     /// Target states a move onto is never pushed: any action whose declared
     /// transition moves a work item onto one of these is excluded by
     /// <see cref="BuildExcludedActionIds"/>. Declared before
-    /// <see cref="s_excludedActionIds"/> so it is initialised first.
+    /// <see cref="_excludedActionIds"/> so it is initialised first.
     /// </summary>
     private static readonly HashSet<string> s_excludedTargetStateIds = new(StringComparer.OrdinalIgnoreCase)
     {
         // Query and withdraw: the query-during-* and withdraw/withdraw-during-*
         // families.
         "queried",
-        ReAccreditationType.WithdrawnStateId,
+        StandardWorkflow.WithdrawnStateId,
         // RA-527: a move onto a pending-contact state (approved or refused) is
         // step 1 of a determination. It is recorded in the Case Management
         // service only — the operator must not see the outcome before the
         // regulator has contacted them — so a pending state is never pushed.
-        ReAccreditationType.ApprovedPendingContactStateId,
-        ReAccreditationType.RejectedPendingContactStateId,
+        StandardWorkflow.ApprovedPendingContactStateId,
+        StandardWorkflow.RejectedPendingContactStateId,
         // RA-527 follow-up: a move onto 'assessment-started' (only
         // start-assessment) is a regulator starting work. It reads "Duly made"
         // in the Case Management service and is not a change the operator
         // needs to see, so it is never pushed and the operator stays DulyMade.
         // Excluded, like every other exclusion, before anything is queued, so
         // no status-push audit entry is written for it either.
-        ReAccreditationType.AssessmentStartedStateId,
+        StandardWorkflow.AssessmentStartedStateId,
     };
 
-    private static readonly HashSet<string> s_excludedActionIds = BuildExcludedActionIds();
+    private readonly HashSet<string> _excludedActionIds = BuildExcludedActionIds(type);
 
     public Task OnSubmittedAsync(WorkItem workItem, ClaimsPrincipal user, CancellationToken cancellationToken) =>
         Task.CompletedTask;
@@ -131,8 +140,9 @@ internal sealed class ReAccreditationStatusPushHook(
         ClaimsPrincipal user,
         CancellationToken cancellationToken)
     {
-        if (!string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase)
-            || s_excludedActionIds.Contains(actionId))
+        if (operatorJourneyPush is null
+            || !string.Equals(workItem.TypeId, type.TypeId, StringComparison.OrdinalIgnoreCase)
+            || _excludedActionIds.Contains(actionId))
         {
             return;
         }
@@ -148,10 +158,15 @@ internal sealed class ReAccreditationStatusPushHook(
         // services (adapter, audit appender) fresh, since it runs after this
         // request — and its DI scope — has ended.
         var workItemId = workItem.Id;
-        var toStateId = workItem.StateId;
-        var toStateDisplayName = ResolveStateDisplayName(workItem, toStateId);
-        var actionDisplayName = ResolveActionDisplayName(workItem, actionId);
-        var occurredAt = workItem.LastModifiedAt;
+        var change = new OperatorJourneyStatusChange(
+            workItemId,
+            correlationId,
+            fromStateId,
+            workItem.StateId,
+            ResolveStateDisplayName(workItem, workItem.StateId),
+            actionId,
+            ResolveActionDisplayName(workItem, actionId),
+            workItem.LastModifiedAt);
 
         // RA-519 follow-up: snapshot the allow-listed propagated headers
         // (tracing/correlation ids only) while still inside the request's
@@ -159,9 +174,7 @@ internal sealed class ReAccreditationStatusPushHook(
         // see the class doc comment above.
         var propagatedHeaders = headerPropagationValues.Headers;
 
-        var pushContext = new StatusPushContext(
-            workItemId, correlationId, fromStateId, toStateId, toStateDisplayName,
-            actionId, actionDisplayName, occurredAt, propagatedHeaders, user);
+        var pushContext = new StatusPushContext(change, propagatedHeaders, user);
 
         try
         {
@@ -208,9 +221,10 @@ internal sealed class ReAccreditationStatusPushHook(
             var adapter = scopedServices.GetRequiredService<IOperatorBackendPushAdapter>();
             var appender = scopedServices.GetRequiredService<IWorkItemAuditAppender>();
 
-            var result = await adapter.PushStatusChangedAsync(
-                context.WorkItemId, context.CorrelationId, context.FromStateId, context.ToStateId,
-                context.ToStateDisplayName, context.ActionId, context.ActionDisplayName, context.OccurredAt, ct);
+            // RA-495: the type's own push target. Checked non-null before
+            // anything was queued.
+            var change = context.Change;
+            var result = await operatorJourneyPush!.PushStatusChangedAsync(adapter, change, ct);
 
             // actionDisplayName/toStateDisplayName are included here (not
             // just on the wire push) because management-fe's audit-log
@@ -220,22 +234,22 @@ internal sealed class ReAccreditationStatusPushHook(
             // action-entry key set documented in docs/work-items.md.
             var details = new Dictionary<string, string?>
             {
-                ["actionId"] = context.ActionId,
-                ["actionDisplayName"] = context.ActionDisplayName,
-                ["fromStateId"] = context.FromStateId,
-                ["toStateId"] = context.ToStateId,
-                ["toStateDisplayName"] = context.ToStateDisplayName,
-                ["correlationId"] = context.CorrelationId.ToString(),
+                ["actionId"] = change.ActionId,
+                ["actionDisplayName"] = change.ActionDisplayName,
+                ["fromStateId"] = change.FromStateId,
+                ["toStateId"] = change.ToStateId,
+                ["toStateDisplayName"] = change.ToStateDisplayName,
+                ["correlationId"] = change.CorrelationId.ToString(),
             };
 
             await RecordPushOutcomeAsync(
-                result, appender, context.WorkItemId, context.CorrelationId, details, context.User, ct);
+                result, appender, change.WorkItemId, change.CorrelationId, details, context.User, ct);
         }
         catch (Exception ex)
         {
             logger.LogError(
                 ex, "Unexpected failure pushing status-changed for work item {WorkItemId} (correlation {CorrelationId}).",
-                context.WorkItemId, context.CorrelationId);
+                context.Change.WorkItemId, context.Change.CorrelationId);
         }
     }
 
@@ -243,25 +257,20 @@ internal sealed class ReAccreditationStatusPushHook(
     /// RA-519 follow-up: the deferred job's own inputs, bundled so the
     /// closure handed to <see cref="IBackgroundTaskQueue.QueueAsync"/> and
     /// <see cref="RunQueuedPushAsync"/> take a single value instead of the
-    /// ten separate plain-value parameters <see cref="OnActionAppliedAsync"/>
-    /// captures (Sonar's parameter-count gate).
+    /// separate plain-value parameters <see cref="OnActionAppliedAsync"/>
+    /// captures (Sonar's parameter-count gate). The push payload is carried as
+    /// the <see cref="OperatorJourneyStatusChange"/> itself, built while still
+    /// inside the request, so it is not restated field by field here.
     /// </summary>
     private sealed record StatusPushContext(
-        Guid WorkItemId,
-        Guid CorrelationId,
-        string FromStateId,
-        string ToStateId,
-        string ToStateDisplayName,
-        string ActionId,
-        string ActionDisplayName,
-        DateTime OccurredAt,
+        OperatorJourneyStatusChange Change,
         IDictionary<string, StringValues>? PropagatedHeaders,
         ClaimsPrincipal User);
 
     /// <summary>
     /// Records the <c>status-push-sent</c> / <c>status-push-skipped</c> /
     /// <c>status-push-failed</c> audit entry for the outcome of the deferred
-    /// push, mirroring <see cref="ReAccreditationQueryPushHook"/>'s own
+    /// push, mirroring <c>ReAccreditationQueryPushHook</c>'s own
     /// pattern — see the class doc comment for why the skipped/failed
     /// outcomes are kept distinct.
     /// </summary>
@@ -332,7 +341,7 @@ internal sealed class ReAccreditationStatusPushHook(
     /// withdraw/withdraw-during-* and make-determination-* families and
     /// <c>start-assessment</c>, without restating their literal ids here.
     /// Computed once from a fresh
-    /// <see cref="ReAccreditationType"/> instance, the same source of truth
+    /// the type's transitions, the same source of truth
     /// the engine itself validates transitions against.
     ///
     /// RA-351: self-loops are deliberately not excluded. The new
@@ -346,10 +355,10 @@ internal sealed class ReAccreditationStatusPushHook(
     /// <c>assessment-started</c>, moves onto <c>assessment-in-progress</c>,
     /// so it is not excluded either and the operator is pushed Updated.)
     /// </summary>
-    private static HashSet<string> BuildExcludedActionIds()
+    private static HashSet<string> BuildExcludedActionIds(IWorkItemType type)
     {
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var transition in s_type.Transitions)
+        foreach (var transition in type.Transitions)
         {
             if (string.Equals(
                     transition.FromStateId,
@@ -370,7 +379,7 @@ internal sealed class ReAccreditationStatusPushHook(
         // epr-p86e / RA-410: the decision actions are excluded here so this
         // post-action hook never pushes for them. RA-527: the operator-journey
         // push for a final outcome is owned by
-        // ReAccreditationConfirmContactService (step 2, confirm-contact-approved
+        // StandardConfirmContactService (step 2, confirm-contact-approved
         // / confirm-contact-rejected), which fires it exactly ONCE as a
         // pre-commit gate, before anything is persisted. Left in, this hook
         // would push again after the committed transition — the double-push
@@ -378,23 +387,25 @@ internal sealed class ReAccreditationStatusPushHook(
         // applications in 'awaiting-decision' when the operator journey was
         // unreachable.
         excluded.Add("submit-for-decision");
-        excluded.Add(ReAccreditationType.ConfirmContactApprovedActionId);
-        excluded.Add(ReAccreditationType.ConfirmContactRejectedActionId);
+        excluded.Add(StandardWorkflow.ConfirmContactApprovedActionId);
+        excluded.Add(StandardWorkflow.ConfirmContactRejectedActionId);
         return excluded;
     }
 
     /// <summary>
     /// Resolves the human-readable label for <paramref name="stateId"/> from
     /// the work item's frozen template snapshot (preferred, so historical
-    /// items keep rendering as they did when assessed) or the live type as a
-    /// fallback. Falls back to the raw state id itself if neither knows it,
+    /// items keep rendering as they did when assessed) or the live registered
+    /// type as a fallback, resolved as the engine resolves it
+    /// (<see cref="WorkItemEngineRules.ResolveTemplate"/>). Falls back to the
+    /// raw state id itself if neither knows it (or there is no template),
     /// rather than throwing — this hook must never unwind the transition it
     /// is reporting on.
     /// </summary>
-    private static string ResolveStateDisplayName(WorkItem workItem, string stateId)
+    private string ResolveStateDisplayName(WorkItem workItem, string stateId)
     {
-        IWorkItemTemplate template = (IWorkItemTemplate?)workItem.TemplateSnapshot ?? s_type;
-        var displayName = template.States.FirstOrDefault(
+        var template = WorkItemEngineRules.ResolveTemplate(workItem, registry);
+        var displayName = template?.States.FirstOrDefault(
             state => string.Equals(state.Id, stateId, StringComparison.OrdinalIgnoreCase))?.DisplayName;
         return displayName ?? stateId;
     }
@@ -402,8 +413,8 @@ internal sealed class ReAccreditationStatusPushHook(
     /// <summary>
     /// Resolves the human-readable label for <paramref name="actionId"/> from
     /// the <c>action-applied</c> audit entry the caller (the generic engine,
-    /// <see cref="ReAccreditationApprovalService"/>, or
-    /// <see cref="ReAccreditationDulyMadeHook"/>) always appends immediately
+    /// <c>ReAccreditationApprovalService</c>, or
+    /// <c>ReAccreditationDulyMadeHook</c>) always appends immediately
     /// before invoking post-action hooks. Preferred over a template
     /// transition lookup because an action may be applied outside the
     /// generic engine, and its own entry is the label it was applied under. Falls back to the raw action id if no matching entry is

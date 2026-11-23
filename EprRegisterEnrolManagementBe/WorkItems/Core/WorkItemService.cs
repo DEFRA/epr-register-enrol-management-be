@@ -288,7 +288,7 @@ public sealed class WorkItemService : IWorkItemService
         var submissionYear = AccreditationYear.TryRead(payload, out var accreditationYear)
             ? accreditationYear
             : now.Year;
-        payload[SubmissionReferenceField] = await _submissionReferenceGenerator.GenerateAsync(
+        payload[SubmissionPayload.SubmissionReferenceField] = await _submissionReferenceGenerator.GenerateAsync(
             session: null,
             submissionYear,
             cancellationToken
@@ -505,8 +505,8 @@ public sealed class WorkItemService : IWorkItemService
         foreach (var site in sites)
         {
             var itemPayload = shared.DeepClone().AsBsonDocument;
-            itemPayload[SiteField] = site.DeepClone();
-            itemPayload[SubmissionReferenceField] = submissionReference;
+            itemPayload[SubmissionPayload.SiteField] = site.DeepClone();
+            itemPayload[SubmissionPayload.SubmissionReferenceField] = submissionReference;
             itemPayload[SubmissionSizeField] = sites.Count;
 
             var applicationReference = await submission.ReferenceFormat.GenerateAsync(
@@ -579,8 +579,6 @@ public sealed class WorkItemService : IWorkItemService
         return WorkItemSubmissionResult.IdempotentReplay(submission);
     }
 
-    private const string SiteField = "site";
-    private const string SubmissionReferenceField = "submissionReference";
     private const string SubmissionSizeField = "submissionSize";
 
     private ISubmissionStore Submissions =>

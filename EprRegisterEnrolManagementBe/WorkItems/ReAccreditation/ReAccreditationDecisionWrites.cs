@@ -1,50 +1,25 @@
-using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using MongoDB.Bson;
 using MongoDB.Bson.Serialization;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-527: the pieces of a determination write shared by
+/// RA-527: the payload reads and writes shared by
 /// <see cref="ReAccreditationApprovalService"/> and
 /// <see cref="ReAccreditationRefusalService"/> — each step of either outcome
 /// is one <see cref="IWorkItemPersistence.ReplaceAsync"/> call that appends its
 /// own audit entries, optionally updates the payload, and then runs the
 /// post-action hooks.
+///
+/// RA-495: the audit entry, actor check and post-action hook fan-out are the
+/// shared <see cref="StandardLifecycleAudit"/>'s, which both services call
+/// directly.
 /// </summary>
 internal static class ReAccreditationDecisionWrites
 {
-    /// <summary>
-    /// Appends an audit entry to <paramref name="workItem"/> in memory, to be
-    /// persisted by the caller's single write. Call it AFTER any state change:
-    /// the entry snapshots the item's state as of this event.
-    /// </summary>
-    public static void AppendAudit(
-        WorkItem workItem,
-        string action,
-        string actionDisplayName,
-        ClaimsPrincipal user,
-        DateTime createdAt,
-        Dictionary<string, string?> details
-    )
-    {
-        workItem.AuditLog.Add(
-            new WorkItemAuditEntry
-            {
-                Action = action,
-                ActionDisplayName = actionDisplayName,
-                Details = details,
-                CreatedAt = createdAt,
-                CreatedBy = user.FindFirstValue("user:id"),
-                CreatedByName = user.FindFirstValue("user:name"),
-                // epr-rr9s: snapshot the state as of this event.
-                StateId = workItem.StateId,
-            }
-        );
-    }
-
     /// <summary>
     /// The work item's payload as the model, or null (logged) when the stored
     /// payload cannot be read. Writing over an unreadable payload would destroy
@@ -110,59 +85,4 @@ internal static class ReAccreditationDecisionWrites
         workItem.ReplacePayload(merged);
         return updated;
     }
-
-    /// <summary>
-    /// Runs every post-action hook for a committed write. A failing hook is
-    /// logged, never rethrown: the write has landed.
-    /// </summary>
-    public static async Task InvokeActionAppliedHooksAsync(
-        IReadOnlyList<IWorkItemPostActionHook> hooks,
-        WorkItem workItem,
-        string actionId,
-        string fromStateId,
-        ClaimsPrincipal user,
-        ILogger logger
-    )
-    {
-        // The transition is already committed by the time hooks run, so a client
-        // that gives up waiting (management-fe times out) must not cancel them:
-        // the operator-backend push and its audit entries would be lost, leaving
-        // this service and the operator disagreeing about the application's state.
-        foreach (var hook in hooks)
-        {
-            try
-            {
-                await hook.OnActionAppliedAsync(
-                    workItem,
-                    actionId,
-                    fromStateId,
-                    user,
-                    CancellationToken.None
-                );
-            }
-            catch (Exception ex)
-            {
-                logger.LogError(
-                    ex,
-                    "Post-action transition hook {HookType} failed for work item {WorkItemId} action {ActionId}",
-                    hook.GetType().FullName,
-                    workItem.Id,
-                    actionId
-                );
-            }
-        }
-    }
-
-    /// <summary>
-    /// A 401-shaped failure when <paramref name="user"/> carries no
-    /// <c>user:id</c> claim, otherwise null.
-    /// </summary>
-    public static WorkItemActionResult? RequireActorIdentity(ClaimsPrincipal user) =>
-        string.IsNullOrWhiteSpace(user.FindFirstValue("user:id"))
-            ? WorkItemActionResult.Failure(
-                WorkItemActionFailureCode.MissingActorIdentity,
-                "Mutating this work item requires an authenticated end user; "
-                    + "the request did not include a 'user:id' claim."
-            )
-            : null;
 }

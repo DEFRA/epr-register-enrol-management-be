@@ -1,8 +1,12 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 
-namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 /// <summary>
+/// RA-495: moved unchanged from re-accreditation (<c>ReAccreditationUpdatedOrigin</c>)
+/// so the shared duly make can use it. Re-accreditation's continue-review
+/// service and origin state resolver call it directly, so the two agree.
+///
 /// RA-337 / RA-372: shared resolution of "where did this work item come from
 /// before it landed in <c>updated</c>, and where is it going back to".
 ///
@@ -22,14 +26,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// caseworker could be offered a call to action for one state and then be
 /// moved into a different one:
 /// <list type="bullet">
-///   <item><see cref="ReAccreditationContinueReviewService"/>, to pick the
+///   <item><c>ReAccreditationContinueReviewService</c>, to pick the
 ///   <c>continue-review-during-*</c> action that moves the item on.</item>
-///   <item><see cref="ReAccreditationOriginStateResolver"/>, to report the
+///   <item><c>ReAccreditationOriginStateResolver</c>, to report the
 ///   origin on the wire so the frontend can offer the matching call to
 ///   action.</item>
 /// </list>
 /// </summary>
-internal static class ReAccreditationUpdatedOrigin
+internal static class StandardUpdatedOrigin
 {
     /// <summary>The waypoint state this whole file is about.</summary>
     public const string StateId = "updated";
@@ -49,14 +53,6 @@ internal static class ReAccreditationUpdatedOrigin
         };
 
     /// <summary>
-    /// True when <paramref name="workItem"/> is a re-accreditation item
-    /// currently parked in the <c>updated</c> waypoint.
-    /// </summary>
-    public static bool IsUpdatedReAccreditation(WorkItem workItem) =>
-        string.Equals(workItem.TypeId, ReAccreditationType.Id, StringComparison.OrdinalIgnoreCase)
-        && string.Equals(workItem.StateId, StateId, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
     /// The <c>continue-review-during-*</c> action that moves
     /// <paramref name="workItem"/> out of <c>updated</c>, or <c>null</c> when
     /// it cannot be determined.
@@ -69,7 +65,7 @@ internal static class ReAccreditationUpdatedOrigin
     /// <see cref="WorkItemAuditEntry.CreatedAt"/>, ties fall back to insertion
     /// order, and code outside the engine appends synthetic
     /// <c>action-applied</c> entries stamped with the current time — see
-    /// <see cref="ReAccreditationDulyMadeSnapshotMigration"/>. Without this
+    /// <c>ReAccreditationDulyMadeSnapshotMigration</c>. Without this
     /// check, such an entry landing in the same tick as a genuine resume could
     /// win the sort and mis-derive the origin.
     ///

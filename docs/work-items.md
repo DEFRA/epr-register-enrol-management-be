@@ -289,13 +289,14 @@ That is still a module-only change.
 The work item type definition (`IWorkItemType`) is the single place a case
 type is configured. Every setting is code, not runtime data:
 
-| Setting | Member | Default | Re-accreditation |
-| --- | --- | --- | --- |
-| Display label | `DisplayName` | — (required) | `"Re-accreditation"` |
-| Category | `Category` | `null` (the type is its own group) | `null` |
-| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` |
-| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` |
-| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` |
+| Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) |
+| --- | --- | --- | --- | --- |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` |
+| Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` |
+| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` |
+| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` |
+| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `AddOverseasSiteType.WorkflowDefinition`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` |
+| Template version | `TemplateVersion` | — (required) | `v19` | `v2` |
 
 - **Category** groups related types so the list can filter on the group
   without naming each type: `GET /work-items?category=in-year-change`
@@ -335,12 +336,66 @@ type is configured. Every setting is code, not runtime data:
   type's states and transitions into its template snapshot at submission (see
   [Template versioning](#template-versioning-ra-94)). Changing a shared
   workflow changes every type that references it, so each of those types
-  needs a new `TemplateVersion` and a snapshot migration.
-- A workflow's transitions name its own states, so re-accreditation's bespoke
-  services (duly make, decision, confirm contact, resume, continue review)
-  reach its `CallerInvocable: false` transitions. Another type on the Standard
-  workflow gets the same states and transitions but needs its own endpoints
-  before a caseworker can use those steps (add-ORS: RA-495).
+  needs a new `TemplateVersion` and a snapshot migration. A type that needs
+  different rules from a shared workflow derives its own instead of changing
+  the shared one: add-ORS v2 (RA-495 review) is `StandardWorkflow.Definition`
+  with its `withdraw*` transitions made `CallerInvocable: false`, because
+  withdraw is re-accreditation-only and re-accreditation still withdraws
+  through the shared workflow.
+- A workflow's transitions name its own states, so only a service reaches
+  its `CallerInvocable: false` transitions. Re-accreditation's query, resume
+  and continue review are its own (`/work-items/re-accreditation/{id}/...`).
+- **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
+  confirm applicant contact are shared services
+  (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:
+  `GET|POST /work-items/{id}/duly-make` (the GET returns the type's charge and
+  `relatedWorkItems`: every work item with the same
+  `payload.submissionReference`, each with its reference, site name and ORS
+  id, type, state and charge, read through
+  `IWorkItemPersistence.FindBySubmissionReferenceAsync` on its own index),
+  `POST /work-items/{id}/decision` and `POST /work-items/{id}/confirm-contact`.
+  A type opts in with an `IStandardLifecycleStrategy`
+  (`services.AddStandardLifecycle<TStrategy>()` in its module), which holds
+  what differs per type: the operator-journey push target (`null`: nothing
+  pushed, no `status-push-*` entry), the determination writes
+  (re-accreditation mints an accreditation number; `StandardDeterminationWrites`
+  for a type that mints none), the charge source and the payment-date stamp.
+  `AddStandardLifecycle` also registers the type's post-commit status push
+  hook (`StandardStatusPushHook`), so a module calls it before registering
+  its email hook: hooks run in registration order. Emails stay
+  the module's own post-action hooks. A work item of a type
+  that has not opted in gets `400` with `errorCode: wrong-work-item-type`.
+  One whose type has opted in but whose template cannot be resolved (the type
+  is not registered and the item has no snapshot) is a server-side problem,
+  not a wrong type: `WorkItemActionFailureCode.TemplateUnavailable`, a generic
+  `500` with no `errorCode` (RA-495 review).
+  Re-accreditation's own routes (`/work-items/re-accreditation/{id}/duly-make`,
+  `/decision`, `/confirm-contact`) are unchanged: they run the same shared
+  services limited to re-accreditation, registered by its module keyed by
+  the type id and sharing its one registered strategy.
+  Add-ORS (`AddOverseasSiteLifecycleStrategy`) opts in with the operator
+  journey's change-request status route as its push target
+  (`POST api/v1/accreditation-changes/case-management/{workItemId}/status`,
+  same body, signing and retries as re-accreditation's route), no minting
+  (`StandardDeterminationWrites`), no emails, and the site's own charge
+  (`payload.site.chargePence`). Its confirm-contact push also carries the
+  `effectiveDate` (`yyyy-MM-dd`) the determination stamped on
+  `payload.effectiveDate` (RA-495 AC6), which the operator journey grants the
+  site from and requires on `approved`; re-accreditation stamps none, so its
+  body has no `effectiveDate`.
+  Query and withdraw stay re-accreditation-only. The `query-during-*`
+  transitions are already `CallerInvocable: false`; since v2 (RA-495 review)
+  add-ORS's `withdraw*` transitions are too, so
+  `POST /work-items/{id}/actions/withdraw*` returns `400` for an add-ORS item
+  and `availableActions` no longer lists them. Before that the generic route
+  could withdraw one, and the status push hook (which never pushes a move onto
+  `withdrawn`) left the site locked in the operator journey.
+  `AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigration` (registered by
+  `AddOverseasSiteModule`) brings v1 items' frozen snapshots onto v2: it sets
+  `CallerInvocable: false` on every `withdraw*` declaration and the template
+  version to `v2`, writes only `TemplateSnapshot` and `TemplateVersion`, and
+  skips an item with no caller-invocable `withdraw*` declaration. Management-fe
+  registers its add-ORS detail template for both versions.
 
 ## Conventions
 
@@ -734,7 +789,7 @@ registration line" promise. All files live under
 | File | Role |
 | --- | --- |
 | `ReAccreditationType.cs` | Re-accreditation's case type configuration (RA-739): label "Re-accreditation", no category, not split per site (its single work item still gets a submission reference), and the Standard workflow (`WorkItems/Workflows/StandardWorkflow.cs`, shared so other types can reference it). That workflow declares the states (`submitted`, `duly-made`, `assessment-started` (RA-527 follow-up: started, still displayed "Duly made"), `assessment-in-progress`, `awaiting-decision`, `queried`, `updated`, `approved-pending-contact` / `rejected-pending-contact` (RA-527: determined, applicant not yet contacted), terminal `approved` / `rejected` / `withdrawn`) and the transitions between them. `duly-make`, `submit-for-decision`, `make-determination-approved` / `-rejected`, `confirm-contact-approved` / `-rejected`, `query-during-*` (RA-000), `resume-during-*`, `continue-review-during-*` and the moving `sla-extend` (below) are declared `CallerInvocable: false` — each is reachable only through the module service that resolves it server-side. Template version v19 (RA-000): the five `query-during-*` declarations (`-duly-making` from `submitted`, `-duly-made` from `duly-made`, `-assessment` from `assessment-in-progress` and `assessment-started`, `-decision` from `awaiting-decision`) are not caller-invocable, so only `ReAccreditationQueryService` (`POST /work-items/re-accreditation/{id}/query`) applies them, with its self-assign, `currentQuery` stamp and `application-queried` audit entry; the generic action endpoint returns `400` for them and they are not in `availableActions`. Since v18 (RA-527 follow-up): `start-assessment` targets `duly-made` → `assessment-started`, the only transition into that state, so starting a case keeps it "Duly made" on both sides. Its four exits reuse existing action ids with a second from-state: `submit-for-decision` → `awaiting-decision` (a second declaration, reached only through `/decision`), `query-during-assessment` → `queried`, `withdraw-during-assessment` → `withdrawn`, and `sla-extend` → `assessment-in-progress` — a real move, unlike the `assessment-in-progress` and `queried` self-loops, which `SlaService` applies in the same write as the deadline change (resolving the template via `WorkItemEngineRules.ResolveTemplate`), so the case becomes "Updated". Only the deadline change (`POST /work-items/{id}/sla/extend`) applies that move: `POST /work-items/{id}/sla/override` (no Case Management UI or caller since RA-572) only rewrites the clock, never changes state and never pushes, so an override on a started case leaves it "Duly made". Deliberately left so while override is retired; if it is ever reinstated, it should apply the same move. |
-| `ReAccreditationStatusPushHook.cs` | Pushes each applied transition's target state to the operator journey, except a *move* (self-loops are never excluded) onto `queried`, `withdrawn`, either pending-contact state or (RA-527 follow-up) `assessment-started`, plus the decision actions whose push is owned by the confirm-contact service. A start therefore pushes nothing and writes no `status-push-*` entry, so the operator stays DulyMade; a deadline change from `assessment-started` pushes `assessment-in-progress` (Updated). |
+| `ReAccreditationLifecycleStrategy.cs` | Re-accreditation's opt-in to the Standard-workflow lifecycle, registered once with `AddStandardLifecycle`; its status push hook (`StandardStatusPushHook`) pushes each applied transition's target state to the operator journey, except a *move* (self-loops are never excluded) onto `queried`, `withdrawn`, either pending-contact state or (RA-527 follow-up) `assessment-started`, plus the decision actions whose push is owned by the confirm-contact service. A start therefore pushes nothing and writes no `status-push-*` entry, so the operator stays DulyMade; a deadline change from `assessment-started` pushes `assessment-in-progress` (Updated). |
 | `ReAccreditationAssessmentStartedSnapshotMigration.cs` | v18 snapshot migration, registered straight before the v19 one. Adds `assessment-started` (after `duly-made`) to every re-accreditation case's frozen snapshot, retargets `start-assessment` and adds the four exits. Writes only `TemplateSnapshot` and `TemplateVersion` — it never moves a case, so a case already in `assessment-in-progress` stays "Updated" — and skips an item whose snapshot already matches. |
 | `ReAccreditationQueryNotCallerInvocableSnapshotMigration.cs` | v19 snapshot migration (RA-000), registered last of the snapshot migrations so it sets the final version. Sets `CallerInvocable: false` on every `query-during-*` declaration in each case's frozen snapshot, so the generic action endpoint (which checks the item's own snapshot) rejects them for cases submitted before v19 too. Writes only `TemplateSnapshot` and `TemplateVersion` and skips an item with no caller-invocable `query-during-*` declaration. The v18 migration treats the v19 form of its `query-during-assessment` declaration as already present, so the two never undo each other. |
 | `ReAccreditationFreshQuery.cs` | RA-000: checks `payload.currentQuery` is complete and was stamped inside the time window of the `query-during-*` transition a post-action hook is handling: `raisedAt`, non-empty `sections` and a non-null `reason` are present, and `raisedAt` lies between the item's previous `action-applied` entry (or `SubmittedAt`) and this transition's own. `currentQuery` is never cleared, so a stale stamp is always older than the `resume-during-*` that took the item out of `queried`. A window is not proof the stamp came from the request being handled, and it has two known gaps: (a) overlapping queries on one item — the stamp is an unversioned payload write that does not check state and the transition is applied after it, so both requests' stamps can land in the window and the winning transition pushes and emails whichever was written last (this race predates RA-000); (b) clock skew — the lower bound is a `CreatedAt` another pod may have written, so if that pod's clock runs ahead a genuine query fails the check and the item ends `queried` with nothing pushed or emailed, recorded only by the Error log and `query-push-failed` / `notification-failed`. `ReAccreditationQueryPushHook` and the Queried email in `ReAccreditationNotificationHook` both use it: without a fresh query (or with an unreadable payload) they send nothing, log at Error and record `query-push-failed` / `notification-failed` with a `reason`. |

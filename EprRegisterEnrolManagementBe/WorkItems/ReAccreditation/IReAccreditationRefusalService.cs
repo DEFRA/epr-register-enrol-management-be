@@ -8,9 +8,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// the counterpart of <see cref="IReAccreditationApprovalService"/>. Each step
 /// is one write with its own audit entries, which the generic engine cannot
 /// make. <see cref="RecordRefusedDeterminationAsync"/> is step 1, called by
-/// <see cref="IReAccreditationLogDecisionService"/> (the /decision endpoint);
+/// <see cref="Workflows.StandardLifecycle.IStandardLogDecisionService"/> (the /decision endpoint);
 /// <see cref="RefuseAsync"/> applies the outcome and is step 2, called by
-/// <see cref="IReAccreditationConfirmContactService"/> (the /confirm-contact
+/// <see cref="Workflows.StandardLifecycle.IStandardConfirmContactService"/> (the /confirm-contact
 /// endpoint). Wrapped behind an interface so it can be substituted in tests.
 /// </summary>
 internal interface IReAccreditationRefusalService

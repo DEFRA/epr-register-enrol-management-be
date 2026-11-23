@@ -1,6 +1,6 @@
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
-namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
+namespace EprRegisterEnrolManagementBe.Test.WorkItems.Workflows.StandardLifecycle;
 
 /// <summary>
 /// RA-316 payment-date validation. The error codes asserted here are a wire
@@ -9,7 +9,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 /// are deliberately on the literal code strings rather than on an enum — a
 /// rename that compiled cleanly would still break both consumers.
 /// </summary>
-public class ReAccreditationDulyMakingValidatorTests
+public class StandardDulyMakingValidatorTests
 {
     private static readonly DateOnly s_today = new(2026, 8, 11);
 
@@ -19,7 +19,7 @@ public class ReAccreditationDulyMakingValidatorTests
     [InlineData("   ")]
     public void A_missing_date_is_required(string? input)
     {
-        var result = ReAccreditationDulyMakingValidator.Validate(input, s_today);
+        var result = StandardDulyMakingValidator.Validate(input, s_today);
 
         Assert.False(result.IsValid);
         Assert.Equal("payment-date-required", result.ErrorCode);
@@ -42,7 +42,7 @@ public class ReAccreditationDulyMakingValidatorTests
     [InlineData("2026-08-11T13:45:00+01:00")]
     public void An_unparseable_date_is_invalid(string input)
     {
-        var result = ReAccreditationDulyMakingValidator.Validate(input, s_today);
+        var result = StandardDulyMakingValidator.Validate(input, s_today);
 
         Assert.False(result.IsValid);
         Assert.Equal("payment-date-invalid", result.ErrorCode);
@@ -51,7 +51,7 @@ public class ReAccreditationDulyMakingValidatorTests
     [Fact]
     public void A_future_date_is_rejected()
     {
-        var result = ReAccreditationDulyMakingValidator.Validate("2026-08-12", s_today);
+        var result = StandardDulyMakingValidator.Validate("2026-08-12", s_today);
 
         Assert.False(result.IsValid);
         Assert.Equal("payment-date-in-future", result.ErrorCode);
@@ -65,7 +65,7 @@ public class ReAccreditationDulyMakingValidatorTests
     [Fact]
     public void Today_is_accepted()
     {
-        var result = ReAccreditationDulyMakingValidator.Validate("2026-08-11", s_today);
+        var result = StandardDulyMakingValidator.Validate("2026-08-11", s_today);
 
         Assert.True(result.IsValid);
         Assert.Equal(s_today, result.PaymentDate);
@@ -76,7 +76,7 @@ public class ReAccreditationDulyMakingValidatorTests
     public void A_date_more_than_twelve_months_old_is_rejected()
     {
         // 366 days before today.
-        var result = ReAccreditationDulyMakingValidator.Validate("2025-08-10", s_today);
+        var result = StandardDulyMakingValidator.Validate("2025-08-10", s_today);
 
         Assert.False(result.IsValid);
         Assert.Equal("payment-date-too-old", result.ErrorCode);
@@ -86,7 +86,7 @@ public class ReAccreditationDulyMakingValidatorTests
     public void The_twelve_month_floor_itself_is_accepted()
     {
         // Exactly 365 days before today — the earliest accepted date.
-        var result = ReAccreditationDulyMakingValidator.Validate("2025-08-11", s_today);
+        var result = StandardDulyMakingValidator.Validate("2025-08-11", s_today);
 
         Assert.True(result.IsValid);
         Assert.Equal(new DateOnly(2025, 8, 11), result.PaymentDate);
@@ -103,7 +103,7 @@ public class ReAccreditationDulyMakingValidatorTests
     [Fact]
     public void A_date_before_the_application_was_submitted_is_accepted()
     {
-        var result = ReAccreditationDulyMakingValidator.Validate("2026-01-05", s_today);
+        var result = StandardDulyMakingValidator.Validate("2026-01-05", s_today);
 
         Assert.True(result.IsValid);
         Assert.Equal(new DateOnly(2026, 1, 5), result.PaymentDate);
@@ -112,7 +112,7 @@ public class ReAccreditationDulyMakingValidatorTests
     [Fact]
     public void Surrounding_whitespace_is_tolerated()
     {
-        var result = ReAccreditationDulyMakingValidator.Validate("  2026-08-01  ", s_today);
+        var result = StandardDulyMakingValidator.Validate("  2026-08-01  ", s_today);
 
         Assert.True(result.IsValid);
         Assert.Equal(new DateOnly(2026, 8, 1), result.PaymentDate);

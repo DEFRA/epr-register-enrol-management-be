@@ -2,7 +2,7 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -38,7 +38,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -72,7 +72,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Rejected,
+            StandardDecisionOutcome.Rejected,
             harness.User,
             ct
         );
@@ -101,7 +101,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -125,7 +125,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Rejected,
+            StandardDecisionOutcome.Rejected,
             harness.User,
             ct
         );
@@ -147,7 +147,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Rejected,
+            StandardDecisionOutcome.Rejected,
             harness.User,
             ct
         );
@@ -171,7 +171,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -197,7 +197,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -436,7 +436,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -456,7 +456,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -480,7 +480,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Rejected,
+            StandardDecisionOutcome.Rejected,
             harness.User,
             ct
         );
@@ -502,7 +502,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -521,7 +521,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -538,7 +538,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -560,7 +560,7 @@ public class ReAccreditationLogDecisionServiceTests
 
         var result = await harness.Service.LogDecisionAsync(
             harness.WorkItem.Id,
-            ReAccreditationDecisionOutcome.Approved,
+            StandardDecisionOutcome.Approved,
             harness.User,
             ct
         );
@@ -571,8 +571,8 @@ public class ReAccreditationLogDecisionServiceTests
         await harness.Persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, ct);
     }
 
-    private static ReAccreditationDecisionOutcome Outcome(bool approve) =>
-        approve ? ReAccreditationDecisionOutcome.Approved : ReAccreditationDecisionOutcome.Rejected;
+    private static StandardDecisionOutcome Outcome(bool approve) =>
+        approve ? StandardDecisionOutcome.Approved : StandardDecisionOutcome.Rejected;
 
     private sealed class Harness
     {
@@ -662,12 +662,12 @@ public class ReAccreditationLogDecisionServiceTests
             }
             User = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
 
-            Service = new ReAccreditationLogDecisionService(
+            Service = ReAccreditationLifecycleTestServices.LogDecisionService(
                 Persistence,
                 Engine,
+                new WorkItemRegistry([new ReAccreditationType()]),
                 ApprovalService,
-                RefusalService,
-                NullLogger<ReAccreditationLogDecisionService>.Instance
+                RefusalService
             );
         }
 
@@ -677,7 +677,7 @@ public class ReAccreditationLogDecisionServiceTests
         public IReAccreditationApprovalService ApprovalService { get; }
         public IReAccreditationRefusalService RefusalService { get; }
         public ClaimsPrincipal User { get; }
-        public ReAccreditationLogDecisionService Service { get; }
+        public IStandardLogDecisionService Service { get; }
         public List<string> AppliedActionIds { get; } = [];
         public List<string> OrderedCalls { get; } = [];
         public AccreditationNumberResult? LastRecordedNumberArgument { get; private set; }

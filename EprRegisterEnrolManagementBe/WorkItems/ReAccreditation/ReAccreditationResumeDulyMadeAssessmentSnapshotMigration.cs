@@ -1,4 +1,5 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -36,7 +37,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// snapshot: it is dead for items resumed under the new rule (they never enter
 /// <c>updated</c>), but it is the only way out for any item already parked
 /// there, and it is the declaration
-/// <see cref="ReAccreditationUpdatedOrigin.ResolveOriginatingStateId"/> reads
+/// <see cref="StandardUpdatedOrigin.ResolveOriginatingStateId"/> reads
 /// to resolve those items' origin.
 ///
 /// The migration is idempotent: items whose <c>resume-during-duly-made</c>

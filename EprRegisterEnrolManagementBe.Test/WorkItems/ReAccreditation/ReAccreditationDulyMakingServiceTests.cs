@@ -2,6 +2,7 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -11,7 +12,7 @@ using NSubstitute;
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
-/// RA-316 unit cover for <see cref="ReAccreditationDulyMakingService"/>.
+/// RA-316 unit cover for <see cref="StandardDulyMakingService"/>.
 ///
 /// The single-write / real-persistence contract lives in
 /// <see cref="ReAccreditationUpdatedWaypointPersistenceTests"/> against a real
@@ -39,7 +40,7 @@ public class ReAccreditationDulyMakingServiceTests
         );
 
     private sealed record Harness(
-        ReAccreditationDulyMakingService Service,
+        IStandardDulyMakingService Service,
         IWorkItemPersistence Persistence,
         List<(string ActionId, string FromStateId)> HookCalls
     );
@@ -79,12 +80,11 @@ public class ReAccreditationDulyMakingServiceTests
                 return Task.CompletedTask;
             });
 
-        var service = new ReAccreditationDulyMakingService(
+        var service = ReAccreditationLifecycleTestServices.DulyMakingService(
             persistence,
             new WorkItemRegistry([new ReAccreditationType()]),
             [hook],
-            new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero)),
-            NullLogger<ReAccreditationDulyMakingService>.Instance
+            new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero))
         );
 
         return new Harness(service, persistence, hookCalls);
@@ -528,12 +528,11 @@ public class ReAccreditationDulyMakingServiceTests
                 return Task.CompletedTask;
             });
 
-        var service = new ReAccreditationDulyMakingService(
+        var service = ReAccreditationLifecycleTestServices.DulyMakingService(
             persistence,
             new WorkItemRegistry([new ReAccreditationType()]),
             [hook],
-            new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero)),
-            NullLogger<ReAccreditationDulyMakingService>.Instance
+            new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero))
         );
 
         var result = await service.CompleteDulyMakingAsync(id, s_paymentDate, User(), ct);
@@ -570,12 +569,11 @@ public class ReAccreditationDulyMakingServiceTests
             )
             .Returns(_ => Task.FromException(new InvalidOperationException("notify is down")));
 
-        var service = new ReAccreditationDulyMakingService(
+        var service = ReAccreditationLifecycleTestServices.DulyMakingService(
             persistence,
             new WorkItemRegistry([new ReAccreditationType()]),
             [hook],
-            new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero)),
-            NullLogger<ReAccreditationDulyMakingService>.Instance
+            new FakeTimeProvider(new DateTimeOffset(2026, 8, 11, 10, 0, 0, TimeSpan.Zero))
         );
 
         var result = await service.CompleteDulyMakingAsync(

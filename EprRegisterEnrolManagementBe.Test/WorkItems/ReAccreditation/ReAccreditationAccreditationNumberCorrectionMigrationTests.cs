@@ -396,11 +396,11 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
 
     /// <summary>Changes one item's number just before the migration's first write.</summary>
     private sealed class RacingPersistence(WorkItemPersistence inner, Guid raceId, string raceValue)
-        : IWorkItemPersistence
+        : ForwardingWorkItemPersistence(inner)
     {
         private bool _raced;
 
-        public async Task<bool> CorrectPayloadFieldAsync(
+        public override async Task<bool> CorrectPayloadFieldAsync(
             Guid workItemId,
             string fieldName,
             BsonValue expectedValue,
@@ -412,9 +412,9 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             if (!_raced)
             {
                 _raced = true;
-                await inner.SetPayloadFieldAsync(raceId, fieldName, raceValue, cancellationToken);
+                await Inner.SetPayloadFieldAsync(raceId, fieldName, raceValue, cancellationToken);
             }
-            return await inner.CorrectPayloadFieldAsync(
+            return await Inner.CorrectPayloadFieldAsync(
                 workItemId,
                 fieldName,
                 expectedValue,
@@ -424,21 +424,16 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             );
         }
 
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldPrefixAsync(
-            string typeId,
-            string fieldName,
-            string prefix,
-            CancellationToken cancellationToken = default
-        ) => inner.FindByPayloadFieldPrefixAsync(typeId, fieldName, prefix, cancellationToken);
-
-        public Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
+        // The migration only lists by prefix and corrects; anything else it
+        // calls is a test failure.
+        public override Task<IReadOnlyList<WorkItem>> FindByPayloadFieldAsync(
             string typeId,
             string fieldName,
             BsonValue value,
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
 
-        public Task<bool> CompareAndSetPayloadFieldAsync(
+        public override Task<bool> CompareAndSetPayloadFieldAsync(
             Guid workItemId,
             string fieldName,
             BsonValue expectedValue,
@@ -446,38 +441,47 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
 
-        public Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+        public override Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task CreateAsync(
+        public override Task CreateAsync(
             MongoDB.Driver.IClientSessionHandle session,
             WorkItem workItem,
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
 
-        public Task<bool> CreateIfAbsentAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
+        public override Task<bool> CreateIfAbsentAsync(
+            WorkItem workItem,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
+        public override Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkItem?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
+        public override Task<WorkItemPage> QueryAsync(
+            WorkItemQuery query,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
+        public override Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
-        public Task<WorkItemPage> QueryAsync(WorkItemQuery query, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task ReplaceAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException();
-
-        public Task<bool> SetPayloadFieldAsync(
+        public override Task<bool> SetPayloadFieldAsync(
             Guid workItemId,
             string fieldName,
             BsonValue value,
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
 
-        public Task<WorkItem?> FindBySubmissionKeyAsync(
+        public override Task<WorkItem?> FindBySubmissionKeyAsync(
             string typeId,
             string payloadField,
             string value,
+            CancellationToken cancellationToken = default
+        ) => throw new NotSupportedException();
+
+        public override Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
+            string submissionReference,
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
     }

@@ -9,7 +9,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 /// name in epr-register-enrol-backend.
 ///
 /// Member names are spelled to match the wire value verbatim (glass_re_melt,
-/// glass_other) rather than PascalCase — like <see cref="ReAccreditationDecisionOutcome.Rejected"/>,
+/// glass_other) rather than PascalCase — like <see cref="Workflows.StandardLifecycle.StandardDecisionOutcome.Rejected"/>,
 /// this prioritises matching the external id over C# convention. That is not
 /// cosmetic: this record is deserialised from the stored work-item payload
 /// both via System.Text.Json (JsonStringEnumConverter) and directly via the
