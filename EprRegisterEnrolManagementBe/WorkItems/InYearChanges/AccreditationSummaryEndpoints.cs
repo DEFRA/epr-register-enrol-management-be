@@ -1,6 +1,8 @@
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using System.Globalization;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
@@ -24,8 +26,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 ///   <item>otherwise the live read: 200, 404 (not found or not Approved) or 503 (the read failed).</item>
 /// </list>
 /// </summary>
+internal sealed class AccreditationSummaryEndpointsLog;
+
 internal static class AccreditationSummaryEndpoints
 {
+    private const string StartDateField = "accreditationStartDate";
     private const string WrongWorkItemTypeTitle = "Wrong work item type";
 
     public static IEndpointRouteBuilder MapAccreditationSummaryEndpoints(this IEndpointRouteBuilder app)
@@ -51,6 +56,7 @@ internal static class AccreditationSummaryEndpoints
         [FromServices] IWorkItemRegistry registry,
         [FromServices] IAccreditationSummaryAdapter adapter,
         [FromServices] IConfiguration configuration,
+        [FromServices] ILogger<AccreditationSummaryEndpointsLog> logger,
         CancellationToken cancellationToken
     )
     {
@@ -77,7 +83,7 @@ internal static class AccreditationSummaryEndpoints
         var organisationId = ReadString(workItem.Payload, "operatorOrganisationId");
         if (TestOrganisations.IsEnabled(configuration) && TestOrganisations.IsTestOrganisation(organisationId))
         {
-            return TypedResults.Ok(Respond(TestOrganisationAccreditationSummary.Fixture));
+            return TypedResults.Ok(Respond(TestOrganisationAccreditationSummary.Fixture, storedStartDate: null));
         }
 
         var applicationId = ReadString(workItem.Payload, "accreditationApplicationId");
@@ -90,21 +96,83 @@ internal static class AccreditationSummaryEndpoints
             new AccreditationSummaryReadRequest(organisationId, applicationId, Guid.NewGuid()),
             cancellationToken
         );
-        return read.Outcome switch
+        if (read.Outcome == AccreditationSummaryReadOutcome.NotFound)
         {
-            AccreditationSummaryReadOutcome.Success => TypedResults.Ok(Respond(read.Summary!)),
-            AccreditationSummaryReadOutcome.NotFound => TypedResults.NotFound(),
-            _ => TypedResults.Problem(
-                title: "Accreditation summary unavailable",
-                detail: read.Message,
-                statusCode: StatusCodes.Status503ServiceUnavailable
-            ),
-        };
+            return TypedResults.NotFound();
+        }
+        if (read.Outcome != AccreditationSummaryReadOutcome.Success)
+        {
+            return Unavailable(read.Message);
+        }
+
+        DateOnly? storedStartDate;
+        try
+        {
+            storedStartDate = await ReadStoredStartDateAsync(
+                persistence,
+                read.Summary!.AccreditationNumber,
+                cancellationToken
+            );
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Never a guessed date: a failed lookup is the tab's unavailable state.
+            logger.LogError(ex, "Accreditation start date lookup failed for work item {WorkItemId}", id);
+            return Unavailable("The accreditation start date could not be read.");
+        }
+        return TypedResults.Ok(Respond(read.Summary!, storedStartDate));
     }
 
-    // 1 January of the accreditation year until the stored start date is read (RA-769 task 003).
-    private static AccreditationSummaryResponse Respond(OperatorAccreditationSummary summary) =>
-        new(summary, new DateOnly(summary.AccreditationYear, 1, 1));
+    private static ProblemHttpResult Unavailable(string? detail) =>
+        TypedResults.Problem(
+            title: "Accreditation summary unavailable",
+            detail: detail,
+            statusCode: StatusCodes.Status503ServiceUnavailable
+        );
+
+    /// <summary>
+    /// The start date the re-accreditation work item stamped when it issued this accreditation. It counts only once
+    /// that work item is Granted (<c>approved</c>): the number is minted at step 1 (<c>approved-pending-contact</c>)
+    /// but the date is stamped at step 2. Null when there is no such work item or it carries no usable date.
+    /// </summary>
+    private static async Task<DateOnly?> ReadStoredStartDateAsync(
+        IWorkItemPersistence persistence,
+        string? accreditationNumber,
+        CancellationToken cancellationToken
+    )
+    {
+        if (string.IsNullOrWhiteSpace(accreditationNumber))
+        {
+            return null;
+        }
+        // Uses the unique partial index on payload.accreditationId.
+        var issuer = await persistence.FindBySubmissionKeyAsync(
+            ReAccreditationType.Id,
+            ReAccreditationAccreditationNumber.PayloadKey,
+            accreditationNumber,
+            cancellationToken
+        );
+        if (issuer?.StateId != ReAccreditationType.ApprovedStateId)
+        {
+            return null;
+        }
+        return
+            issuer.Payload.TryGetValue(StartDateField, out var value)
+            && value.IsString
+            && DateOnly.TryParseExact(
+                value.AsString,
+                "yyyy-MM-dd",
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var date
+            )
+            ? date
+            : null;
+    }
+
+    // The stored start date of a Granted accreditation, else 1 January of the accreditation year.
+    private static AccreditationSummaryResponse Respond(OperatorAccreditationSummary summary, DateOnly? storedStartDate) =>
+        new(summary, storedStartDate ?? new DateOnly(summary.AccreditationYear, 1, 1));
 
     private static string? ReadString(BsonDocument payload, string field) =>
         payload.TryGetValue(field, out var value) && value.IsString && !string.IsNullOrWhiteSpace(value.AsString)

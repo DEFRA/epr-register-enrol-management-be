@@ -9,6 +9,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using MongoDB.Bson;
 using NSubstitute;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
 
@@ -132,7 +133,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
             ],
             accreditation.EnumerateObject().Select(p => p.Name)
         );
-        // The start date is 1 January of the accreditation year until the stored date is read (task 003).
+        // No re-accreditation work item holds this accreditation number: 1 January of the accreditation year.
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
         await adapter
             .Received(1)
@@ -142,6 +143,132 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
                 ),
                 Arg.Any<CancellationToken>()
             );
+    }
+
+    // The re-accreditation work item that issued an accreditation: its number and start date on the payload.
+    private static async Task StoreReAccreditationAsync(
+        AddOverseasSiteAppFactory factory,
+        string stateId,
+        string accreditationNumber,
+        string? startDate
+    )
+    {
+        var type = new ReAccreditationType();
+        var payload = new BsonDocument { ["accreditationId"] = accreditationNumber };
+        if (startDate is not null)
+        {
+            payload["accreditationStartDate"] = startDate;
+        }
+        await factory.Persistence.CreateAsync(
+            new WorkItem
+            {
+                Id = Guid.NewGuid(),
+                TypeId = ReAccreditationType.Id,
+                StateId = stateId,
+                SubmittedBy = "test-client",
+                TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+                TemplateVersion = type.TemplateVersion,
+                Payload = payload,
+            },
+            Ct
+        );
+    }
+
+    private async Task<(HttpStatusCode Status, string? StartDate)> GetStartDateAsync(
+        string stateId,
+        string? storedStartDate,
+        string storedNumber = "A26ER5003240164GR"
+    )
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
+        await using var factory = NewFactory(fixture, adapter);
+        using var client = factory.CreateClient();
+        await StoreReAccreditationAsync(factory, stateId, storedNumber, storedStartDate);
+        var id = await SubmitAsync(factory, client, "summary-start-date");
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        if (response.StatusCode != HttpStatusCode.OK)
+        {
+            return (response.StatusCode, null);
+        }
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        return (response.StatusCode, body.GetProperty("accreditationStartDate").GetString());
+    }
+
+    [Fact]
+    public async Task An_accreditation_granted_mid_year_shows_its_stored_start_date()
+    {
+        var (status, startDate) = await GetStartDateAsync("approved", "2026-06-15");
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal("2026-06-15", startDate);
+    }
+
+    [Fact]
+    public async Task A_work_item_pending_contact_does_not_supply_the_start_date_even_if_it_carries_one()
+    {
+        var (status, startDate) = await GetStartDateAsync("approved-pending-contact", "2026-06-15");
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal("2026-01-01", startDate);
+    }
+
+    [Fact]
+    public async Task A_granted_work_item_without_a_stored_date_falls_back_to_1_january()
+    {
+        var (status, startDate) = await GetStartDateAsync("approved", storedStartDate: null);
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal("2026-01-01", startDate);
+    }
+
+    [Fact]
+    public async Task Only_the_work_item_with_this_accreditation_number_supplies_the_start_date()
+    {
+        var (status, startDate) = await GetStartDateAsync("approved", "2026-06-15", storedNumber: "A26ER5003240199GR");
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal("2026-01-01", startDate);
+    }
+
+    [Fact]
+    public async Task A_failed_work_item_lookup_is_a_service_unavailable_never_a_guessed_date()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
+        await using var factory = new AddOverseasSiteAppFactory(fixture)
+        {
+            ConfigureTestServices = services =>
+            {
+                services.RemoveAll<IAccreditationSummaryAdapter>();
+                services.AddSingleton(adapter);
+                var real = services.Last(d => d.ServiceType == typeof(IWorkItemPersistence));
+                services.Remove(real);
+                services.AddSingleton<IWorkItemPersistence>(sp => new FailingLookupPersistence(
+                    (IWorkItemPersistence)(
+                        real.ImplementationInstance
+                        ?? real.ImplementationFactory?.Invoke(sp)
+                        ?? ActivatorUtilities.CreateInstance(sp, real.ImplementationType!)
+                    )
+                ));
+            },
+        };
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(factory, client, "summary-lookup-failed");
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    private sealed class FailingLookupPersistence(IWorkItemPersistence inner) : ForwardingWorkItemPersistence(inner)
+    {
+        public override Task<WorkItem?> FindBySubmissionKeyAsync(
+            string typeId,
+            string payloadField,
+            string value,
+            CancellationToken cancellationToken = default
+        ) => Task.FromException<WorkItem?>(new InvalidOperationException("Injected lookup failure"));
     }
 
     [Fact]
