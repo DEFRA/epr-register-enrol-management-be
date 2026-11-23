@@ -39,10 +39,36 @@ internal static class TestOrganisationAccreditationSummary
             },
             // Four sites in ORS id order. Two share a name, so a summary that hid its address for a unique name would
             // still show it here; the last has no contact or codes, as an ORS registered with little detail does.
+            // The first has one interim site, the second three, the others none.
             OverseasSites:
             [
-                Site(1, "001", "Speira GmbH", "1 Hafenstrasse", "Bremen", "Germany", isEu: true, isOecd: true),
-                Site(2, "002", "Speira GmbH", "2 Hafenstrasse", "Hamburg", "Germany", isEu: true, isOecd: true),
+                Site(
+                    1,
+                    "001",
+                    "Speira GmbH",
+                    "1 Hafenstrasse",
+                    "Bremen",
+                    "Germany",
+                    isEu: true,
+                    isOecd: true,
+                    interimSites: [Interim(101, "I-001", "Bremen Interim Works", "R12")]
+                ),
+                Site(
+                    2,
+                    "002",
+                    "Speira GmbH",
+                    "2 Hafenstrasse",
+                    "Hamburg",
+                    "Germany",
+                    isEu: true,
+                    isOecd: true,
+                    interimSites:
+                    [
+                        Interim(201, "I-002", "Hamburg Interim North", "R12"),
+                        Interim(202, "I-003", "Hamburg Interim South", "R13"),
+                        Interim(203, "I-004", "Hamburg Interim East", "R12", "R3"),
+                    ]
+                ),
                 Site(3, "003", "Excel Recycling BV", "3 Havenweg", "Rotterdam", "Netherlands", isEu: true, isOecd: true),
                 new OperatorSummarySite(
                     SiteId: 4,
@@ -64,7 +90,8 @@ internal static class TestOrganisationAccreditationSummary
                     RepatriatedLoads: null,
                     ConditionsOfExport: false,
                     IsEu: false,
-                    IsOecd: true
+                    IsOecd: true,
+                    InterimSites: []
                 ),
             ]
         );
@@ -77,7 +104,8 @@ internal static class TestOrganisationAccreditationSummary
         string townOrCity,
         string country,
         bool isEu,
-        bool isOecd
+        bool isOecd,
+        IReadOnlyList<OperatorSummaryInterimSite>? interimSites = null
     ) =>
         new(
             SiteId: siteId,
@@ -99,6 +127,29 @@ internal static class TestOrganisationAccreditationSummary
             RepatriatedLoads: "As per article 18",
             ConditionsOfExport: true,
             IsEu: isEu,
-            IsOecd: isOecd
+            IsOecd: isOecd,
+            InterimSites: interimSites ?? []
+        );
+
+    private static OperatorSummaryInterimSite Interim(
+        int siteId,
+        string siteNumber,
+        string name,
+        params string[] operationCodes
+    ) =>
+        new(
+            SiteId: siteId,
+            SiteNumber: siteNumber,
+            SiteName: name,
+            AddressLine1: $"{siteId} Interim Strasse",
+            AddressLine2: null,
+            TownOrCity: "Hamburg",
+            StateOrRegion: null,
+            Postcode: "20095",
+            Country: "Germany",
+            ContactName: "Interim Contact " + siteNumber,
+            ContactEmail: $"interim.{siteNumber}@example.test".ToLowerInvariant(),
+            ContactPhone: "+49 40 1234 5678",
+            OperationCodes: operationCodes
         );
 }

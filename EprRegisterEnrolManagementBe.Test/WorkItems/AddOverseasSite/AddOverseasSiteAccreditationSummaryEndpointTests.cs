@@ -455,6 +455,12 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         );
         Assert.All(stubSites, s => Assert.False(string.IsNullOrWhiteSpace(s.GetProperty("siteName").GetString())));
         Assert.DoesNotContain("isNewSite", accreditation.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        // One site with a single interim site, one with several, and sites with none.
+        var interimCounts = stubSites.Select(s => s.GetProperty("interimSites").GetArrayLength()).ToList();
+        Assert.Contains(1, interimCounts);
+        Assert.Contains(interimCounts, count => count > 1);
+        Assert.Contains(0, interimCounts);
+        Assert.DoesNotContain("removedAt", accreditation.GetRawText(), StringComparison.OrdinalIgnoreCase);
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
         await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
     }

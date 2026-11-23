@@ -65,7 +65,25 @@ public class HttpAccreditationSummaryAdapterTests
               "repatriatedLoads": "As per article 18",
               "conditionsOfExport": true,
               "isEu": true,
-              "isOecd": false
+              "isOecd": false,
+              "interimSites": [
+                {
+                  "siteId": 11,
+                  "siteNumber": "I-11",
+                  "siteName": "Hamburg Interim",
+                  "addressLine1": "2 Interim Strasse",
+                  "addressLine2": "Unit 4",
+                  "townOrCity": "Hamburg",
+                  "stateOrRegion": "Hamburg",
+                  "postcode": "20095",
+                  "country": "Germany",
+                  "contactName": "Ines Interim",
+                  "contactEmail": "ines@example.de",
+                  "contactPhone": "+49 456",
+                  "operationCodes": ["R12", "R3"]
+                },
+                { "siteId": 12, "siteName": "Second Interim" }
+              ]
             },
             { "siteId": 8, "orsId": "002", "siteName": "Second GmbH" }
           ]
@@ -201,6 +219,33 @@ public class HttpAccreditationSummaryAdapterTests
         Assert.True(site.ConditionsOfExport);
         Assert.True(site.IsEu);
         Assert.False(site.IsOecd);
+    }
+
+    [Fact]
+    public async Task The_interim_sites_of_a_site_are_carried_through_in_the_order_answered()
+    {
+        var (adapter, _) = BuildSut(_ => Json(HttpStatusCode.OK, UsableBody));
+
+        var result = await Read(adapter);
+
+        var sites = result.Summary!.OverseasSites!;
+        var interimSites = sites[0].InterimSites!;
+        Assert.Equal(["Hamburg Interim", "Second Interim"], interimSites.Select(interim => interim.SiteName));
+        var interim = interimSites[0];
+        Assert.Equal(11, interim.SiteId);
+        Assert.Equal("I-11", interim.SiteNumber);
+        Assert.Equal("2 Interim Strasse", interim.AddressLine1);
+        Assert.Equal("Unit 4", interim.AddressLine2);
+        Assert.Equal("Hamburg", interim.TownOrCity);
+        Assert.Equal("Hamburg", interim.StateOrRegion);
+        Assert.Equal("20095", interim.Postcode);
+        Assert.Equal("Germany", interim.Country);
+        Assert.Equal("Ines Interim", interim.ContactName);
+        Assert.Equal("ines@example.de", interim.ContactEmail);
+        Assert.Equal("+49 456", interim.ContactPhone);
+        Assert.Equal(["R12", "R3"], interim.OperationCodes);
+        // A site from an operator backend that predates interim sites is still usable.
+        Assert.Null(sites[1].InterimSites);
     }
 
     [Fact]

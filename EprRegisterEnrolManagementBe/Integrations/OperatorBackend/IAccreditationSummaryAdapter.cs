@@ -127,8 +127,8 @@ public sealed record OperatorSummaryBusinessPlan
 /// <summary>
 /// An overseas reprocessing site on the accreditation, shaped like the payload's site so management-fe reads it with
 /// the code it already has. Only selected sites are answered, in ORS id then site id order. The operator backend
-/// never says which sites are new (a site stays "new" for the year after grant), so none is marked. Interim sites and
-/// BES evidence files are added by later tasks.
+/// never says which sites are new (a site stays "new" for the year after grant), so none is marked. Its interim
+/// sites are the active ones only. BES evidence files are added by a later task.
 /// </summary>
 public sealed record OperatorSummarySite(
     int SiteId,
@@ -150,5 +150,26 @@ public sealed record OperatorSummarySite(
     string? RepatriatedLoads,
     bool? ConditionsOfExport,
     bool IsEu,
-    bool IsOecd
+    bool IsOecd,
+    IReadOnlyList<OperatorSummaryInterimSite>? InterimSites = null
+);
+
+/// <summary>
+/// An active interim site of an overseas site, shaped like the payload's interim site. The operator backend never
+/// returns a withdrawn one, nor says which are new.
+/// </summary>
+public sealed record OperatorSummaryInterimSite(
+    int SiteId,
+    string? SiteNumber,
+    string? SiteName,
+    string? AddressLine1,
+    string? AddressLine2,
+    string? TownOrCity,
+    string? StateOrRegion,
+    string? Postcode,
+    string? Country,
+    string? ContactName,
+    string? ContactEmail,
+    string? ContactPhone,
+    IReadOnlyList<string>? OperationCodes
 );

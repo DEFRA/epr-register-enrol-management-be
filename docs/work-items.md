@@ -363,7 +363,8 @@ type is configured. Every setting is code, not runtime data:
   `businessPlan` as the operator backend allow-lists them, never the per-contact
   new marker. `overseasSites` are the sites the operator backend answers: selected
   ones only (a requested ORS is absent until granted), in ORS id then site id
-  order, with no new-site markers; the `e2e-` stub has four. The
+  order, with no new-site markers, each with its active interim sites only (the operator backend
+  never answers a withdrawn one); the `e2e-` stub has four, with one, three and no interim sites. The
   start date is 1 January of the accreditation year.
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services
