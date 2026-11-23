@@ -44,6 +44,19 @@ public class HttpAccreditationSummaryAdapterTests
             "priceSupportPercent": 40,
             "priceSupportDetail": null
           },
+          "samplingPlan": {
+            "files": [
+              {
+                "fileId": "sp-1",
+                "filename": "sampling-plan.pdf",
+                "contentType": "application/pdf",
+                "scanStatus": "Clean",
+                "s3Key": "sampling-plans/sp-1.pdf",
+                "s3Bucket": "plans-bucket"
+              },
+              { "fileId": "sp-2", "filename": "second.pdf", "scanStatus": "Pending", "s3Key": "sampling-plans/sp-2.pdf" }
+            ]
+          },
           "overseasSites": [
             {
               "siteId": 7,
@@ -66,6 +79,18 @@ public class HttpAccreditationSummaryAdapterTests
               "conditionsOfExport": true,
               "isEu": true,
               "isOecd": false,
+              "besEvidence": {
+                "files": [
+                  {
+                    "fileId": "bes-1",
+                    "filename": "bes.pdf",
+                    "contentType": "application/pdf",
+                    "scanStatus": "Clean",
+                    "s3Key": "bes/bes-1.pdf",
+                    "s3Bucket": "bes-bucket"
+                  }
+                ]
+              },
               "interimSites": [
                 {
                   "siteId": 11,
@@ -249,6 +274,44 @@ public class HttpAccreditationSummaryAdapterTests
     }
 
     [Fact]
+    public async Task The_sampling_plan_files_are_carried_through_with_their_s3_details()
+    {
+        var (adapter, _) = BuildSut(_ => Json(HttpStatusCode.OK, UsableBody));
+
+        var result = await Read(adapter);
+
+        var files = result.Summary!.SamplingPlan!.Files;
+        Assert.Equal(["sp-1", "sp-2"], files.Select(file => file.FileId));
+        var file = files[0];
+        Assert.Equal("sampling-plan.pdf", file.Filename);
+        Assert.Equal("application/pdf", file.ContentType);
+        Assert.Equal("Clean", file.ScanStatus);
+        Assert.Equal("sampling-plans/sp-1.pdf", file.S3Key);
+        Assert.Equal("plans-bucket", file.S3Bucket);
+        Assert.Equal("Pending", files[1].ScanStatus);
+        Assert.Null(files[1].S3Bucket);
+    }
+
+    [Fact]
+    public async Task The_bes_evidence_files_of_a_site_are_carried_through_with_their_s3_details()
+    {
+        var (adapter, _) = BuildSut(_ => Json(HttpStatusCode.OK, UsableBody));
+
+        var result = await Read(adapter);
+
+        var sites = result.Summary!.OverseasSites!;
+        var file = Assert.Single(sites[0].BesEvidence!.Files);
+        Assert.Equal("bes-1", file.FileId);
+        Assert.Equal("bes.pdf", file.Filename);
+        Assert.Equal("application/pdf", file.ContentType);
+        Assert.Equal("Clean", file.ScanStatus);
+        Assert.Equal("bes/bes-1.pdf", file.S3Key);
+        Assert.Equal("bes-bucket", file.S3Bucket);
+        // A site from an operator backend that predates BES evidence files is still usable.
+        Assert.Null(sites[1].BesEvidence);
+    }
+
+    [Fact]
     public async Task A_body_without_overseas_sites_is_still_usable()
     {
         var (adapter, _) = BuildSut(_ =>
@@ -262,6 +325,7 @@ public class HttpAccreditationSummaryAdapterTests
 
         Assert.Equal(AccreditationSummaryReadOutcome.Success, result.Outcome);
         Assert.Null(result.Summary!.OverseasSites);
+        Assert.Null(result.Summary.SamplingPlan);
     }
 
     [Fact]

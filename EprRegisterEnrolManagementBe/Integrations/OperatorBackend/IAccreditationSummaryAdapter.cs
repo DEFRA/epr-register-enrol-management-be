@@ -82,6 +82,7 @@ public sealed record OperatorAccreditationSummary(
     string? CompanyRegisteredAddress,
     OperatorSummaryPrns? Prns = null,
     OperatorSummaryBusinessPlan? BusinessPlan = null,
+    OperatorSummaryFiles? SamplingPlan = null,
     IReadOnlyList<OperatorSummarySite>? OverseasSites = null
 )
 {
@@ -128,7 +129,7 @@ public sealed record OperatorSummaryBusinessPlan
 /// An overseas reprocessing site on the accreditation, shaped like the payload's site so management-fe reads it with
 /// the code it already has. Only selected sites are answered, in ORS id then site id order. The operator backend
 /// never says which sites are new (a site stays "new" for the year after grant), so none is marked. Its interim
-/// sites are the active ones only. BES evidence files are added by a later task.
+/// sites are the active ones only. Its BES evidence is the files alone.
 /// </summary>
 public sealed record OperatorSummarySite(
     int SiteId,
@@ -151,7 +152,28 @@ public sealed record OperatorSummarySite(
     bool? ConditionsOfExport,
     bool IsEu,
     bool IsOecd,
-    IReadOnlyList<OperatorSummaryInterimSite>? InterimSites = null
+    IReadOnlyList<OperatorSummaryInterimSite>? InterimSites = null,
+    OperatorSummaryFiles? BesEvidence = null
+);
+
+/// <summary>
+/// The files of a document section: the sampling plan, or a site's BES evidence. Shaped like the payload's
+/// <c>samplingPlan</c> and <c>besEvidence</c>.
+/// </summary>
+public sealed record OperatorSummaryFiles(IReadOnlyList<OperatorSummaryFile> Files);
+
+/// <summary>
+/// One document, with what management-fe needs to find it again on a download: its id, name, content type and scan
+/// result, and its S3 location. The S3 location is for the server side only: management-fe never renders it, and
+/// serves a file only when it is among the live summary's files.
+/// </summary>
+public sealed record OperatorSummaryFile(
+    string FileId,
+    string? Filename,
+    string? ContentType,
+    string? ScanStatus,
+    string? S3Key,
+    string? S3Bucket
 );
 
 /// <summary>

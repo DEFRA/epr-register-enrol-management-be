@@ -41,6 +41,9 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
             [new OperatorSummaryAuthoriser("Ada Authoriser", "ada@example.com")]
         ),
         BusinessPlan: new OperatorSummaryBusinessPlan { OtherPercent = 100, OtherDetail = "Everything else" },
+        SamplingPlan: new OperatorSummaryFiles(
+            [new OperatorSummaryFile("sp-1", "plan.pdf", "application/pdf", "Clean", "plans/sp-1.pdf", "plans-bucket")]
+        ),
         OverseasSites:
         [
             new OperatorSummarySite(
@@ -162,6 +165,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
                 "companyRegisteredAddress",
                 "prns",
                 "businessPlan",
+                "samplingPlan",
                 "overseasSites",
             ],
             accreditation.EnumerateObject().Select(p => p.Name)
@@ -180,6 +184,11 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         Assert.Equal("Bremen", site.GetProperty("townOrCity").GetString());
         Assert.Equal("R4", Assert.Single(site.GetProperty("operationCodes").EnumerateArray()).GetString());
         Assert.True(site.GetProperty("isEu").GetBoolean());
+        // The files go through with their S3 location, for management-fe's server-side download.
+        var planFile = Assert.Single(accreditation.GetProperty("samplingPlan").GetProperty("files").EnumerateArray());
+        Assert.Equal("sp-1", planFile.GetProperty("fileId").GetString());
+        Assert.Equal("plans/sp-1.pdf", planFile.GetProperty("s3Key").GetString());
+        Assert.Equal("plans-bucket", planFile.GetProperty("s3Bucket").GetString());
         // No re-accreditation work item holds this accreditation number: 1 January of the accreditation year.
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
         await adapter
@@ -461,6 +470,19 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         Assert.Contains(interimCounts, count => count > 1);
         Assert.Contains(0, interimCounts);
         Assert.DoesNotContain("removedAt", accreditation.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        // A sampling plan with a clean file and one that has not been scanned, and BES evidence on some sites.
+        var samplingFiles = accreditation.GetProperty("samplingPlan").GetProperty("files").EnumerateArray().ToList();
+        Assert.Contains(samplingFiles, f => f.GetProperty("scanStatus").GetString() == "Clean");
+        Assert.Contains(samplingFiles, f => f.GetProperty("scanStatus").GetString() == "Pending");
+        Assert.All(samplingFiles, f => Assert.False(string.IsNullOrWhiteSpace(f.GetProperty("s3Key").GetString())));
+        var besCounts = stubSites.Select(s => s.GetProperty("besEvidence").GetProperty("files").GetArrayLength()).ToList();
+        Assert.Contains(besCounts, count => count > 0);
+        Assert.Contains(0, besCounts);
+        var allFileIds = samplingFiles
+            .Concat(stubSites.SelectMany(s => s.GetProperty("besEvidence").GetProperty("files").EnumerateArray()))
+            .Select(f => f.GetProperty("fileId").GetString())
+            .ToList();
+        Assert.Equal(allFileIds.Count, allFileIds.Distinct().Count());
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
         await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
     }

@@ -37,9 +37,17 @@ internal static class TestOrganisationAccreditationSummary
                 PriceSupportPercent = 40,
                 PriceSupportDetail = "Support for collection prices",
             },
+            // A clean plan, and one that has not passed its scan (so is offered no download).
+            SamplingPlan: new OperatorSummaryFiles(
+                [
+                    File("e2e-sampling-plan-clean", "sampling-and-inspection-plan.pdf", "sampling-plans", "Clean"),
+                    File("e2e-sampling-plan-pending", "sampling-plan-awaiting-scan.pdf", "sampling-plans", "Pending"),
+                ]
+            ),
             // Four sites in ORS id order. Two share a name, so a summary that hid its address for a unique name would
             // still show it here; the last has no contact or codes, as an ORS registered with little detail does.
-            // The first has one interim site, the second three, the others none.
+            // The first has one interim site, the second three, the others none. The first has one BES file, the second a clean
+            // one and one awaiting its scan, the others none.
             OverseasSites:
             [
                 Site(
@@ -51,7 +59,8 @@ internal static class TestOrganisationAccreditationSummary
                     "Germany",
                     isEu: true,
                     isOecd: true,
-                    interimSites: [Interim(101, "I-001", "Bremen Interim Works", "R12")]
+                    interimSites: [Interim(101, "I-001", "Bremen Interim Works", "R12")],
+                    besFiles: [File("e2e-bes-001", "bes-speira-bremen.pdf", "bes", "Clean")]
                 ),
                 Site(
                     2,
@@ -67,6 +76,11 @@ internal static class TestOrganisationAccreditationSummary
                         Interim(201, "I-002", "Hamburg Interim North", "R12"),
                         Interim(202, "I-003", "Hamburg Interim South", "R13"),
                         Interim(203, "I-004", "Hamburg Interim East", "R12", "R3"),
+                    ],
+                    besFiles:
+                    [
+                        File("e2e-bes-002", "bes-speira-hamburg.pdf", "bes", "Clean"),
+                        File("e2e-bes-002-pending", "bes-speira-hamburg-awaiting-scan.pdf", "bes", "Pending"),
                     ]
                 ),
                 Site(3, "003", "Excel Recycling BV", "3 Havenweg", "Rotterdam", "Netherlands", isEu: true, isOecd: true),
@@ -91,7 +105,8 @@ internal static class TestOrganisationAccreditationSummary
                     ConditionsOfExport: false,
                     IsEu: false,
                     IsOecd: true,
-                    InterimSites: []
+                    InterimSites: [],
+                    BesEvidence: new OperatorSummaryFiles([])
                 ),
             ]
         );
@@ -105,7 +120,8 @@ internal static class TestOrganisationAccreditationSummary
         string country,
         bool isEu,
         bool isOecd,
-        IReadOnlyList<OperatorSummaryInterimSite>? interimSites = null
+        IReadOnlyList<OperatorSummaryInterimSite>? interimSites = null,
+        IReadOnlyList<OperatorSummaryFile>? besFiles = null
     ) =>
         new(
             SiteId: siteId,
@@ -128,7 +144,19 @@ internal static class TestOrganisationAccreditationSummary
             ConditionsOfExport: true,
             IsEu: isEu,
             IsOecd: isOecd,
-            InterimSites: interimSites ?? []
+            InterimSites: interimSites ?? [],
+            BesEvidence: new OperatorSummaryFiles(besFiles ?? [])
+        );
+
+    // The S3 location is made up: nothing is stored there, so a download of a clean stub file is an S3 failure.
+    private static OperatorSummaryFile File(string fileId, string filename, string folder, string scanStatus) =>
+        new(
+            FileId: fileId,
+            Filename: filename,
+            ContentType: "application/pdf",
+            ScanStatus: scanStatus,
+            S3Key: $"e2e-stub/{folder}/{fileId}.pdf",
+            S3Bucket: "e2e-stub-bucket"
         );
 
     private static OperatorSummaryInterimSite Interim(
