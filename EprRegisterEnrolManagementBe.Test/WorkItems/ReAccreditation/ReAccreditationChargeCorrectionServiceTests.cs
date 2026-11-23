@@ -335,11 +335,11 @@ public class ReAccreditationChargeCorrectionServiceTests
     [InlineData("APPROVED-PENDING-CONTACT", true)]
     [InlineData("queried", false)]
     [InlineData("duly-made", false)]
-    public void IsClosed_is_the_terminal_states_plus_the_two_pending_contact_states(
+    public void IsDecided_is_the_terminal_states_plus_the_two_pending_contact_states(
         string stateId, bool expected)
     {
         var template = new ReAccreditationType();
 
-        Assert.Equal(expected, ReAccreditationChargeCorrectionService.IsClosed(template, stateId));
+        Assert.Equal(expected, ReAccreditationCorrectionGuards.IsDecided(template, stateId));
     }
 }

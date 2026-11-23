@@ -275,6 +275,12 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             IReAccreditationChargeCorrectionService,
             ReAccreditationChargeCorrectionService
         >();
+        // RA-768: removes named overseas sites for the operator backend's
+        // one-off correction of query responses saved before RA-557.
+        services.AddSingleton<
+            IReAccreditationOverseasSitesCorrectionService,
+            ReAccreditationOverseasSitesCorrectionService
+        >();
         // RA-291: bespoke query workflow (state-derived query-during-* action
         // + query-detail audit entry).
         services.AddSingleton<IReAccreditationQueryService, ReAccreditationQueryService>();

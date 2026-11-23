@@ -3,7 +3,6 @@ using System.Security.Claims;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using MongoDB.Bson;
-using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -17,7 +16,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 /// audit entry. It does NOT change <see cref="WorkItem.StateId"/> or the SLA
 /// clock and runs no post-action hooks. Duly-made items are corrected too.
 ///
-/// A closed application (see <see cref="IsClosed"/>) is never changed. The
+/// A closed application (see <see cref="ReAccreditationCorrectionGuards.IsDecided"/>) is never changed. The
 /// payload is edited by setting the one field, so every other key is kept.
 /// Concurrency is handled as in <see cref="ReAccreditationChangePaymentDateService"/>:
 /// reload and re-check on a <see cref="WorkItemConcurrencyException"/>.
@@ -37,21 +36,6 @@ internal sealed class ReAccreditationChargeCorrectionService(
     public const string AuditAction = "charge-corrected";
     public const string AuditActionDisplayName = "Charge corrected";
     public const string AuditReason = "RA-766";
-
-    private const string PaymentDateField = "paymentDate";
-
-    /// <summary>
-    /// The states a charge is never corrected in: the template's terminal
-    /// states (approved, rejected, withdrawn) plus the two pending-contact
-    /// states, which are not terminal but are already a decided outcome.
-    /// The pending-contact states come from <see cref="StandardConfirmContactGuard"/>,
-    /// so they stay in step with it. The operator backend keeps its own copy of
-    /// the five ids (<c>ChargeCorrectionMigration.ClosedWorkItemStates</c>) for
-    /// its dry run, which never sends the PUT: a change here also needs a change there.
-    /// </summary>
-    internal static bool IsClosed(IWorkItemTemplate template, string stateId) =>
-        TerminalStates.Find(template, stateId) is not null
-        || StandardConfirmContactGuard.ForPendingState(stateId) is not null;
 
     public async Task<ChargeCorrectionResult> CorrectChargeAsync(
         Guid workItemId,
@@ -82,7 +66,7 @@ internal sealed class ReAccreditationChargeCorrectionService(
             }
 
             var previous = ReAccreditationPayload.ReadChargeAmountPence(workItem!);
-            var dulyMade = HasPaymentDate(workItem!);
+            var dulyMade = ReAccreditationCorrectionGuards.IsDulyMade(workItem!);
 
             if (previous == chargeAmountPence)
             {
@@ -167,7 +151,7 @@ internal sealed class ReAccreditationChargeCorrectionService(
             );
         }
 
-        return IsClosed(template, workItem.StateId)
+        return ReAccreditationCorrectionGuards.IsDecided(template, workItem.StateId)
             ? Refuse(
                 WorkItemActionFailureCode.TerminalState,
                 $"Work item {workItemId} is closed ('{workItem.StateId}'); its charge cannot change."
@@ -177,12 +161,6 @@ internal sealed class ReAccreditationChargeCorrectionService(
 
     private static ChargeCorrectionResult Refuse(WorkItemActionFailureCode code, string message) =>
         ChargeCorrectionResult.Refused(WorkItemActionResult.Failure(code, message));
-
-    // Duly making is what stamps the payment date, so its presence is the marker.
-    private static bool HasPaymentDate(WorkItem workItem) =>
-        workItem.Payload is not null
-        && workItem.Payload.TryGetValue(PaymentDateField, out var value)
-        && !value.IsBsonNull;
 
     /// <summary>
     /// Mutates the loaded instance in memory only; the caller commits it with

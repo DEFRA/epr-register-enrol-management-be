@@ -3340,6 +3340,569 @@ public class ReAccreditationEndpointTests
         Assert.Equal(0, persisted!.Payload!["chargeAmountPence"].AsInt32);
     }
 
+    // ------------------- RemoveOverseasSites (RA-768) -------------------
+
+    private const string RemoveOverseasSitesLogCategory = "ReAccreditationEndpoints.RemoveOverseasSites";
+
+    private static string RemoveOverseasSitesUrl(Guid id) =>
+        $"/work-items/re-accreditation/{id}/overseas-sites/remove";
+
+    private static BsonDocument OverseasSite(int siteId, string? orsId, params string[] operationCodes)
+    {
+        var site = new BsonDocument
+        {
+            ["siteId"] = siteId,
+            ["siteName"] = $"Site {siteId}",
+            ["operationCodes"] = new BsonArray(operationCodes),
+        };
+        if (orsId is not null)
+        {
+            site["orsId"] = orsId;
+        }
+        return site;
+    }
+
+    /// <summary>
+    /// A queried re-accreditation item holding three overseas sites: ORS-A
+    /// (siteId 1), ORS-B (siteId 2), and a site with no orsId (siteId 3).
+    /// </summary>
+    private static WorkItem BuildOverseasSitesCandidate(
+        Guid id,
+        string stateId = "queried",
+        bool dulyMade = false
+    )
+    {
+        var item = BuildInState(id, stateId, TenantClientId);
+        item.Payload = new BsonDocument
+        {
+            ["someUnmodelledKey"] = "must-survive",
+            ["overseasSites"] = new BsonDocument
+            {
+                ["sites"] = new BsonArray
+                {
+                    OverseasSite(1, "ORS-A", "R3"),
+                    OverseasSite(2, "ORS-B", "R4"),
+                    OverseasSite(3, null, "R5"),
+                },
+            },
+        };
+        if (dulyMade)
+        {
+            item.Payload["paymentDate"] = "2026-07-15";
+        }
+        return item;
+    }
+
+    private static HttpContent RemoveBody(string json) =>
+        new StringContent(json, System.Text.Encoding.UTF8, "application/json");
+
+    private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+        return document.RootElement.Clone();
+    }
+
+    private static List<(string? OrsId, string? SiteId)> ReadSiteRefs(JsonElement array) =>
+        array
+            .EnumerateArray()
+            .Select(e =>
+                (
+                    e.GetProperty("orsId").ValueKind == JsonValueKind.Null ? null : e.GetProperty("orsId").GetString(),
+                    e.GetProperty("siteId").ValueKind == JsonValueKind.Null ? null : e.GetProperty("siteId").GetString()
+                )
+            )
+            .ToList();
+
+    private static List<string?> StoredOrsIds(WorkItem item) =>
+        item.Payload["overseasSites"]["sites"]
+            .AsBsonArray.Select(s => s.AsBsonDocument.Contains("orsId") ? s["orsId"].AsString : null)
+            .ToList();
+
+    [Fact]
+    public async Task RemoveOverseasSites_removes_one_site_matched_by_orsId_and_audits_it_without_changing_state()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-B","siteId":"2"}],"reason":"RA-768: deselected by the operator"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        Assert.Equal([("ORS-B", "2")], ReadSiteRefs(body.GetProperty("removed")));
+        Assert.Empty(ReadSiteRefs(body.GetProperty("alreadyAbsent")));
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-A", null], StoredOrsIds(persisted!));
+        Assert.Equal("queried", persisted!.StateId);
+        Assert.Equal("must-survive", persisted.Payload["someUnmodelledKey"].AsString);
+
+        var entry = Assert.Single(persisted.AuditLog);
+        Assert.Equal("overseas-sites-corrected", entry.Action);
+        Assert.Equal("Overseas sites corrected", entry.ActionDisplayName);
+        Assert.Equal(["removedSites", "reason"], entry.Details.Keys);
+        Assert.Equal("""[{"orsId":"ORS-B","siteId":"2"}]""", entry.Details["removedSites"]);
+        Assert.Equal("RA-768: deselected by the operator", entry.Details["reason"]);
+        Assert.Equal(DefaultUserId, entry.CreatedBy);
+        Assert.Equal(DefaultUserName, entry.CreatedByName);
+        Assert.Equal("queried", entry.StateId);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_removes_several_sites_in_one_write_with_one_audit_entry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"},{"orsId":null,"siteId":"3"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        // removed carries the stored site's ids, both keys, null when the site has none.
+        Assert.Equal([("ORS-A", "1"), (null, "3")], ReadSiteRefs(body.GetProperty("removed")));
+        Assert.Equal(JsonValueKind.Null, body.GetProperty("removed")[1].GetProperty("orsId").ValueKind);
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-B"], StoredOrsIds(persisted!));
+        Assert.Equal(1, persisted!.Version);
+        var entry = Assert.Single(persisted.AuditLog);
+        Assert.Equal(
+            """[{"orsId":"ORS-A","siteId":"1"},{"orsId":null,"siteId":"3"}]""",
+            entry.Details["removedSites"]
+        );
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_reports_a_site_already_gone_and_writes_nothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        var seeded = BuildOverseasSitesCandidate(id);
+        await factory.SeedAsync(seeded, ct);
+        var before = await factory.Persistence.GetByIdAsync(id, ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-GONE","siteId":"9"},{"siteId":"99"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        Assert.Empty(ReadSiteRefs(body.GetProperty("removed")));
+        // alreadyAbsent echoes the request entries as sent.
+        Assert.Equal([("ORS-GONE", "9"), (null, "99")], ReadSiteRefs(body.GetProperty("alreadyAbsent")));
+
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Empty(persisted!.AuditLog);
+        Assert.Equal(before!.Version, persisted.Version);
+        Assert.Equal(before.LastModifiedAt, persisted.LastModifiedAt);
+        Assert.Equal(before.Payload, persisted.Payload);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_repeated_call_changes_nothing_and_adds_no_second_audit_entry()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+        const string json = """{"sites":[{"orsId":"ORS-B"}],"reason":"RA-768: x"}""";
+
+        var first = await client.PostAsync(RemoveOverseasSitesUrl(id), RemoveBody(json), ct);
+        var second = await client.PostAsync(RemoveOverseasSitesUrl(id), RemoveBody(json), ct);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, second.StatusCode);
+        var body = await ReadJsonAsync(second, ct);
+        Assert.Empty(ReadSiteRefs(body.GetProperty("removed")));
+        Assert.Equal([("ORS-B", null)], ReadSiteRefs(body.GetProperty("alreadyAbsent")));
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Single(persisted!.AuditLog);
+        Assert.Equal(1, persisted.Version);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_audits_only_the_sites_it_removed_when_some_are_already_gone()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-GONE"},{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        Assert.Equal([("ORS-A", "1")], ReadSiteRefs(body.GetProperty("removed")));
+        Assert.Equal([("ORS-GONE", null)], ReadSiteRefs(body.GetProperty("alreadyAbsent")));
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(
+            """[{"orsId":"ORS-A","siteId":"1"}]""",
+            Assert.Single(persisted!.AuditLog).Details["removedSites"]
+        );
+    }
+
+    [Theory]
+    [InlineData("""{"siteId":"3"}""")]
+    [InlineData("""{"orsId":null,"siteId":"3"}""")]
+    [InlineData("""{"orsId":"","siteId":"3"}""")]
+    [InlineData("""{"orsId":null,"siteId":3}""")]
+    public async Task RemoveOverseasSites_matches_a_site_by_siteId_alone_when_the_entry_has_no_orsId(string entry)
+    {
+        // The stored siteId is a number, as the operator backend stores it;
+        // the request's siteId may be a string or a number.
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody($$"""{"sites":[{{entry}}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        Assert.Equal([(null, "3")], ReadSiteRefs(body.GetProperty("removed")));
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-A", "ORS-B"], StoredOrsIds(persisted!));
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_matches_by_orsId_only_when_the_entry_has_one()
+    {
+        // siteId 1 is stored (as ORS-A), but an entry with an orsId is matched on
+        // that orsId alone, so a stale or wrong siteId cannot remove another site.
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-OTHER","siteId":"1"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        Assert.Empty(ReadSiteRefs(body.GetProperty("removed")));
+        Assert.Equal([("ORS-OTHER", "1")], ReadSiteRefs(body.GetProperty("alreadyAbsent")));
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-A", "ORS-B", null], StoredOrsIds(persisted!));
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_keeps_a_regulator_edited_remaining_site_unchanged()
+    {
+        // AC 2: a regulator may change a site's recycling operation codes in
+        // case management (RA-469), so the remaining sites must survive exactly
+        // as stored. A full replacement from the operator backend would lose this.
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        var item = BuildOverseasSitesCandidate(id);
+        var edited = item.Payload["overseasSites"]["sites"][0].AsBsonDocument;
+        edited["operationCodes"] = new BsonArray { "R12", "R13" };
+        edited["recyclingOperationsUpdatedBy"] = "regulator-7";
+        edited["recyclingOperationsUpdatedAt"] = "2026-10-01T09:30:00.0000000Z";
+        edited["interimSites"] = new BsonArray
+        {
+            new BsonDocument { ["siteId"] = 11, ["operationCodes"] = new BsonArray { "R3" } },
+        };
+        var expected = edited.DeepClone();
+        await factory.SeedAsync(item, ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-B"},{"siteId":"3"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        var remaining = Assert.Single(persisted!.Payload["overseasSites"]["sites"].AsBsonArray);
+        Assert.Equal(expected, remaining);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_reports_every_site_absent_when_the_item_holds_no_overseas_sites()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        var item = BuildInState(id, "queried", TenantClientId);
+        item.Payload = new BsonDocument { ["someUnmodelledKey"] = "must-survive" };
+        await factory.SeedAsync(item, ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        Assert.Equal([("ORS-A", null)], ReadSiteRefs(body.GetProperty("alreadyAbsent")));
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Empty(persisted!.AuditLog);
+        Assert.False(persisted.Payload.Contains("overseasSites"));
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_is_a_404_for_an_unknown_work_item()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(Guid.NewGuid()),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_is_a_404_for_a_work_item_that_is_not_re_accreditation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        var candidate = BuildOverseasSitesCandidate(id);
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = "some-other-type",
+                StateId = candidate.StateId,
+                SubmittedBy = TenantClientId,
+                Payload = candidate.Payload,
+            },
+            ct
+        );
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-A", "ORS-B", null], StoredOrsIds(persisted!));
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_is_a_409_duly_made_for_a_duly_made_item_and_changes_nothing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id, "duly-made", dulyMade: true), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        Assert.Equal("duly-made", body.GetProperty("reason").GetString());
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-A", "ORS-B", null], StoredOrsIds(persisted!));
+        Assert.Empty(persisted!.AuditLog);
+    }
+
+    [Theory]
+    [InlineData("queried")]
+    [InlineData("assessment-in-progress")]
+    public async Task RemoveOverseasSites_is_a_409_duly_made_whenever_a_payment_date_is_set(string stateId)
+    {
+        // Duly made is payload.paymentDate being set, whatever the open state.
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id, stateId, dulyMade: true), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal("duly-made", (await ReadJsonAsync(response, ct)).GetProperty("reason").GetString());
+    }
+
+    [Theory]
+    [InlineData("approved")]
+    [InlineData("rejected")]
+    [InlineData("withdrawn")]
+    [InlineData("approved-pending-contact")]
+    [InlineData("rejected-pending-contact")]
+    public async Task RemoveOverseasSites_is_a_409_decided_for_a_decided_item_and_changes_nothing(string stateId)
+    {
+        // Seeded duly made as well: "decided" wins over "duly-made".
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id, stateId, dulyMade: true), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var body = await ReadJsonAsync(response, ct);
+        Assert.Equal("decided", body.GetProperty("reason").GetString());
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(stateId, persisted!.StateId);
+        Assert.Equal(["ORS-A", "ORS-B", null], StoredOrsIds(persisted));
+        Assert.Empty(persisted.AuditLog);
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_is_a_409_concurrency_conflict_when_the_item_stays_busy()
+    {
+        // Every ReplaceAsync races a competing write, so all three attempts conflict.
+        var ct = TestContext.Current.CancellationToken;
+        var id = Guid.NewGuid();
+        await using var factory = new ReAccreditationFactory(_fixture, raceWorkItemId: id, captureLogs: true);
+        using var client = factory.CreateClient();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(
+            "concurrency-conflict",
+            (await ReadJsonAsync(response, ct)).GetProperty("reason").GetString()
+        );
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-A", "ORS-B", null], StoredOrsIds(persisted!));
+        Assert.Empty(persisted!.AuditLog);
+        Assert.Contains(
+            factory.Logs!.Records,
+            r => r.Level == LogLevel.Error && r.Message.Contains("repeated concurrency conflicts", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
+    public async Task RemoveOverseasSites_is_a_401_without_a_user_id_and_logs_an_error()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, userId: null, captureLogs: true);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+
+        var response = await client.PostAsync(
+            RemoveOverseasSitesUrl(id),
+            RemoveBody("""{"sites":[{"orsId":"ORS-A"}],"reason":"RA-768: x"}"""),
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-A", "ORS-B", null], StoredOrsIds(persisted!));
+        Assert.Contains(
+            factory.Logs!.Records,
+            r => r.Category == RemoveOverseasSitesLogCategory
+                && r.Level == LogLevel.Error
+                && r.Message.Contains("x-cdp-user-id", StringComparison.Ordinal)
+        );
+    }
+
+    [Theory]
+    [InlineData("", "body")]
+    [InlineData("not json", "body")]
+    [InlineData("[]", "body")]
+    [InlineData("""{"reason":"RA-768: x"}""", "sites")]
+    [InlineData("""{"sites":null,"reason":"RA-768: x"}""", "sites")]
+    [InlineData("""{"sites":[],"reason":"RA-768: x"}""", "sites")]
+    [InlineData("""{"sites":"ORS-A","reason":"RA-768: x"}""", "sites")]
+    [InlineData("""{"sites":[{}],"reason":"RA-768: x"}""", "sites[0]")]
+    [InlineData("""{"sites":[{"orsId":null,"siteId":null}],"reason":"RA-768: x"}""", "sites[0]")]
+    [InlineData("""{"sites":[{"orsId":"ORS-A"},{"orsId":" ","siteId":""}],"reason":"RA-768: x"}""", "sites[1]")]
+    [InlineData("""{"sites":["ORS-A"],"reason":"RA-768: x"}""", "sites[0]")]
+    [InlineData("""{"sites":[{"orsId":5}],"reason":"RA-768: x"}""", "sites[0].orsId")]
+    [InlineData("""{"sites":[{"siteId":1.5}],"reason":"RA-768: x"}""", "sites[0].siteId")]
+    [InlineData("""{"sites":[{"siteId":true}],"reason":"RA-768: x"}""", "sites[0].siteId")]
+    [InlineData("""{"sites":[{"orsId":"ORS-A"}]}""", "reason")]
+    [InlineData("""{"sites":[{"orsId":"ORS-A"}],"reason":null}""", "reason")]
+    [InlineData("""{"sites":[{"orsId":"ORS-A"}],"reason":""}""", "reason")]
+    [InlineData("""{"sites":[{"orsId":"ORS-A"}],"reason":"   "}""", "reason")]
+    [InlineData("""{"sites":[{"orsId":"ORS-A"}],"reason":5}""", "reason")]
+    public async Task RemoveOverseasSites_is_a_400_naming_the_field_and_logs_an_error_for_a_bad_body(
+        string json,
+        string field
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture, captureLogs: true);
+        using var client = factory.CreateClient();
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(BuildOverseasSitesCandidate(id), ct);
+
+        var response = await client.PostAsync(RemoveOverseasSitesUrl(id), RemoveBody(json), ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await ReadJsonAsync(response, ct);
+        Assert.Equal("Could not remove overseas sites", problem.GetProperty("title").GetString());
+        Assert.Equal(field, problem.GetProperty("field").GetString());
+        var log = Assert.Single(
+            factory.Logs!.Records,
+            r => r.Category == RemoveOverseasSitesLogCategory && r.Level == LogLevel.Error
+        );
+        Assert.Equal(field, log.Properties["Field"]);
+        Assert.Equal(id, log.Properties["WorkItemId"]);
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(["ORS-A", "ORS-B", null], StoredOrsIds(persisted!));
+        Assert.Empty(persisted!.AuditLog);
+    }
+
     [Fact]
     public async Task ChangePaymentDate_updates_the_date_and_leaves_state_and_sla_alone()
     {

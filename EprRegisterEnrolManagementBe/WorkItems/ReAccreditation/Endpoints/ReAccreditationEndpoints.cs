@@ -101,6 +101,13 @@ internal static class ReAccreditationEndpoints
     // size guard. A legitimate body is one integer, so 1 KiB is generous.
     public const long MaxSetChargeBodyBytes = 1024;
 
+    // RA-768: the overseas-sites removal endpoint parses its own body (so every
+    // bad value is a ProblemDetails 400 naming the field, and is logged), so it
+    // carries its own size guard. A legitimate body is a reason plus one
+    // { orsId, siteId } pair per site to remove (about 60 bytes each), so
+    // 16 KiB holds a couple of hundred sites.
+    public const long MaxRemoveOverseasSitesBodyBytes = 16 * 1024;
+
     /// <summary>
     /// ProblemDetails title for every log-decision failure. Constant across all
     /// of them on purpose: the frontend switches on <c>errorCode</c> or the
@@ -131,6 +138,15 @@ internal static class ReAccreditationEndpoints
 
     /// <summary>RA-766 (temporary): ProblemDetails title for every charge correction failure.</summary>
     public const string SetChargeProblemTitle = "Could not set re-accreditation charge";
+
+    /// <summary>RA-768: ProblemDetails title for every overseas-sites removal failure.</summary>
+    public const string RemoveOverseasSitesProblemTitle = "Could not remove overseas sites";
+
+    // RA-768: the ProblemDetails extension that tells the operator backend's
+    // migration why a 409 was returned (decided, duly-made or concurrency-conflict).
+    internal const string ConflictReasonKey = "reason";
+
+    private const string RemoveOverseasSitesLogCategory = "ReAccreditationEndpoints.RemoveOverseasSites";
 
     /// <summary>
     /// ProblemDetails title for every recycling-operations update failure.
@@ -189,6 +205,18 @@ internal static class ReAccreditationEndpoints
             .WithName("SetReAccreditationCharge")
             .DisableValidation()
             .WithMetadata(new RequestSizeLimitAttribute(MaxSetChargeBodyBytes))
+            .RequireAuthorization();
+
+        // RA-768: called by the operator backend's one-off migration to remove
+        // overseas sites that an operator dropped in a query response before
+        // RA-557, and that are still in payload.overseasSites.sites. Removes the
+        // named sites only and never replaces the list. No state change.
+        group
+            .MapPost("/{id:guid}/overseas-sites/remove", RemoveOverseasSites)
+            .WithName("RemoveReAccreditationOverseasSites")
+            .Accepts<RemoveOverseasSitesRequest>("application/json")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxRemoveOverseasSitesBodyBytes))
             .RequireAuthorization();
 
         // RA-410: bespoke log-decision endpoint. Both hops of a determination
@@ -536,6 +564,110 @@ internal static class ReAccreditationEndpoints
         if (ToChargeErrorCode(result.Failure.FailureCode) is { } errorCode)
         {
             problem.ProblemDetails.Extensions[ErrorCodeKey] = errorCode;
+        }
+
+        return problem;
+    }
+
+    /// <summary>
+    /// RA-768: remove named overseas sites from a re-accreditation work item.
+    /// 400 for a bad body: <c>sites</c> missing or empty, an entry with neither
+    /// <c>orsId</c> nor <c>siteId</c>, or <c>reason</c> missing or blank. The
+    /// ProblemDetails names the <c>field</c>, and the rejection is logged at
+    /// Error. 401 without a <c>user:id</c>. 404 when the work item is not found
+    /// or is not re-accreditation. 409 with a <c>reason</c> extension:
+    /// <c>decided</c> (approved, rejected, withdrawn or awaiting applicant
+    /// contact), <c>duly-made</c> (<c>payload.paymentDate</c> is set), or
+    /// <c>concurrency-conflict</c> (still busy after the retries, so retry).
+    /// 200 with <c>removed</c> and <c>alreadyAbsent</c>.
+    /// </summary>
+    public static async Task<
+        Results<Ok<RemoveOverseasSitesResponse>, NotFound, ProblemHttpResult>
+    > RemoveOverseasSites(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromServices] IReAccreditationOverseasSitesCorrectionService overseasSitesCorrectionService,
+        [FromServices] ILoggerFactory loggerFactory,
+        CancellationToken cancellationToken
+    )
+    {
+        var logger = loggerFactory.CreateLogger(RemoveOverseasSitesLogCategory);
+        var clientId = httpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+        RemoveOverseasSitesRequest? request;
+        string? field;
+        string? error;
+        try
+        {
+            using var document = await JsonDocument.ParseAsync(
+                httpContext.Request.Body,
+                cancellationToken: cancellationToken
+            );
+            request = RemoveOverseasSitesRequestParser.Parse(document.RootElement, out field, out error);
+        }
+        catch (JsonException)
+        {
+            request = null;
+            field = "body";
+            error = "The request body is not valid JSON.";
+        }
+
+        if (request is null)
+        {
+            logger.LogError(
+                "Rejected overseas-sites removal for work item {WorkItemId} from client {ClientId}: "
+                    + "{Field} is invalid ({ValidationError}).",
+                id,
+                clientId,
+                field,
+                error
+            );
+            return TypedResults.Problem(
+                title: RemoveOverseasSitesProblemTitle,
+                detail: error,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?> { [FieldKey] = field }
+            );
+        }
+
+        var result = await overseasSitesCorrectionService.RemoveSitesAsync(
+            id,
+            request.Sites,
+            request.Reason,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.Failure is null)
+        {
+            return TypedResults.Ok(new RemoveOverseasSitesResponse(result.Removed, result.AlreadyAbsent));
+        }
+
+        switch (result.Failure.FailureCode)
+        {
+            case WorkItemActionFailureCode.WorkItemNotFound or WorkItemActionFailureCode.UnknownAction:
+                logger.LogWarning(
+                    "Overseas-sites removal from client {ClientId} names work item {WorkItemId}, "
+                        + "which is not a re-accreditation work item here: {Detail}",
+                    clientId,
+                    id,
+                    result.Failure.Message
+                );
+                return TypedResults.NotFound();
+            case WorkItemActionFailureCode.MissingActorIdentity:
+                logger.LogError(
+                    "Rejected overseas-sites removal for work item {WorkItemId} from client {ClientId}: "
+                        + "no x-cdp-user-id header.",
+                    id,
+                    clientId
+                );
+                break;
+        }
+
+        var problem = ToServiceFailureProblem(result.Failure, RemoveOverseasSitesProblemTitle);
+        if (result.ConflictReason is not null)
+        {
+            problem.ProblemDetails.Extensions[ConflictReasonKey] = result.ConflictReason;
         }
 
         return problem;
