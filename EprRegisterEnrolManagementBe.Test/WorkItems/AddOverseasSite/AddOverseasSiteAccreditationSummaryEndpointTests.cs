@@ -1,0 +1,324 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using EprRegisterEnrolManagementBe.Config;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using NSubstitute;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+
+namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
+
+/// <summary>
+/// RA-769: <c>GET /work-items/{id}/accreditation-summary</c>, the live accreditation behind an In-Year Change
+/// case's Accreditation summary tab. Driven through the real ASP.NET pipeline with the production modules
+/// registered, against ephemeral MongoDB, from a submission posted as the operator backend posts it. The operator
+/// backend read adapter is a fake.
+/// </summary>
+public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegrationFixture fixture)
+{
+    private const string ApplicationId = "6a1b2c3d4e5f6a1b2c3d4e5f";
+
+    private static readonly OperatorAccreditationSummary Live = new(
+        OrganisationName: "Acme Recycling Ltd",
+        OrganisationNumber: 500500,
+        AccreditationNumber: "A26ER5003240164GR",
+        RegistrationNumber: "R26ER5003240164GR",
+        AccreditationYear: 2026,
+        WasteProcessingType: "exporter",
+        Material: "glass",
+        GlassRecyclingProcess: "glass_re_melt",
+        SiteAddress: "1 High Street, Leeds, LS1 1AA",
+        CompanyRegisteredAddress: "2 Registered Road, York, YO1 1AA"
+    );
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    private static AddOverseasSiteAppFactory NewFactory(
+        MongoIntegrationFixture fixture,
+        IAccreditationSummaryAdapter adapter,
+        bool testOrganisations = false
+    )
+    {
+        return new AddOverseasSiteAppFactory(fixture)
+        {
+            Settings = new Dictionary<string, string>
+            {
+                [TestOrganisations.EnabledKey] = testOrganisations ? "true" : "false",
+            },
+            ConfigureTestServices = services =>
+            {
+                services.RemoveAll<IAccreditationSummaryAdapter>();
+                services.AddSingleton(adapter);
+            },
+        };
+    }
+
+    private static IAccreditationSummaryAdapter AdapterReturning(AccreditationSummaryReadResult result)
+    {
+        var adapter = Substitute.For<IAccreditationSummaryAdapter>();
+        adapter
+            .GetAccreditationSummaryAsync(Arg.Any<AccreditationSummaryReadRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(result));
+        return adapter;
+    }
+
+    // An add-ORS submission as the operator backend posts it, with the fields the summary resolves from.
+    private static async Task<Guid> SubmitAsync(
+        AddOverseasSiteAppFactory factory,
+        HttpClient client,
+        string operatorRequestId,
+        string organisationId = "org-1",
+        string? applicationId = ApplicationId
+    )
+    {
+        var body = AddOverseasSiteSubmissions.Body(operatorRequestId, siteCount: 1);
+        var payload = body["payload"]!.AsObject();
+        payload["operatorOrganisationId"] = organisationId;
+        if (applicationId is not null)
+        {
+            payload["accreditationApplicationId"] = applicationId;
+        }
+        var response = await client.PostAsJsonAsync("/work-items", body, Ct);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        return created.GetProperty("workItems")[0].GetProperty("id").GetGuid();
+    }
+
+    [Fact]
+    public async Task A_case_with_an_accreditation_shows_the_live_read_and_its_start_date()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
+        await using var factory = NewFactory(fixture, adapter);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(factory, client, "summary-live", organisationId: "org-live");
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        var accreditation = body.GetProperty("accreditation");
+        Assert.Equal("Acme Recycling Ltd", accreditation.GetProperty("organisationName").GetString());
+        Assert.Equal(500500, accreditation.GetProperty("organisationNumber").GetInt32());
+        Assert.Equal("A26ER5003240164GR", accreditation.GetProperty("accreditationNumber").GetString());
+        Assert.Equal("R26ER5003240164GR", accreditation.GetProperty("registrationNumber").GetString());
+        Assert.Equal(2026, accreditation.GetProperty("accreditationYear").GetInt32());
+        Assert.Equal("exporter", accreditation.GetProperty("wasteProcessingType").GetString());
+        Assert.Equal("glass", accreditation.GetProperty("material").GetString());
+        Assert.Equal("glass_re_melt", accreditation.GetProperty("glassRecyclingProcess").GetString());
+        Assert.Equal("1 High Street, Leeds, LS1 1AA", accreditation.GetProperty("siteAddress").GetString());
+        Assert.Equal(
+            "2 Registered Road, York, YO1 1AA",
+            accreditation.GetProperty("companyRegisteredAddress").GetString()
+        );
+        // Only the summary's own fields go on the wire, nothing derived.
+        Assert.Equal(
+            [
+                "organisationName",
+                "organisationNumber",
+                "accreditationNumber",
+                "registrationNumber",
+                "accreditationYear",
+                "wasteProcessingType",
+                "material",
+                "glassRecyclingProcess",
+                "siteAddress",
+                "companyRegisteredAddress",
+            ],
+            accreditation.EnumerateObject().Select(p => p.Name)
+        );
+        // The start date is 1 January of the accreditation year until the stored date is read (task 003).
+        Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
+        await adapter
+            .Received(1)
+            .GetAccreditationSummaryAsync(
+                Arg.Is<AccreditationSummaryReadRequest>(r =>
+                    r.OrganisationId == "org-live" && r.ApplicationId == ApplicationId
+                ),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task An_unknown_work_item_is_not_found()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
+        await using var factory = NewFactory(fixture, adapter);
+        using var client = factory.CreateClient();
+
+        var response = await client.GetAsync($"/work-items/{Guid.NewGuid()}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task A_work_item_type_without_the_tab_is_rejected_as_the_wrong_type()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
+        await using var factory = NewFactory(fixture, adapter);
+        using var client = factory.CreateClient();
+        var type = new ReAccreditationType();
+        var id = Guid.NewGuid();
+        await factory.Persistence.CreateAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = ReAccreditationType.Id,
+                StateId = "submitted",
+                SubmittedBy = "test-client",
+                TemplateSnapshot = WorkItemTemplateSnapshot.Capture(type),
+                TemplateVersion = type.TemplateVersion,
+            },
+            Ct
+        );
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Equal("wrong-work-item-type", problem.GetProperty("errorCode").GetString());
+        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task A_registration_only_case_has_no_summary_and_makes_no_operator_call()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
+        await using var factory = NewFactory(fixture, adapter);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(factory, client, "summary-registration-only", applicationId: null);
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task An_accreditation_the_operator_backend_does_not_hold_as_approved_is_not_found()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.NotFound());
+        await using var factory = NewFactory(fixture, adapter);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(factory, client, "summary-not-found");
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_failed_read_is_a_service_unavailable_never_a_guess()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.TransientFailure("operator backend is down"));
+        await using var factory = NewFactory(fixture, adapter);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(factory, client, "summary-transient");
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_disabled_operator_backend_is_a_service_unavailable()
+    {
+        // The real adapter, with OperatorBackendApi:Enabled false (the default): a transient failure.
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(factory, client, "summary-disabled");
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task A_test_organisation_is_answered_from_the_stub_even_without_an_application_id()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.NotFound());
+        await using var factory = NewFactory(fixture, adapter, testOrganisations: true);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(
+            factory,
+            client,
+            "summary-stub",
+            organisationId: "e2e-summary-stub",
+            applicationId: null
+        );
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        var accreditation = body.GetProperty("accreditation");
+        Assert.Equal("E2E Test Organisation Ltd", accreditation.GetProperty("organisationName").GetString());
+        Assert.Equal(500999, accreditation.GetProperty("organisationNumber").GetInt32());
+        Assert.Equal("A26ER9999999999PL", accreditation.GetProperty("accreditationNumber").GetString());
+        Assert.Equal("R26ER9999999999PL", accreditation.GetProperty("registrationNumber").GetString());
+        Assert.Equal(2026, accreditation.GetProperty("accreditationYear").GetInt32());
+        Assert.Equal("exporter", accreditation.GetProperty("wasteProcessingType").GetString());
+        Assert.Equal("plastic", accreditation.GetProperty("material").GetString());
+        Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
+        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
+    }
+
+    [Fact]
+    public async Task The_stub_is_inactive_when_test_organisations_are_off()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.NotFound());
+        await using var factory = NewFactory(fixture, adapter, testOrganisations: false);
+        using var client = factory.CreateClient();
+        var noApplication = await SubmitAsync(
+            factory,
+            client,
+            "summary-stub-off-1",
+            organisationId: "e2e-summary-stub-off",
+            applicationId: null
+        );
+        var withApplication = await SubmitAsync(
+            factory,
+            client,
+            "summary-stub-off-2",
+            organisationId: "e2e-summary-stub-off"
+        );
+
+        var first = await client.GetAsync($"/work-items/{noApplication}/accreditation-summary", Ct);
+        var second = await client.GetAsync($"/work-items/{withApplication}/accreditation-summary", Ct);
+
+        // No stub: the first has no application id, so no accreditation; the second is read live (here: not found).
+        Assert.Equal(HttpStatusCode.NotFound, first.StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
+        await adapter
+            .Received(1)
+            .GetAccreditationSummaryAsync(
+                Arg.Is<AccreditationSummaryReadRequest>(r => r.OrganisationId == "e2e-summary-stub-off"),
+                Arg.Any<CancellationToken>()
+            );
+    }
+
+    [Fact]
+    public async Task Only_the_lower_case_e2e_prefix_makes_a_test_organisation()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.NotFound());
+        await using var factory = NewFactory(fixture, adapter, testOrganisations: true);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(
+            factory,
+            client,
+            "summary-upper-prefix",
+            organisationId: "E2E-summary",
+            applicationId: null
+        );
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+}

@@ -11,6 +11,7 @@ using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Http;
@@ -194,6 +195,8 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // RA-495: the shared Standard-workflow lifecycle (duly make, make
     // determination, confirm contact) that a module opts its type in to.
     services.AddStandardLifecycleServices();
+    // RA-769: the live accreditation read behind an In-Year Change case's Accreditation summary tab.
+    services.AddAccreditationSummaryServices();
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
     // RA-000: the e2e- fixture reset writes through the same persistence
     // instance (a single writer of the collection), via an interface the
@@ -867,5 +870,7 @@ static void ConfigureEndpoints(WebApplication app)
     app.MapWorkItemSlaEndpoints();
     // RA-495: the shared Standard-workflow lifecycle routes.
     app.MapStandardLifecycleEndpoints();
+    // RA-769: the Accreditation summary tab's read.
+    app.MapAccreditationSummaryEndpoints();
     app.MapWorkItemModules();
 }

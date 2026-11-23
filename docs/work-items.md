@@ -345,6 +345,21 @@ type is configured. Every setting is code, not runtime data:
 - A workflow's transitions name its own states, so only a service reaches
   its `CallerInvocable: false` transitions. Re-accreditation's query, resume
   and continue review are its own (`/work-items/re-accreditation/{id}/...`).
+- **Accreditation summary (RA-769).** `GET /work-items/{id}/accreditation-summary`
+  (`WorkItems/InYearChanges`) serves an In-Year Change case's Accreditation
+  summary tab: the accreditation as it stands today, read live from the
+  operator backend (`IAccreditationSummaryAdapter`, typed outcomes, never
+  throws) by `payload.operatorOrganisationId` and
+  `payload.accreditationApplicationId`. Any type whose category is
+  `in-year-change` has it; another type is a 400 `wrong-work-item-type`.
+  Resolution order: unknown work item 404; wrong type 400; an `e2e-`
+  organisation with `TestOrganisations__Enabled` on is answered from the
+  stable test accreditation (`TestOrganisationAccreditationSummary`) before
+  the application id check, because a case posted directly has none; no
+  `accreditationApplicationId` (registration-only) 404 with no operator
+  call; otherwise the live read: 200, 404 (not found or not `Approved`) or
+  503 (the read failed, including `OperatorBackendApi:Enabled=false`). The
+  start date is 1 January of the accreditation year.
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services
   (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:
