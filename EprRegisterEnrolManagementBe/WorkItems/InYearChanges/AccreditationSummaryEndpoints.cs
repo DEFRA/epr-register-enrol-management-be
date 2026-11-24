@@ -10,9 +10,6 @@ using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 
-/// <summary>Marker type for the endpoint's log category.</summary>
-internal sealed class AccreditationSummaryEndpointsLog;
-
 /// <summary>
 /// RA-769: the Accreditation summary tab of an In-Year Change case. Type-less, like the Standard-workflow lifecycle
 /// routes: the type is read off the work item, and any In-Year Change type has the tab (add-ORS today, RA-782
@@ -60,7 +57,7 @@ internal static class AccreditationSummaryEndpoints
         [FromServices] IWorkItemRegistry registry,
         [FromServices] IAccreditationSummaryAdapter adapter,
         [FromServices] IConfiguration configuration,
-        [FromServices] ILogger<AccreditationSummaryEndpointsLog> logger,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
@@ -121,10 +118,12 @@ internal static class AccreditationSummaryEndpoints
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
             // Never a guessed date: a failed lookup is the tab's unavailable state.
-            logger.LogError(ex, "Accreditation start date lookup failed for work item {WorkItemId}", id);
+            loggerFactory
+                .CreateLogger(typeof(AccreditationSummaryEndpoints).FullName!)
+                .LogError(ex, "Accreditation start date lookup failed for work item {WorkItemId}", id);
             return Unavailable("The accreditation start date could not be read.");
         }
-        return TypedResults.Ok(Respond(read.Summary!, storedStartDate));
+        return TypedResults.Ok(Respond(read.Summary, storedStartDate));
     }
 
     private static ProblemHttpResult Unavailable(string? detail) =>

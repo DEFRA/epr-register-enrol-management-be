@@ -337,7 +337,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         var response = await client.GetAsync($"/work-items/{Guid.NewGuid()}/accreditation-summary", Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
+        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, Ct);
     }
 
     [Fact]
@@ -366,7 +366,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
         Assert.Equal("wrong-work-item-type", problem.GetProperty("errorCode").GetString());
-        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
+        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, Ct);
     }
 
     [Fact]
@@ -380,7 +380,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
+        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, Ct);
     }
 
     [Fact]
@@ -484,7 +484,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
             .ToList();
         Assert.Equal(allFileIds.Count, allFileIds.Distinct().Count());
         Assert.Equal("2026-01-01", body.GetProperty("accreditationStartDate").GetString());
-        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, default);
+        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, Ct);
     }
 
     [Fact]

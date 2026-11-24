@@ -1,3 +1,4 @@
+using System.Globalization;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
@@ -52,11 +53,8 @@ internal static class TestOrganisationAccreditationSummary
             [
                 Site(
                     1,
-                    "001",
                     "Speira GmbH",
-                    "1 Hafenstrasse",
-                    "Bremen",
-                    "Germany",
+                    ("1 Hafenstrasse", "Bremen", "Germany"),
                     isEu: true,
                     isOecd: true,
                     interimSites: [Interim(101, "I-001", "Bremen Interim Works", "R12")],
@@ -64,11 +62,8 @@ internal static class TestOrganisationAccreditationSummary
                 ),
                 Site(
                     2,
-                    "002",
                     "Speira GmbH",
-                    "2 Hafenstrasse",
-                    "Hamburg",
-                    "Germany",
+                    ("2 Hafenstrasse", "Hamburg", "Germany"),
                     isEu: true,
                     isOecd: true,
                     interimSites:
@@ -83,7 +78,7 @@ internal static class TestOrganisationAccreditationSummary
                         File("e2e-bes-002-pending", "bes-speira-hamburg-awaiting-scan.pdf", "bes", "Pending"),
                     ]
                 ),
-                Site(3, "003", "Excel Recycling BV", "3 Havenweg", "Rotterdam", "Netherlands", isEu: true, isOecd: true),
+                Site(3, "Excel Recycling BV", ("3 Havenweg", "Rotterdam", "Netherlands"), isEu: true, isOecd: true),
                 new OperatorSummarySite(
                     SiteId: 4,
                     OrsId: "004",
@@ -111,27 +106,27 @@ internal static class TestOrganisationAccreditationSummary
             ]
         );
 
+    // The ORS id is the site id, zero padded to three digits ("001").
     private static OperatorSummarySite Site(
         int siteId,
-        string orsId,
         string name,
-        string addressLine1,
-        string townOrCity,
-        string country,
+        (string AddressLine1, string TownOrCity, string Country) address,
         bool isEu,
         bool isOecd,
         IReadOnlyList<OperatorSummaryInterimSite>? interimSites = null,
         IReadOnlyList<OperatorSummaryFile>? besFiles = null
-    ) =>
-        new(
+    )
+    {
+        var orsId = siteId.ToString("D3", CultureInfo.InvariantCulture);
+        return new(
             SiteId: siteId,
             OrsId: orsId,
             SiteName: name,
             SiteAddress: null,
-            AddressLine1: addressLine1,
+            AddressLine1: address.AddressLine1,
             AddressLine2: null,
-            TownOrCity: townOrCity,
-            Country: country,
+            TownOrCity: address.TownOrCity,
+            Country: address.Country,
             Coordinates: "51.847,7.123",
             ContactName: "Test Contact " + orsId,
             ContactEmail: $"contact.{orsId}@example.test",
@@ -147,6 +142,7 @@ internal static class TestOrganisationAccreditationSummary
             InterimSites: interimSites ?? [],
             BesEvidence: new OperatorSummaryFiles(besFiles ?? [])
         );
+    }
 
     // The S3 location is made up: nothing is stored there, so a download of a clean stub file is an S3 failure.
     private static OperatorSummaryFile File(string fileId, string filename, string folder, string scanStatus) =>
