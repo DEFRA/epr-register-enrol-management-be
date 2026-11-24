@@ -56,6 +56,13 @@ the compose stack and on CDP **test**. On test:
    - The RA-611 clock start is 14 November of the previous year, derived
      from `TimeProvider` at each boot, so it stays before 1 January in
      every year.
+5. **Accreditation summary (RA-769).** The Accreditation summary endpoint
+   answers an `e2e-` organisation's case from a stable fixture
+   (`TestOrganisationAccreditationSummary`) when the switch is on. Unlike the
+   ReEx routing in 2, this is a check inline in the endpoint, not a decorating
+   client: it needs the work item's organisation id and sits before the
+   application id check, because a case posted directly to this service has
+   no application id. The `e2e-` rule and the prod guard are the same.
 
 ## Consequences
 

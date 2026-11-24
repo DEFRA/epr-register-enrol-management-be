@@ -31,6 +31,8 @@ internal sealed class AccreditationSummaryEndpointsLog;
 internal static class AccreditationSummaryEndpoints
 {
     private const string StartDateField = "accreditationStartDate";
+    private const string OrganisationIdField = "operatorOrganisationId";
+    private const string ApplicationIdField = "accreditationApplicationId";
     private const string WrongWorkItemTypeTitle = "Wrong work item type";
 
     public static IEndpointRouteBuilder MapAccreditationSummaryEndpoints(this IEndpointRouteBuilder app)
@@ -80,13 +82,13 @@ internal static class AccreditationSummaryEndpoints
             );
         }
 
-        var organisationId = ReadString(workItem.Payload, "operatorOrganisationId");
+        var organisationId = ReadString(workItem.Payload, OrganisationIdField);
         if (TestOrganisations.IsEnabled(configuration) && TestOrganisations.IsTestOrganisation(organisationId))
         {
             return TypedResults.Ok(Respond(TestOrganisationAccreditationSummary.Fixture, storedStartDate: null));
         }
 
-        var applicationId = ReadString(workItem.Payload, "accreditationApplicationId");
+        var applicationId = ReadString(workItem.Payload, ApplicationIdField);
         if (organisationId is null || applicationId is null)
         {
             return TypedResults.NotFound();
