@@ -7,7 +7,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 /// Accreditation summary tab, so a case posted directly to the Case Management service can be tested without
 /// operator data. Only ever served when <c>TestOrganisations__Enabled</c> is on, which startup refuses in prod
 /// (<see cref="Config.TestOrganisations.EnsureNotEnabledInProd"/>), so caseworkers only ever see real data.
-/// An exporter, so the tab's exporter-only rows have something to show as later tasks add them.
+/// An exporter, so the tab's exporter-only rows have something to show.
 /// </summary>
 internal static class TestOrganisationAccreditationSummary
 {
