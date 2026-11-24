@@ -170,10 +170,9 @@ internal sealed record ReAccreditationPayload
     ///
     /// Nullable. RA-766: written by this service only to keep it in step with
     /// the operator backend, on <c>resume-from-query</c> (the operator backend
-    /// recalculates it when a query changes the tonnage band or overseas sites)
-    /// and by the temporary <c>PUT .../charge</c> correction endpoint. Absent
-    /// on every work item submitted before RA-316, so readers must degrade rather than assume a
-    /// value; note that <c>0</c> is a legitimate charge and must not be
+    /// recalculates it when a query changes the tonnage band or overseas sites).
+    /// Absent on every work item submitted before RA-316, so readers must degrade
+    /// rather than assume a value; note that <c>0</c> is a legitimate charge and must not be
     /// conflated with "missing".
     /// </summary>
     public int? ChargeAmountPence { get; init; }
