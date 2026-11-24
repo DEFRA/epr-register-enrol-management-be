@@ -131,7 +131,11 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
             new ConfigurationBuilder().AddInMemoryCollection(settings).Build(),
             _logger,
             new FixedTimeProvider(s_now)
-        );
+        )
+        {
+            // No real pauses in the suite; The_run_pauses_after_every_few_lines covers the pacing.
+            Pause = _ => Task.CompletedTask,
+        };
     }
 
     private Task<Migration.RunResult> RunAsync(bool apply = true) =>
@@ -586,18 +590,24 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
         await RunAsync(apply: false);
 
         var total = PublicRegister2026.ByRegistrationNumber.Count;
-        var unused = _logger.Records
-            .Where(r => r.Message.Contains("register row not used", StringComparison.Ordinal))
+        var unused = total - 2;
+        var lines = _logger.Records
+            .Where(r => r.Message.Contains("register rows not used", StringComparison.Ordinal))
             .Select(r => r.Message)
             .ToList();
-        Assert.Equal(total - 2, unused.Count);
-        Assert.DoesNotContain(unused, m => m.Contains(EggerRegistration, StringComparison.Ordinal));
-        Assert.DoesNotContain(unused, m => m.Contains(DtsRegistration, StringComparison.Ordinal));
-        Assert.Contains(unused, m => m.Contains(ClearfieldRegistration, StringComparison.Ordinal)
-            && m.Contains(ClearfieldAccreditation, StringComparison.Ordinal));
-        Assert.Contains(unused, m => m.Contains(JAndAYoungRegistration, StringComparison.Ordinal)
-            && m.Contains("none (registered only)", StringComparison.Ordinal));
-        Assert.True(Logged(LogLevel.Information, $"{total - 2} of {total} register rows matched no 2027 work item"));
+        // RegisterRowsPerLine rows to a line, numbered, so the ~400 rows are a handful of lines.
+        Assert.Equal((unused + Migration.RegisterRowsPerLine - 1) / Migration.RegisterRowsPerLine, lines.Count);
+        Assert.Contains($"1-{Migration.RegisterRowsPerLine} of {unused}:", lines[0], StringComparison.Ordinal);
+        Assert.Contains($"-{unused} of {unused}:", lines[^1], StringComparison.Ordinal);
+        var rows = lines.SelectMany(m => m.Split("; ")).ToList();
+        Assert.Equal(unused, rows.Count);
+        Assert.DoesNotContain(rows, r => r.Contains(EggerRegistration, StringComparison.Ordinal));
+        Assert.DoesNotContain(rows, r => r.Contains(DtsRegistration, StringComparison.Ordinal));
+        Assert.Contains(rows, r => r.Contains(ClearfieldRegistration, StringComparison.Ordinal)
+            && r.Contains(ClearfieldAccreditation, StringComparison.Ordinal));
+        Assert.Contains(rows, r => r.Contains(JAndAYoungRegistration, StringComparison.Ordinal)
+            && r.Contains("none (registered only)", StringComparison.Ordinal));
+        Assert.True(Logged(LogLevel.Information, $"{unused} of {total} register rows matched no 2027 work item"));
     }
 
     // Organisation by organisation, so the log reads one organisation at a time.
@@ -653,6 +663,84 @@ public sealed class ReAccreditationLastYearsAccreditationBackfillMigrationTests 
                 && r.Message.Contains("planned: Added=2", StringComparison.Ordinal)
                 && r.Message.Contains("Written: Written=2, LostTheRace=0, Failed=0", StringComparison.Ordinal)
         );
+    }
+
+    // The outcome counts go out before the per-item lines, so the run's result is logged even if the detail that
+    // follows is lost.
+    [Fact]
+    public async Task The_planned_line_carries_the_outcome_counts_before_any_item_line()
+    {
+        await EggerAsync();
+        await SeedAsync(DtsRegistration, 500237);
+        var clearfield = await ClearfieldAsync();
+
+        await RunAsync(apply: false);
+
+        var lines = _logger.Records.Select(r => r.Message).ToList();
+        var planned = lines.FindIndex(m => m.Contains("planned 3 work items", StringComparison.Ordinal));
+        Assert.True(planned >= 0);
+        Assert.Contains(
+            "Last year's accreditation planned: Added=2, AlreadyHeld=0, RegisteredOnly=1",
+            lines[planned],
+            StringComparison.Ordinal
+        );
+        Assert.Contains(
+            "Issued numbers: NotIssued=2, FitsTheRegister=0, DoesNotFitTheRegister=1",
+            lines[planned],
+            StringComparison.Ordinal
+        );
+        Assert.True(planned < lines.FindIndex(m => m.Contains(clearfield.Id.ToString(), StringComparison.Ordinal)));
+    }
+
+    // The run never logs more than LinesBetweenPauses lines without a pause, in a dry run and in an APPLY run, where
+    // each Added item logs a second line for its write (RA-784: CDP's log shipping looks to drop bursts).
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task The_run_pauses_after_every_few_lines(bool apply)
+    {
+        for (var i = 0; i < 7; i++)
+        {
+            await SeedAsync($"R26ER50099{i:D2}0001PL", 500990 + i);
+        }
+        await EggerAsync();
+        await SeedAsync(JpRecyclingRegistration, 500302);
+        var linesAtEachPause = new List<int>();
+        var services = new ServiceCollection().AddSingleton<IWorkItemPersistence>(_persistence).BuildServiceProvider();
+        var settings = new Dictionary<string, string?> { [Migration.EnabledConfigKey] = "true" };
+        if (apply)
+        {
+            settings[Migration.ApplyConfigKey] = "true";
+            settings[Migration.SpotCheckConfirmedByConfigKey] = "a.reviewer";
+        }
+        var migration = new Migration(
+            services,
+            new ConfigurationBuilder().AddInMemoryCollection(settings).Build(),
+            _logger,
+            new FixedTimeProvider(s_now)
+        )
+        {
+            LinesBetweenPauses = 3,
+            PauseBetweenLines = TimeSpan.FromMilliseconds(250),
+            Pause = delay =>
+            {
+                Assert.Equal(TimeSpan.FromMilliseconds(250), delay);
+                linesAtEachPause.Add(_logger.Records.Count);
+                return Task.CompletedTask;
+            },
+        };
+
+        await migration.ApplyAsync(_persistence, Ct);
+
+        // starting, planned, 9 items (and, applying, 2 writes), 1 + 7 not on the register, the unused-row lines,
+        // summary. Every line but the summary is paced.
+        Assert.Equal(apply ? 2 : 0, _logger.Records.Count(r => r.Message.Contains("RA-784 APPLIED", StringComparison.Ordinal)));
+        var lines = _logger.Records.Count;
+        Assert.True(lines > 20);
+        Assert.Equal((lines - 1) / 3, linesAtEachPause.Count);
+        Assert.All(linesAtEachPause.Zip(linesAtEachPause.Skip(1), (a, b) => b - a), gap => Assert.Equal(3, gap));
+        Assert.Equal(3, linesAtEachPause[0]);
+        Assert.True(lines - linesAtEachPause[^1] <= 3);
     }
 
     // ------------------------------- edges -------------------------------

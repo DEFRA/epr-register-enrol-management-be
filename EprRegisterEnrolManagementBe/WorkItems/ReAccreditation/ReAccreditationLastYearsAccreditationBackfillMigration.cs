@@ -45,10 +45,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   never corrected.</item>
 /// </list>
 ///
-/// <para>The run ends with a report: every work item whose registration
-/// number isn't on the register (its org and registration number), and every
-/// register row no 2027 work item used. The report is logged even if the run
-/// stops part-way, with the writes done so far.</para>
+/// <para>Once planned, the run logs the outcome counts before any per-item
+/// line. It ends with a report: every work item whose registration number
+/// isn't on the register (its org and registration number), and every register
+/// row no 2027 work item used, <see cref="RegisterRowsPerLine"/> to a line. The
+/// report is logged even if the run stops part-way, with the writes done so
+/// far. Every line but the final summary is paced
+/// (<see cref="LinesBetweenPauses"/> lines, then a pause), because CDP's log
+/// shipping looks to drop bursts.</para>
 ///
 /// <para>Never creates a work item and never changes state. Every work item is
 /// planned before anything is written. Each write is one atomic update of the
@@ -154,6 +158,32 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
     private readonly TimeProvider _timeProvider = timeProvider ?? TimeProvider.System;
 
+    // At most LinesBetweenPauses lines, then a pause of PauseBetweenLines (about 100 lines a second), because CDP's
+    // log shipping looks to drop bursts: on ext-test a start-up that logged this run alongside other one-off
+    // migrations lost every line from the run on (RA-784, as the operator backend found). The pause ignores the stop
+    // signal, so the finally block's report still goes out when a run is stopped. Settable for tests.
+    internal int LinesBetweenPauses { get; init; } = 50;
+    internal TimeSpan PauseBetweenLines { get; init; } = TimeSpan.FromMilliseconds(500);
+    internal Func<TimeSpan, Task> Pause { get; init; } = delay => Task.Delay(delay);
+
+    // Unused register rows per report line, so the ~400-row register is a handful of lines, not one each. 40 rows
+    // make a line of about 10 KB, under the 16 KB at which the container runtime splits a log line.
+    internal const int RegisterRowsPerLine = 40;
+
+    private int _linesSincePause;
+
+    // Called after each line the run logs.
+    private async Task PaceAsync()
+    {
+        if (++_linesSincePause < LinesBetweenPauses)
+        {
+            return;
+        }
+
+        _linesSincePause = 0;
+        await Pause(PauseBetweenLines);
+    }
+
     private bool IsEnabled => configuration.GetValue(EnabledConfigKey, false);
 
     public Task StartingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
@@ -219,9 +249,11 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             return RunResult.Disabled;
         }
 
+        _linesSincePause = 0;
         var confirmedBy = AuthorisedReviewer();
         var mode = confirmedBy is null ? "DRY RUN (nothing will be written)" : "APPLY";
         logger.LogInformation("RA-784 last year's accreditation backfill starting. Mode={Mode}", mode);
+        await PaceAsync();
 
         var items = await persistence.FindByPayloadFieldAsync(
             ReAccreditationType.Id,
@@ -238,6 +270,18 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             .ThenBy(i => i.SubmittedAt)
             .Select(PlanFor)
             .ToList();
+
+        // The outcome counts go out here, before the per-item lines, so the run's result is in the log even if its
+        // detail is not.
+        logger.LogInformation(
+            "RA-784 {Mode}: planned {Count} work items. Last year's accreditation planned: {Outcomes}. "
+                + "Issued numbers: {Issued}",
+            mode,
+            plans.Count,
+            OutcomeCounts(plans),
+            IssuedCounts(plans)
+        );
+        await PaceAsync();
 
         var writes = new List<Write>();
         var finished = false;
@@ -256,8 +300,8 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
         {
             // Cancelled or failed part-way: the report still says what was planned and what was written so far,
             // and the exception carries on.
-            ReportNotOnTheRegister(plans, mode);
-            ReportUnusedRegisterRows(plans, mode);
+            await ReportNotOnTheRegisterAsync(plans, mode);
+            await ReportUnusedRegisterRowsAsync(plans, mode);
             ReportSummary(plans, writes, mode, finished);
         }
         return confirmedBy is null ? RunResult.DryRun : RunResult.Applied;
@@ -446,12 +490,26 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             plan.Issued,
             plan.Detail
         );
+        await PaceAsync();
 
         if (confirmedBy is null || plan.Outcome != Outcome.Added)
         {
             return null;
         }
 
+        // The write logs a line of its own (applied, lost the race or failed).
+        var write = await AddLastYearsAccreditationNumberAsync(persistence, plan, confirmedBy, cancellationToken);
+        await PaceAsync();
+        return write;
+    }
+
+    private async Task<Write> AddLastYearsAccreditationNumberAsync(
+        IWorkItemPersistence persistence,
+        Plan plan,
+        string confirmedBy,
+        CancellationToken cancellationToken
+    )
+    {
         // Only an Added plan reaches here, and PlanFor only gives that outcome to a register row with a number.
         var number = plan.RegisterAccreditationNumber!;
         bool written;
@@ -515,7 +573,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
 
     // The end-of-run report, part 1: every work item whose registration number
     // isn't on the register, with the org and registration number it holds.
-    private void ReportNotOnTheRegister(IReadOnlyList<Plan> plans, string mode)
+    private async Task ReportNotOnTheRegisterAsync(IReadOnlyList<Plan> plans, string mode)
     {
         var missing = plans
             .Where(p => p.Outcome is Outcome.NotOnTheRegister or Outcome.RegistrationNumberIncomplete)
@@ -525,6 +583,7 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             mode,
             missing.Count
         );
+        await PaceAsync();
         foreach (var plan in missing)
         {
             logger.LogWarning(
@@ -537,12 +596,14 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
                 plan.Item.Id,
                 ReadString(plan.Item.Payload, ApplicationReferenceField)
             );
+            await PaceAsync();
         }
     }
 
     // The end-of-run report, part 2: every register row no 2027 work item
-    // matched.
-    private void ReportUnusedRegisterRows(IReadOnlyList<Plan> plans, string mode)
+    // matched, RegisterRowsPerLine rows to a line, so the whole register is a
+    // handful of lines.
+    private async Task ReportUnusedRegisterRowsAsync(IReadOnlyList<Plan> plans, string mode)
     {
         var used = plans
             .Select(p => p.RegisterRegistrationNumber)
@@ -562,19 +623,34 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             unused.Count(r => r.Value.AccreditationNumber is not null),
             unused.Count(r => r.Value.AccreditationNumber is null)
         );
-        foreach (var (registrationNumber, row) in unused)
+        await PaceAsync();
+        var lines = unused.Chunk(RegisterRowsPerLine).ToList();
+        for (var line = 0; line < lines.Count; line++)
         {
+            var first = line * RegisterRowsPerLine + 1;
             logger.LogInformation(
-                "RA-784 {Mode} report: register row not used: org {OrgId} {OrganisationName}, registration "
-                    + "{RegistrationNumber}, 2026 accreditation {AccreditationNumber}",
+                "RA-784 {Mode} report: register rows not used {First}-{Last} of {Count}: {Rows}",
                 mode,
-                row.OrgId,
-                row.OrganisationName,
-                registrationNumber,
-                row.AccreditationNumber ?? "none (registered only)"
+                first,
+                first + lines[line].Length - 1,
+                unused.Count,
+                string.Join(
+                    "; ",
+                    lines[line].Select(r =>
+                        $"org {r.Value.OrgId} {r.Value.OrganisationName}, registration {r.Key}, "
+                            + $"2026 accreditation {r.Value.AccreditationNumber ?? "none (registered only)"}"
+                    )
+                )
             );
+            await PaceAsync();
         }
     }
+
+    private static string OutcomeCounts(IReadOnlyList<Plan> plans) =>
+        string.Join(", ", Enum.GetValues<Outcome>().Select(o => $"{o}={plans.Count(p => p.Outcome == o)}"));
+
+    private static string IssuedCounts(IReadOnlyList<Plan> plans) =>
+        string.Join(", ", Enum.GetValues<IssuedNumber>().Select(i => $"{i}={plans.Count(p => p.Issued == i)}"));
 
     // Planned against actual: the outcomes are what the plan found; the writes
     // are what an APPLY run did with the Added ones (a dry run writes nothing).
@@ -585,14 +661,8 @@ internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
             ", ",
             Enum.GetValues<Write>().Select(w => $"{w}={writes.Count(x => x == w)}")
         );
-        var outcomes = string.Join(
-            ", ",
-            Enum.GetValues<Outcome>().Select(o => $"{o}={plans.Count(p => p.Outcome == o)}")
-        );
-        var issued = string.Join(
-            ", ",
-            Enum.GetValues<IssuedNumber>().Select(i => $"{i}={plans.Count(p => p.Issued == i)}")
-        );
+        var outcomes = OutcomeCounts(plans);
+        var issued = IssuedCounts(plans);
         logger.LogInformation(
             "RA-784 last year's accreditation backfill {Ending}. Mode={Mode}, work items={Count}. "
                 + "Last year's accreditation planned: {Outcomes}. Written: {Written}. Issued numbers: {Issued}",
