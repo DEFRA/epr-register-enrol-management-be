@@ -1,6 +1,6 @@
+using System.Globalization;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
-using System.Globalization;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
@@ -9,6 +9,9 @@ using Microsoft.AspNetCore.Mvc;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
+
+/// <summary>Marker type for the endpoint's log category.</summary>
+internal sealed class AccreditationSummaryEndpointsLog;
 
 /// <summary>
 /// RA-769: the Accreditation summary tab of an In-Year Change case. Type-less, like the Standard-workflow lifecycle
@@ -19,15 +22,14 @@ namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 /// Resolution order:
 /// <list type="number">
 ///   <item>unknown work item: 404;</item>
-///   <item>a type without the tab: 400;</item>
+///   <item>a type that is not an In-Year Change (the category is what this service knows; the tab list is
+///   management-fe's): 400;</item>
 ///   <item>an <c>e2e-</c> organisation with test organisations enabled: the stub. This is before the application id
 ///   check because a case posted directly for a test organisation has no application id;</item>
 ///   <item>no <c>accreditationApplicationId</c> (a registration-only case): 404, with no operator backend call;</item>
 ///   <item>otherwise the live read: 200, 404 (not found or not Approved) or 503 (the read failed).</item>
 /// </list>
 /// </summary>
-internal sealed class AccreditationSummaryEndpointsLog;
-
 internal static class AccreditationSummaryEndpoints
 {
     private const string StartDateField = "accreditationStartDate";

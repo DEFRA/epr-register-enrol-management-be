@@ -367,7 +367,7 @@ type is configured. Every setting is code, not runtime data:
   never answers a withdrawn one); the `e2e-` stub has four, with one, three and no interim sites. The
   `samplingPlan` and each site's `besEvidence` carry `files`, each with its S3 key and bucket, for
   management-fe's server-side download (the stub's S3 locations are made up, so a clean stub file
-  is an S3 failure on download). The start date is 1 January of the accreditation year.
+  is an S3 failure on download). The start date is the stored start date of the Granted re-accreditation (an `approved` one), else 1 January of the accreditation year.
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services
   (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:
