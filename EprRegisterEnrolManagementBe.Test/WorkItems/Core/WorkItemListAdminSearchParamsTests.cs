@@ -118,6 +118,28 @@ public class WorkItemListAdminSearchParamsTests
     }
 
     [Fact]
+    public void Validate_accepts_a_q_of_100_characters_after_trimming()
+    {
+        Assert.Empty(WorkItemQueryBinding.Validate(Query(("q", ["  " + new string('a', 100) + "  "]))));
+    }
+
+    [Fact]
+    public void Validate_rejects_a_q_longer_than_100_characters()
+    {
+        var errors = WorkItemQueryBinding.Validate(Query(("q", [new string('a', 101)])));
+
+        Assert.Equal(["'q' must be 100 characters or fewer."], errors["q"]);
+    }
+
+    [Fact]
+    public void Validate_rejects_a_repeated_q()
+    {
+        var errors = WorkItemQueryBinding.Validate(Query(("q", ["a", "b"])));
+
+        Assert.Equal(["'q' must be sent once."], errors["q"]);
+    }
+
+    [Fact]
     public void Validate_rejects_a_repeated_assigned()
     {
         var errors = WorkItemQueryBinding.Validate(Query(("assigned", ["true", "false"])));
@@ -170,7 +192,9 @@ public class WorkItemListAdminSearchParamsTests
     [InlineData("/work-items?archived=", "archived")]
     [InlineData("/work-items?assigned=true&unassigned=true", "assigned")]
     [InlineData("/work-items?sort=last-modifed", "sort")]
+    [InlineData("/work-items?q=a&q=b", "q")]
     [InlineData("/work-items?sort=last-modified&dir=newest", "dir")]
+    [InlineData("LONG_Q", "q")]
     public async Task Invalid_params_answer_400_validation_problem_and_log_at_error(string url, string field)
     {
         var (factory, app, logs) = NewApp();
@@ -178,6 +202,10 @@ public class WorkItemListAdminSearchParamsTests
         await using var _a = app;
         using var client = Client(app);
 
+        if (url == "LONG_Q")
+        {
+            url = "/work-items?q=" + new string('a', 101);
+        }
         var response = await client.GetAsync(url, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);

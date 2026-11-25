@@ -125,9 +125,11 @@ full.
   empties, which remains accepted; when it forwards role/nation the extended
   form over those values is the only one accepted, exactly as before this
   ADR.
-- Authorization placement is unchanged from ADR-0005 — the only
-  backend-side authorization remains the RA-469 recycling-operations
-  endpoint; every other endpoint treats role/nation as audit-only claims.
+- Authorization placement is unchanged from ADR-0005. Backend-side
+  authorization is limited to two things: the RA-469 recycling-operations
+  endpoint's role/nation check, and (since ADR-0010) `CallerAccessPolicies`,
+  which keeps read-only callers to the GET endpoints that opt in. Every
+  other use of role/nation is as audit-only claims.
 
 ## Verification
 

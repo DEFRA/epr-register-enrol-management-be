@@ -11,9 +11,19 @@ tool. Its users sign in with Entra and hold the role
 `Waste.SupportUser.ReadOnly`. RA-751 gives it a work item search, so it
 needs to call this service.
 
-Until now every registered caller could reach every endpoint (ADR-0006,
-ADR-0009): authentication proved which caller was asking, and nothing limited
-what it could do. The epic requires that "credentials must only reach
+Until now every registered caller could reach every endpoint. ADR-0005
+decided that the backend authenticates the caller and otherwise trusts it
+completely ("any authenticated caller can read, list, or mutate any work
+item"), leaving all authorization to the frontend. ADR-0006 and ADR-0009 then
+added per-caller secrets and the mgmt-tests caller under that rule:
+authentication proved which caller was asking, and nothing limited what it
+could do.
+
+This ADR narrows ADR-0005 for one kind of caller. ADR-0005 was about users
+and roles, which still belong in the frontend. The Admin UI is a whole service
+whose credentials must never be able to write, whatever its users do, and the
+only place that can be guaranteed is the service that would carry out the
+write. ADR-0005 carries an amendment note pointing here. The epic requires that "credentials must only reach
 read-only endpoints", and that upstream logs show the calling client and the
 signed-in user.
 

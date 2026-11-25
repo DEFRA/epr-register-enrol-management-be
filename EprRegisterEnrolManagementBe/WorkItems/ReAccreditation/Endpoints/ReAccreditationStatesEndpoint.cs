@@ -2,6 +2,7 @@ using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 
@@ -19,14 +20,23 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 /// </summary>
 internal static class ReAccreditationStatesEndpoint
 {
+    // A static class cannot be a logger type argument, so name the category.
+    internal const string LoggerCategory =
+        "EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints.ReAccreditationStatesEndpoint";
+
     internal static Results<Ok<ReAccreditationStatesResponse>, ProblemHttpResult> GetStates(
-        [FromServices] IWorkItemRegistry registry
+        [FromServices] IWorkItemRegistry registry,
+        [FromServices] ILoggerFactory loggerFactory
     )
     {
         // ReAccreditationModule registers the type, so this lookup failing is
-        // a wiring defect: report it as a 500 rather than an empty list.
+        // a wiring defect: log it and report a 500 rather than an empty list.
         if (registry.Find(ReAccreditationType.Id) is not { } type)
         {
+            loggerFactory.CreateLogger(LoggerCategory).LogError(
+                "GET /work-items/re-accreditation/states: work item type {TypeId} is not registered.",
+                ReAccreditationType.Id
+            );
             return TypedResults.Problem(
                 title: "Work item type not registered",
                 detail: $"Work item type '{ReAccreditationType.Id}' is not registered.",
@@ -50,9 +60,13 @@ internal static class ReAccreditationStatesEndpoint
 
     internal static string OperatorJourneyPushFor(IWorkItemType type, string stateId)
     {
-        // The query push (ReAccreditationQueryPushHook) owns moves onto
-        // 'queried'; StandardStatusPushHook excludes it from status pushes.
-        if (string.Equals(stateId, ReAccreditationOperatorJourneyPush.QueriedStateId, StringComparison.Ordinal))
+        var transitionsIn = type
+            .Transitions.Where(t => string.Equals(t.ToStateId, stateId, StringComparison.Ordinal))
+            .ToList();
+
+        // The query push (ReAccreditationQueryPushHook) owns the moves its
+        // query actions make; StandardStatusPushHook excludes their target.
+        if (transitionsIn.Any(t => ReAccreditationQueryPushHook.IsQueryPushAction(t.ActionId)))
         {
             return ReAccreditationOperatorJourneyPush.Query;
         }
@@ -60,11 +74,7 @@ internal static class ReAccreditationStatesEndpoint
         // A state no transition moves onto is never the target of a push.
         // ('submitted' is not one: continue-review-during-duly-making moves an
         // item back onto it, and that move is pushed.)
-        var isTransitionTarget = type.Transitions.Any(t =>
-            string.Equals(t.ToStateId, stateId, StringComparison.Ordinal)
-        );
-
-        return isTransitionTarget && StandardStatusPushHook.IsStatusPushedTargetState(stateId)
+        return transitionsIn.Count > 0 && StandardStatusPushHook.IsStatusPushedTargetState(stateId)
             ? ReAccreditationOperatorJourneyPush.Status
             : ReAccreditationOperatorJourneyPush.None;
     }
@@ -75,8 +85,6 @@ internal static class ReAccreditationStatesEndpoint
 /// </summary>
 internal static class ReAccreditationOperatorJourneyPush
 {
-    internal const string QueriedStateId = "queried";
-
     /// <summary>
     /// A move onto this state is pushed to the operator backend's
     /// <c>/case-management/{workItemId}/status</c> endpoint with

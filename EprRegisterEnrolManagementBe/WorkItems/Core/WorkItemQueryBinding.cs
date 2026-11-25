@@ -39,6 +39,13 @@ internal static class WorkItemQueryBinding
     internal const string AssignedParam = "assigned";
     internal const string ArchivedParam = "archived";
 
+    /// <summary>
+    /// RA-751: longest <c>q</c> accepted, after trimming. <c>q</c> becomes an
+    /// unindexed case-insensitive regex over five fields, so its size is
+    /// bounded; 100 is the Admin UI's own search box limit.
+    /// </summary>
+    internal const int MaxQLength = 100;
+
     public static WorkItemQuery FromQueryString(IQueryCollection query)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -100,6 +107,19 @@ internal static class WorkItemQueryBinding
                 .. errors.GetValueOrDefault(AssignedParam, []),
                 $"'{AssignedParam}' cannot be combined with '{UnassignedOnlyParam}' or '{AssigneeIdParam}'.",
             ];
+        }
+
+        // RA-751: q is sent at most once and is bounded in length.
+        if (query.TryGetValue(QParam, out var qValues))
+        {
+            if (qValues.Count > 1)
+            {
+                errors[QParam] = [$"'{QParam}' must be sent once."];
+            }
+            else if ((qValues[0]?.Trim().Length ?? 0) > MaxQLength)
+            {
+                errors[QParam] = [$"'{QParam}' must be {MaxQLength} characters or fewer."];
+            }
         }
 
         // RA-751: a non-blank sort token or direction must be one this

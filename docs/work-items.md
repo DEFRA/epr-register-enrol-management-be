@@ -651,20 +651,32 @@ An endpoint opens itself to read-only callers with
 `RequireAuthorization()` keeps them out. See
 [ADR-0010](adr/0010-read-only-admin-ui-caller.md).
 
+`GET /work-items` also takes `q` for the Admin UI: at most 100 characters
+after trimming, sent once; otherwise `400` (errors keyed `q`).
+
 `GET /work-items/re-accreditation/states` returns
 `{ typeId, templateVersion, states: [ { id, displayName, isTerminal, operatorJourneyPush } ] }`
 in workflow order. `operatorJourneyPush` is `status` (a move onto the state is
 pushed to the operator backend's status endpoint as `toStateId`), `query`
-(sent by the query push) or `none` (never pushed). The operator backend maps
-each pushed state id to its own `ApplicationStatus`.
+(sent by the query push) or `none` (never pushed). Both are derived, not
+copied: `query` from the actions `ReAccreditationQueryPushHook` pushes on, and
+`status` from `StandardStatusPushHook`'s excluded target states. The operator
+backend maps each state id to the Legacy `ApplicationStatus` it should hold
+(`CaseManagementStatusMapping.StatusPush`, served at
+`GET /admin/case-management-status-mapping`).
 
 ### Endpoints
+
+Read-only callers (the Admin UI, ADR-0010) are refused with `403` on every
+endpoint below; "any authenticated user" means any caller that is not
+read-only.
 
 ```
 POST /work-items/{id}/assign
   Body: { "assigneeId": "<userId>", "assigneeName": "<display name>" }
-  Authorization: any authenticated user; backend enforces the
-                 self-assign-only rule for non-`assign` callers.
+  Authorization: any authenticated user except a read-only caller (403,
+                 ADR-0010); backend enforces the self-assign-only rule
+                 for non-`assign` callers.
 
 POST /work-items/{id}/unassign
   Body: (none)
@@ -704,8 +716,9 @@ without re-sorting.
 ```
 POST /work-items/{id}/notes
   Body: { "text": "<note body>" }
-  Authorization: any authenticated user (notes are an audit narrative;
-                 no role gate beyond authentication).
+  Authorization: any authenticated user except a read-only caller (403,
+                 ADR-0010); notes are an audit narrative, with no role
+                 gate beyond that.
 
   Validation:
    - `text` required, non-blank, ≤ WorkItemService.MaxNoteLength (4000)
@@ -869,7 +882,8 @@ registration line" promise. All files live under
 | `ReAccreditationFreshQuery.cs` | RA-000: checks `payload.currentQuery` is complete and was stamped inside the time window of the `query-during-*` transition a post-action hook is handling: `raisedAt`, non-empty `sections` and a non-null `reason` are present, and `raisedAt` lies between the item's previous `action-applied` entry (or `SubmittedAt`) and this transition's own. `currentQuery` is never cleared, so a stale stamp is always older than the `resume-during-*` that took the item out of `queried`. A window is not proof the stamp came from the request being handled, and it has two known gaps: (a) overlapping queries on one item — the stamp is an unversioned payload write that does not check state and the transition is applied after it, so both requests' stamps can land in the window and the winning transition pushes and emails whichever was written last (this race predates RA-000); (b) clock skew — the lower bound is a `CreatedAt` another pod may have written, so if that pod's clock runs ahead a genuine query fails the check and the item ends `queried` with nothing pushed or emailed, recorded only by the Error log and `query-push-failed` / `notification-failed`. `ReAccreditationQueryPushHook` and the Queried email in `ReAccreditationNotificationHook` both use it: without a fresh query (or with an unreadable payload) they send nothing, log at Error and record `query-push-failed` / `notification-failed` with a `reason`. |
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
 | `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
-| `Endpoints/ReAccreditationEndpoints.cs` | Module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
+| `Endpoints/ReAccreditationStatesEndpoint.cs` | RA-751: `GET /work-items/re-accreditation/states` — the template's states with their display names, terminal flags and operator-journey push kind. Open to read-only callers. |
+| `Endpoints/ReAccreditationEndpoints.cs` | Maps `GET /work-items/re-accreditation/states` (above) and the module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
 | `IReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateValidator.cs` | RA-576: `POST /work-items/re-accreditation/{id}/change-payment-date` with body `{ paymentDate, reason }` corrects the payment date entered at duly making. One `ReplaceAsync` edits `payload.paymentDate` and appends an `action-applied` audit entry (`actionId=change-payment-date`, `previousPaymentDate`, `paymentDate`, `reason`). `StateId` and `SlaClock` are not changed and no hooks run, so status and "Due on" stay as they were. Allowed in any non-terminal state (repeat edits included); terminal items and items with no payment date get 409. 400 codes: the duly-making `payment-date-*` codes (`field: paymentDate`) plus `payment-date-reason-required` / `payment-date-reason-too-long` (`field: reason`, max 200 words). |
 | `IReAccreditationResumeService.cs` / `ReAccreditationResumeService.cs` / `ReAccreditationResumeValidator.cs` | `POST /work-items/re-accreditation/{id}/resume-from-query`, called by the operator backend when the applicant responds to a query: applies the matching `resume-during-*` transition and appends a `query-responded` audit entry. RA-766 (permanent): the body may carry `chargeAmountPence` (400 if negative). When it is sent and differs from the stored value, it is saved to the top-level `payload.chargeAmountPence`, so the duly-making page shows the charge as recalculated after the query, and the `query-responded` entry records `previousChargeAmountPence` and `chargeAmountPence`. |
 | `ReAccreditationModule.cs` | Glue: exposes the type, registers the decision service in DI, mounts the endpoints. |

@@ -3,7 +3,13 @@ using System.Net.Http.Json;
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Test.Auth;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Logging;
+using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
@@ -70,5 +76,39 @@ public class ReAccreditationStatesEndpointTests
         );
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public void An_unregistered_type_is_a_500_with_an_error_log()
+    {
+        var registry = Substitute.For<IWorkItemRegistry>();
+        registry.Find(ReAccreditationType.Id).Returns((IWorkItemType?)null);
+        var logs = new CapturingLoggerProvider();
+        using var loggerFactory = LoggerFactory.Create(b => b.AddProvider(logs));
+
+        var result = ReAccreditationStatesEndpoint.GetStates(registry, loggerFactory);
+
+        var problem = Assert.IsType<ProblemHttpResult>(result.Result);
+        Assert.Equal(StatusCodes.Status500InternalServerError, problem.StatusCode);
+        Assert.Equal("Work item type not registered", problem.ProblemDetails.Title);
+        var log = Assert.Single(logs.Records);
+        Assert.Equal(LogLevel.Error, log.Level);
+        Assert.Equal(ReAccreditationStatesEndpoint.LoggerCategory, log.Category);
+        Assert.Equal(ReAccreditationType.Id, log.Properties["TypeId"]);
+    }
+
+    [Fact]
+    public void A_state_is_query_pushed_when_a_query_push_action_moves_onto_it()
+    {
+        // Derived from the transitions and ReAccreditationQueryPushHook's
+        // action set, not from a copy of the state id: rename the state and
+        // the answer follows it.
+        var type = Substitute.For<IWorkItemType>();
+        type.Transitions.Returns(
+            [new WorkItemTransition("query-during-duly-made", "Query", "duly-made", "on-hold")]
+        );
+
+        Assert.Equal("query", ReAccreditationStatesEndpoint.OperatorJourneyPushFor(type, "on-hold"));
+        Assert.Equal("none", ReAccreditationStatesEndpoint.OperatorJourneyPushFor(type, "queried"));
     }
 }
