@@ -383,9 +383,11 @@ public sealed class WorkItemPersistence
 
         return await Collection
             .Find(Builders<WorkItem>.Filter.Eq(SubmissionReferencePath, submissionReference))
-            .Sort(Builders<WorkItem>.Sort.Ascending("payload.applicationReference"))
+            .Sort(Builders<WorkItem>.Sort.Ascending(ApplicationReferencePath))
             .ToListAsync(cancellationToken);
     }
+
+    private const string ApplicationReferencePath = "payload.applicationReference";
 
     private const string SubmissionReferencePath = "payload." + SubmissionPayload.SubmissionReferenceField;
 
@@ -496,56 +498,20 @@ public sealed class WorkItemPersistence
             clauses.Add(builder.In(w => w.StateId, stateIds));
         }
 
-        var search = query.NormalisedSearch;
-        if (!string.IsNullOrEmpty(search))
+        if (SearchClause(builder, query.NormalisedSearch) is { } search)
         {
-            // Case-insensitive substring on submitter, plus prefix match on the
-            // string-serialised id (which lets a user paste a full or partial
-            // id into the search box).
-            var escaped = System.Text.RegularExpressions.Regex.Escape(search);
-            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
-
-            clauses.Add(
-                builder.Or(
-                    builder.Regex("_id", pattern),
-                    builder.Regex(nameof(WorkItem.SubmittedBy), pattern)
-                )
-            );
+            clauses.Add(search);
         }
 
-        if (AdminSearchClause(builder, query.NormalisedQ) is { } adminSearch)
-        {
-            clauses.Add(adminSearch);
-        }
-
-        if (query.Assigned is { } assigned)
-        {
-            // RA-751: any assignee, or none.
-            clauses.Add(
-                assigned
-                    ? builder.Ne(w => w.AssignedToId, null)
-                    : builder.Eq(w => w.AssignedToId, null)
-            );
-        }
-
-        if (query.Archived is { } archived)
-        {
-            // RA-751: ArchiveBackgroundService stamps payload.archivedAt once a
-            // terminal item has aged out; it is never removed.
-            clauses.Add(
-                builder.Exists(
-                    $"payload.{ArchiveBackgroundService.ArchivedAtPayloadKey}",
-                    archived
-                )
-            );
-        }
+        // RA-751: the Admin UI's q / assigned / archived filters.
+        clauses.AddRange(SupportSearchClauses(builder, query));
 
         var orgId = query.NormalisedOrgId;
         if (!string.IsNullOrEmpty(orgId))
         {
             var escaped = System.Text.RegularExpressions.Regex.Escape(orgId);
             var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
-            clauses.Add(builder.Regex("payload.applicationReference", pattern));
+            clauses.Add(builder.Regex(ApplicationReferencePath, pattern));
         }
 
         var registrationId = query.NormalisedRegistrationId;
@@ -702,6 +668,58 @@ public sealed class WorkItemPersistence
         return wantsExporter ? exporterFilter : builder.Not(exporterFilter);
     }
 
+    // Extracted from BuildFilter (S3776): case-insensitive substring on
+    // submitter, plus prefix match on the string-serialised id (which lets a
+    // user paste a full or partial id into the search box).
+    private static FilterDefinition<WorkItem>? SearchClause(
+        FilterDefinitionBuilder<WorkItem> builder,
+        string? search
+    )
+    {
+        if (string.IsNullOrEmpty(search))
+        {
+            return null;
+        }
+
+        var escaped = System.Text.RegularExpressions.Regex.Escape(search);
+        var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+        return builder.Or(
+            builder.Regex("_id", pattern),
+            builder.Regex(nameof(WorkItem.SubmittedBy), pattern)
+        );
+    }
+
+    // RA-751 (extracted from BuildFilter, S3776): the Admin UI's filters. Each
+    // is absent from the result when its parameter was not sent.
+    private static IEnumerable<FilterDefinition<WorkItem>> SupportSearchClauses(
+        FilterDefinitionBuilder<WorkItem> builder,
+        WorkItemQuery query
+    )
+    {
+        if (AdminSearchClause(builder, query.NormalisedQ) is { } adminSearch)
+        {
+            yield return adminSearch;
+        }
+
+        if (query.Assigned is { } assigned)
+        {
+            // Any assignee, or none.
+            yield return assigned
+                ? builder.Ne(w => w.AssignedToId, null)
+                : builder.Eq(w => w.AssignedToId, null);
+        }
+
+        if (query.Archived is { } archived)
+        {
+            // ArchiveBackgroundService stamps payload.archivedAt once a
+            // terminal item has aged out; it is never removed.
+            yield return builder.Exists(
+                $"payload.{ArchiveBackgroundService.ArchivedAtPayloadKey}",
+                archived
+            );
+        }
+    }
+
     // RA-751: the Admin UI's free-text search. A case-insensitive substring
     // of any of the identifiers a support user might paste, OR-ed together.
     // Unanchored regexes cannot use an index; the same trade-off as the
@@ -723,7 +741,7 @@ public sealed class WorkItemPersistence
         return builder.Or(
             builder.Regex("_id", contains),
             builder.Regex("payload.accreditationId", contains),
-            builder.Regex("payload.applicationReference", contains),
+            builder.Regex(ApplicationReferencePath, contains),
             builder.Regex("payload.operatorOrganisationId", contains),
             builder.Regex("payload.organisationName", contains)
         );
@@ -1009,7 +1027,7 @@ public sealed class WorkItemPersistence
         // the unique constraint — only documents that actually carry the field
         // are constrained, and every new submission sets it.
         var applicationReference = new CreateIndexModel<WorkItem>(
-            builder.Ascending("payload.applicationReference"),
+            builder.Ascending(ApplicationReferencePath),
             new CreateIndexOptions { Unique = true, Sparse = true }
         );
         // RA-311/MBE-3: the operator backend forwards the operator's own

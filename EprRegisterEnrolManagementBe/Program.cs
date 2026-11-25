@@ -378,7 +378,8 @@ static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration con
 
 [ExcludeFromCodeCoverage]
 static string AdminUiClientId(IConfiguration config) =>
-    config.GetValue(CallerAccessPolicies.AdminUiClientIdKey, CallerAccessPolicies.AdminUiClientIdDefault)!;
+    config.GetValue<string?>(CallerAccessPolicies.AdminUiClientIdKey)
+    ?? CallerAccessPolicies.AdminUiClientIdDefault;
 
 [ExcludeFromCodeCoverage]
 static void AddCallerSecret(

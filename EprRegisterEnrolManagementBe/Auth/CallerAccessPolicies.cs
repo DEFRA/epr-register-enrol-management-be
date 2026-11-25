@@ -71,9 +71,6 @@ public sealed class FullAccessCallerRequirement : IAuthorizationRequirement;
 /// <summary>Refuses a read-only caller unless the request is GET or HEAD.</summary>
 public sealed class ReadOnlyCallerMethodRequirement : IAuthorizationRequirement;
 
-// Marker type for the logger category.
-internal sealed class CallerAccessAuthorizationHandlerLogger;
-
 /// <summary>
 /// Handles both requirements. Every refusal of a read-only caller is logged at
 /// Error with the caller, user, method and path: a read-only client asking for
@@ -81,9 +78,14 @@ internal sealed class CallerAccessAuthorizationHandlerLogger;
 /// credential, and both need to be noticed.
 /// </summary>
 internal sealed class CallerAccessAuthorizationHandler(
-    ILogger<CallerAccessAuthorizationHandlerLogger> logger
+    ILogger<CallerAccessAuthorizationHandler> logger
 ) : IAuthorizationHandler
 {
+    // Log placeholders only, never data: shown when a claim or the request is
+    // not available to the logger.
+    private const string AbsentValue = "(absent)";
+    private const string UnknownValue = "(unknown)";
+
     public Task HandleAsync(AuthorizationHandlerContext context)
     {
         var readOnly = CallerAccessPolicies.IsReadOnlyCaller(context.User);
@@ -93,10 +95,7 @@ internal sealed class CallerAccessAuthorizationHandler(
         {
             switch (requirement)
             {
-                case FullAccessCallerRequirement when !readOnly:
-                    context.Succeed(requirement);
-                    break;
-                case ReadOnlyCallerMethodRequirement when !readOnly:
+                case FullAccessCallerRequirement or ReadOnlyCallerMethodRequirement when !readOnly:
                     context.Succeed(requirement);
                     break;
                 case ReadOnlyCallerMethodRequirement when IsReadMethod(http):
@@ -120,21 +119,31 @@ internal sealed class CallerAccessAuthorizationHandler(
 
     // RA-751: the epic asks that upstream logs show the calling client and
     // the signed-in user for every Admin UI request.
-    private void LogAccess(ClaimsPrincipal user, HttpContext? http) =>
-        logger.LogInformation(
-            "Read-only caller {ClientId} (user {UserId}) allowed: {Method} {Path}.",
-            user.FindFirstValue("client_id") ?? "(absent)",
-            user.FindFirstValue("user:id") ?? "(absent)",
-            http?.Request.Method ?? "(unknown)",
-            http?.Request.Path.Value ?? "(unknown)"
-        );
+    private void LogAccess(ClaimsPrincipal user, HttpContext? http)
+    {
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            logger.LogInformation(
+                "Read-only caller {ClientId} (user {UserId}) allowed: {Method} {Path}.",
+                user.FindFirstValue("client_id") ?? AbsentValue,
+                user.FindFirstValue("user:id") ?? AbsentValue,
+                http?.Request.Method ?? UnknownValue,
+                http?.Request.Path.Value ?? UnknownValue
+            );
+        }
+    }
 
-    private void LogRefusal(ClaimsPrincipal user, HttpContext? http) =>
-        logger.LogError(
-            "Read-only caller {ClientId} (user {UserId}) refused: {Method} {Path} is not open to read-only callers.",
-            user.FindFirstValue("client_id") ?? "(absent)",
-            user.FindFirstValue("user:id") ?? "(absent)",
-            http?.Request.Method ?? "(unknown)",
-            http?.Request.Path.Value ?? "(unknown)"
-        );
+    private void LogRefusal(ClaimsPrincipal user, HttpContext? http)
+    {
+        if (logger.IsEnabled(LogLevel.Error))
+        {
+            logger.LogError(
+                "Read-only caller {ClientId} (user {UserId}) refused: {Method} {Path} is not open to read-only callers.",
+                user.FindFirstValue("client_id") ?? AbsentValue,
+                user.FindFirstValue("user:id") ?? AbsentValue,
+                http?.Request.Method ?? UnknownValue,
+                http?.Request.Path.Value ?? UnknownValue
+            );
+        }
+    }
 }

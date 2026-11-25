@@ -18,6 +18,17 @@ namespace EprRegisterEnrolManagementBe.Health;
 public sealed class RequiredConfigHealthCheck(IConfiguration configuration, IHostEnvironment environment)
     : IHealthCheck
 {
+    // Caller secrets required outside Development, as (config key, env var).
+    // RA-751 / ADR-0010 adds the Admin UI's: reported here, not thrown at
+    // startup, so a missing support-tool secret cannot stop the caseworker
+    // service starting.
+    private static readonly (string ConfigKey, string EnvVar)[] s_callerSecrets =
+    [
+        ("AUTH_SHARED_SECRET:MANAGEMENT_FE", "AUTH_SHARED_SECRET__MANAGEMENT_FE"),
+        ("AUTH_SHARED_SECRET:BACKEND", "AUTH_SHARED_SECRET__BACKEND"),
+        ("AUTH_SHARED_SECRET:ADMIN_UI", "AUTH_SHARED_SECRET__ADMIN_UI"),
+    ];
+
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
@@ -29,27 +40,11 @@ public sealed class RequiredConfigHealthCheck(IConfiguration configuration, IHos
         // one is blank — the caller just never gets an entry in ClientSecrets.
         if (!environment.IsDevelopment())
         {
-            if (
-                string.IsNullOrWhiteSpace(
-                    configuration.GetValue<string>("AUTH_SHARED_SECRET:MANAGEMENT_FE")
-                )
-            )
-                missing.Add("AUTH_SHARED_SECRET__MANAGEMENT_FE");
-            if (
-                string.IsNullOrWhiteSpace(
-                    configuration.GetValue<string>("AUTH_SHARED_SECRET:BACKEND")
-                )
-            )
-                missing.Add("AUTH_SHARED_SECRET__BACKEND");
-            // RA-751 / ADR-0010: the Admin UI's secret. Reported here, not
-            // thrown at startup: a missing support-tool secret must not stop
-            // the caseworker service starting.
-            if (
-                string.IsNullOrWhiteSpace(
-                    configuration.GetValue<string>("AUTH_SHARED_SECRET:ADMIN_UI")
-                )
-            )
-                missing.Add("AUTH_SHARED_SECRET__ADMIN_UI");
+            missing.AddRange(
+                s_callerSecrets
+                    .Where(secret => string.IsNullOrWhiteSpace(configuration.GetValue<string>(secret.ConfigKey)))
+                    .Select(secret => secret.EnvVar)
+            );
         }
 
         // A blank username is the expected, silent default in Development. Anywhere

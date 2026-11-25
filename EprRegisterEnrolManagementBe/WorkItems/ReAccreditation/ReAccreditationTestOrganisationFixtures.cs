@@ -120,6 +120,8 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     }
 
     private const string EnglandNation = "England";
+    private const string PlasticMaterial = "plastic";
+    private const string FixtureSubmittedBy = "e2e-fixture";
 
     private const string SimulatedDeliveredEmail = "simulate-delivered@notifications.service.gov.uk";
 
@@ -184,7 +186,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 [Field.OperatorOrganisationId] = LegacySnapshotOrganisationId,
                 [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = RegistrationReference(now, "9003420342"),
                 ["operatorRegistrationId"] = "reg-342",
-                [Field.Material] = "plastic",
+                [Field.Material] = PlasticMaterial,
                 [Field.PreviousAccreditationYear] = now.Year - 1,
                 [Field.ComplianceIssuesReported] = 0,
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,
@@ -257,7 +259,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             StateId = "assessment-in-progress",
             SubmittedAt = submittedAt,
             LastModifiedAt = submittedAt,
-            SubmittedBy = "e2e-fixture",
+            SubmittedBy = FixtureSubmittedBy,
             TemplateSnapshot = snapshot,
             TemplateVersion = snapshot.TemplateVersion,
             SlaClock = new WorkItemSlaClock { StartedAt = clockStart },
@@ -268,7 +270,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 [Field.OperatorOrganisationId] = PreYearStartOrganisationId,
                 [Field.OperatorApplicationId] = "e2e-app-ra611-pre-year-start",
                 [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = RegistrationReference(now, "9006110611"),
-                [Field.Material] = "plastic",
+                [Field.Material] = PlasticMaterial,
                 [AccreditationYear.Field] = now.Year,
                 [Field.PreviousAccreditationYear] = now.Year - 1,
                 [Field.ComplianceIssuesReported] = 0,
@@ -303,7 +305,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             StateId = ReAccreditationType.ApprovedStateId,
             SubmittedAt = submittedAt,
             LastModifiedAt = now.AddDays(-1),
-            SubmittedBy = "e2e-fixture",
+            SubmittedBy = FixtureSubmittedBy,
             TemplateSnapshot = snapshot,
             TemplateVersion = snapshot.TemplateVersion,
             Payload = new BsonDocument
@@ -316,7 +318,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 // 2026 previous accreditation year, sharing the corrected number's
                 // org id and sequence.
                 [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = "R26ER9006910246PL",
-                [Field.Material] = "plastic",
+                [Field.Material] = PlasticMaterial,
                 [AccreditationYear.Field] = 2027,
                 [Field.PreviousAccreditationYear] = 2026,
                 [Field.ComplianceIssuesReported] = 0,
@@ -354,7 +356,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             StateId = StandardWorkflow.WithdrawnStateId,
             SubmittedAt = now.AddDays(-40),
             LastModifiedAt = now.AddDays(-10),
-            SubmittedBy = "e2e-fixture",
+            SubmittedBy = FixtureSubmittedBy,
             TemplateSnapshot = snapshot,
             TemplateVersion = snapshot.TemplateVersion,
             Payload = new BsonDocument
@@ -366,7 +368,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 // A valid registration reference on the fictitious organisation
                 // 900751, like the RA-691 fixture's.
                 [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = "R26ER9007510001PL",
-                [Field.Material] = "plastic",
+                [Field.Material] = PlasticMaterial,
                 [AccreditationYear.Field] = 2027,
                 [Field.PreviousAccreditationYear] = 2026,
                 [Field.ComplianceIssuesReported] = 0,
@@ -441,7 +443,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             StateId = "submitted",
             SubmittedAt = submittedAt,
             LastModifiedAt = submittedAt,
-            SubmittedBy = "e2e-fixture",
+            SubmittedBy = FixtureSubmittedBy,
             TemplateSnapshot = snapshot,
             TemplateVersion = snapshot.TemplateVersion,
             Payload = new BsonDocument
