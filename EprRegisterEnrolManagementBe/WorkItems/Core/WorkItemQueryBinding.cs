@@ -88,7 +88,17 @@ internal static class WorkItemQueryBinding
     {
         ArgumentNullException.ThrowIfNull(query);
         var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        ValidateAssignmentAndArchive(query, errors);
+        ValidateQ(query, errors);
+        ValidateSort(query, errors);
+        return errors;
+    }
 
+    private static void ValidateAssignmentAndArchive(
+        IQueryCollection query,
+        Dictionary<string, string[]> errors
+    )
+    {
         foreach (var key in new[] { AssignedParam, ArchivedParam })
         {
             if (!ReadStrictBool(query, key).IsValid)
@@ -108,48 +118,63 @@ internal static class WorkItemQueryBinding
                 $"'{AssignedParam}' cannot be combined with '{UnassignedOnlyParam}' or '{AssigneeIdParam}'.",
             ];
         }
+    }
 
-        // RA-751: q is sent at most once and is bounded in length.
-        if (query.TryGetValue(QParam, out var qValues))
+    // RA-751: q is sent at most once and is bounded in length.
+    private static void ValidateQ(IQueryCollection query, Dictionary<string, string[]> errors)
+    {
+        if (!query.TryGetValue(QParam, out var qValues))
         {
-            if (qValues.Count > 1)
-            {
-                errors[QParam] = [$"'{QParam}' must be sent once."];
-            }
-            else if ((qValues[0]?.Trim().Length ?? 0) > MaxQLength)
-            {
-                errors[QParam] = [$"'{QParam}' must be {MaxQLength} characters or fewer."];
-            }
+            return;
         }
+        if (qValues.Count > 1)
+        {
+            errors[QParam] = [$"'{QParam}' must be sent once."];
+        }
+        else if ((qValues[0]?.Trim().Length ?? 0) > MaxQLength)
+        {
+            errors[QParam] = [$"'{QParam}' must be {MaxQLength} characters or fewer."];
+        }
+    }
 
-        // RA-751: a non-blank sort token or direction must be one this
-        // endpoint understands. Blank or absent keeps the default order.
-        // A repeated sort or dir is refused like a repeated q: binding reads
-        // only the first value, so ?sort=&sort=status would otherwise pass
-        // here and then sort by nothing.
-        foreach (var key in new[] { SortParam, SortDirectionParam })
-        {
-            if (query.TryGetValue(key, out var values) && values.Count > 1)
-            {
-                errors[key] = [$"'{key}' must be sent once."];
-            }
-        }
-        if (!errors.ContainsKey(SortParam) && NonBlankValues(query, SortParam).Any(v => !WorkItemSort.IsKnownToken(v)))
-        {
-            errors[SortParam] =
-            [
-                $"'{SortParam}' must be one of: {string.Join(", ", WorkItemSort.Tokens.Order(StringComparer.Ordinal))}.",
-            ];
-        }
-        if (
-            !errors.ContainsKey(SortDirectionParam)
-            && NonBlankValues(query, SortDirectionParam).Any(v => ParseSortDirection(v) is null)
-        )
-        {
-            errors[SortDirectionParam] = [$"'{SortDirectionParam}' must be 'asc' or 'desc'."];
-        }
+    // RA-751: a non-blank sort token or direction must be one this endpoint
+    // understands; blank or absent keeps the default order. A repeated sort
+    // or dir is refused like a repeated q: binding reads only the first value,
+    // so ?sort=&sort=status would otherwise pass here and then sort by nothing.
+    private static void ValidateSort(IQueryCollection query, Dictionary<string, string[]> errors)
+    {
+        ValidateSingleKnownValue(
+            query,
+            errors,
+            SortParam,
+            WorkItemSort.IsKnownToken,
+            $"'{SortParam}' must be one of: {string.Join(", ", WorkItemSort.Tokens.Order(StringComparer.Ordinal))}."
+        );
+        ValidateSingleKnownValue(
+            query,
+            errors,
+            SortDirectionParam,
+            v => ParseSortDirection(v) is not null,
+            $"'{SortDirectionParam}' must be 'asc' or 'desc'."
+        );
+    }
 
-        return errors;
+    private static void ValidateSingleKnownValue(
+        IQueryCollection query,
+        Dictionary<string, string[]> errors,
+        string key,
+        Func<string, bool> isKnown,
+        string unknownMessage
+    )
+    {
+        if (query.TryGetValue(key, out var values) && values.Count > 1)
+        {
+            errors[key] = [$"'{key}' must be sent once."];
+        }
+        else if (NonBlankValues(query, key).Any(v => !isKnown(v)))
+        {
+            errors[key] = [unknownMessage];
+        }
     }
 
     private static IEnumerable<string> NonBlankValues(IQueryCollection query, string key) =>
