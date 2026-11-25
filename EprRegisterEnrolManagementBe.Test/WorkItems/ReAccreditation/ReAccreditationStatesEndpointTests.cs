@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Test.Auth;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
@@ -30,7 +31,9 @@ public class ReAccreditationStatesEndpointTests
         ("duly-made", "Duly made", false, "status"),
         ("assessment-started", "Duly made", false, "none"),
         ("assessment-in-progress", "Updated", false, "status"),
-        ("awaiting-decision", "Awaiting decision", false, "status"),
+        // submit-for-decision (the normal route in) is not pushed;
+        // continue-review-during-decision is.
+        ("awaiting-decision", "Awaiting decision", false, "partial"),
         ("queried", "Queried", false, "query"),
         ("updated", "Updated", false, "status"),
         ("approved-pending-contact", "Approved", false, "none"),
@@ -53,14 +56,27 @@ public class ReAccreditationStatesEndpointTests
         );
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<ReAccreditationStatesResponse>(
-            TestContext.Current.CancellationToken
+        // Read the wire JSON, so the push kind is asserted as the string sent.
+        using var json = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken),
+            cancellationToken: TestContext.Current.CancellationToken
         );
-        Assert.Equal(ReAccreditationType.Id, body!.TypeId);
-        Assert.Equal(new ReAccreditationType().TemplateVersion, body.TemplateVersion);
+        var root = json.RootElement;
+        Assert.Equal(ReAccreditationType.Id, root.GetProperty("typeId").GetString());
+        Assert.Equal(new ReAccreditationType().TemplateVersion, root.GetProperty("templateVersion").GetString());
         Assert.Equal(
             s_expected,
-            body.States.Select(s => (s.Id, s.DisplayName, s.IsTerminal, s.OperatorJourneyPush)).ToArray()
+            root.GetProperty("states")
+                .EnumerateArray()
+                .Select(s =>
+                    (
+                        s.GetProperty("id").GetString()!,
+                        s.GetProperty("displayName").GetString()!,
+                        s.GetProperty("isTerminal").GetBoolean(),
+                        s.GetProperty("operatorJourneyPush").GetString()!
+                    )
+                )
+                .ToArray()
         );
     }
 
@@ -108,7 +124,32 @@ public class ReAccreditationStatesEndpointTests
             [new WorkItemTransition("query-during-duly-made", "Query", "duly-made", "on-hold")]
         );
 
-        Assert.Equal("query", ReAccreditationStatesEndpoint.OperatorJourneyPushFor(type, "on-hold"));
-        Assert.Equal("none", ReAccreditationStatesEndpoint.OperatorJourneyPushFor(type, "queried"));
+        Assert.Equal(
+            OperatorJourneyPushKind.Query,
+            ReAccreditationStatesEndpoint.OperatorJourneyPushFor(type, "on-hold")
+        );
+        Assert.Equal(
+            OperatorJourneyPushKind.None,
+            ReAccreditationStatesEndpoint.OperatorJourneyPushFor(type, "queried")
+        );
+    }
+
+    [Fact]
+    public void A_state_reached_by_pushed_and_unpushed_routes_is_partial()
+    {
+        var type = Substitute.For<IWorkItemType>();
+        type.Transitions.Returns(
+            [
+                new WorkItemTransition("submit-for-decision", "Submit", "updated", "awaiting-decision"),
+                new WorkItemTransition("continue-review-during-decision", "Continue", "updated", "awaiting-decision"),
+                // A self-loop is an in-place action, not a move onto the state.
+                new WorkItemTransition("change-deadline", "Change", "awaiting-decision", "awaiting-decision"),
+            ]
+        );
+
+        Assert.Equal(
+            OperatorJourneyPushKind.Partial,
+            ReAccreditationStatesEndpoint.OperatorJourneyPushFor(type, "awaiting-decision")
+        );
     }
 }

@@ -264,13 +264,12 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
         .Configure<IConfiguration>(
             (options, config) =>
             {
-                options.ClientSecrets = BuildClientSecrets(config);
                 // RA-751 / ADR-0010: the Admin UI is read-only. Its clientId is
                 // marked read-only whether or not its secret is configured.
-                options.ReadOnlyClientIds = new HashSet<string>(StringComparer.Ordinal)
-                {
-                    AdminUiClientId(config),
-                };
+                // Resolved first so an Admin UI client-id collision reports
+                // its own, clearer error.
+                options.ReadOnlyClientIds = BuildReadOnlyClientIds(config);
+                options.ClientSecrets = BuildClientSecrets(config);
                 options.MaxClientIdLength = config.GetValue(
                     "Auth:MaxClientIdLength",
                     options.MaxClientIdLength
@@ -296,7 +295,11 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
                     options.MaxNonceLength
                 );
             }
-        );
+        )
+        // RA-751: resolve the options at startup, so a client-id collision
+        // (BuildReadOnlyClientIds, AddCallerSecret) stops the service starting
+        // rather than failing its first request.
+        .ValidateOnStart();
 
     // RA-751 / ADR-0010: the default policy refuses read-only callers; the
     // read endpoints they may call opt in to CallerAccessPolicies.ReadOnlyCallerAllowed.
@@ -320,66 +323,88 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
 // without touching the other — see ADR-0005's "Follow-up: per-caller
 // shared secrets" section and CaseManagementAuthConfig in
 // epr-register-enrol-backend for the single-caller precedent this mirrors.
+//
+// Config-key form, NOT the literal env var name: EnvironmentVariablesConfigurationProvider
+// rewrites "__" to ":" while loading, so the real env var
+// AUTH_SHARED_SECRET__MANAGEMENT_FE is stored under config key
+// "AUTH_SHARED_SECRET:MANAGEMENT_FE" — a GetValue call using the literal
+// double-underscore string never matches it. Same pattern OperatorBackendApi
+// uses elsewhere in this file (GetSection("OperatorBackendApi"), not a
+// literal "OperatorBackendApi__Url" GetValue key).
 [ExcludeFromCodeCoverage]
-static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration config)
+static IEnumerable<(string CallerName, string ClientIdKey, string ClientIdDefault, string SecretKey)> Callers(
+    IConfiguration config
+)
 {
-    var map = new Dictionary<string, string>(StringComparer.Ordinal);
-    // Config-key form, NOT the literal env var name: EnvironmentVariablesConfigurationProvider
-    // rewrites "__" to ":" while loading, so the real env var
-    // AUTH_SHARED_SECRET__MANAGEMENT_FE is stored under config key
-    // "AUTH_SHARED_SECRET:MANAGEMENT_FE" — a GetValue call using the literal
-    // double-underscore string never matches it. Same pattern OperatorBackendApi
-    // uses elsewhere in this file (GetSection("OperatorBackendApi"), not a
-    // literal "OperatorBackendApi__Url" GetValue key).
-    AddCallerSecret(
-        map,
-        config,
-        callerName: "ManagementFe",
-        clientIdKey: "Auth:ManagementFeClientId",
-        clientIdDefault: "frontend",
-        secretKey: "AUTH_SHARED_SECRET:MANAGEMENT_FE"
-    );
-    AddCallerSecret(
-        map,
-        config,
-        callerName: "Backend",
-        clientIdKey: "Auth:BackendClientId",
-        clientIdDefault: "epr-register-enrol-backend",
-        secretKey: "AUTH_SHARED_SECRET:BACKEND"
-    );
+    yield return ("ManagementFe", "Auth:ManagementFeClientId", "frontend", "AUTH_SHARED_SECRET:MANAGEMENT_FE");
+    yield return ("Backend", "Auth:BackendClientId", "epr-register-enrol-backend", "AUTH_SHARED_SECRET:BACKEND");
     // RA-000: the mgmt-tests journey suite creates its own work items on CDP
     // test. Its caller exists only where test organisations are enabled, which
     // startup refuses in prod (TestOrganisations.EnsureNotEnabledInProd), so a
     // stray AUTH_SHARED_SECRET__MGMT_TESTS can never open a door in prod.
     if (TestOrganisations.IsEnabled(config))
     {
-        AddCallerSecret(
-            map,
-            config,
-            callerName: "MgmtTests",
-            clientIdKey: "Auth:MgmtTestsClientId",
-            clientIdDefault: "epr-register-enrol-mgmt-tests",
-            secretKey: "AUTH_SHARED_SECRET:MGMT_TESTS"
+        yield return (
+            "MgmtTests",
+            "Auth:MgmtTestsClientId",
+            "epr-register-enrol-mgmt-tests",
+            "AUTH_SHARED_SECRET:MGMT_TESTS"
         );
     }
     // RA-751 / ADR-0010: the Admin UI (epr-register-enrol-admin), a read-only
     // production support tool. Registered whenever its secret is set; what it
-    // may reach is limited by CallerAccessPolicies, not by this map.
-    AddCallerSecret(
-        map,
-        config,
-        callerName: "AdminUi",
-        clientIdKey: CallerAccessPolicies.AdminUiClientIdKey,
-        clientIdDefault: CallerAccessPolicies.AdminUiClientIdDefault,
-        secretKey: "AUTH_SHARED_SECRET:ADMIN_UI"
+    // may reach is limited by CallerAccessPolicies, not by the secret map.
+    yield return (
+        CallerAccessPolicies.AdminUiCallerName,
+        CallerAccessPolicies.AdminUiClientIdKey,
+        CallerAccessPolicies.AdminUiClientIdDefault,
+        "AUTH_SHARED_SECRET:ADMIN_UI"
     );
-    return map;
 }
 
 [ExcludeFromCodeCoverage]
-static string AdminUiClientId(IConfiguration config) =>
-    config.GetValue<string?>(CallerAccessPolicies.AdminUiClientIdKey)
-    ?? CallerAccessPolicies.AdminUiClientIdDefault;
+static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration config)
+{
+    var map = new Dictionary<string, string>(StringComparer.Ordinal);
+    foreach (var caller in Callers(config))
+    {
+        AddCallerSecret(map, config, caller.CallerName, caller.ClientIdKey, caller.ClientIdDefault, caller.SecretKey);
+    }
+    return map;
+}
+
+// RA-751 / ADR-0010: the read-only client ids. The Admin UI's id is read-only
+// whether or not its secret is set, so it must never equal another caller's
+// id: a mistaken Auth__AdminUiClientId=frontend would otherwise make
+// management-fe read-only. Checked against every caller's id whether or not
+// that caller's secret is set, and thrown at startup (ValidateOnStart).
+[ExcludeFromCodeCoverage]
+static IReadOnlySet<string> BuildReadOnlyClientIds(IConfiguration config)
+{
+    var adminUiClientId = ClientIdOf(
+        config,
+        CallerAccessPolicies.AdminUiClientIdKey,
+        CallerAccessPolicies.AdminUiClientIdDefault
+    );
+    foreach (var caller in Callers(config).Where(c => c.CallerName != CallerAccessPolicies.AdminUiCallerName))
+    {
+        var otherClientId = ClientIdOf(config, caller.ClientIdKey, caller.ClientIdDefault);
+        if (string.Equals(adminUiClientId, otherClientId, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                $"ClientIdAuthentication misconfigured: {CallerAccessPolicies.AdminUiClientIdKey} is "
+                    + $"'{adminUiClientId}', which is also the clientId of caller '{caller.CallerName}' "
+                    + $"(via {caller.ClientIdKey}). The Admin UI's clientId is read-only, so this would "
+                    + "make that caller read-only. Give the Admin UI a distinct clientId."
+            );
+        }
+    }
+    return new HashSet<string>(StringComparer.Ordinal) { adminUiClientId };
+}
+
+[ExcludeFromCodeCoverage]
+static string ClientIdOf(IConfiguration config, string clientIdKey, string clientIdDefault) =>
+    config.GetValue<string?>(clientIdKey) ?? clientIdDefault;
 
 [ExcludeFromCodeCoverage]
 static void AddCallerSecret(
@@ -399,7 +424,7 @@ static void AddCallerSecret(
         return;
     }
 
-    var clientId = config.GetValue(clientIdKey, clientIdDefault);
+    var clientId = ClientIdOf(config, clientIdKey, clientIdDefault);
 
     // Fail LOUD: two callers configured to assert the same clientId would
     // mean the second caller's secret silently overwrites the first's in

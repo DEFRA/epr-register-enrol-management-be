@@ -475,7 +475,9 @@ public static class WorkItemEndpoints
         return TypedResults.Ok(ToResponse(engine.Project(workItem), timeProvider));
     }
 
-    internal static async Task<Results<Ok<WorkItemListResponse>, ProblemHttpResult>> GetAll(
+    internal static async Task<
+        Results<Ok<WorkItemListResponse>, Ok<ReadOnlyWorkItemListResponse>, ProblemHttpResult>
+    > GetAll(
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemService engine,
@@ -487,16 +489,18 @@ public static class WorkItemEndpoints
         var errors = WorkItemQueryBinding.Validate(httpContext.Request.Query);
         if (errors.Count > 0)
         {
+            // RA-751: a client's query mistake, answered with 400. Warning,
+            // not Error: it is the caller's bug to fix, not an incident here.
+            var caller = EprRegisterEnrolManagementBe.Auth.CallerIdentity.From(httpContext.User);
             log.Log(
-                LogLevel.Error,
+                LogLevel.Warning,
                 "Work item list query rejected",
                 new Dictionary<string, object?>
                 {
                     ["url.path"] = httpContext.Request.Path.Value,
                     ["error.fields"] = string.Join(",", errors.Keys),
-                    [CallerClientIdField] =
-                        httpContext.User.FindFirstValue("client_id") ?? AbsentValue,
-                    ["caller.user_id"] = httpContext.User.FindFirstValue("user:id") ?? AbsentValue,
+                    [CallerClientIdField] = caller.ClientId,
+                    ["caller.user_id"] = caller.UserId,
                 }
             );
             return TypedResults.Problem(
@@ -520,6 +524,20 @@ public static class WorkItemEndpoints
         }
 
         var page = await persistence.QueryAsync(query, cancellationToken);
+
+        // RA-751 / ADR-0010: a read-only caller (the Admin UI) gets only the
+        // fields its search shows, never the full payload or submitter.
+        if (EprRegisterEnrolManagementBe.Auth.CallerAccessPolicies.IsReadOnlyCaller(httpContext.User))
+        {
+            return TypedResults.Ok(
+                new ReadOnlyWorkItemListResponse(
+                    page.Items.Select(ReadOnlyWorkItemListItem.From).ToList(),
+                    page.TotalCount,
+                    page.Page,
+                    page.PageSize
+                )
+            );
+        }
 
         var items = page
             .Items.Select(w => ToListItemResponse(engine.Project(w), timeProvider))

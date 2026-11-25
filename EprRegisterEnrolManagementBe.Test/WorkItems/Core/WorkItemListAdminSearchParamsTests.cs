@@ -139,6 +139,19 @@ public class WorkItemListAdminSearchParamsTests
         Assert.Equal(["'q' must be sent once."], errors["q"]);
     }
 
+    [Theory]
+    [InlineData("sort", "", "status")]
+    [InlineData("sort", "status", "status")]
+    [InlineData("dir", "asc", "desc")]
+    public void Validate_rejects_a_repeated_sort_or_dir(string key, string first, string second)
+    {
+        // Binding reads only the first value, so ?sort=&sort=status would
+        // otherwise validate and then sort by nothing.
+        var errors = WorkItemQueryBinding.Validate(Query((key, [first, second])));
+
+        Assert.Equal([$"'{key}' must be sent once."], errors[key]);
+    }
+
     [Fact]
     public void Validate_rejects_a_repeated_assigned()
     {
@@ -193,9 +206,11 @@ public class WorkItemListAdminSearchParamsTests
     [InlineData("/work-items?assigned=true&unassigned=true", "assigned")]
     [InlineData("/work-items?sort=last-modifed", "sort")]
     [InlineData("/work-items?q=a&q=b", "q")]
+    [InlineData("/work-items?sort=&sort=status", "sort")]
+    [InlineData("/work-items?dir=asc&dir=desc", "dir")]
     [InlineData("/work-items?sort=last-modified&dir=newest", "dir")]
     [InlineData("LONG_Q", "q")]
-    public async Task Invalid_params_answer_400_validation_problem_and_log_at_error(string url, string field)
+    public async Task Invalid_params_answer_400_validation_problem_and_log_at_warning(string url, string field)
     {
         var (factory, app, logs) = NewApp();
         await using var _f = factory;
@@ -215,7 +230,8 @@ public class WorkItemListAdminSearchParamsTests
         Assert.Equal("Invalid query", problem!.Title);
         Assert.True(problem.Errors.ContainsKey(field));
         var log = Assert.Single(logs.Records, r => r.Message == "Work item list query rejected");
-        Assert.Equal(LogLevel.Error, log.Level);
+        // A client's query mistake: Warning, not Error (it must not alert).
+        Assert.Equal(LogLevel.Warning, log.Level);
         await factory
             .MockPersistence.DidNotReceive()
             .QueryAsync(Arg.Is<WorkItemQuery>(q => q.PageSize == 50), Arg.Any<CancellationToken>());

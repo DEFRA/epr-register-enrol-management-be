@@ -1,5 +1,7 @@
 using System.Net;
 using System.Text;
+using System.Text.Json;
+using MongoDB.Bson;
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -313,5 +315,158 @@ public class ClientIdAuthenticationAdminUiCallerTests
         );
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+    }
+
+    private static WorkItem ItemWithContactDetails() =>
+        new()
+        {
+            Id = s_workItemId,
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = new DateTime(2026, 4, 1, 9, 0, 0, DateTimeKind.Utc),
+            LastModifiedAt = new DateTime(2026, 4, 2, 9, 0, 0, DateTimeKind.Utc),
+            SubmittedBy = "operator-user-1",
+            AssignedToId = "caseworker-1",
+            AssignedToName = "Case Worker",
+            Payload = new BsonDocument
+            {
+                ["applicationReference"] = "APEPL5005001",
+                ["operatorOrganisationId"] = "org-1",
+                ["organisationName"] = "Acme Plastics Ltd",
+                ["operatorEmail"] = "contact@example.com",
+                ["nation"] = "England",
+            },
+        };
+
+    private static async Task<JsonElement> FirstListedItemAsync(HttpClient client)
+    {
+        var response = await client.GetAsync("/work-items", TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var root = json.RootElement;
+        Assert.Equal(1, root.GetProperty("totalCount").GetInt64());
+        return root.GetProperty("items")[0].Clone();
+    }
+
+    [Fact]
+    public async Task Admin_ui_receives_only_the_projected_fields()
+    {
+        // RA-751 / ADR-0010: no submitter, no contact details, no other payload.
+        var (factory, app, _) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([ItemWithContactDetails()], 1, 1, 50));
+        using var client = AdminClient(factory, app, "nonce-admin-projection");
+
+        var item = await FirstListedItemAsync(client);
+
+        Assert.Equal(
+            ["assignedToId", "assignedToName", "id", "lastModifiedAt", "payload", "stateId", "typeId"],
+            item.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)
+        );
+        var payload = item.GetProperty("payload");
+        Assert.Equal(
+            ["applicationReference", "operatorOrganisationId", "organisationName"],
+            payload.EnumerateObject().Select(p => p.Name).Order(StringComparer.Ordinal)
+        );
+        Assert.Equal("APEPL5005001", payload.GetProperty("applicationReference").GetString());
+        Assert.Equal("Acme Plastics Ltd", payload.GetProperty("organisationName").GetString());
+        Assert.Equal("Case Worker", item.GetProperty("assignedToName").GetString());
+    }
+
+    [Fact]
+    public async Task Admin_ui_projection_reports_an_absent_payload_field_as_null()
+    {
+        var (factory, app, _) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        var legacy = ItemWithContactDetails();
+        legacy.Payload.Remove("applicationReference");
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([legacy], 1, 1, 50));
+        using var client = AdminClient(factory, app, "nonce-admin-projection-null");
+
+        var item = await FirstListedItemAsync(client);
+
+        Assert.Equal(JsonValueKind.Null, item.GetProperty("payload").GetProperty("applicationReference").ValueKind);
+    }
+
+    [Fact]
+    public async Task Management_fe_still_receives_the_full_item()
+    {
+        var (factory, app, _) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([ItemWithContactDetails()], 1, 1, 50));
+        using var client = SignedClient(factory, app, "frontend", ManagementFeSecret, "nonce-fe-full");
+
+        var item = await FirstListedItemAsync(client);
+
+        Assert.Equal("operator-user-1", item.GetProperty("submittedBy").GetString());
+        Assert.Equal("contact@example.com", item.GetProperty("payload").GetProperty("operatorEmail").GetString());
+    }
+
+    [Theory]
+    [InlineData("frontend", null)]
+    [InlineData("epr-register-enrol-backend", null)]
+    [InlineData("frontend", AdminSecret)]
+    public void Startup_fails_when_the_admin_ui_client_id_is_another_callers(string clientId, string? adminSecret)
+    {
+        // Whether or not the admin secret is set: the Admin UI's client id is
+        // read-only regardless, so a collision would make that caller read-only.
+        var overrides = new Dictionary<string, string?>
+        {
+            ["AUTH_SHARED_SECRET:MANAGEMENT_FE"] = ManagementFeSecret,
+            [CallerAccessPolicies.AdminUiClientIdKey] = clientId,
+        };
+        if (adminSecret is not null)
+        {
+            overrides["AUTH_SHARED_SECRET:ADMIN_UI"] = adminSecret;
+        }
+        using var factory = new BareFactory(environment: "Production", configOverrides: overrides);
+
+        var thrown = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
+
+        var message = string.Join(" | ", Flatten(thrown).Select(e => e.Message));
+        Assert.Contains($"{CallerAccessPolicies.AdminUiClientIdKey} is '{clientId}'", message);
+        Assert.Contains("Give the Admin UI a distinct clientId", message);
+    }
+
+    private static IEnumerable<Exception> Flatten(Exception e)
+    {
+        yield return e;
+        var inner = e is AggregateException agg ? agg.InnerExceptions : (e.InnerException is { } i ? [i] : []);
+        foreach (var child in inner.SelectMany(Flatten))
+        {
+            yield return child;
+        }
+    }
+
+    [Fact]
+    public void Extended_signature_over_a_percent_encoded_name_matches_the_known_value()
+    {
+        // The Admin UI sends encodeURIComponent(name) and signs exactly that
+        // header string; management-be verifies over the header as received.
+        var signature = ClientIdAuthenticationHandler.ComputeSignature(
+            "admin-test-secret",
+            new ClientIdSignaturePayload(
+                "epr-register-enrol-admin",
+                "entra-oid-123",
+                "Si%C3%A2n%20O%E2%80%99Brien",
+                "2026-11-25T10:00:00.000Z",
+                "nonce-abc",
+                Role: SupportRole
+            )
+        );
+
+        Assert.Equal("xUgQC3G8CMtms+/s3rWHQRZ5BAiunCjZgm9lI3muA/M=", signature);
     }
 }

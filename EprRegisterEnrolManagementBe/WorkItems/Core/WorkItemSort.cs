@@ -65,17 +65,26 @@ internal static class WorkItemSort
     /// quietly falling back to the default order, so a mistyped or renamed
     /// token can never show results in an order the caller did not ask for.
     /// </summary>
-    internal static readonly IReadOnlySet<string> Tokens = new HashSet<string>(StringComparer.Ordinal)
+    internal static IReadOnlyCollection<string> Tokens => s_stageBuilders.Keys;
+
+    // The single list of sort tokens and how each builds its stages; Tokens,
+    // IsKnownToken and BuildStages all read it, so a new sort is one entry.
+    private static readonly Dictionary<
+        string,
+        Func<bool?, IReadOnlyDictionary<string, int>, (BsonDocument?, BsonDocument)>
+    > s_stageBuilders = new(StringComparer.Ordinal)
     {
-        OrganisationToken,
-        StatusToken,
-        DueDateToken,
-        LastModifiedToken,
+        [OrganisationToken] = (descending, _) => BuildOrganisationStages(descending),
+        [StatusToken] = BuildStatusStages,
+        [DueDateToken] = (descending, _) => BuildDueDateStages(descending),
+        [LastModifiedToken] = (descending, _) => BuildLastModifiedStages(descending),
     };
 
     /// <summary>Whether <paramref name="sortToken"/> names a sort, matched as <see cref="BuildStages"/> matches it.</summary>
     internal static bool IsKnownToken(string sortToken) =>
-        Tokens.Contains(sortToken.Trim().ToLowerInvariant());
+        s_stageBuilders.ContainsKey(Normalise(sortToken));
+
+    private static string Normalise(string sortToken) => sortToken.Trim().ToLowerInvariant();
 
     /// <summary>
     /// Map each state id to a workflow rank derived from the order states are
@@ -126,14 +135,9 @@ internal static class WorkItemSort
             return null;
         }
 
-        return sortToken.Trim().ToLowerInvariant() switch
-        {
-            OrganisationToken => BuildOrganisationStages(descendingOverride),
-            StatusToken => BuildStatusStages(descendingOverride, statusRank),
-            DueDateToken => BuildDueDateStages(descendingOverride),
-            LastModifiedToken => BuildLastModifiedStages(descendingOverride),
-            _ => throw new ArgumentException($"Unknown sort token '{sortToken}'.", nameof(sortToken)),
-        };
+        return s_stageBuilders.TryGetValue(Normalise(sortToken), out var build)
+            ? build(descendingOverride, statusRank)
+            : throw new ArgumentException($"Unknown sort token '{sortToken}'.", nameof(sortToken));
     }
 
     private static (BsonDocument?, BsonDocument) BuildOrganisationStages(bool? descendingOverride)

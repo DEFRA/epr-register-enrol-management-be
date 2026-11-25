@@ -645,22 +645,29 @@ endpoint answers `400` (ValidationProblem, title `Invalid query`, errors keyed
 
 The Admin UI (`epr-register-enrol-admin`) is a read-only caller: it may call
 `GET /work-items` and `GET /work-items/re-accreditation/states` and nothing
-else. Every other request it makes is refused with `403` and logged at Error.
+else. From `GET /work-items` it gets a projected item, `{ id, typeId, stateId,
+lastModifiedAt, assignedToId, assignedToName, payload: { applicationReference,
+operatorOrganisationId, organisationName } }`: no submitter, no contact
+details, no other payload. Other callers get the full item. Every other request it makes is refused with `403` and logged at Error.
 An endpoint opens itself to read-only callers with
 `RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed)`; a plain
 `RequireAuthorization()` keeps them out. See
 [ADR-0010](adr/0010-read-only-admin-ui-caller.md).
 
 `GET /work-items` also takes `q` for the Admin UI: at most 100 characters
-after trimming, sent once; otherwise `400` (errors keyed `q`).
+after trimming, sent once; otherwise `400` (errors keyed `q`). `sort` and `dir`
+must each be sent at most once. These client mistakes are logged at Warning.
 
 `GET /work-items/re-accreditation/states` returns
 `{ typeId, templateVersion, states: [ { id, displayName, isTerminal, operatorJourneyPush } ] }`
 in workflow order. `operatorJourneyPush` is `status` (a move onto the state is
 pushed to the operator backend's status endpoint as `toStateId`), `query`
-(sent by the query push) or `none` (never pushed). Both are derived, not
-copied: `query` from the actions `ReAccreditationQueryPushHook` pushes on, and
-`status` from `StandardStatusPushHook`'s excluded target states. The operator
+(sent by the query push), `none` (never pushed) or `partial` (some routes in
+push and some do not: `awaiting-decision`, where `submit-for-decision` is not
+pushed but `continue-review-during-decision` is). Each is derived per action
+from the transitions into the state: `query` from the actions
+`ReAccreditationQueryPushHook` pushes on, `status` from
+`StandardStatusPushHook.IsActionStatusPushed`. The operator
 backend maps each state id to the Legacy `ApplicationStatus` it should hold
 (`CaseManagementStatusMapping.StatusPush`, served at
 `GET /admin/case-management-status-mapping`).

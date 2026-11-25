@@ -39,6 +39,9 @@ public static class CallerAccessPolicies
     /// <summary>Config key overriding the Admin UI's clientId (env var <c>Auth__AdminUiClientId</c>).</summary>
     public const string AdminUiClientIdKey = "Auth:AdminUiClientId";
 
+    /// <summary>The Admin UI's caller name in Program.cs's caller list.</summary>
+    internal const string AdminUiCallerName = "AdminUi";
+
     /// <summary>The clientId the Admin UI asserts by default.</summary>
     public const string AdminUiClientIdDefault = "epr-register-enrol-admin";
 
@@ -81,9 +84,6 @@ internal sealed class CallerAccessAuthorizationHandler(
     ILogger<CallerAccessAuthorizationHandler> logger
 ) : IAuthorizationHandler
 {
-    // Log placeholders only, never data: shown when a claim or the request is
-    // not available to the logger.
-    private const string AbsentValue = "(absent)";
     private const string UnknownValue = "(unknown)";
 
     public Task HandleAsync(AuthorizationHandlerContext context)
@@ -99,12 +99,12 @@ internal sealed class CallerAccessAuthorizationHandler(
                     context.Succeed(requirement);
                     break;
                 case ReadOnlyCallerMethodRequirement when IsReadMethod(http):
-                    LogAccess(context.User, http);
+                    Log(LogLevel.Information, "allowed", context.User, http);
                     context.Succeed(requirement);
                     break;
                 case FullAccessCallerRequirement:
                 case ReadOnlyCallerMethodRequirement:
-                    LogRefusal(context.User, http);
+                    Log(LogLevel.Error, "refused", context.User, http);
                     context.Fail(new AuthorizationFailureReason(this, "Read-only caller"));
                     break;
             }
@@ -118,32 +118,25 @@ internal sealed class CallerAccessAuthorizationHandler(
         && (HttpMethods.IsGet(http.Request.Method) || HttpMethods.IsHead(http.Request.Method));
 
     // RA-751: the epic asks that upstream logs show the calling client and
-    // the signed-in user for every Admin UI request.
-    private void LogAccess(ClaimsPrincipal user, HttpContext? http)
+    // the signed-in user for every Admin UI request: Information when it is
+    // allowed, Error when it is refused.
+    private void Log(LogLevel level, string outcome, ClaimsPrincipal user, HttpContext? http)
     {
-        if (logger.IsEnabled(LogLevel.Information))
+        if (!logger.IsEnabled(level))
         {
-            logger.LogInformation(
-                "Read-only caller {ClientId} (user {UserId}) allowed: {Method} {Path}.",
-                user.FindFirstValue("client_id") ?? AbsentValue,
-                user.FindFirstValue("user:id") ?? AbsentValue,
-                http?.Request.Method ?? UnknownValue,
-                http?.Request.Path.Value ?? UnknownValue
-            );
+            return;
         }
-    }
-
-    private void LogRefusal(ClaimsPrincipal user, HttpContext? http)
-    {
-        if (logger.IsEnabled(LogLevel.Error))
-        {
-            logger.LogError(
-                "Read-only caller {ClientId} (user {UserId}) refused: {Method} {Path} is not open to read-only callers.",
-                user.FindFirstValue("client_id") ?? AbsentValue,
-                user.FindFirstValue("user:id") ?? AbsentValue,
-                http?.Request.Method ?? UnknownValue,
-                http?.Request.Path.Value ?? UnknownValue
-            );
-        }
+        var caller = CallerIdentity.From(user);
+#pragma warning disable CA2254 // One fixed template; only the level varies.
+        logger.Log(
+            level,
+            "Read-only caller {ClientId} (user {UserId}) {Outcome}: {Method} {Path}.",
+            caller.ClientId,
+            caller.UserId,
+            outcome,
+            http?.Request.Method ?? UnknownValue,
+            http?.Request.Path.Value ?? UnknownValue
+        );
+#pragma warning restore CA2254
     }
 }

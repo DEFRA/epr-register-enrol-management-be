@@ -124,14 +124,27 @@ internal static class WorkItemQueryBinding
 
         // RA-751: a non-blank sort token or direction must be one this
         // endpoint understands. Blank or absent keeps the default order.
-        if (NonBlankValues(query, SortParam).Any(v => !WorkItemSort.IsKnownToken(v)))
+        // A repeated sort or dir is refused like a repeated q: binding reads
+        // only the first value, so ?sort=&sort=status would otherwise pass
+        // here and then sort by nothing.
+        foreach (var key in new[] { SortParam, SortDirectionParam })
+        {
+            if (query.TryGetValue(key, out var values) && values.Count > 1)
+            {
+                errors[key] = [$"'{key}' must be sent once."];
+            }
+        }
+        if (!errors.ContainsKey(SortParam) && NonBlankValues(query, SortParam).Any(v => !WorkItemSort.IsKnownToken(v)))
         {
             errors[SortParam] =
             [
                 $"'{SortParam}' must be one of: {string.Join(", ", WorkItemSort.Tokens.Order(StringComparer.Ordinal))}.",
             ];
         }
-        if (NonBlankValues(query, SortDirectionParam).Any(v => ParseSortDirection(v) is null))
+        if (
+            !errors.ContainsKey(SortDirectionParam)
+            && NonBlankValues(query, SortDirectionParam).Any(v => ParseSortDirection(v) is null)
+        )
         {
             errors[SortDirectionParam] = [$"'{SortDirectionParam}' must be 'asc' or 'desc'."];
         }

@@ -522,16 +522,14 @@ public sealed class WorkItemPersistence
         var orgId = query.NormalisedOrgId;
         if (!string.IsNullOrEmpty(orgId))
         {
-            var escaped = System.Text.RegularExpressions.Regex.Escape(orgId);
-            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            var pattern = ContainsRegex(orgId);
             clauses.Add(builder.Regex(ApplicationReferencePath, pattern));
         }
 
         var registrationId = query.NormalisedRegistrationId;
         if (!string.IsNullOrEmpty(registrationId))
         {
-            var escaped = System.Text.RegularExpressions.Regex.Escape(registrationId);
-            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            var pattern = ContainsRegex(registrationId);
             clauses.Add(builder.Regex("_id", pattern));
         }
 
@@ -556,8 +554,7 @@ public sealed class WorkItemPersistence
         var organisation = query.NormalisedOrganisation;
         if (!string.IsNullOrEmpty(organisation))
         {
-            var escaped = System.Text.RegularExpressions.Regex.Escape(organisation);
-            var contains = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            var contains = ContainsRegex(organisation);
             clauses.Add(
                 builder.Or(
                     builder.Regex("payload.organisationName", contains),
@@ -694,8 +691,7 @@ public sealed class WorkItemPersistence
             return null;
         }
 
-        var escaped = System.Text.RegularExpressions.Regex.Escape(search);
-        var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+        var pattern = ContainsRegex(search);
         return builder.Or(
             builder.Regex("_id", pattern),
             builder.Regex(nameof(WorkItem.SubmittedBy), pattern)
@@ -733,6 +729,11 @@ public sealed class WorkItemPersistence
         }
     }
 
+    // A case-insensitive "contains" match on a needle taken literally (regex
+    // metacharacters escaped, so no injection and no catastrophic pattern).
+    private static MongoDB.Bson.BsonRegularExpression ContainsRegex(string needle) =>
+        new(System.Text.RegularExpressions.Regex.Escape(needle), "i");
+
     // RA-751: the Admin UI's free-text search. A case-insensitive substring
     // of any of the identifiers a support user might paste, OR-ed together.
     // Unanchored regexes cannot use an index; the same trade-off as the
@@ -747,10 +748,7 @@ public sealed class WorkItemPersistence
             return null;
         }
 
-        var contains = new MongoDB.Bson.BsonRegularExpression(
-            System.Text.RegularExpressions.Regex.Escape(needle),
-            "i"
-        );
+        var contains = ContainsRegex(needle);
         return builder.Or(
             builder.Regex("_id", contains),
             builder.Regex("payload.accreditationId", contains),
