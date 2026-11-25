@@ -73,7 +73,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// RA-751: free-text needle for the Admin UI's work item search. Matched
 /// case-insensitively as a substring of the work item id,
 /// <c>payload.accreditationId</c>, <c>payload.applicationReference</c> (the
-/// RA- reference), <c>payload.operatorOrganisationId</c> and
+/// application reference, e.g. <c>AP…</c>), <c>payload.operatorOrganisationId</c> and
 /// <c>payload.organisationName</c>. Separate from <paramref name="Search"/>,
 /// which management-fe's Applications page uses with its own narrower match.
 /// Whitespace-only values are ignored.

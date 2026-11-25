@@ -9,7 +9,9 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.Core;
 /// RA-751: the Admin UI's work item search filters of <c>GET /work-items</c>
 /// (<c>q</c>, <c>assigned</c>, <c>archived</c>) against real Mongo.
 /// RA-751 AC4: the search box matches a work item ID, an accreditation ID or
-/// RA- reference, an organisation ID or part of an organisation name.
+/// RA- reference, an organisation ID or part of an organisation name. The
+/// reference a work item carries is <c>payload.applicationReference</c>
+/// (<c>AP…</c> from ApplicationReferenceGenerator).
 /// </summary>
 public sealed class WorkItemAdminSearchMongoIntegrationTests : IAsyncDisposable
 {
@@ -77,12 +79,12 @@ public sealed class WorkItemAdminSearchMongoIntegrationTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Q_matches_the_ra_reference_case_insensitively()
+    public async Task Q_matches_the_application_reference_case_insensitively()
     {
-        await SeedAsync("Target", new BsonDocument { ["applicationReference"] = "RA-900000751" });
-        await SeedAsync("Other", new BsonDocument { ["applicationReference"] = "RA-100000001" });
+        await SeedAsync("Target", new BsonDocument { ["applicationReference"] = "APEPL5005001" });
+        await SeedAsync("Other", new BsonDocument { ["applicationReference"] = "APEGL5009002" });
 
-        Assert.Equal(["Target"], await NamesMatchingAsync(new WorkItemQuery(Q: "ra-900000751")));
+        Assert.Equal(["Target"], await NamesMatchingAsync(new WorkItemQuery(Q: "apepl5005")));
     }
 
     [Fact]

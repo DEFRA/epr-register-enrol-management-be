@@ -165,6 +165,7 @@ public class ClientIdAuthenticationAdminUiCallerTests
             { "POST", $"/work-items/{s_workItemId}/notes" },
             { "POST", $"/work-items/{s_workItemId}/actions/duly-make" },
             { "POST", $"/work-items/re-accreditation/{s_workItemId}/decision-rationale" },
+            { "PATCH", $"/work-items/re-accreditation/{s_workItemId}/overseas-sites/site-1/recycling-operations" },
             // A read the Admin UI has not been given (RA-752 is not built).
             { "GET", $"/work-items/{s_workItemId}" },
             { "GET", $"/work-items/re-accreditation/{s_workItemId}/recommendation" },
@@ -182,7 +183,7 @@ public class ClientIdAuthenticationAdminUiCallerTests
         await using var _a = app;
         using var client = AdminClient(factory, app, $"nonce-admin-{method}-{path.GetHashCode()}");
         using var request = new HttpRequestMessage(new HttpMethod(method), path);
-        if (method == "POST")
+        if (method is "POST" or "PATCH")
         {
             request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
         }
