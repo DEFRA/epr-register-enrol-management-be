@@ -378,7 +378,7 @@ public class HttpAccreditationSummaryAdapterTests
         var record = Assert.Single(logger.Records);
         Assert.Equal(LogLevel.Warning, record.Level);
         Assert.Contains("no Approved accreditation", record.Message, StringComparison.Ordinal);
-        Assert.Contains("backend#296", record.Message, StringComparison.Ordinal);
+        Assert.Contains("does not serve this route", record.Message, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -153,8 +153,8 @@ internal sealed partial class HttpAccreditationSummaryAdapter(
     [LoggerMessage(
         Level = LogLevel.Warning,
         Message = "Operator backend answered 404 at {Endpoint} (correlation {CorrelationId}). Likely causes: the "
-            + "application has no Approved accreditation, or the operator backend does not serve this route yet "
-            + "(backend#296 not deployed) or the route is wrong."
+            + "application has no Approved accreditation, or the operator backend does not serve this route "
+            + "(not deployed yet, or the path is wrong)."
     )]
     private static partial void LogNotFound(ILogger logger, string endpoint, Guid correlationId);
 
