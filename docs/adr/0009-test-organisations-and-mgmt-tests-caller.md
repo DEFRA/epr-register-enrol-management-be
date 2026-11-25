@@ -56,6 +56,21 @@ the compose stack and on CDP **test**. On test:
    - The RA-611 clock start is 14 November of the previous year, derived
      from `TimeProvider` at each boot, so it stays before 1 January in
      every year.
+5. **Accreditation summary (RA-769).** When the switch is on,
+   `IAccreditationSummaryAdapter` is `TestOrganisationAccreditationSummaryAdapter`,
+   a decorator over `HttpAccreditationSummaryAdapter`, registered at DI time
+   exactly as the ReEx routing in 2 is. It answers an `e2e-` organisation from
+   a stable fixture (`TestOrganisationAccreditationSummary`) and delegates
+   every other organisation. The read request carries the organisation id, so
+   the endpoint needs no test branch and reads no configuration (an earlier
+   revision branched inline in the endpoint, on every request, which put a
+   test path on production requests). A case posted directly to this service
+   has no application id, so the request's ids are nullable and the
+   missing-id 404 lives in the real adapter, which answers it before its
+   `Enabled` check and makes no call. The endpoint's start date lookup runs
+   for `e2e-` organisations too: no work item holds the fixture's
+   accreditation number, so the date is 1 January of the fixture's year, the
+   same as before. The `e2e-` rule and the prod guard are the same.
 
 ## Consequences
 
@@ -80,6 +95,13 @@ the compose stack and on CDP **test**. On test:
   each combination of credentials and switch, startup failing in prod with
   the switch on, and startup succeeding in prod with it off.
 - `TestOrganisationReExAccreditationClientTests`: routing for both methods.
+- `TestOrganisationsWiringTests` also covers the accreditation summary
+  adapter: decorated with the switch on, the real adapter alone with it off.
+- `TestOrganisationAccreditationSummaryAdapterTests`: an `e2e-` organisation
+  is answered from the fixture without calling the real adapter (with or
+  without an application id); every other organisation is delegated.
+- `AccreditationSummaryEndpointTests`: the fixture's JSON and start date
+  through the endpoint, and the stub inactive with the switch off.
 - `ClientIdAuthenticationMgmtTestsCallerTests`:
   - a signed request is accepted with the switch on;
   - it is rejected with the switch off;

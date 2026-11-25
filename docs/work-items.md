@@ -345,6 +345,58 @@ type is configured. Every setting is code, not runtime data:
 - A workflow's transitions name its own states, so only a service reaches
   its `CallerInvocable: false` transitions. Re-accreditation's query, resume
   and continue review are its own (`/work-items/re-accreditation/{id}/...`).
+- **Accreditation summary (RA-769).** `GET /work-items/{id}/accreditation-summary`
+  (`WorkItems/InYearChanges`) serves an In-Year Change case's Accreditation
+  summary tab: the accreditation as it stands today, read live from the
+  operator backend (`IAccreditationSummaryAdapter`, typed outcomes, never
+  throws) by `payload.operatorOrganisationId` and
+  `payload.accreditationApplicationId`.
+  - **Which types.** Any type whose category is `in-year-change` has it;
+    another type is a 400 `wrong-work-item-type`. A new In-Year Change type
+    must be added deliberately to management-fe's tab list too.
+  - **Resolution order.** Unknown work item 404; wrong type 400; then the
+    read through `IAccreditationSummaryAdapter`: 200, 404 (not found or not
+    `Approved`, or no `accreditationApplicationId`, as for a registration-only
+    case, which `HttpAccreditationSummaryAdapter` answers before its
+    `Enabled` check and with no operator call) or 503 (the read failed,
+    including `OperatorBackendApi:Enabled=false`). The endpoint reads no
+    configuration and has no test-organisation branch.
+  - **Test organisations.** With `TestOrganisations__Enabled` on, the
+    registered adapter is `TestOrganisationAccreditationSummaryAdapter`, a
+    decorator over `HttpAccreditationSummaryAdapter` (chosen at DI time, as
+    `TestOrganisationReExAccreditationClient` is, so there is no test branch
+    on a production request path; startup refuses the switch in prod). It
+    answers an `e2e-` organisation from the stable test accreditation
+    (`TestOrganisationAccreditationSummary`), whatever its application id
+    (a case posted directly has none), with no operator call, and delegates
+    every other organisation. The start date below is resolved for it as for
+    any case: nothing holds the stub's accreditation number, so it shows 1
+    January of the stub's year, with the fallback Warning.
+  - **Deploy order.** The operator backend route (backend#296) must deploy
+    first. A bare 404 cannot be told from "no Approved accreditation", so the
+    adapter logs a Warning naming both causes.
+  - **Retry budget.** One retry, 2s per attempt, backoff capped at 300ms
+    (worst case about 4.3s), to fit management-fe's 5s timeout.
+  - **Summary content.** `prns` (tonnage band, authorisers by name and email)
+    and `businessPlan` as the operator backend allow-lists them, never the
+    per-contact new marker. `overseasSites` are the sites the operator backend
+    answers: selected ones only (a requested ORS is absent until granted), in
+    ORS id then site id order, with no new-site markers, each with its active
+    interim sites only (the operator backend never answers a withdrawn one);
+    the `e2e-` stub has four, with one, three and no interim sites.
+  - **Files.** The `samplingPlan` and each site's `besEvidence` carry `files`,
+    each with its S3 key and bucket, for management-fe's server-side download
+    (the stub's S3 locations are made up, so a clean stub file is an S3
+    failure on download).
+  - **Start date.** The stored start date of the Granted (`approved`)
+    re-accreditation that issued this accreditation number
+    (`IReAccreditationStartDateResolver`, reading
+    `ReAccreditationPayload.AccreditationStartDate`). When there is none (no
+    work item holds the number, it is not yet Granted, or it has no usable
+    date) the fallback is 1 January of the accreditation year, and a Warning
+    is logged with the work item, accreditation number and reason. That is
+    right for every grant before mid-year grants exist and a date too early
+    for one granted later. A failed lookup is a 503, never a guessed date.
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services
   (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:

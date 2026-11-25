@@ -1,6 +1,8 @@
 using EprRegisterEnrolManagementBe.Config;
+using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.Notifications;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -8,8 +10,8 @@ namespace EprRegisterEnrolManagementBe.Test.Config;
 
 /// <summary>
 /// RA-000: boots the real Program.cs wiring to prove what
-/// <c>TestOrganisations__Enabled</c> changes — the ReEx client registered,
-/// and the prod startup guard. In the env-var collection because the guard
+/// <c>TestOrganisations__Enabled</c> changes — the ReEx client and the
+/// accreditation summary adapter registered, and the prod startup guard. In the env-var collection because the guard
 /// reads the process-global CDP <c>ENVIRONMENT</c> variable.
 /// </summary>
 [Collection(EnvVarMutationCollection.Name)]
@@ -66,6 +68,30 @@ public class TestOrganisationsWiringTests : IClassFixture<MongoIntegrationFixtur
 
         Assert.IsType<StubReExAccreditationClient>(
             factory.Services.GetRequiredService<IReExAccreditationClient>()
+        );
+    }
+
+    [Fact]
+    public void The_accreditation_summary_adapter_is_decorated_for_e2e_organisations_when_enabled()
+    {
+        using var factory = NewFactory(reExCredentials: false, testOrganisations: true);
+
+        Assert.IsType<TestOrganisationAccreditationSummaryAdapter>(
+            factory.Services.GetRequiredService<IAccreditationSummaryAdapter>()
+        );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(null)]
+    public void The_accreditation_summary_adapter_is_not_decorated_when_test_organisations_are_off(
+        bool? testOrganisations
+    )
+    {
+        using var factory = NewFactory(reExCredentials: false, testOrganisations);
+
+        Assert.IsType<HttpAccreditationSummaryAdapter>(
+            factory.Services.GetRequiredService<IAccreditationSummaryAdapter>()
         );
     }
 

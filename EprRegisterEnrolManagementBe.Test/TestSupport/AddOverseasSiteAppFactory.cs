@@ -44,6 +44,9 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
     /// <summary>Runs after the factory's own service registrations.</summary>
     public Action<IServiceCollection>? ConfigureTestServices { get; init; }
 
+    /// <summary>Configuration settings (RA-769: <c>TestOrganisations:Enabled</c>) the app starts with.</summary>
+    public IReadOnlyDictionary<string, string>? Settings { get; init; }
+
     public IOperatorBackendPushAdapter PushAdapter { get; } = Substitute.For<IOperatorBackendPushAdapter>();
 
     public IAccreditationNumberAdapter NumberAdapter { get; } = Substitute.For<IAccreditationNumberAdapter>();
@@ -236,6 +239,10 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
         builder.UseSetting("WorkItems:SeedOnStartup", "false");
         // On, so a decision email would be sent if add-ORS registered a hook.
         builder.UseSetting("Notify:Enabled", "true");
+        foreach (var (key, value) in Settings ?? new Dictionary<string, string>())
+        {
+            builder.UseSetting(key, value);
+        }
         builder.ConfigureServices(services =>
         {
             services.UseEphemeralMongoPersistence(_fixture, _databaseName);

@@ -15,6 +15,8 @@ namespace EprRegisterEnrolManagementBe.Config;
 /// <c>StubReExAccreditationClient</c> (see
 /// <c>TestOrganisationReExAccreditationClient</c>) — real ReEx has never
 /// heard of them;</item>
+/// <item>answering the Accreditation summary of <c>e2e-</c> organisations from a
+/// fixture (see <c>TestOrganisationAccreditationSummaryAdapter</c>, RA-769);</item>
 /// <item>the <c>epr-register-enrol-mgmt-tests</c> HMAC caller
 /// (<c>AUTH_SHARED_SECRET__MGMT_TESTS</c>), so the suite can create work
 /// items directly.</item>

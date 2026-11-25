@@ -259,6 +259,8 @@ internal sealed class ReAccreditationModule : IWorkItemModule
             HttpOverseasSiteRecyclingOperationsAdapter
         >();
         services.AddSingleton<IReAccreditationApprovalService, ReAccreditationApprovalService>();
+        // RA-769: the stored start date of an issued accreditation, for the In-Year Change accreditation summary.
+        services.AddSingleton<IReAccreditationStartDateResolver, ReAccreditationStartDateResolver>();
         // RA-527: both steps of a refusal (the counterpart of the approval
         // service): step 1 for the log-decision service, step 2 for the
         // confirm-contact service.
