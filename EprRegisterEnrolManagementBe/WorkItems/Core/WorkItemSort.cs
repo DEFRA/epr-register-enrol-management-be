@@ -60,6 +60,24 @@ internal static class WorkItemSort
     internal const int UnknownStateRank = int.MaxValue;
 
     /// <summary>
+    /// RA-751: the tokens <see cref="BuildStages"/> understands. The endpoint
+    /// rejects any other non-blank <c>?sort=</c> value with 400 rather than
+    /// quietly falling back to the default order, so a mistyped or renamed
+    /// token can never show results in an order the caller did not ask for.
+    /// </summary>
+    internal static readonly IReadOnlySet<string> Tokens = new HashSet<string>(StringComparer.Ordinal)
+    {
+        OrganisationToken,
+        StatusToken,
+        DueDateToken,
+        LastModifiedToken,
+    };
+
+    /// <summary>Whether <paramref name="sortToken"/> names a sort, matched as <see cref="BuildStages"/> matches it.</summary>
+    internal static bool IsKnownToken(string sortToken) =>
+        Tokens.Contains(sortToken.Trim().ToLowerInvariant());
+
+    /// <summary>
     /// Map each state id to a workflow rank derived from the order states are
     /// declared in on their <see cref="IWorkItemType"/>. Mirrors
     /// <see cref="TerminalStates.Ids"/>: data-driven from the registry rather
@@ -88,11 +106,13 @@ internal static class WorkItemSort
     /// <summary>
     /// Build the <c>$addFields</c> (may be <c>null</c>) and <c>$sort</c> stages
     /// for the requested <c>sort</c> token, or <c>null</c> when the token is
-    /// blank or unrecognised — in which case the caller keeps the default
-    /// newest-submitted-first Find path, so the default ordering can never
-    /// regress. <paramref name="descendingOverride"/> is the optional
-    /// <c>?dir=</c> value; when <c>null</c> each column applies its natural
-    /// default direction.
+    /// blank, in which case the caller keeps the default newest-submitted-first
+    /// Find path. An unrecognised non-blank token throws: the endpoint rejects
+    /// it with 400 first (<see cref="WorkItemQueryBinding.Validate"/>), so
+    /// reaching here with one is a defect, never a reason to pick an order the
+    /// caller did not ask for. <paramref name="descendingOverride"/> is the
+    /// optional <c>?dir=</c> value; when <c>null</c> each column applies its
+    /// natural default direction.
     /// </summary>
     internal static (BsonDocument? AddFields, BsonDocument Sort)? BuildStages(
         string? sortToken,
@@ -101,13 +121,18 @@ internal static class WorkItemSort
     {
         ArgumentNullException.ThrowIfNull(statusRank);
 
-        return sortToken?.Trim().ToLowerInvariant() switch
+        if (string.IsNullOrWhiteSpace(sortToken))
+        {
+            return null;
+        }
+
+        return sortToken.Trim().ToLowerInvariant() switch
         {
             OrganisationToken => BuildOrganisationStages(descendingOverride),
             StatusToken => BuildStatusStages(descendingOverride, statusRank),
             DueDateToken => BuildDueDateStages(descendingOverride),
             LastModifiedToken => BuildLastModifiedStages(descendingOverride),
-            _ => null
+            _ => throw new ArgumentException($"Unknown sort token '{sortToken}'.", nameof(sortToken)),
         };
     }
 

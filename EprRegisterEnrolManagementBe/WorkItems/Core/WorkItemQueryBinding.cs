@@ -102,8 +102,27 @@ internal static class WorkItemQueryBinding
             ];
         }
 
+        // RA-751: a non-blank sort token or direction must be one this
+        // endpoint understands. Blank or absent keeps the default order.
+        if (NonBlankValues(query, SortParam).Any(v => !WorkItemSort.IsKnownToken(v)))
+        {
+            errors[SortParam] =
+            [
+                $"'{SortParam}' must be one of: {string.Join(", ", WorkItemSort.Tokens.Order(StringComparer.Ordinal))}.",
+            ];
+        }
+        if (NonBlankValues(query, SortDirectionParam).Any(v => ParseSortDirection(v) is null))
+        {
+            errors[SortDirectionParam] = [$"'{SortDirectionParam}' must be 'asc' or 'desc'."];
+        }
+
         return errors;
     }
+
+    private static IEnumerable<string> NonBlankValues(IQueryCollection query, string key) =>
+        query.TryGetValue(key, out var values)
+            ? values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!)
+            : [];
 
     /// <summary>
     /// Absent → valid, no value. Exactly one value of <c>true</c> or
@@ -127,24 +146,32 @@ internal static class WorkItemQueryBinding
 
     /// <summary>
     /// Reads the optional <c>?dir=</c> value: <c>desc</c>/<c>descending</c> →
-    /// <c>true</c>, <c>asc</c>/<c>ascending</c> → <c>false</c>, anything else
-    /// (absent, blank, unrecognised) → <c>null</c> so the requested sort column
-    /// applies its own natural default direction.
+    /// <c>true</c>, <c>asc</c>/<c>ascending</c> → <c>false</c>, absent or blank
+    /// → <c>null</c> so the requested sort column applies its own natural
+    /// default direction. An unrecognised value is rejected with 400 by
+    /// <see cref="Validate"/> before binding (RA-751).
     /// </summary>
     private static bool? ReadSortDirection(IQueryCollection query, string key)
     {
-        var value = ReadString(query, key)?.Trim();
-        if (string.IsNullOrEmpty(value))
-        {
-            return null;
-        }
-        if (value.Equals("desc", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("descending", StringComparison.OrdinalIgnoreCase))
+        var value = ReadString(query, key);
+        return string.IsNullOrWhiteSpace(value) ? null : ParseSortDirection(value);
+    }
+
+    /// <summary>
+    /// <c>desc</c>/<c>descending</c> → <c>true</c>, <c>asc</c>/<c>ascending</c>
+    /// → <c>false</c> (any case, surrounding whitespace ignored); anything else
+    /// → <c>null</c>, which <see cref="Validate"/> rejects.
+    /// </summary>
+    private static bool? ParseSortDirection(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Equals("desc", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("descending", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
-        if (value.Equals("asc", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("ascending", StringComparison.OrdinalIgnoreCase))
+        if (trimmed.Equals("asc", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("ascending", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

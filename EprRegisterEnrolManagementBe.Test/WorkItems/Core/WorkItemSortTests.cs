@@ -89,11 +89,21 @@ public class WorkItemSortTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("submittedAt")]
-    [InlineData("nonsense")]
-    public void BuildStages_returns_null_for_default_or_unknown_sort(string? token)
+    public void BuildStages_returns_null_for_the_default_sort(string? token)
     {
         Assert.Null(WorkItemSort.BuildStages(token, descendingOverride: null, s_rank));
+    }
+
+    [Theory]
+    [InlineData("submittedAt")]
+    [InlineData("nonsense")]
+    [InlineData("last-modifed")]
+    public void BuildStages_throws_for_an_unknown_sort(string token)
+    {
+        // RA-751: never a silent fallback to the default order.
+        Assert.Throws<ArgumentException>(() =>
+            WorkItemSort.BuildStages(token, descendingOverride: null, s_rank)
+        );
     }
 
     [Theory]

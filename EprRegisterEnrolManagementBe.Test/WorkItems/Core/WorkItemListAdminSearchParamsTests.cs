@@ -70,6 +70,53 @@ public class WorkItemListAdminSearchParamsTests
         Assert.Equal([$"'{key}' must be 'true' or 'false'."], errors[key]);
     }
 
+    [Theory]
+    [InlineData("last-modified")]
+    [InlineData("  Due-Date ")]
+    [InlineData("organisation")]
+    [InlineData("status")]
+    [InlineData("")]
+    public void Validate_accepts_every_known_sort_token_and_a_blank_one(string token)
+    {
+        Assert.Empty(WorkItemQueryBinding.Validate(Query(("sort", [token]))));
+    }
+
+    [Theory]
+    [InlineData("last-modifed")]
+    [InlineData("submittedAt")]
+    [InlineData("newest")]
+    public void Validate_rejects_an_unknown_sort_token(string token)
+    {
+        var errors = WorkItemQueryBinding.Validate(Query(("sort", [token])));
+
+        Assert.Equal(
+            ["'sort' must be one of: due-date, last-modified, organisation, status."],
+            errors["sort"]
+        );
+    }
+
+    [Theory]
+    [InlineData("asc")]
+    [InlineData("DESC")]
+    [InlineData("ascending")]
+    [InlineData("descending")]
+    [InlineData(" ")]
+    public void Validate_accepts_every_known_direction_and_a_blank_one(string dir)
+    {
+        Assert.Empty(WorkItemQueryBinding.Validate(Query(("dir", [dir]))));
+    }
+
+    [Theory]
+    [InlineData("down")]
+    [InlineData("newest")]
+    [InlineData("-1")]
+    public void Validate_rejects_an_unknown_direction(string dir)
+    {
+        var errors = WorkItemQueryBinding.Validate(Query(("dir", [dir])));
+
+        Assert.Equal(["'dir' must be 'asc' or 'desc'."], errors["dir"]);
+    }
+
     [Fact]
     public void Validate_rejects_a_repeated_assigned()
     {
@@ -122,6 +169,8 @@ public class WorkItemListAdminSearchParamsTests
     [InlineData("/work-items?assigned=maybe", "assigned")]
     [InlineData("/work-items?archived=", "archived")]
     [InlineData("/work-items?assigned=true&unassigned=true", "assigned")]
+    [InlineData("/work-items?sort=last-modifed", "sort")]
+    [InlineData("/work-items?sort=last-modified&dir=newest", "dir")]
     public async Task Invalid_params_answer_400_validation_problem_and_log_at_error(string url, string field)
     {
         var (factory, app, logs) = NewApp();
