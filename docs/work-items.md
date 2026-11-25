@@ -49,7 +49,7 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 | --- | --- | --- |
 | `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`, except a split submission (below), which has no `Location` because it creates one work item per site. |
 | `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with the actions the engine will currently allow. |
-| `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
+| `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `q` (RA-751 Admin UI search — case-insensitive substring of the id, `payload.accreditationId`, `payload.applicationReference`, `payload.operatorOrganisationId` or `payload.organisationName`), `assigned` (`true`/`false`, RA-751), `archived` (`true` = `payload.archivedAt` set, `false` = not set, RA-751), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state; `400` for unknown actions, transitions whose from-state does not match, and transitions declared `CallerInvocable: false`. The `CallerInvocable` check and the engine resolve the transition with the same `WorkItemEngineRules.ResolveTransition` lookup (ids match case-insensitively; the declaration for the item's current state wins, else the first), so the guard always checks the transition the engine would apply. |
 
 **Split submissions (RA-739).** For a type that declares
@@ -627,14 +627,36 @@ The Mongo collection has an `assigneeAndSubmitted` index for the common
 
 ### List filters
 
-`GET /work-items` accepts two extra query parameters:
+`GET /work-items` accepts these assignment query parameters:
 
 | Param | Effect |
 | --- | --- |
 | `assigneeId=<userId>` | only items currently assigned to that user |
 | `unassigned=true` | only items with no current assignee |
+| `assigned=true` / `assigned=false` | RA-751: items with any assignee / with none |
 
-If both are supplied, `assigneeId` wins.
+If `assigneeId` and `unassigned=true` are both supplied, the result is the
+union: items assigned to that user OR unassigned. `assigned` must be exactly
+`true` or `false` and cannot be combined with either of the other two; the
+endpoint answers `400` (ValidationProblem, title `Invalid query`, errors keyed
+`assigned`) otherwise. `archived` is validated the same way.
+
+### Read-only callers (RA-751)
+
+The Admin UI (`epr-register-enrol-admin`) is a read-only caller: it may call
+`GET /work-items` and `GET /work-items/re-accreditation/states` and nothing
+else. Every other request it makes is refused with `403` and logged at Error.
+An endpoint opens itself to read-only callers with
+`RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed)`; a plain
+`RequireAuthorization()` keeps them out. See
+[ADR-0010](adr/0010-read-only-admin-ui-caller.md).
+
+`GET /work-items/re-accreditation/states` returns
+`{ typeId, templateVersion, states: [ { id, displayName, isTerminal, operatorJourneyPush } ] }`
+in workflow order. `operatorJourneyPush` is `status` (a move onto the state is
+pushed to the operator backend's status endpoint as `toStateId`), `query`
+(sent by the query push) or `none` (never pushed). The operator backend maps
+each pushed state id to its own `ApplicationStatus`.
 
 ### Endpoints
 

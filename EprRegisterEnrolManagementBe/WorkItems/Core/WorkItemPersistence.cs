@@ -513,6 +513,33 @@ public sealed class WorkItemPersistence
             );
         }
 
+        if (AdminSearchClause(builder, query.NormalisedQ) is { } adminSearch)
+        {
+            clauses.Add(adminSearch);
+        }
+
+        if (query.Assigned is { } assigned)
+        {
+            // RA-751: any assignee, or none.
+            clauses.Add(
+                assigned
+                    ? builder.Ne(w => w.AssignedToId, null)
+                    : builder.Eq(w => w.AssignedToId, null)
+            );
+        }
+
+        if (query.Archived is { } archived)
+        {
+            // RA-751: ArchiveBackgroundService stamps payload.archivedAt once a
+            // terminal item has aged out; it is never removed.
+            clauses.Add(
+                builder.Exists(
+                    $"payload.{ArchiveBackgroundService.ArchivedAtPayloadKey}",
+                    archived
+                )
+            );
+        }
+
         var orgId = query.NormalisedOrgId;
         if (!string.IsNullOrEmpty(orgId))
         {
@@ -673,6 +700,33 @@ public sealed class WorkItemPersistence
             "exporter"
         );
         return wantsExporter ? exporterFilter : builder.Not(exporterFilter);
+    }
+
+    // RA-751: the Admin UI's free-text search. A case-insensitive substring
+    // of any of the identifiers a support user might paste, OR-ed together.
+    // Unanchored regexes cannot use an index; the same trade-off as the
+    // RA-324 organisation search above, acceptable at this collection's size.
+    private static FilterDefinition<WorkItem>? AdminSearchClause(
+        FilterDefinitionBuilder<WorkItem> builder,
+        string? needle
+    )
+    {
+        if (needle is null)
+        {
+            return null;
+        }
+
+        var contains = new MongoDB.Bson.BsonRegularExpression(
+            System.Text.RegularExpressions.Regex.Escape(needle),
+            "i"
+        );
+        return builder.Or(
+            builder.Regex("_id", contains),
+            builder.Regex("payload.accreditationId", contains),
+            builder.Regex("payload.applicationReference", contains),
+            builder.Regex("payload.operatorOrganisationId", contains),
+            builder.Regex("payload.organisationName", contains)
+        );
     }
 
     // Extracted from BuildFilter (S3776: cognitive complexity) - the assignee

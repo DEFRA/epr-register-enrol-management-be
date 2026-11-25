@@ -265,6 +265,12 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
             (options, config) =>
             {
                 options.ClientSecrets = BuildClientSecrets(config);
+                // RA-751 / ADR-0010: the Admin UI is read-only. Its clientId is
+                // marked read-only whether or not its secret is configured.
+                options.ReadOnlyClientIds = new HashSet<string>(StringComparer.Ordinal)
+                {
+                    AdminUiClientId(config),
+                };
                 options.MaxClientIdLength = config.GetValue(
                     "Auth:MaxClientIdLength",
                     options.MaxClientIdLength
@@ -292,7 +298,10 @@ static void ConfigureAuth(IServiceCollection services, IConfiguration configurat
             }
         );
 
-    services.AddAuthorization();
+    // RA-751 / ADR-0010: the default policy refuses read-only callers; the
+    // read endpoints they may call opt in to CallerAccessPolicies.ReadOnlyCallerAllowed.
+    services.AddAuthorization(options => options.AddCallerAccessPolicies());
+    services.AddSingleton<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, CallerAccessAuthorizationHandler>();
 
     // RA-525: Mongo-backed replay store, shared across every running
     // instance — replaces the old per-process IMemoryCache. Registered
@@ -353,8 +362,23 @@ static IReadOnlyDictionary<string, string> BuildClientSecrets(IConfiguration con
             secretKey: "AUTH_SHARED_SECRET:MGMT_TESTS"
         );
     }
+    // RA-751 / ADR-0010: the Admin UI (epr-register-enrol-admin), a read-only
+    // production support tool. Registered whenever its secret is set; what it
+    // may reach is limited by CallerAccessPolicies, not by this map.
+    AddCallerSecret(
+        map,
+        config,
+        callerName: "AdminUi",
+        clientIdKey: CallerAccessPolicies.AdminUiClientIdKey,
+        clientIdDefault: CallerAccessPolicies.AdminUiClientIdDefault,
+        secretKey: "AUTH_SHARED_SECRET:ADMIN_UI"
+    );
     return map;
 }
+
+[ExcludeFromCodeCoverage]
+static string AdminUiClientId(IConfiguration config) =>
+    config.GetValue(CallerAccessPolicies.AdminUiClientIdKey, CallerAccessPolicies.AdminUiClientIdDefault)!;
 
 [ExcludeFromCodeCoverage]
 static void AddCallerSecret(

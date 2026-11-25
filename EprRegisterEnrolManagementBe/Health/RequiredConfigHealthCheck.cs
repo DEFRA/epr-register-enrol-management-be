@@ -41,6 +41,15 @@ public sealed class RequiredConfigHealthCheck(IConfiguration configuration, IHos
                 )
             )
                 missing.Add("AUTH_SHARED_SECRET__BACKEND");
+            // RA-751 / ADR-0010: the Admin UI's secret. Reported here, not
+            // thrown at startup: a missing support-tool secret must not stop
+            // the caseworker service starting.
+            if (
+                string.IsNullOrWhiteSpace(
+                    configuration.GetValue<string>("AUTH_SHARED_SECRET:ADMIN_UI")
+                )
+            )
+                missing.Add("AUTH_SHARED_SECRET__ADMIN_UI");
         }
 
         // A blank username is the expected, silent default in Development. Anywhere

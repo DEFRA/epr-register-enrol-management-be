@@ -60,6 +60,20 @@ public class ClientIdAuthenticationOptions : AuthenticationSchemeOptions
         new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>
+    /// RA-751: the clientIds of read-only callers (the Admin UI). A request
+    /// asserting one of these is authenticated exactly like any other caller
+    /// (same signature, timestamp and nonce rules) and then carries the
+    /// <see cref="CallerAccessPolicies.AccessClaimType"/> claim with value
+    /// <see cref="CallerAccessPolicies.ReadOnlyAccess"/>, which the
+    /// authorization policies in <see cref="CallerAccessPolicies"/> use to
+    /// keep the caller to GET/HEAD on the routes that opt in. Membership does
+    /// not depend on a secret being configured, so a read-only caller stays
+    /// read-only in Development header-trust mode too. See ADR-0010.
+    /// </summary>
+    public IReadOnlySet<string> ReadOnlyClientIds { get; set; } =
+        new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// Maximum permitted absolute difference between the BFF-supplied
     /// timestamp header and the backend's clock. Enforced in both
     /// directions to bound replay windows even if a request is captured

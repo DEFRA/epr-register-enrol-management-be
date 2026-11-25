@@ -34,6 +34,7 @@ public class RequiredConfigHealthCheckTests
     [Theory]
     [InlineData("AUTH_SHARED_SECRET:MANAGEMENT_FE", "AUTH_SHARED_SECRET__MANAGEMENT_FE")]
     [InlineData("AUTH_SHARED_SECRET:BACKEND", "AUTH_SHARED_SECRET__BACKEND")]
+    [InlineData("AUTH_SHARED_SECRET:ADMIN_UI", "AUTH_SHARED_SECRET__ADMIN_UI")]
     public async Task Reports_unhealthy_when_a_caller_secret_is_missing_outside_development(
         string configKey,
         string expectedReportedKey
@@ -52,6 +53,7 @@ public class RequiredConfigHealthCheckTests
     [Theory]
     [InlineData("AUTH_SHARED_SECRET:MANAGEMENT_FE")]
     [InlineData("AUTH_SHARED_SECRET:BACKEND")]
+    [InlineData("AUTH_SHARED_SECRET:ADMIN_UI")]
     public async Task Reports_healthy_when_a_caller_secret_is_missing_in_development(string configKey)
     {
         var config = CompleteConfig();
@@ -131,6 +133,7 @@ public class RequiredConfigHealthCheckTests
         {
             ["AUTH_SHARED_SECRET:MANAGEMENT_FE"] = "",
             ["AUTH_SHARED_SECRET:BACKEND"] = "",
+            ["AUTH_SHARED_SECRET:ADMIN_UI"] = "",
             ["REEX_API_BASIC_AUTH_USERNAME"] = ""
         };
         var check = MakeCheck(config, isDevelopment: false);
@@ -140,6 +143,7 @@ public class RequiredConfigHealthCheckTests
         Assert.Equal(HealthStatus.Unhealthy, result.Status);
         Assert.Contains("AUTH_SHARED_SECRET__MANAGEMENT_FE", result.Description);
         Assert.Contains("AUTH_SHARED_SECRET__BACKEND", result.Description);
+        Assert.Contains("AUTH_SHARED_SECRET__ADMIN_UI", result.Description);
         Assert.Contains("REEX_API_BASIC_AUTH_USERNAME", result.Description);
     }
 
@@ -148,6 +152,7 @@ public class RequiredConfigHealthCheckTests
         {
             ["AUTH_SHARED_SECRET:MANAGEMENT_FE"] = "management-fe-secret",
             ["AUTH_SHARED_SECRET:BACKEND"] = "backend-secret",
+            ["AUTH_SHARED_SECRET:ADMIN_UI"] = "admin-ui-secret",
             ["REEX_API_BASIC_AUTH_USERNAME"] = "reex-user",
             ["REEX_API_BASIC_AUTH_PASSWORD"] = "reex-pass",
             ["ReExApi:BaseUrl"] = "http://reex.test"

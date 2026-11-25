@@ -34,6 +34,11 @@ internal static class WorkItemQueryBinding
 
     internal const string SubmittedByParam = "submittedBy";
 
+    // RA-751 (Admin UI work item search). Strictly parsed: see Validate.
+    internal const string QParam = "q";
+    internal const string AssignedParam = "assigned";
+    internal const string ArchivedParam = "archived";
+
     public static WorkItemQuery FromQueryString(IQueryCollection query)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -57,7 +62,67 @@ internal static class WorkItemQueryBinding
             Organisation: ReadString(query, OrganisationParam),
             Sort: ReadString(query, SortParam),
             SortDescending: ReadSortDirection(query, SortDirectionParam),
-            Categories: ReadStrings(query, CategoryParam));
+            Categories: ReadStrings(query, CategoryParam),
+            Q: ReadString(query, QParam),
+            Assigned: ReadStrictBool(query, AssignedParam).Value,
+            Archived: ReadStrictBool(query, ArchivedParam).Value);
+    }
+
+    /// <summary>
+    /// RA-751: checks the strictly parsed parameters. Returns the problems
+    /// keyed by parameter name (empty when there are none), so the endpoint
+    /// can answer 400 instead of quietly dropping a filter the caller asked
+    /// for. <c>assigned</c> and <c>archived</c> must be exactly <c>true</c> or
+    /// <c>false</c> (any case) when present, and <c>assigned</c> cannot be
+    /// combined with <c>unassigned</c> or <c>assigneeId</c>, whose meaning it
+    /// would contradict or blur.
+    /// </summary>
+    public static Dictionary<string, string[]> Validate(IQueryCollection query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+
+        foreach (var key in new[] { AssignedParam, ArchivedParam })
+        {
+            if (!ReadStrictBool(query, key).IsValid)
+            {
+                errors[key] = [$"'{key}' must be 'true' or 'false'."];
+            }
+        }
+
+        if (
+            query.ContainsKey(AssignedParam)
+            && (query.ContainsKey(UnassignedOnlyParam) || query.ContainsKey(AssigneeIdParam))
+        )
+        {
+            errors[AssignedParam] =
+            [
+                .. errors.GetValueOrDefault(AssignedParam, []),
+                $"'{AssignedParam}' cannot be combined with '{UnassignedOnlyParam}' or '{AssigneeIdParam}'.",
+            ];
+        }
+
+        return errors;
+    }
+
+    /// <summary>
+    /// Absent → valid, no value. Exactly one value of <c>true</c> or
+    /// <c>false</c> (any case, surrounding whitespace ignored) → valid, that
+    /// value. Anything else, including an empty value or a repeated key, is
+    /// invalid.
+    /// </summary>
+    private static (bool IsValid, bool? Value) ReadStrictBool(IQueryCollection query, string key)
+    {
+        if (!query.TryGetValue(key, out var values))
+        {
+            return (true, null);
+        }
+        if (values.Count != 1)
+        {
+            return (false, null);
+        }
+
+        return bool.TryParse(values[0]?.Trim(), out var parsed) ? (true, parsed) : (false, null);
     }
 
     /// <summary>

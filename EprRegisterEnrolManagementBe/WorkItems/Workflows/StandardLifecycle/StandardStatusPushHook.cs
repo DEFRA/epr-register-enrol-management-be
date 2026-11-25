@@ -130,6 +130,17 @@ internal sealed class StandardStatusPushHook(
 
     private readonly HashSet<string> _excludedActionIds = BuildExcludedActionIds(type);
 
+    /// <summary>
+    /// RA-751: whether a move onto <paramref name="stateId"/> is ever sent as
+    /// a status push (by this hook or by the decision / duly-making services,
+    /// which push the same way). False for every state in
+    /// <see cref="s_excludedTargetStateIds"/>, so the read-only state list
+    /// (<c>GET /work-items/re-accreditation/states</c>) reads the same set
+    /// this hook acts on rather than a copy of it.
+    /// </summary>
+    internal static bool IsStatusPushedTargetState(string stateId) =>
+        !s_excludedTargetStateIds.Contains(stateId);
+
     public Task OnSubmittedAsync(WorkItem workItem, ClaimsPrincipal user, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 

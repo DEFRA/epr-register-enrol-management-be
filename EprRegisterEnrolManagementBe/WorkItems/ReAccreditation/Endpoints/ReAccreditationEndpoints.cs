@@ -133,6 +133,13 @@ internal static class ReAccreditationEndpoints
     {
         var group = app.MapGroup("/work-items/re-accreditation").WithTags("ReAccreditation");
 
+        // RA-751: the state list and how each state reaches the operator
+        // journey. Read-only callers (the Admin UI) may call it.
+        group
+            .MapGet("/states", ReAccreditationStatesEndpoint.GetStates)
+            .WithName("GetReAccreditationStates")
+            .RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed);
+
         group
             .MapGet("/{id:guid}/recommendation", GetRecommendation)
             .WithName("GetReAccreditationRecommendation")
