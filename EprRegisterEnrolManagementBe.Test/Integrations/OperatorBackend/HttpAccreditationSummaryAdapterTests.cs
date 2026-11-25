@@ -179,6 +179,31 @@ public class HttpAccreditationSummaryAdapterTests
             Ct
         );
 
+    [Theory]
+    [InlineData("org-1", null, true)]
+    [InlineData("org-1", "", true)]
+    [InlineData("org-1", "  ", true)]
+    [InlineData(null, "app-1", true)]
+    [InlineData(" ", "app-1", true)]
+    [InlineData("org-1", null, false)]
+    public async Task A_request_without_an_organisation_or_application_id_is_not_found_with_no_call(
+        string? organisationId,
+        string? applicationId,
+        bool enabled
+    )
+    {
+        var (adapter, handler) = BuildSut(_ => Json(HttpStatusCode.OK, UsableBody), enabled);
+
+        var result = await adapter.GetAccreditationSummaryAsync(
+            new AccreditationSummaryReadRequest(organisationId, applicationId, Guid.NewGuid()),
+            Ct
+        );
+
+        // Answered before the Enabled check too: a registration-only case is not found, not "unavailable".
+        Assert.Equal(AccreditationSummaryReadOutcome.NotFound, result.Outcome);
+        Assert.Empty(handler.Requests);
+    }
+
     [Fact]
     public async Task A_usable_summary_is_a_success_read_with_a_signed_get_to_the_case_management_route()
     {

@@ -196,7 +196,7 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     // determination, confirm contact) that a module opts its type in to.
     services.AddStandardLifecycleServices();
     // RA-769: the live accreditation read behind an In-Year Change case's Accreditation summary tab.
-    services.AddAccreditationSummaryServices();
+    services.AddAccreditationSummaryServices(builder.Configuration);
     services.AddSingleton<IWorkItemPersistence, WorkItemPersistence>();
     // RA-000: the e2e- fixture reset writes through the same persistence
     // instance (a single writer of the collection), via an interface the

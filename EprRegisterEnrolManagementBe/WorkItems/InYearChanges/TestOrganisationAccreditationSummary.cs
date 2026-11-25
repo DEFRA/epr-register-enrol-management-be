@@ -6,7 +6,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 /// <summary>
 /// RA-769: the stable accreditation an end-to-end test organisation (<c>e2e-</c>, ADR-0009) shows on the
 /// Accreditation summary tab, so a case posted directly to the Case Management service can be tested without
-/// operator data. Only ever served when <c>TestOrganisations__Enabled</c> is on, which startup refuses in prod
+/// operator data. Only ever served by <see cref="TestOrganisationAccreditationSummaryAdapter"/>, which is registered
+/// only when <c>TestOrganisations__Enabled</c> is on, which startup refuses in prod
 /// (<see cref="Config.TestOrganisations.EnsureNotEnabledInProd"/>), so caseworkers only ever see real data.
 /// An exporter, so the tab's exporter-only rows have something to show.
 /// </summary>

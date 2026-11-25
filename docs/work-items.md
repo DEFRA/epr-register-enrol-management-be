@@ -354,13 +354,24 @@ type is configured. Every setting is code, not runtime data:
   - **Which types.** Any type whose category is `in-year-change` has it;
     another type is a 400 `wrong-work-item-type`. A new In-Year Change type
     must be added deliberately to management-fe's tab list too.
-  - **Resolution order.** Unknown work item 404; wrong type 400; an `e2e-`
-    organisation with `TestOrganisations__Enabled` on is answered from the
-    stable test accreditation (`TestOrganisationAccreditationSummary`) before
-    the application id check, because a case posted directly has none; no
-    `accreditationApplicationId` (registration-only) 404 with no operator
-    call; otherwise the live read: 200, 404 (not found or not `Approved`) or
-    503 (the read failed, including `OperatorBackendApi:Enabled=false`).
+  - **Resolution order.** Unknown work item 404; wrong type 400; then the
+    read through `IAccreditationSummaryAdapter`: 200, 404 (not found or not
+    `Approved`, or no `accreditationApplicationId`, as for a registration-only
+    case, which `HttpAccreditationSummaryAdapter` answers before its
+    `Enabled` check and with no operator call) or 503 (the read failed,
+    including `OperatorBackendApi:Enabled=false`). The endpoint reads no
+    configuration and has no test-organisation branch.
+  - **Test organisations.** With `TestOrganisations__Enabled` on, the
+    registered adapter is `TestOrganisationAccreditationSummaryAdapter`, a
+    decorator over `HttpAccreditationSummaryAdapter` (chosen at DI time, as
+    `TestOrganisationReExAccreditationClient` is, so there is no test branch
+    on a production request path; startup refuses the switch in prod). It
+    answers an `e2e-` organisation from the stable test accreditation
+    (`TestOrganisationAccreditationSummary`), whatever its application id
+    (a case posted directly has none), with no operator call, and delegates
+    every other organisation. The start date below is resolved for it as for
+    any case: nothing holds the stub's accreditation number, so it shows 1
+    January of the stub's year, with the fallback Warning.
   - **Deploy order.** The operator backend route (backend#296) must deploy
     first. A bare 404 cannot be told from "no Approved accreditation", so the
     adapter logs a Warning naming both causes.

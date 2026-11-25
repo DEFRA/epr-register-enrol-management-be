@@ -20,11 +20,13 @@ namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 ///   <item>unknown work item: 404;</item>
 ///   <item>a type that is not an In-Year Change (the category is what this service knows; the tab list is
 ///   management-fe's): 400;</item>
-///   <item>an <c>e2e-</c> organisation with test organisations enabled: the stub. This is before the application id
-///   check because a case posted directly for a test organisation has no application id;</item>
-///   <item>no <c>accreditationApplicationId</c> (a registration-only case): 404, with no operator backend call;</item>
-///   <item>otherwise the live read: 200, 404 (not found or not Approved) or 503 (the read failed).</item>
+///   <item>the read, through <see cref="IAccreditationSummaryAdapter"/>: 200, 404 (not found or not Approved, or
+///   the case has no organisation or <c>accreditationApplicationId</c>, a registration-only case, which the real
+///   adapter answers without an operator backend call) or 503 (the read failed).</item>
 /// </list>
+/// The endpoint knows nothing of test organisations: with <c>TestOrganisations__Enabled</c> on, the registered
+/// adapter is <see cref="TestOrganisationAccreditationSummaryAdapter"/>, which answers <c>e2e-</c> organisations
+/// from a fixture, so the start date lookup runs for them too.
 /// </summary>
 internal static class AccreditationSummaryEndpoints
 {
@@ -42,10 +44,24 @@ internal static class AccreditationSummaryEndpoints
         return app;
     }
 
-    public static IServiceCollection AddAccreditationSummaryServices(this IServiceCollection services)
+    public static IServiceCollection AddAccreditationSummaryServices(
+        this IServiceCollection services,
+        IConfiguration configuration
+    )
     {
-        // Registered unconditionally: the adapter enforces OperatorBackendApi:Enabled itself.
-        services.AddSingleton<IAccreditationSummaryAdapter, HttpAccreditationSummaryAdapter>();
+        // The real adapter is registered unconditionally: it enforces OperatorBackendApi:Enabled itself.
+        if (!TestOrganisations.IsEnabled(configuration))
+        {
+            services.AddSingleton<IAccreditationSummaryAdapter, HttpAccreditationSummaryAdapter>();
+            return services;
+        }
+
+        // RA-769: test organisations are routed here, at DI time, as for the ReEx client (startup refuses the
+        // switch in prod: TestOrganisations.EnsureNotEnabledInProd), so the endpoint carries no test branch.
+        services.AddSingleton<HttpAccreditationSummaryAdapter>();
+        services.AddSingleton<IAccreditationSummaryAdapter>(sp => new TestOrganisationAccreditationSummaryAdapter(
+            sp.GetRequiredService<HttpAccreditationSummaryAdapter>()
+        ));
         return services;
     }
 
@@ -55,7 +71,6 @@ internal static class AccreditationSummaryEndpoints
         [FromServices] IWorkItemRegistry registry,
         [FromServices] IAccreditationSummaryAdapter adapter,
         [FromServices] IReAccreditationStartDateResolver startDates,
-        [FromServices] IConfiguration configuration,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
@@ -85,22 +100,13 @@ internal static class AccreditationSummaryEndpoints
             );
         }
 
-        var organisationId = ReadString(workItem.Payload, OrganisationIdField);
-        if (TestOrganisations.IsEnabled(configuration) && TestOrganisations.IsTestOrganisation(organisationId))
-        {
-            var fixture = TestOrganisationAccreditationSummary.Fixture;
-            // The stub has no re-accreditation behind it: 1 January of its year, by design (not a fallback miss).
-            return TypedResults.Ok(new AccreditationSummaryResponse(fixture, new DateOnly(fixture.AccreditationYear, 1, 1)));
-        }
-
-        var applicationId = ReadString(workItem.Payload, ApplicationIdField);
-        if (organisationId is null || applicationId is null)
-        {
-            return TypedResults.NotFound();
-        }
-
+        // A missing organisation or application id (a registration-only case) is the adapter's NotFound.
         var read = await adapter.GetAccreditationSummaryAsync(
-            new AccreditationSummaryReadRequest(organisationId, applicationId, Guid.NewGuid()),
+            new AccreditationSummaryReadRequest(
+                ReadString(workItem.Payload, OrganisationIdField),
+                ReadString(workItem.Payload, ApplicationIdField),
+                Guid.NewGuid()
+            ),
             cancellationToken
         );
         if (read is not { Outcome: AccreditationSummaryReadOutcome.Success, Summary: { } summary })

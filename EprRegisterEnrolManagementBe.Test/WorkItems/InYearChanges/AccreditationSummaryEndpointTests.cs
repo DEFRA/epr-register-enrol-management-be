@@ -6,6 +6,7 @@ using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -90,8 +91,12 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
             },
             ConfigureTestServices = services =>
             {
+                // The fake stands in for the real adapter. With test organisations on, production registers the
+                // decorator over the real adapter (see TestOrganisationsWiringTests), so do the same over the fake.
                 services.RemoveAll<IAccreditationSummaryAdapter>();
-                services.AddSingleton(adapter);
+                services.AddSingleton<IAccreditationSummaryAdapter>(
+                    testOrganisations ? new TestOrganisationAccreditationSummaryAdapter(adapter) : adapter
+                );
                 if (logs is not null)
                 {
                     // Serilog owns the factory in the real host, so replace it to capture what the endpoint logs.
@@ -413,15 +418,34 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
     [Fact]
     public async Task A_registration_only_case_has_no_summary_and_makes_no_operator_call()
     {
-        var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
-        await using var factory = NewFactory(fixture, adapter);
+        // The real adapter, with OperatorBackendApi:Enabled false (the default): a case with an application id is a
+        // 503 (see below), so a 404 here shows the missing application id is answered before any read is attempted.
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await SubmitAsync(factory, client, "summary-registration-only", applicationId: null);
 
         var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
-        await adapter.DidNotReceiveWithAnyArgs().GetAccreditationSummaryAsync(default!, Ct);
+    }
+
+    [Fact]
+    public async Task The_endpoint_passes_a_missing_application_id_to_the_adapter_which_decides_not_found()
+    {
+        var adapter = AdapterReturning(AccreditationSummaryReadResult.NotFound());
+        await using var factory = NewFactory(fixture, adapter);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(factory, client, "summary-no-application", applicationId: null);
+
+        var response = await client.GetAsync($"/work-items/{id}/accreditation-summary", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        await adapter
+            .Received(1)
+            .GetAccreditationSummaryAsync(
+                Arg.Is<AccreditationSummaryReadRequest>(r => r.OrganisationId == "org-1" && r.ApplicationId == null),
+                Arg.Any<CancellationToken>()
+            );
     }
 
     [Fact]
@@ -551,11 +575,11 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
         var first = await client.GetAsync($"/work-items/{noApplication}/accreditation-summary", Ct);
         var second = await client.GetAsync($"/work-items/{withApplication}/accreditation-summary", Ct);
 
-        // No stub: the first has no application id, so no accreditation; the second is read live (here: not found).
+        // No stub: both reads go to the adapter (here: not found), as for any other organisation.
         Assert.Equal(HttpStatusCode.NotFound, first.StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
         await adapter
-            .Received(1)
+            .Received(2)
             .GetAccreditationSummaryAsync(
                 Arg.Is<AccreditationSummaryReadRequest>(r => r.OrganisationId == "e2e-summary-stub-off"),
                 Arg.Any<CancellationToken>()

@@ -21,14 +21,14 @@ public interface IAccreditationSummaryAdapter
 }
 
 /// <param name="OrganisationId">The operator backend's organisation id, from the work item payload's
-/// <c>operatorOrganisationId</c>.</param>
+/// <c>operatorOrganisationId</c>; null when the payload has none.</param>
 /// <param name="ApplicationId">The accreditation's application id, from the payload's
-/// <c>accreditationApplicationId</c>.</param>
+/// <c>accreditationApplicationId</c>; null for a registration-only case, which has no accreditation.</param>
 /// <param name="CorrelationId">Forwarded as <c>X-Correlation-Id</c>, so both services' logs for one read can be
 /// joined.</param>
 public sealed record AccreditationSummaryReadRequest(
-    string OrganisationId,
-    string ApplicationId,
+    string? OrganisationId,
+    string? ApplicationId,
     Guid CorrelationId
 );
 
@@ -37,7 +37,10 @@ public enum AccreditationSummaryReadOutcome
 {
     Success,
 
-    /// <summary>The operator backend holds no Approved accreditation at that address.</summary>
+    /// <summary>
+    /// The operator backend holds no Approved accreditation at that address, or the request has no organisation or
+    /// application id to address one by (a registration-only case), which makes no call.
+    /// </summary>
     NotFound,
 
     /// <summary>

@@ -60,6 +60,13 @@ internal sealed partial class HttpAccreditationSummaryAdapter(
         CancellationToken cancellationToken = default
     )
     {
+        // A registration-only case has no application id, so there is no accreditation to read. This answers before
+        // the Enabled check and makes no call, as the endpoint did before this moved here.
+        if (string.IsNullOrWhiteSpace(request.OrganisationId) || string.IsNullOrWhiteSpace(request.ApplicationId))
+        {
+            return AccreditationSummaryReadResult.NotFound();
+        }
+
         if (!_config.Enabled)
         {
             return AccreditationSummaryReadResult.TransientFailure("OperatorBackendApi:Enabled is false.");
