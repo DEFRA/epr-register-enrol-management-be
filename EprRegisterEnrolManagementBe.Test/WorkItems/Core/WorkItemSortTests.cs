@@ -217,4 +217,24 @@ public class WorkItemSortTests
         Assert.Equal(-1, sort[WorkItemSort.HasDeadlineField].AsInt32);
         Assert.Equal(-1, sort[WorkItemSort.DeadlineField].AsInt32);
     }
+
+    [Theory]
+    [InlineData(null, -1)]
+    [InlineData(true, -1)]
+    [InlineData(false, 1)]
+    public void BuildStages_last_modified_is_a_plain_field_sort_newest_first_by_default(
+        bool? descendingOverride,
+        int expectedDirection
+    )
+    {
+        // RA-751 AC8: "most recently updated first" unless ?dir=asc.
+        var stages = WorkItemSort.BuildStages("last-modified", descendingOverride, s_rank);
+
+        Assert.NotNull(stages);
+        Assert.Null(stages.Value.AddFields);
+        Assert.Equal(
+            new BsonDocument { { "lastModifiedAt", expectedDirection }, { "_id", expectedDirection } },
+            stages.Value.Sort
+        );
+    }
 }

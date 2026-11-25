@@ -10,7 +10,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// database.
 ///
 /// <para>
-/// Two of the three sorts cannot be expressed as a plain field sort:
+/// RA-751 adds <see cref="LastModifiedToken"/>, a plain field sort with no
+/// <c>$addFields</c> stage, which the persistence layer runs on the Find path.
+/// </para>
+///
+/// <para>
+/// Two of the three RA-324 sorts cannot be expressed as a plain field sort:
 /// <list type="bullet">
 /// <item><description><b>Due date</b> is not stored; it is
 /// <c>slaClock.startedAt + slaClock.targetDuration</c>. Both operands are
@@ -28,6 +33,14 @@ internal static class WorkItemSort
     internal const string OrganisationToken = "organisation";
     internal const string StatusToken = "status";
     internal const string DueDateToken = "due-date";
+
+    /// <summary>
+    /// RA-751 AC8 ("as in RA-740": most recently updated first): sorts on
+    /// <see cref="WorkItem.LastModifiedAt"/>. Descending (newest first) unless
+    /// <c>?dir=asc</c>. A plain field sort, so it needs no computed field and
+    /// <see cref="WorkItemPersistence.QueryAsync"/> runs it on the Find path.
+    /// </summary>
+    internal const string LastModifiedToken = "last-modified";
 
     // Computed fields injected by an $addFields stage. They must be removed
     // ($unset) before the aggregation result is deserialised because WorkItem
@@ -93,6 +106,7 @@ internal static class WorkItemSort
             OrganisationToken => BuildOrganisationStages(descendingOverride),
             StatusToken => BuildStatusStages(descendingOverride, statusRank),
             DueDateToken => BuildDueDateStages(descendingOverride),
+            LastModifiedToken => BuildLastModifiedStages(descendingOverride),
             _ => null
         };
     }
@@ -129,6 +143,20 @@ internal static class WorkItemSort
             }));
         var sort = StableSort(RankField, dir);
         return (addFields, sort);
+    }
+
+    private static (BsonDocument?, BsonDocument) BuildLastModifiedStages(bool? descendingOverride)
+    {
+        // Default newest first; only an explicit ?dir=asc reverses it. Ties
+        // break on _id in the same direction, so paging is stable and the
+        // { lastModifiedAt: -1, _id: -1 } index serves both directions.
+        var dir = descendingOverride == false ? 1 : -1;
+        var sort = new BsonDocument
+        {
+            { "lastModifiedAt", dir },
+            { "_id", dir }
+        };
+        return (null, sort);
     }
 
     private static (BsonDocument?, BsonDocument) BuildDueDateStages(bool? descendingOverride)

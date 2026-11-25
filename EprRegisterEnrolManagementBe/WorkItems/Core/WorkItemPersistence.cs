@@ -412,21 +412,34 @@ public sealed class WorkItemPersistence
 
         var sortStages = WorkItemSort.BuildStages(query.Sort, query.SortDescending, _statusRank);
 
+        // epr-4pf: the list endpoint never renders the per-item Notes /
+        // AuditLog collections and they dominate document size on chatty
+        // items, so every Find path projects them away.
+        var projection = Builders<WorkItem>
+            .Projection.Exclude(w => w.Notes)
+            .Exclude(w => w.AuditLog);
+
         List<WorkItem> items;
         if (sortStages is null)
         {
             // Default path (RA-324: unchanged from the original behaviour) —
-            // newest submitted first, with the per-item Notes / AuditLog
-            // collections projected away (epr-4pf): the list endpoint never
-            // renders them and they dominate document size on chatty items.
-            var projection = Builders<WorkItem>
-                .Projection.Exclude(w => w.Notes)
-                .Exclude(w => w.AuditLog);
-
+            // newest submitted first.
             items = await Collection
                 .Find(filter)
                 .Project<WorkItem>(projection)
                 .SortByDescending(w => w.SubmittedAt)
+                .Skip(skip)
+                .Limit(pageSize)
+                .ToListAsync(cancellationToken);
+        }
+        else if (sortStages.Value.AddFields is null)
+        {
+            // RA-751: a plain field sort (last-modified) needs no computed
+            // field, so it stays on the Find path and can use an index.
+            items = await Collection
+                .Find(filter)
+                .Project<WorkItem>(projection)
+                .Sort(new BsonDocumentSortDefinition<WorkItem>(sortStages.Value.Sort))
                 .Skip(skip)
                 .Limit(pageSize)
                 .ToListAsync(cancellationToken);
@@ -1002,6 +1015,13 @@ public sealed class WorkItemPersistence
         var submittedDescending = new CreateIndexModel<WorkItem>(
             builder.Descending(w => w.SubmittedAt)
         );
+        // RA-751: the Admin UI's "most recently updated first" sort
+        // (sort=last-modified). Matches WorkItemSort's { lastModifiedAt, _id }
+        // sort key, walked forwards or backwards for either direction, so the
+        // sort never runs in memory over the whole collection.
+        var lastModifiedDescending = new CreateIndexModel<WorkItem>(
+            builder.Combine(builder.Descending(w => w.LastModifiedAt), builder.Descending("_id"))
+        );
         var assigneeAndSubmitted = new CreateIndexModel<WorkItem>(
             builder.Combine(
                 builder.Ascending(w => w.AssignedToId),
@@ -1134,6 +1154,7 @@ public sealed class WorkItemPersistence
             typeAndSubmitted,
             stateAndSubmitted,
             submittedDescending,
+            lastModifiedDescending,
             assigneeAndSubmitted,
             nationAndState,
             orgNameText,

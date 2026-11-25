@@ -35,7 +35,9 @@ public sealed class WorkItemAdminSearchMongoIntegrationTests : IAsyncDisposable
         string name,
         BsonDocument? payload = null,
         string? assignedToId = null,
-        Guid? id = null
+        Guid? id = null,
+        DateTime? lastModifiedAt = null,
+        DateTime? submittedAt = null
     )
     {
         var item = new WorkItem
@@ -43,8 +45,8 @@ public sealed class WorkItemAdminSearchMongoIntegrationTests : IAsyncDisposable
             Id = id ?? Guid.NewGuid(),
             TypeId = "re-accreditation",
             StateId = "submitted",
-            SubmittedAt = s_now,
-            LastModifiedAt = s_now,
+            SubmittedAt = submittedAt ?? s_now,
+            LastModifiedAt = lastModifiedAt ?? s_now,
             SubmittedBy = "client-1",
             AssignedToId = assignedToId,
             Payload = payload ?? new BsonDocument(),
@@ -153,6 +155,101 @@ public sealed class WorkItemAdminSearchMongoIntegrationTests : IAsyncDisposable
         Assert.Equal(
             ["Archived and assigned", "Live and unassigned"],
             await NamesMatchingAsync(new WorkItemQuery())
+        );
+    }
+
+    // RA-751 AC8 ("as in RA-740"): most recently updated first.
+    private async Task SeedLastModifiedAsync()
+    {
+        // Submitted in the opposite order to last-modified, so the default
+        // (newest submitted) and the last-modified sort disagree.
+        await SeedAsync("Changed 1h ago", lastModifiedAt: s_now.AddHours(-1), submittedAt: s_now.AddDays(-3));
+        await SeedAsync("Changed 3h ago", lastModifiedAt: s_now.AddHours(-3), submittedAt: s_now.AddDays(-1));
+        await SeedAsync("Changed 2h ago", lastModifiedAt: s_now.AddHours(-2), submittedAt: s_now.AddDays(-2));
+    }
+
+    private async Task<string[]> OrderedNamesAsync(WorkItemQuery query)
+    {
+        var page = await _persistence.QueryAsync(query, TestContext.Current.CancellationToken);
+        return page.Items.Select(i => i.Payload["organisationName"].AsString).ToArray();
+    }
+
+    [Fact]
+    public async Task Last_modified_sort_is_newest_first_by_default_and_with_dir_desc()
+    {
+        await SeedLastModifiedAsync();
+        string[] newestFirst = ["Changed 1h ago", "Changed 2h ago", "Changed 3h ago"];
+
+        Assert.Equal(newestFirst, await OrderedNamesAsync(new WorkItemQuery(Sort: "last-modified")));
+        Assert.Equal(
+            newestFirst,
+            await OrderedNamesAsync(new WorkItemQuery(Sort: "last-modified", SortDescending: true))
+        );
+    }
+
+    [Fact]
+    public async Task Last_modified_sort_with_dir_asc_is_oldest_first()
+    {
+        await SeedLastModifiedAsync();
+
+        Assert.Equal(
+            ["Changed 3h ago", "Changed 2h ago", "Changed 1h ago"],
+            await OrderedNamesAsync(new WorkItemQuery(Sort: "last-modified", SortDescending: false))
+        );
+    }
+
+    [Fact]
+    public async Task Last_modified_sort_breaks_ties_on_id_in_the_same_direction_and_pages_stably()
+    {
+        var low = Guid.Parse("00000000-0000-4000-8000-000000000001");
+        var mid = Guid.Parse("00000000-0000-4000-8000-000000000002");
+        var high = Guid.Parse("00000000-0000-4000-8000-000000000003");
+        await SeedAsync("Mid", id: mid);
+        await SeedAsync("High", id: high);
+        await SeedAsync("Low", id: low);
+
+        Assert.Equal(["High", "Mid", "Low"], await OrderedNamesAsync(new WorkItemQuery(Sort: "last-modified")));
+        Assert.Equal(
+            ["Low", "Mid", "High"],
+            await OrderedNamesAsync(new WorkItemQuery(Sort: "last-modified", SortDescending: false))
+        );
+        Assert.Equal(
+            ["Mid"],
+            await OrderedNamesAsync(new WorkItemQuery(Sort: "last-modified", Page: 2, PageSize: 1))
+        );
+    }
+
+    [Fact]
+    public async Task Last_modified_sort_leaves_notes_and_audit_log_out_of_the_page()
+    {
+        var item = new WorkItem
+        {
+            TypeId = "re-accreditation",
+            StateId = "submitted",
+            SubmittedAt = s_now,
+            LastModifiedAt = s_now,
+            Payload = new BsonDocument { ["organisationName"] = "With history" },
+            Notes = [new WorkItemNote { Text = "note", CreatedAt = s_now, CreatedBy = "u" }],
+        };
+        await _persistence.CreateAsync(item, TestContext.Current.CancellationToken);
+        Assert.Single((await _persistence.GetByIdAsync(item.Id, TestContext.Current.CancellationToken))!.Notes);
+
+        var page = await _persistence.QueryAsync(
+            new WorkItemQuery(Sort: "last-modified"),
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Empty(Assert.Single(page.Items).Notes);
+    }
+
+    [Fact]
+    public async Task Default_order_is_still_newest_submitted_first()
+    {
+        await SeedLastModifiedAsync();
+
+        Assert.Equal(
+            ["Changed 3h ago", "Changed 2h ago", "Changed 1h ago"],
+            await OrderedNamesAsync(new WorkItemQuery())
         );
     }
 }
