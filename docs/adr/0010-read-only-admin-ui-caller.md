@@ -1,7 +1,7 @@
 # ADR-0010: The Admin UI is a read-only caller
 
 **Date:** 2026-11-25
-**Status:** Accepted
+**Status:** Accepted, amended by RA-752 (see amendment below)
 **Issue:** RA-751 (epic RA-639, Production Support "Admin UI")
 
 ## Context
@@ -135,3 +135,31 @@ signed-in user.
 - `RequiredConfigHealthCheckTests`: a missing Admin UI secret is Degraded
   with an Error log outside Development and ignored in Development; a missing
   caseworker caller secret stays Unhealthy.
+
+## Amendment: RA-752 (2026-11-25)
+
+RA-752 (the Admin UI's Work item page) opts two more GETs in to
+`ReadOnlyCallerAllowed`: `GET /work-items/{id}` (Document tab and Regulator
+view) and `GET /work-items/re-accreditation/{id}/prior-year` (the Regulator
+view's prior-year section, which management-fe's work item page also shows).
+Decision 3's list is now those two plus the RA-751 pair.
+
+`GET /work-items/re-accreditation/{id}/recommendation` stays closed: neither
+the Admin UI nor management-fe's work item page calls it, and deny by default
+means a route opens only for a reader that needs it.
+
+`GET /work-items/{id}` is **not** projected the way decision 5 projects the
+list: the Admin UI gets the same full `WorkItemResponse` as management-fe,
+including the payload, notes, audit log and the names they hold. RA-752 AC08
+has the Document tab show the work item as JSON "including the payload, notes
+and audit log, with the status pushes to the Operator journey", which a
+projection would remove, and AC10 places the masking of names and email
+addresses in the Admin UI when it shows them. So for this route, decision 5's
+guarantee does not hold: personal data reaches the Admin UI and it is the
+Admin UI's masking that keeps it off screen.
+
+Nothing else in this ADR changes. Verification:
+`ClientIdAuthenticationAdminUiCallerTests` now also asserts that the routing
+table opens exactly these four GET-only endpoints to read-only callers, that
+the Admin UI reads a work item (byte-identical to management-fe's) and its prior-year data, gets a plain `404`
+for a missing work item or a non-GUID id, and is still refused on writes.

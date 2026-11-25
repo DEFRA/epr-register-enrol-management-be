@@ -248,10 +248,12 @@ internal static class ReAccreditationEndpoints
 
         // Live prior-year accreditation data from ReEx, scoped to this
         // work item type because no other module needs ReEx access.
+        // RA-752: read-only callers (the Admin UI) may call it; its Regulator
+        // view shows the prior-year data as management-fe's work item page does.
         group
             .MapGet("/{id:guid}/prior-year", GetPriorYear)
             .WithName("GetReAccreditationPriorYear")
-            .RequireAuthorization();
+            .RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed);
 
         // RA-294/RA-297: operator-backend notification whenever a new ORS or
         // interim site is added to an accreditation application. There is no

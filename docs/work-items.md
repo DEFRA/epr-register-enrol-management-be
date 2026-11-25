@@ -657,17 +657,36 @@ union: items assigned to that user OR unassigned. `assigned` must be exactly
 endpoint answers `400` (ValidationProblem, title `Invalid query`, errors keyed
 `assigned`) otherwise. `archived` is validated the same way.
 
-### Read-only callers (RA-751)
+### Read-only callers (RA-751, RA-752)
 
-The Admin UI (`epr-register-enrol-admin`) is a read-only caller: it may call
-`GET /work-items` and `GET /work-items/re-accreditation/states` and nothing
-else. From `GET /work-items` it gets a projected item, `{ id, typeId, stateId,
+The Admin UI (`epr-register-enrol-admin`) is a read-only caller. It may call
+these and nothing else:
+
+| Route | Opened by | Admin UI use | What it gets |
+| --- | --- | --- | --- |
+| `GET /work-items` | RA-751 | Case management search | Projected items (below) |
+| `GET /work-items/re-accreditation/states` | RA-751 | State names and push kinds for search | Same as every caller |
+| `GET /work-items/{id}` | RA-752 | Work item page: Document tab and Regulator view | The full `WorkItemResponse`, same as every caller |
+| `GET /work-items/re-accreditation/{id}/prior-year` | RA-752 | Work item page: Regulator view's prior-year section | Same as every caller |
+
+From `GET /work-items` it gets a projected item, `{ id, typeId, stateId,
 lastModifiedAt, assignedToId, assignedToName, payload: { applicationReference,
 operatorOrganisationId, organisationName } }`: no submitter, no contact
 details, no other payload. Other callers get the full item. A projected payload
 field stored as a non-string value comes back `null` for that item, logged at
 Error with the work item id and field name, and the rest of the page still
-returns. Every other request it makes is refused with `403` and logged at Error.
+returns.
+
+`GET /work-items/{id}` is not projected: RA-752 AC08 has the Document tab show
+the work item as JSON with its payload, notes and audit log (`status-push-*`
+entries included), and AC10 has the Admin UI mask names and email addresses
+when it shows them. The response carries no `templateSnapshot`, `version` or
+raw `slaClock`.
+
+Every other request it makes is refused with `403` and logged at Error,
+including `GET /work-items/re-accreditation/{id}/recommendation`, which
+neither the Admin UI nor management-fe's work item page reads. An id that is
+not a GUID matches no route, so it is `404`, not `403`.
 An endpoint opens itself to read-only callers with
 `RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed)`; a plain
 `RequireAuthorization()` keeps them out. See
@@ -911,7 +930,7 @@ registration line" promise. All files live under
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
 | `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
 | `Endpoints/ReAccreditationStatesEndpoint.cs` | RA-751: `GET /work-items/re-accreditation/states` — the template's states with their display names, terminal flags and operator-journey push kind. Open to read-only callers. |
-| `Endpoints/ReAccreditationEndpoints.cs` | Maps `GET /work-items/re-accreditation/states` (above) and the module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
+| `Endpoints/ReAccreditationEndpoints.cs` | Maps `GET /work-items/re-accreditation/states` (above), `GET /work-items/re-accreditation/{id}/prior-year` (live prior-year data from ReEx; open to read-only callers since RA-752) and the module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
 | `IReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateValidator.cs` | RA-576: `POST /work-items/re-accreditation/{id}/change-payment-date` with body `{ paymentDate, reason }` corrects the payment date entered at duly making. One `ReplaceAsync` edits `payload.paymentDate` and appends an `action-applied` audit entry (`actionId=change-payment-date`, `previousPaymentDate`, `paymentDate`, `reason`). `StateId` and `SlaClock` are not changed and no hooks run, so status and "Due on" stay as they were. Allowed in any non-terminal state (repeat edits included); terminal items and items with no payment date get 409. 400 codes: the duly-making `payment-date-*` codes (`field: paymentDate`) plus `payment-date-reason-required` / `payment-date-reason-too-long` (`field: reason`, max 200 words). |
 | `IReAccreditationResumeService.cs` / `ReAccreditationResumeService.cs` / `ReAccreditationResumeValidator.cs` | `POST /work-items/re-accreditation/{id}/resume-from-query`, called by the operator backend when the applicant responds to a query: applies the matching `resume-during-*` transition and appends a `query-responded` audit entry. RA-766 (permanent): the body may carry `chargeAmountPence` (400 if negative). When it is sent and differs from the stored value, it is saved to the top-level `payload.chargeAmountPence`, so the duly-making page shows the charge as recalculated after the query, and the `query-responded` entry records `previousChargeAmountPence` and `chargeAmountPence`. |
 | `ReAccreditationModule.cs` | Glue: exposes the type, registers the decision service in DI, mounts the endpoints. |
