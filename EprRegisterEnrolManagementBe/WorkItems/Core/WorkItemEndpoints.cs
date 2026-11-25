@@ -467,7 +467,17 @@ public static class WorkItemEndpoints
         {
             return TypedResults.NotFound();
         }
-        return TypedResults.Ok(ToResponse(engine.Project(workItem), timeProvider));
+        var response = ToResponse(engine.Project(workItem), timeProvider);
+        // RA-770: the count for the Related change requests tab label.
+        if (SubmissionPayload.TryReadSubmissionReference(workItem.Payload, out var submissionReference))
+        {
+            response = response with
+            {
+                SubmissionWorkItemCount = (int)
+                    await persistence.CountBySubmissionReferenceAsync(submissionReference, cancellationToken),
+            };
+        }
+        return TypedResults.Ok(response);
     }
 
     internal static async Task<Results<Ok<WorkItemListResponse>, ProblemHttpResult>> GetAll(

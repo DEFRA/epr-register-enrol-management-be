@@ -239,6 +239,15 @@ public interface IWorkItemPersistence
         string submissionReference,
         CancellationToken cancellationToken = default
     );
+
+    /// <summary>
+    /// RA-770: how many work items <see cref="FindBySubmissionReferenceAsync"/>
+    /// would return, for the Related change requests tab label on every case tab.
+    /// </summary>
+    Task<long> CountBySubmissionReferenceAsync(
+        string submissionReference,
+        CancellationToken cancellationToken = default
+    );
 }
 
 public sealed class WorkItemPersistence
@@ -385,6 +394,20 @@ public sealed class WorkItemPersistence
             .Find(Builders<WorkItem>.Filter.Eq(SubmissionReferencePath, submissionReference))
             .Sort(Builders<WorkItem>.Sort.Ascending("payload.applicationReference"))
             .ToListAsync(cancellationToken);
+    }
+
+    [ExcludeFromCodeCoverage]
+    public Task<long> CountBySubmissionReferenceAsync(
+        string submissionReference,
+        CancellationToken cancellationToken = default
+    )
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(submissionReference);
+
+        return Collection.CountDocumentsAsync(
+            Builders<WorkItem>.Filter.Eq(SubmissionReferencePath, submissionReference),
+            cancellationToken: cancellationToken
+        );
     }
 
     private const string SubmissionReferencePath = "payload." + SubmissionPayload.SubmissionReferenceField;
