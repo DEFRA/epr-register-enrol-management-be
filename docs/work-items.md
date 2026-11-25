@@ -435,6 +435,12 @@ type is configured. Every setting is code, not runtime data:
   `payload.effectiveDate` (RA-495 AC6), which the operator journey grants the
   site from and requires on `approved`; re-accreditation stamps none, so its
   body has no `effectiveDate`.
+  An approval's `effectiveDate` must fall between 1 January and 31 December
+  (inclusive) of the work item's `payload.accreditationYear` (RA-795; it may be
+  before the submission date): `400` with `errorCode`
+  `effective-date-before-year-start` or `effective-date-after-year-end`
+  (`StandardEffectiveDate.CheckWithinAccreditationYear`, reusable by any
+  action that sets a valid-from date). An unreadable year is a generic `500`.
   Query and withdraw stay re-accreditation-only. The `query-during-*`
   transitions are already `CallerInvocable: false`; since v2 (RA-495 review)
   add-ORS's `withdraw*` transitions are too, so
