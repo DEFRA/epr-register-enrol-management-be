@@ -441,6 +441,18 @@ type is configured. Every setting is code, not runtime data:
   `effective-date-before-year-start` or `effective-date-after-year-end`
   (`StandardEffectiveDate.CheckWithinAccreditationYear`, reusable by any
   action that sets a valid-from date). An unreadable year is a generic `500`.
+  RA-800: `POST /work-items/{id}/change-valid-from` with `{ effectiveDate, reason }`
+  corrects that date while the case is `approved-pending-contact`
+  (`StandardChangeValidFromService`, opt-in per type via `TakesEffectiveDate`; a
+  type without it gets `400 wrong-work-item-type`). One `ReplaceAsync` rewrites
+  `payload.effectiveDate` and appends a `valid-from-changed` audit entry
+  (`previousEffectiveDate`, `effectiveDate`, `reason`, user, state); `StateId`,
+  `SlaClock` and the operator are untouched (confirm contact pushes the stored
+  date). Same-date saves are accepted; any other state is `409`, no identity
+  `401`, a concurrency conflict is retried (3 attempts) then `409`. 400 codes
+  (`field`): `effective-date-required` / `-invalid` / `-before-year-start` /
+  `-after-year-end` (`effectiveDate`), `effective-date-reason-required` /
+  `effective-date-reason-too-long` (`reason`, max 200 words).
   Query and withdraw stay re-accreditation-only. The `query-during-*`
   transitions are already `CallerInvocable: false`; since v2 (RA-495 review)
   add-ORS's `withdraw*` transitions are too, so

@@ -31,6 +31,13 @@ internal static class StandardLifecycleEndpoints
     public const string DulyMakeProblemTitle = "Could not complete duly making";
     public const string LogDecisionProblemTitle = "Could not record decision";
     public const string ConfirmContactProblemTitle = "Could not confirm applicant contact";
+    public const string ChangeValidFromProblemTitle = "Could not change the valid from date";
+
+    /// <summary>
+    /// RA-800: the change-valid-from endpoint owns its validation too. A legitimate
+    /// body is a date plus a reason of at most 200 words (~1.5 KiB); 16 KiB leaves headroom.
+    /// </summary>
+    public const long MaxChangeValidFromBodyBytes = 16 * 1024;
 
     public static IEndpointRouteBuilder MapStandardLifecycleEndpoints(this IEndpointRouteBuilder app)
     {
@@ -60,7 +67,63 @@ internal static class StandardLifecycleEndpoints
             .WithName("ConfirmWorkItemApplicantContact")
             .RequireAuthorization();
 
+        group
+            .MapPost("/{id:guid}/change-valid-from", ChangeValidFrom)
+            .WithName("ChangeWorkItemValidFromDate")
+            .DisableValidation()
+            .WithMetadata(new RequestSizeLimitAttribute(MaxChangeValidFromBodyBytes))
+            .RequireAuthorization();
+
         return app;
+    }
+
+    /// <summary>
+    /// RA-800: correct the valid-from date of a case that is approved and awaiting
+    /// applicant contact. Shape validation happens here so a 400 can carry the
+    /// <c>errorCode</c> and <c>field</c> management-fe binds to
+    /// (<see cref="StandardChangeValidFromValidator"/>); the year bounds and state
+    /// rules are the service's.
+    /// </summary>
+    public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> ChangeValidFrom(
+        [FromRoute] Guid id,
+        HttpContext httpContext,
+        [FromBody] StandardChangeValidFromRequest? request,
+        [FromServices] IStandardChangeValidFromService changeValidFromService,
+        [FromServices] IWorkItemService engine,
+        CancellationToken cancellationToken
+    )
+    {
+        var validation = StandardChangeValidFromValidator.Validate(request?.EffectiveDate, request?.Reason);
+        if (!validation.IsValid)
+        {
+            return TypedResults.Problem(
+                title: ChangeValidFromProblemTitle,
+                detail: validation.Detail,
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: new Dictionary<string, object?>
+                {
+                    [StandardLifecycleProblems.ErrorCodeKey] = validation.ErrorCode,
+                    [StandardLifecycleProblems.FieldKey] = validation.Field,
+                }
+            );
+        }
+
+        var result = await changeValidFromService.ChangeValidFromAsync(
+            id,
+            validation.EffectiveDate!.Value,
+            validation.Reason!,
+            httpContext.User,
+            cancellationToken
+        );
+
+        if (result.IsSuccess)
+        {
+            return TypedResults.Ok(WorkItemEndpoints.ToResponse(engine.Project(result.WorkItem!)));
+        }
+
+        return result.FailureCode == WorkItemActionFailureCode.WorkItemNotFound
+            ? TypedResults.NotFound()
+            : StandardLifecycleProblems.ServiceFailure(result, ChangeValidFromProblemTitle);
     }
 
     /// <summary>
@@ -313,6 +376,12 @@ internal static class StandardLifecycleEndpoints
         }
     }
 }
+
+/// <summary>
+/// RA-800: <c>POST /work-items/{id}/change-valid-from</c> body: the corrected date
+/// (<c>yyyy-MM-dd</c>) and the reason, both strings so the validator owns every failure.
+/// </summary>
+internal sealed record StandardChangeValidFromRequest(string? EffectiveDate, string? Reason);
 
 /// <summary>RA-495: <c>POST /work-items/{id}/duly-make</c> body.</summary>
 internal sealed record StandardDulyMakeRequest(string? PaymentDate);
