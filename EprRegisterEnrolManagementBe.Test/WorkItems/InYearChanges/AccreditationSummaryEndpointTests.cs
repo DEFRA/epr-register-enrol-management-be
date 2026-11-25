@@ -7,13 +7,15 @@ using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using NSubstitute;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
 
-namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
+namespace EprRegisterEnrolManagementBe.Test.WorkItems.InYearChanges;
 
 /// <summary>
 /// RA-769: <c>GET /work-items/{id}/accreditation-summary</c>, the live accreditation behind an In-Year Change
@@ -21,7 +23,7 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 /// registered, against ephemeral MongoDB, from a submission posted as the operator backend posts it. The operator
 /// backend read adapter is a fake.
 /// </summary>
-public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegrationFixture fixture)
+public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fixture)
 {
     private const string ApplicationId = "6a1b2c3d4e5f6a1b2c3d4e5f";
 
@@ -49,7 +51,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
             new OperatorSummarySite(
                 SiteId: 7,
                 OrsId: "001",
-                SiteName: "Speira GmbH",
+                SiteName: "Example Recycling GmbH",
                 SiteAddress: null,
                 AddressLine1: "1 Test Strasse",
                 AddressLine2: null,
@@ -76,7 +78,8 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
     private static AddOverseasSiteAppFactory NewFactory(
         MongoIntegrationFixture fixture,
         IAccreditationSummaryAdapter adapter,
-        bool testOrganisations = false
+        bool testOrganisations = false,
+        CapturingLoggerProvider? logs = null
     )
     {
         return new AddOverseasSiteAppFactory(fixture)
@@ -89,6 +92,14 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
             {
                 services.RemoveAll<IAccreditationSummaryAdapter>();
                 services.AddSingleton(adapter);
+                if (logs is not null)
+                {
+                    // Serilog owns the factory in the real host, so replace it to capture what the endpoint logs.
+                    services.RemoveAll<ILoggerFactory>();
+                    services.AddSingleton<ILoggerFactory>(_ =>
+                        LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(logs))
+                    );
+                }
             },
         };
     }
@@ -180,7 +191,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         Assert.Equal("Everything else", plan.GetProperty("otherDetail").GetString());
         var site = Assert.Single(accreditation.GetProperty("overseasSites").EnumerateArray());
         Assert.Equal("001", site.GetProperty("orsId").GetString());
-        Assert.Equal("Speira GmbH", site.GetProperty("siteName").GetString());
+        Assert.Equal("Example Recycling GmbH", site.GetProperty("siteName").GetString());
         Assert.Equal("Bremen", site.GetProperty("townOrCity").GetString());
         Assert.Equal("R4", Assert.Single(site.GetProperty("operationCodes").EnumerateArray()).GetString());
         Assert.True(site.GetProperty("isEu").GetBoolean());
@@ -206,15 +217,17 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
         AddOverseasSiteAppFactory factory,
         string stateId,
         string accreditationNumber,
-        string? startDate
+        DateOnly? startDate
     )
     {
         var type = new ReAccreditationType();
-        var payload = new BsonDocument { ["accreditationId"] = accreditationNumber };
-        if (startDate is not null)
+        // Stamped through the payload model, as the approval service does, so a change to how the date is stored
+        // is seen here and not only in production.
+        var payload = new ReAccreditationPayload
         {
-            payload["accreditationStartDate"] = startDate;
-        }
+            AccreditationId = accreditationNumber,
+            AccreditationStartDate = startDate,
+        }.ToBsonDocument();
         await factory.Persistence.CreateAsync(
             new WorkItem
             {
@@ -232,12 +245,13 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
 
     private async Task<(HttpStatusCode Status, string? StartDate)> GetStartDateAsync(
         string stateId,
-        string? storedStartDate,
-        string storedNumber = "A26ER5003240164GR"
+        DateOnly? storedStartDate,
+        string storedNumber = "A26ER5003240164GR",
+        CapturingLoggerProvider? logs = null
     )
     {
         var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
-        await using var factory = NewFactory(fixture, adapter);
+        await using var factory = NewFactory(fixture, adapter, logs: logs);
         using var client = factory.CreateClient();
         await StoreReAccreditationAsync(factory, stateId, storedNumber, storedStartDate);
         var id = await SubmitAsync(factory, client, "summary-start-date");
@@ -255,7 +269,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
     [Fact]
     public async Task An_accreditation_granted_mid_year_shows_its_stored_start_date()
     {
-        var (status, startDate) = await GetStartDateAsync("approved", "2026-06-15");
+        var (status, startDate) = await GetStartDateAsync("approved", new DateOnly(2026, 6, 15));
 
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal("2026-06-15", startDate);
@@ -264,7 +278,7 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
     [Fact]
     public async Task A_work_item_pending_contact_does_not_supply_the_start_date_even_if_it_carries_one()
     {
-        var (status, startDate) = await GetStartDateAsync("approved-pending-contact", "2026-06-15");
+        var (status, startDate) = await GetStartDateAsync("approved-pending-contact", new DateOnly(2026, 6, 15));
 
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal("2026-01-01", startDate);
@@ -280,9 +294,36 @@ public sealed class AddOverseasSiteAccreditationSummaryEndpointTests(MongoIntegr
     }
 
     [Fact]
+    public async Task Using_the_1_january_fallback_logs_a_warning_with_the_reason()
+    {
+        var logs = new CapturingLoggerProvider();
+
+        var (status, startDate) = await GetStartDateAsync("approved", storedStartDate: null, logs: logs);
+
+        Assert.Equal(HttpStatusCode.OK, status);
+        Assert.Equal("2026-01-01", startDate);
+        var warning = Assert.Single(
+            logs.Records,
+            r => r.Level == LogLevel.Warning && r.Message.Contains("no stored start date", StringComparison.Ordinal)
+        );
+        Assert.Contains("A26ER5003240164GR", warning.Message, StringComparison.Ordinal);
+        Assert.Contains(nameof(StartDateMiss.NoUsableStartDate), warning.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_stored_start_date_logs_no_fallback_warning()
+    {
+        var logs = new CapturingLoggerProvider();
+
+        await GetStartDateAsync("approved", new DateOnly(2026, 6, 15), logs: logs);
+
+        Assert.DoesNotContain(logs.Records, r => r.Message.Contains("no stored start date", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Only_the_work_item_with_this_accreditation_number_supplies_the_start_date()
     {
-        var (status, startDate) = await GetStartDateAsync("approved", "2026-06-15", storedNumber: "A26ER5003240199GR");
+        var (status, startDate) = await GetStartDateAsync("approved", new DateOnly(2026, 6, 15), storedNumber: "A26ER5003240199GR");
 
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal("2026-01-01", startDate);

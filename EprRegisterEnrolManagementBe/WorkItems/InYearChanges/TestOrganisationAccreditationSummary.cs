@@ -53,16 +53,16 @@ internal static class TestOrganisationAccreditationSummary
             [
                 Site(
                     1,
-                    "Speira GmbH",
+                    "Example Recycling GmbH",
                     ("1 Hafenstrasse", "Bremen", "Germany"),
                     isEu: true,
                     isOecd: true,
                     interimSites: [Interim(101, "I-001", "Bremen Interim Works", "R12")],
-                    besFiles: [File("e2e-bes-001", "bes-speira-bremen.pdf", "bes", "Clean")]
+                    besFiles: [File("e2e-bes-001", "bes-example-bremen.pdf", "bes", "Clean")]
                 ),
                 Site(
                     2,
-                    "Speira GmbH",
+                    "Example Recycling GmbH",
                     ("2 Hafenstrasse", "Hamburg", "Germany"),
                     isEu: true,
                     isOecd: true,
@@ -74,11 +74,11 @@ internal static class TestOrganisationAccreditationSummary
                     ],
                     besFiles:
                     [
-                        File("e2e-bes-002", "bes-speira-hamburg.pdf", "bes", "Clean"),
-                        File("e2e-bes-002-pending", "bes-speira-hamburg-awaiting-scan.pdf", "bes", "Pending"),
+                        File("e2e-bes-002", "bes-example-hamburg.pdf", "bes", "Clean"),
+                        File("e2e-bes-002-pending", "bes-example-hamburg-awaiting-scan.pdf", "bes", "Pending"),
                     ]
                 ),
-                Site(3, "Excel Recycling BV", ("3 Havenweg", "Rotterdam", "Netherlands"), isEu: true, isOecd: true),
+                Site(3, "Sample Recycling BV", ("3 Havenweg", "Rotterdam", "Netherlands"), isEu: true, isOecd: true),
                 new OperatorSummarySite(
                     SiteId: 4,
                     OrsId: "004",

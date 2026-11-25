@@ -1,4 +1,3 @@
-using System.Globalization;
 using EprRegisterEnrolManagementBe.Config;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -29,7 +28,6 @@ namespace EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 /// </summary>
 internal static class AccreditationSummaryEndpoints
 {
-    private const string StartDateField = "accreditationStartDate";
     private const string OrganisationIdField = "operatorOrganisationId";
     private const string ApplicationIdField = "accreditationApplicationId";
     private const string WrongWorkItemTypeTitle = "Wrong work item type";
@@ -56,6 +54,7 @@ internal static class AccreditationSummaryEndpoints
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IWorkItemRegistry registry,
         [FromServices] IAccreditationSummaryAdapter adapter,
+        [FromServices] IReAccreditationStartDateResolver startDates,
         [FromServices] IConfiguration configuration,
         [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
@@ -67,6 +66,11 @@ internal static class AccreditationSummaryEndpoints
             return TypedResults.NotFound();
         }
 
+        // The In-Year Change category stands in for "this case has the Accreditation summary tab". It is the
+        // category, not a per-type flag, so a new In-Year Change type (RA-782 and later) gets this route
+        // automatically. Adding one is therefore a deliberate act on both sides: confirm the type should have the
+        // tab, and add it to management-fe's tab list, or the two drift apart (the route answers but the tab never
+        // shows, or the tab shows over a 400).
         var type = registry.Find(workItem.TypeId);
         if (type?.Category != WorkItemCategories.InYearChange)
         {
@@ -84,7 +88,9 @@ internal static class AccreditationSummaryEndpoints
         var organisationId = ReadString(workItem.Payload, OrganisationIdField);
         if (TestOrganisations.IsEnabled(configuration) && TestOrganisations.IsTestOrganisation(organisationId))
         {
-            return TypedResults.Ok(Respond(TestOrganisationAccreditationSummary.Fixture, storedStartDate: null));
+            var fixture = TestOrganisationAccreditationSummary.Fixture;
+            // The stub has no re-accreditation behind it: 1 January of its year, by design (not a fallback miss).
+            return TypedResults.Ok(new AccreditationSummaryResponse(fixture, new DateOnly(fixture.AccreditationYear, 1, 1)));
         }
 
         var applicationId = ReadString(workItem.Payload, ApplicationIdField);
@@ -97,33 +103,26 @@ internal static class AccreditationSummaryEndpoints
             new AccreditationSummaryReadRequest(organisationId, applicationId, Guid.NewGuid()),
             cancellationToken
         );
-        if (read.Outcome == AccreditationSummaryReadOutcome.NotFound)
+        if (read is not { Outcome: AccreditationSummaryReadOutcome.Success, Summary: { } summary })
         {
-            return TypedResults.NotFound();
-        }
-        if (read.Outcome != AccreditationSummaryReadOutcome.Success)
-        {
-            return Unavailable(read.Message);
+            return read.Outcome == AccreditationSummaryReadOutcome.NotFound
+                ? TypedResults.NotFound()
+                : Unavailable(read.Message);
         }
 
-        DateOnly? storedStartDate;
+        StartDateLookup lookup;
+        var logger = loggerFactory.CreateLogger(typeof(AccreditationSummaryEndpoints).FullName!);
         try
         {
-            storedStartDate = await ReadStoredStartDateAsync(
-                persistence,
-                read.Summary!.AccreditationNumber,
-                cancellationToken
-            );
+            lookup = await startDates.FindAsync(summary.AccreditationNumber, cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // Never a guessed date: a failed lookup is the tab's unavailable state.
-            loggerFactory
-                .CreateLogger(typeof(AccreditationSummaryEndpoints).FullName!)
-                .LogError(ex, "Accreditation start date lookup failed for work item {WorkItemId}", id);
+            // A failed lookup is the tab's unavailable state; the date is not guessed in that case.
+            logger.LogError(ex, "Accreditation start date lookup failed for work item {WorkItemId}", id);
             return Unavailable("The accreditation start date could not be read.");
         }
-        return TypedResults.Ok(Respond(read.Summary, storedStartDate));
+        return TypedResults.Ok(Respond(id, summary, lookup, logger));
     }
 
     private static ProblemHttpResult Unavailable(string? detail) =>
@@ -133,49 +132,34 @@ internal static class AccreditationSummaryEndpoints
             statusCode: StatusCodes.Status503ServiceUnavailable
         );
 
-    /// <summary>
-    /// The start date the re-accreditation work item stamped when it issued this accreditation. It counts only once
-    /// that work item is Granted (<c>approved</c>): the number is minted at step 1 (<c>approved-pending-contact</c>)
-    /// but the date is stamped at step 2. Null when there is no such work item or it carries no usable date.
-    /// </summary>
-    private static async Task<DateOnly?> ReadStoredStartDateAsync(
-        IWorkItemPersistence persistence,
-        string? accreditationNumber,
-        CancellationToken cancellationToken
+    // The stored start date of a Granted accreditation. When there is none (see StartDateMiss) the tab still has to
+    // show a date, so it shows 1 January of the accreditation year: right for every accreditation granted before
+    // mid-year grants exist, a date too early for one granted later. That is a guess, so each use of it is logged.
+    private static AccreditationSummaryResponse Respond(
+        Guid workItemId,
+        OperatorAccreditationSummary summary,
+        StartDateLookup lookup,
+        ILogger logger
     )
     {
-        if (string.IsNullOrWhiteSpace(accreditationNumber))
+        if (lookup.Date is { } stored)
         {
-            return null;
+            return new AccreditationSummaryResponse(summary, stored);
         }
-        // Uses the unique partial index on payload.accreditationId.
-        var issuer = await persistence.FindBySubmissionKeyAsync(
-            ReAccreditationType.Id,
-            ReAccreditationAccreditationNumber.PayloadKey,
-            accreditationNumber,
-            cancellationToken
-        );
-        if (issuer?.StateId != ReAccreditationType.ApprovedStateId)
-        {
-            return null;
-        }
-        return
-            issuer.Payload.TryGetValue(StartDateField, out var value)
-            && value.IsString
-            && DateOnly.TryParseExact(
-                value.AsString,
-                "yyyy-MM-dd",
-                CultureInfo.InvariantCulture,
-                DateTimeStyles.None,
-                out var date
-            )
-            ? date
-            : null;
-    }
 
-    // The stored start date of a Granted accreditation, else 1 January of the accreditation year.
-    private static AccreditationSummaryResponse Respond(OperatorAccreditationSummary summary, DateOnly? storedStartDate) =>
-        new(summary, storedStartDate ?? new DateOnly(summary.AccreditationYear, 1, 1));
+        var fallback = new DateOnly(summary.AccreditationYear, 1, 1);
+        logger.LogWarning(
+            "Accreditation summary for work item {WorkItemId} has no stored start date for accreditation "
+                + "{AccreditationNumber} ({Reason}, issuing work item {IssuerWorkItemId}); showing the fallback "
+                + "{FallbackStartDate:yyyy-MM-dd}",
+            workItemId,
+            summary.AccreditationNumber,
+            lookup.Miss,
+            lookup.IssuerWorkItemId,
+            fallback
+        );
+        return new AccreditationSummaryResponse(summary, fallback);
+    }
 
     private static string? ReadString(BsonDocument payload, string field) =>
         payload.TryGetValue(field, out var value) && value.IsString && !string.IsNullOrWhiteSpace(value.AsString)

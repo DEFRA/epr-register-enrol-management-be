@@ -2,6 +2,8 @@ using System.Net;
 using System.Text;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Utils.Logging;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -61,7 +63,7 @@ public class HttpAccreditationSummaryAdapterTests
             {
               "siteId": 7,
               "orsId": "001",
-              "siteName": "Speira GmbH",
+              "siteName": "Example Recycling GmbH",
               "siteAddress": "Flat line",
               "addressLine1": "1 Test Strasse",
               "addressLine2": "Block B",
@@ -135,7 +137,8 @@ public class HttpAccreditationSummaryAdapterTests
         Func<HttpRequestMessage, HttpResponseMessage> respond,
         bool enabled = true,
         string url = BaseUrl,
-        string? sharedSecret = "a-shared-secret"
+        string? sharedSecret = "a-shared-secret",
+        ILogger<HttpAccreditationSummaryAdapter>? logger = null
     )
     {
         var handler = new Handler(respond);
@@ -152,13 +155,13 @@ public class HttpAccreditationSummaryAdapterTests
                     SharedSecret = sharedSecret,
                 }
             ),
-            NullLogger<HttpAccreditationSummaryAdapter>.Instance,
+            logger ?? NullLogger<HttpAccreditationSummaryAdapter>.Instance,
             Substitute.For<IStructuredLogger<HttpAccreditationSummaryAdapter>>(),
             new ResiliencePipelineBuilder<HttpResponseMessage>()
                 .AddRetry(
                     new RetryStrategyOptions<HttpResponseMessage>
                     {
-                        MaxRetryAttempts = 2,
+                        MaxRetryAttempts = HttpAccreditationSummaryAdapter.MaxRetryAttempts,
                         Delay = TimeSpan.Zero,
                         ShouldHandle = new PredicateBuilder<HttpResponseMessage>()
                             .Handle<HttpRequestException>()
@@ -228,7 +231,7 @@ public class HttpAccreditationSummaryAdapterTests
         Assert.Equal(["001", "002"], sites.Select(site => site.OrsId));
         var site = sites[0];
         Assert.Equal(7, site.SiteId);
-        Assert.Equal("Speira GmbH", site.SiteName);
+        Assert.Equal("Example Recycling GmbH", site.SiteName);
         Assert.Equal("Flat line", site.SiteAddress);
         Assert.Equal("1 Test Strasse", site.AddressLine1);
         Assert.Equal("Block B", site.AddressLine2);
@@ -340,6 +343,28 @@ public class HttpAccreditationSummaryAdapterTests
     }
 
     [Fact]
+    public async Task A_404_is_logged_as_a_warning_naming_the_likely_causes()
+    {
+        var logger = new ListLogger<HttpAccreditationSummaryAdapter>();
+        var (adapter, _) = BuildSut(_ => new HttpResponseMessage(HttpStatusCode.NotFound), logger: logger);
+
+        await Read(adapter);
+
+        var record = Assert.Single(logger.Records);
+        Assert.Equal(LogLevel.Warning, record.Level);
+        Assert.Contains("no Approved accreditation", record.Message, StringComparison.Ordinal);
+        Assert.Contains("backend#296", record.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_worst_case_retry_budget_fits_inside_management_fes_5s_timeout()
+    {
+        // management-fe calls this route with backendApi.timeoutMs (default 5000ms) and shows "unavailable" after
+        // it, so a retry that cannot finish in time is wasted work. Leave room for the start date lookup.
+        Assert.True(HttpAccreditationSummaryAdapter.WorstCaseBudget <= TimeSpan.FromSeconds(4.5));
+    }
+
+    [Fact]
     public async Task A_5xx_is_retried_and_then_a_transient_failure()
     {
         var (adapter, handler) = BuildSut(_ => new HttpResponseMessage(HttpStatusCode.BadGateway));
@@ -347,7 +372,7 @@ public class HttpAccreditationSummaryAdapterTests
         var result = await Read(adapter);
 
         Assert.Equal(AccreditationSummaryReadOutcome.TransientFailure, result.Outcome);
-        Assert.Equal(3, handler.Requests.Count);
+        Assert.Equal(HttpAccreditationSummaryAdapter.MaxRetryAttempts + 1, handler.Requests.Count);
     }
 
     [Fact]
