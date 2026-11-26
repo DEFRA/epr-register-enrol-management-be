@@ -65,18 +65,19 @@ public class ClientIdAuthenticationAdminUiCallerTests
         WebApplicationFactory<Program> app,
         string clientId,
         string secret,
-        string nonce
+        string nonce,
+        string userName = "Support User"
     )
     {
         var timestamp = factory.FakeTime.GetUtcNow().ToString("O");
         var signature = ClientIdAuthenticationHandler.ComputeSignature(
             secret,
-            new ClientIdSignaturePayload(clientId, "entra-oid-123", "Support User", timestamp, nonce, Role: SupportRole)
+            new ClientIdSignaturePayload(clientId, "entra-oid-123", userName, timestamp, nonce, Role: SupportRole)
         );
         var client = app.CreateClient();
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, clientId);
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultUserIdHeaderName, "entra-oid-123");
-        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultUserNameHeaderName, "Support User");
+        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultUserNameHeaderName, userName);
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultRoleHeaderName, SupportRole);
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultTimestampHeaderName, timestamp);
         client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultNonceHeaderName, nonce);
@@ -317,10 +318,10 @@ public class ClientIdAuthenticationAdminUiCallerTests
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
     }
 
-    private static WorkItem ItemWithContactDetails() =>
+    private static WorkItem ItemWithContactDetails(Guid? id = null) =>
         new()
         {
-            Id = s_workItemId,
+            Id = id ?? s_workItemId,
             TypeId = "re-accreditation",
             StateId = "submitted",
             SubmittedAt = new DateTime(2026, 4, 1, 9, 0, 0, DateTimeKind.Utc),
@@ -398,6 +399,47 @@ public class ClientIdAuthenticationAdminUiCallerTests
     }
 
     [Fact]
+    public async Task Admin_ui_still_gets_the_page_when_one_item_has_a_non_string_payload_field()
+    {
+        // One corrupt record must not make the whole results page a 500: its
+        // bad field comes back null (the Admin UI shows "Missing from work
+        // item") and is logged at Error; every other item is unaffected.
+        var (factory, app, logs) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        var corrupt = ItemWithContactDetails();
+        corrupt.Payload["organisationName"] = new BsonInt32(42);
+        var healthy = ItemWithContactDetails(Guid.Parse("00000751-0000-4000-8000-000000000002"));
+        factory
+            .MockPersistence.QueryAsync(Arg.Any<WorkItemQuery>(), Arg.Any<CancellationToken>())
+            .Returns(new WorkItemPage([corrupt, healthy], 2, 1, 50));
+        using var client = AdminClient(factory, app, "nonce-admin-projection-corrupt");
+
+        var response = await client.GetAsync("/work-items", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var json = await JsonDocument.ParseAsync(
+            await response.Content.ReadAsStreamAsync(TestContext.Current.CancellationToken),
+            cancellationToken: TestContext.Current.CancellationToken
+        );
+        var items = json.RootElement.GetProperty("items");
+        Assert.Equal(2, items.GetArrayLength());
+        var corruptPayload = items[0].GetProperty("payload");
+        Assert.Equal(JsonValueKind.Null, corruptPayload.GetProperty("organisationName").ValueKind);
+        Assert.Equal("APEPL5005001", corruptPayload.GetProperty("applicationReference").GetString());
+        Assert.Equal(
+            "Acme Plastics Ltd",
+            items[1].GetProperty("payload").GetProperty("organisationName").GetString()
+        );
+        Assert.Single(
+            logs.Records,
+            r =>
+                r.Level == LogLevel.Error
+                && r.Message.StartsWith("Work item payload field is not a string", StringComparison.Ordinal)
+        );
+    }
+
+    [Fact]
     public async Task Management_fe_still_receives_the_full_item()
     {
         var (factory, app, _) = NewApp();
@@ -448,6 +490,58 @@ public class ClientIdAuthenticationAdminUiCallerTests
         {
             yield return child;
         }
+    }
+
+    // The Admin UI sends x-cdp-user-name as encodeURIComponent(name). An Entra
+    // display name is at most 256 chars and a BMP character such as '王'
+    // encodes to 9 ASCII chars (%E7%8E%8B), so the longest valid name arrives
+    // as 2304 chars. Uri.EscapeDataString encodes '王' exactly as
+    // encodeURIComponent does.
+    [Fact]
+    public async Task Admin_ui_is_accepted_with_the_longest_entra_name_percent_encoded()
+    {
+        var (factory, app, _) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        var encoded = Uri.EscapeDataString(new string('王', 256));
+        Assert.Equal(2304, encoded.Length);
+        using var client = SignedClient(
+            factory,
+            app,
+            CallerAccessPolicies.AdminUiClientIdDefault,
+            AdminSecret,
+            "nonce-admin-long-name",
+            encoded
+        );
+
+        var response = await client.GetAsync("/work-items", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Admin_ui_is_refused_with_401_when_the_encoded_name_is_over_the_cap()
+    {
+        var (factory, app, _) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        var encoded = Uri.EscapeDataString(new string('王', 257));
+        using var client = SignedClient(
+            factory,
+            app,
+            CallerAccessPolicies.AdminUiClientIdDefault,
+            AdminSecret,
+            "nonce-admin-too-long-name",
+            encoded
+        );
+
+        var response = await client.GetAsync("/work-items", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Contains(
+            $"{ClientIdDefaults.DefaultUserNameHeaderName} exceeds 2304 chars",
+            response.Headers.WwwAuthenticate.ToString()
+        );
     }
 
     [Fact]

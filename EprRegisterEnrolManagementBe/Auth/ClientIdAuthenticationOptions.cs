@@ -112,7 +112,28 @@ public class ClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// into <c>WorkItem.AuditLog.CreatedByName</c> and
     /// <c>WorkItemNote.CreatedByName</c>.
     /// </summary>
-    public int MaxUserNameLength { get; set; } = 256;
+    /// <remarks>
+    /// The cap is on the header as sent, which may be percent-encoded: the
+    /// Admin UI (RA-751) sends <c>encodeURIComponent(name)</c>. An Entra
+    /// display name is at most 256 characters, and encoding turns one UTF-16
+    /// character into at most 9 ASCII ones (a BMP character above U+07FF is 3
+    /// UTF-8 bytes, each <c>%XX</c>; a surrogate pair is 4 bytes, 12 chars for
+    /// 2), so the longest valid name arrives as 256 × 9 = 2304 chars. A lower
+    /// cap would 401 a support user with a long non-ASCII name on every call.
+    /// One cap for every caller, not a larger one for the Admin UI only: this
+    /// check runs before the signature is verified, so the client id it could
+    /// key on is still unproven and any caller could claim the Admin UI's.
+    /// </remarks>
+    public int MaxUserNameLength { get; set; } = MaxEntraDisplayNameLength * MaxPercentEncodedCharsPerChar;
+
+    /// <summary>Entra ID's limit on a user's <c>displayName</c>.</summary>
+    internal const int MaxEntraDisplayNameLength = 256;
+
+    /// <summary>
+    /// The most ASCII characters <c>encodeURIComponent</c> emits per UTF-16
+    /// character: three <c>%XX</c> triplets for a 3-byte UTF-8 BMP character.
+    /// </summary>
+    internal const int MaxPercentEncodedCharsPerChar = 9;
 
     /// <summary>
     /// Maximum permitted length of the role header. Persisted into the

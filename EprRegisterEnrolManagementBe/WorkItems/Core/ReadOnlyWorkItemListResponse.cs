@@ -1,3 +1,4 @@
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using MongoDB.Bson;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.Core;
@@ -27,7 +28,7 @@ public sealed record ReadOnlyWorkItemListItem(
     ReadOnlyWorkItemPayload Payload
 )
 {
-    internal static ReadOnlyWorkItemListItem From(WorkItem item) =>
+    internal static ReadOnlyWorkItemListItem From(WorkItem item, IStructuredLogger<WorkItemEndpointsLogger> log) =>
         new(
             item.Id,
             item.TypeId,
@@ -36,17 +37,46 @@ public sealed record ReadOnlyWorkItemListItem(
             item.AssignedToId,
             item.AssignedToName,
             new ReadOnlyWorkItemPayload(
-                OptionalString(item.Payload, "applicationReference"),
-                OptionalString(item.Payload, "operatorOrganisationId"),
-                OptionalString(item.Payload, "organisationName")
+                OptionalString(item, "applicationReference", log),
+                OptionalString(item, "operatorOrganisationId", log),
+                OptionalString(item, "organisationName", log)
             )
         );
 
-    // Absent or BSON null → null (these fields are optional on stored items:
-    // applicationReference predates RA-219 on old items). A value of any other
-    // BSON type throws, so corrupt data surfaces as a 500 rather than a blank.
-    private static string? OptionalString(BsonDocument payload, string field) =>
-        payload.TryGetValue(field, out var value) && !value.IsBsonNull ? value.AsString : null;
+    // Absent or BSON null → null: these fields are optional on stored items
+    // (applicationReference predates RA-219 on old items).
+    //
+    // A value of any other BSON type is corrupt data. It also comes back as
+    // null, logged at Error with the work item id and the field name (never
+    // the value, which may be personal data), so one bad record cannot turn
+    // the whole results page into a 500. The Admin UI (RA-751) shows a null
+    // field as "Missing from work item" and logs it on its side too.
+    private static string? OptionalString(
+        WorkItem item,
+        string field,
+        IStructuredLogger<WorkItemEndpointsLogger> log
+    )
+    {
+        if (!item.Payload.TryGetValue(field, out var value) || value.IsBsonNull)
+        {
+            return null;
+        }
+        if (value.IsString)
+        {
+            return value.AsString;
+        }
+        log.Log(
+            LogLevel.Error,
+            "Work item payload field is not a string; returned as null to the read-only caller",
+            new Dictionary<string, object?>
+            {
+                ["work_item.id"] = item.Id.ToString(),
+                ["work_item.payload_field"] = field,
+                ["work_item.payload_field_bson_type"] = value.BsonType.ToString(),
+            }
+        );
+        return null;
+    }
 }
 
 /// <summary>The only payload fields a read-only caller receives.</summary>

@@ -610,7 +610,9 @@ optionally reads two headers forwarded by the BFF and turns them into
 | `x-cdp-user-name` | `user:name` |
 
 These are used for audit attribution only (`WorkItem.AuditLog.CreatedBy` /
-`CreatedByName` and similar). Role membership is not part of the trust
+`CreatedByName` and similar). `x-cdp-user-name` is capped at
+`Auth:MaxUserNameLength` (default 2304) characters as sent, because the Admin
+UI percent-encodes it: a 256-character Entra display name can encode to 2304. Role membership is not part of the trust
 contract — see ADR-0005.
 
 ### Storage
@@ -648,7 +650,10 @@ The Admin UI (`epr-register-enrol-admin`) is a read-only caller: it may call
 else. From `GET /work-items` it gets a projected item, `{ id, typeId, stateId,
 lastModifiedAt, assignedToId, assignedToName, payload: { applicationReference,
 operatorOrganisationId, organisationName } }`: no submitter, no contact
-details, no other payload. Other callers get the full item. Every other request it makes is refused with `403` and logged at Error.
+details, no other payload. Other callers get the full item. A projected payload
+field stored as a non-string value comes back `null` for that item, logged at
+Error with the work item id and field name, and the rest of the page still
+returns. Every other request it makes is refused with `403` and logged at Error.
 An endpoint opens itself to read-only callers with
 `RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed)`; a plain
 `RequireAuthorization()` keeps them out. See
@@ -670,7 +675,9 @@ from the transitions into the state: `query` from the actions
 `StandardStatusPushHook.IsActionStatusPushed`. The operator
 backend maps each state id to the Legacy `ApplicationStatus` it should hold
 (`CaseManagementStatusMapping.StatusPush`, served at
-`GET /admin/case-management-status-mapping`).
+`GET /admin/case-management-status-mapping`). The Admin UI labels and filters
+add-overseas-site items with these states too, because add-overseas-site uses
+the Standard workflow's states; `AddOverseasSiteTypeTests` pins that they match.
 
 ### Endpoints
 

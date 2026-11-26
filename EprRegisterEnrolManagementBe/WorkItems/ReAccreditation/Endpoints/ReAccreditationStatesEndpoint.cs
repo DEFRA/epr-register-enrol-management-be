@@ -12,7 +12,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 /// re-accreditation states of the current template (id, display name,
 /// terminal flag) in workflow order, with how a move onto each state reaches
 /// the operator journey. The Admin UI reads this instead of keeping its own
-/// copy (RA-751 ACs 2, 3 and 6).
+/// copy (RA-751 ACs 2, 3 and 6). It also labels and filters add-overseas-site
+/// items with this list, which is right only while both types use the
+/// Standard workflow's states; <c>AddOverseasSiteTypeTests</c> pins that.
 ///
 /// Management-be does not push a status name: it pushes the state id as
 /// <c>toStateId</c>, and the operator backend maps that id onto its own

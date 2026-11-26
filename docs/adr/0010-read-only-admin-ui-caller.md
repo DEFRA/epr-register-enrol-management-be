@@ -35,7 +35,11 @@ signed-in user.
    `AddCallerSecret` and uses the unchanged v3 HMAC contract (ADR-0003,
    ADR-0007). The Admin UI signs the eight-line form with role
    `Waste.SupportUser.ReadOnly` and an empty nation, and sends no nation
-   header.
+   header. It sends `x-cdp-user-name` as `encodeURIComponent(name)`, so
+   `Auth:MaxUserNameLength` defaults to 2304: an Entra display name is at
+   most 256 characters and encoding makes each one at most 9. The cap applies
+   to every caller, because it is checked before the signature, when the
+   client id is not yet proven.
 2. **Read-only by client id.** `ClientIdAuthenticationOptions.ReadOnlyClientIds`
    holds the Admin UI's client id. The handler gives a request from it the
    claim `client:access = read-only`. Membership does not depend on the
@@ -47,6 +51,9 @@ signed-in user.
    `ReadOnlyCallerAllowed` policy, which lets other callers through unchanged
    and the read-only caller through only for GET or HEAD. Only
    `GET /work-items` and `GET /work-items/re-accreditation/states` opt in.
+   The Admin UI also labels and filters add-overseas-site items with the
+   re-accreditation states, which is right because both types use the
+   Standard workflow's states. `AddOverseasSiteTypeTests` pins that.
 4. **Every read-only request is logged.** An allowed request is logged at
    Information with the caller's client id, user id, method and path, so
    upstream logs show the client and the signed-in user (an epic
@@ -60,6 +67,12 @@ signed-in user.
    Admin UI's search shows, so the submitter, the operator's contact details
    and the rest of the payload never leave this service for that caller,
    whatever its own masking code does. Other callers get the full item.
+   A projected payload field that is absent or BSON null is `null`. One
+   stored as any other non-string type is corrupt data: it is also `null`
+   for that item, with an Error log naming the work item id and the field
+   (never the value), and the rest of the page still returns. One bad record
+   must not take down the whole search, and the Admin UI shows a `null`
+   field as "Missing from work item" and logs it too.
 6. **Client-id collisions stop startup.** The Admin UI's client id is
    read-only whether or not its secret is set, so `Auth__AdminUiClientId`
    equal to another caller's client id would make that caller read-only. The
@@ -107,8 +120,18 @@ signed-in user.
     including a percent-encoded user name;
   - the admin receives only the projected fields (an absent payload field is
     null), while management-fe still receives the full item;
+  - a page holding one item with a non-string payload field still returns
+    `200`, with that field null and an Error log;
+  - a 256-character non-ASCII name, percent-encoded to 2304 characters, is
+    accepted, and one character more is refused with `401`;
   - startup fails when the Admin UI's client id equals another caller's,
     with or without the admin secret.
+- `ReadOnlyWorkItemListResponseTests`: a non-string payload field (number,
+  boolean, date, document, array) is null with an Error log carrying the work
+  item id, field and BSON type but never the value; absent and BSON null
+  fields are null without a log.
+- `AddOverseasSiteTypeTests`: add-overseas-site's state ids and display names
+  equal re-accreditation's.
 - `RequiredConfigHealthCheckTests`: a missing Admin UI secret is Degraded
   with an Error log outside Development and ignored in Development; a missing
   caseworker caller secret stays Unhealthy.

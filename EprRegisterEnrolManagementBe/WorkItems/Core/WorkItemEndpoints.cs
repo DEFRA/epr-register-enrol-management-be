@@ -531,7 +531,7 @@ public static class WorkItemEndpoints
         {
             return TypedResults.Ok(
                 new ReadOnlyWorkItemListResponse(
-                    page.Items.Select(ReadOnlyWorkItemListItem.From).ToList(),
+                    page.Items.Select(w => ReadOnlyWorkItemListItem.From(w, log)).ToList(),
                     page.TotalCount,
                     page.Page,
                     page.PageSize
