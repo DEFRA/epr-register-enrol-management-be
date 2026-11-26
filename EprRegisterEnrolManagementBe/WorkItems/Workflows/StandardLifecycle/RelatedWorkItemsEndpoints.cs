@@ -1,3 +1,4 @@
+using System.Globalization;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
@@ -35,8 +36,8 @@ internal static class RelatedWorkItemsEndpoints
     /// <summary>
     /// One page of the work items submitted with <paramref name="id"/>. The
     /// page is read as text so any value answers a page: one that is not a
-    /// whole number, or is below 1, is page 1, and one past the end (however
-    /// large) is the last page.
+    /// whole number, or is below 1, is page 1, and one past the end, however
+    /// many digits it has, is the last page.
     /// </summary>
     public static async Task<Results<Ok<RelatedWorkItemsResponse>, NotFound>> GetRelatedWorkItems(
         [FromRoute] Guid id,
@@ -52,14 +53,8 @@ internal static class RelatedWorkItemsEndpoints
             return TypedResults.NotFound();
         }
 
-        List<WorkItem> ordered = SubmissionPayload.TryReadSubmissionReference(workItem.Payload, out var reference)
-            ?
-            [
-                workItem,
-                .. (await persistence.FindBySubmissionReferenceAsync(reference, cancellationToken)).Where(item =>
-                    item.Id != workItem.Id
-                ),
-            ]
+        var ordered = SubmissionPayload.TryReadSubmissionReference(workItem.Payload, out var reference)
+            ? ThisOneFirst(workItem, await persistence.FindBySubmissionReferenceAsync(reference, cancellationToken))
             : [workItem];
 
         var lastPage = Math.Max(1, (ordered.Count + PageSize - 1) / PageSize);
@@ -73,8 +68,22 @@ internal static class RelatedWorkItemsEndpoints
         return TypedResults.Ok(new RelatedWorkItemsResponse(ordered.Count, currentPage, PageSize, items));
     }
 
-    private static int ResolvePage(string? page, int lastPage) =>
-        long.TryParse(page, out var requested) && requested >= 1 ? (int)Math.Min(requested, lastPage) : 1;
+    /// <summary>The one asked about, then the rest of its submission in the order read.</summary>
+    private static List<WorkItem> ThisOneFirst(WorkItem workItem, IReadOnlyList<WorkItem> submission) =>
+        [workItem, .. submission.Where(item => item.Id != workItem.Id)];
+
+    private static int ResolvePage(string? page, int lastPage)
+    {
+        if (string.IsNullOrEmpty(page) || !page.All(char.IsAsciiDigit))
+        {
+            return 1;
+        }
+
+        // All digits: too many to parse is past the end, so the last page.
+        return long.TryParse(page, NumberStyles.None, CultureInfo.InvariantCulture, out var requested)
+            ? (int)Math.Clamp(requested, 1, lastPage)
+            : lastPage;
+    }
 }
 
 /// <summary>RA-770: one page of the work items from the same submission.</summary>

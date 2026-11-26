@@ -3,7 +3,6 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
-using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -99,6 +98,8 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     [InlineData("abc", 1)]
     [InlineData("99", 2)]
     [InlineData("99999999999", 2)]
+    [InlineData("99999999999999999999", 2)]
+    [InlineData("+2", 1)]
     public async Task Any_page_value_answers_the_nearest_page(string asked, int expected)
     {
         var ct = TestContext.Current.CancellationToken;
@@ -145,40 +146,32 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     }
 
     [Fact]
-    public async Task The_submission_read_uses_the_submission_reference_index()
+    public async Task The_related_read_uses_the_submission_reference_index()
     {
         var ct = TestContext.Current.CancellationToken;
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-tab-index", siteCount: 2, ct);
-        var reference = (await factory.Persistence.GetByIdAsync(ids[0], ct))!
-            .Payload["submissionReference"]
-            .AsString;
-        var filter = WorkItemPersistence
-            .SubmissionReferenceFilter(reference)
-            .Render(
-                new RenderArgs<WorkItem>(
-                    MongoDB.Bson.Serialization.BsonSerializer.LookupSerializer<WorkItem>(),
-                    MongoDB.Bson.Serialization.BsonSerializer.SerializerRegistry
-                )
-            );
+        var before = await SubmissionReferenceIndexUsesAsync(factory, ct);
 
-        var explain = await WorkItems(factory)
-            .Database.RunCommandAsync<BsonDocument>(
-                new BsonDocument
-                {
-                    {
-                        "explain",
-                        new BsonDocument { { "find", "workItems" }, { "filter", filter } }
-                    },
-                    { "verbosity", "queryPlanner" },
-                },
-                cancellationToken: ct
-            );
+        await GetRelatedAsync(client, ids[0], page: null, ct);
 
-        var plan = explain["queryPlanner"]["winningPlan"].ToJson();
-        Assert.Contains("IXSCAN", plan);
-        Assert.DoesNotContain("COLLSCAN", plan);
+        // The index is partial on $type: string, so a read whose filter does
+        // not imply that type scans the collection and leaves this unchanged.
+        Assert.True(await SubmissionReferenceIndexUsesAsync(factory, ct) > before);
+    }
+
+    private static async Task<long> SubmissionReferenceIndexUsesAsync(
+        AddOverseasSiteAppFactory factory,
+        CancellationToken ct
+    )
+    {
+        var stats = await WorkItems(factory)
+            .Aggregate()
+            .AppendStage<BsonDocument>(new BsonDocument("$indexStats", new BsonDocument()))
+            .Match(new BsonDocument("name", "payload.submissionReference_1"))
+            .SingleAsync(ct);
+        return stats["accesses"]["ops"].ToInt64();
     }
 
     [Fact]
