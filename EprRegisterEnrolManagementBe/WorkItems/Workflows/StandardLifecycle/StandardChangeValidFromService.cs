@@ -139,11 +139,7 @@ internal sealed class StandardChangeValidFromService(
             );
         }
 
-        if (
-            Is(workItem.StateId, StandardWorkflow.ApprovedStateId)
-            || Is(workItem.StateId, StandardWorkflow.RejectedStateId)
-            || Is(workItem.StateId, StandardWorkflow.WithdrawnStateId)
-        )
+        if (StandardWorkflow.IsFinalState(workItem.StateId))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,

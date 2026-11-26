@@ -81,6 +81,16 @@ public static class StandardWorkflow
     /// <summary>The terminal "Withdrawn" state.</summary>
     public const string WithdrawnStateId = "withdrawn";
 
+    /// <summary>
+    /// Whether the case is closed (Granted, Refused or Withdrawn), for the lifecycle services that
+    /// refuse to act on one. Enumerated rather than read off the template: an item must be refused
+    /// even when its frozen snapshot is too old to carry terminal metadata.
+    /// </summary>
+    public static bool IsFinalState(string? stateId) =>
+        string.Equals(stateId, ApprovedStateId, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(stateId, RejectedStateId, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(stateId, WithdrawnStateId, StringComparison.OrdinalIgnoreCase);
+
     // RA-324 (AC06): state DisplayNames align with the prototype "Applications"
     // design. Only the labels change here — the state ids are the wire contract
     // the management-fe and mgmt-tests key off and MUST stay exactly as they
