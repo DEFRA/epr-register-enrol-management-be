@@ -157,6 +157,15 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
         // Every push succeeds, except that each decision push returns the next
         // of decisionResults (the last one repeats).
         PushAdapter
+            .PushChangeRequestQueryRaisedAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<DateTime>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(Task.FromResult(OperatorBackendPushResult.Success()));
+        PushAdapter
             .PushStatusChangedAsync(
                 Arg.Any<OperatorBackendStatusRoute>(),
                 Arg.Any<OperatorBackendPushPipeline>(),
@@ -189,12 +198,24 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
     );
 
     /// <summary>
-    /// Every push the fake adapter has received, in order. Add-ORS only ever
-    /// sends status pushes, so any other call fails the cast and the test.
+    /// RA-698: every query push (<c>PushChangeRequestQueryRaisedAsync</c>) the fake
+    /// adapter has received: the work item id and the note.
+    /// </summary>
+    public IReadOnlyList<(Guid WorkItemId, string Note)> QueryPushes =>
+        PushAdapter
+            .ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushChangeRequestQueryRaisedAsync))
+            .Select(call => ((Guid)call.GetArguments()[0]!, (string)call.GetArguments()[2]!))
+            .ToList();
+
+    /// <summary>
+    /// Every status push the fake adapter has received, in order (query pushes
+    /// are in <see cref="QueryPushes"/>).
     /// </summary>
     public IReadOnlyList<Push> Pushes =>
         PushAdapter
             .ReceivedCalls()
+            .Where(call => call.GetMethodInfo().Name == nameof(IOperatorBackendPushAdapter.PushStatusChangedAsync))
             .Select(call =>
             {
                 var args = call.GetArguments();

@@ -68,6 +68,10 @@ internal sealed class HttpOperatorBackendPushAdapter(
     private const string ChangeRequestStatusRelativePathTemplate =
         "/api/v1/accreditation-changes/case-management/{0}/status";
 
+    // RA-698: an in-year change request item's query route.
+    private const string ChangeRequestQueryRelativePathTemplate =
+        "/api/v1/accreditation-changes/case-management/{0}/query";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -138,6 +142,47 @@ internal sealed class HttpOperatorBackendPushAdapter(
             correlationId,
             body,
             "query-raised",
+            _retryPipeline,
+            cancellationToken
+        );
+    }
+
+    public async Task<OperatorBackendPushResult> PushChangeRequestQueryRaisedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string queryNote,
+        DateTime raisedAt,
+        CancellationToken cancellationToken = default
+    )
+    {
+        if (string.IsNullOrWhiteSpace(_config.Url))
+        {
+            return OperatorBackendPushResult.Failure("OperatorBackendApi:Url is not configured.");
+        }
+
+        var relativePath = string.Format(
+            ChangeRequestQueryRelativePathTemplate,
+            Uri.EscapeDataString(workItemId.ToString())
+        );
+        var endpoint = $"{_config.Url.TrimEnd('/')}{relativePath}";
+
+        // As for PushQueryRaisedAsync, the regulator-supplied note is never
+        // logged; only its length.
+        logger.LogInformation(
+            "Pushing change-request-query-raised for work item {WorkItemId} to {Endpoint} (correlation {CorrelationId}); note length {QueryNoteLength}",
+            workItemId,
+            endpoint,
+            correlationId,
+            queryNote.Length
+        );
+
+        var body = new ChangeRequestQueryRaisedPushRequest(queryNote, raisedAt);
+        return await ExecutePushAsync(
+            workItemId,
+            endpoint,
+            correlationId,
+            body,
+            "change-request-query-raised",
             _retryPipeline,
             cancellationToken
         );
@@ -494,6 +539,8 @@ internal sealed class HttpOperatorBackendPushAdapter(
         string QueryNote,
         IReadOnlyList<string> SectionKeys
     );
+
+    private sealed record ChangeRequestQueryRaisedPushRequest(string Note, DateTime RaisedAt);
 
     private sealed record StatusChangedPushRequest(
         string FromStateId,

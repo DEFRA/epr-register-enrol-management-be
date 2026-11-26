@@ -21,6 +21,14 @@ internal sealed class NullOperatorBackendPushAdapter : IOperatorBackendPushAdapt
         CancellationToken cancellationToken = default) =>
         Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
 
+    public Task<OperatorBackendPushResult> PushChangeRequestQueryRaisedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string queryNote,
+        DateTime raisedAt,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(OperatorBackendPushResult.Skipped("OperatorBackendApi:Enabled is false."));
+
     // epr-p86e / RA-410, RA-495: a decision push is gated on, so "disabled"
     // must be a Skipped pass (not a Failure) — otherwise every decision in an
     // environment that has not enabled the push would 500. The gate in

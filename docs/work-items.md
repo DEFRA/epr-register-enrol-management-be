@@ -296,7 +296,7 @@ type is configured. Every setting is code, not runtime data:
 | In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` |
 | Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` |
 | Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `AddOverseasSiteType.WorkflowDefinition`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` |
-| Template version | `TemplateVersion` | — (required) | `v19` | `v2` |
+| Template version | `TemplateVersion` | — (required) | `v19` | `v3` |
 
 - **Category** groups related types so the list can filter on the group
   without naming each type: `GET /work-items?category=in-year-change`
@@ -338,7 +338,7 @@ type is configured. Every setting is code, not runtime data:
   workflow changes every type that references it, so each of those types
   needs a new `TemplateVersion` and a snapshot migration. A type that needs
   different rules from a shared workflow derives its own instead of changing
-  the shared one: add-ORS v2 (RA-495 review) is `StandardWorkflow.Definition`
+  the shared one: add-ORS v2 (RA-495 review, v3 for RA-698) is `StandardWorkflow.Definition`
   with its `withdraw*` transitions made `CallerInvocable: false`, because
   withdraw is re-accreditation-only and re-accreditation still withdraws
   through the shared workflow.
@@ -435,9 +435,9 @@ type is configured. Every setting is code, not runtime data:
   `payload.effectiveDate` (RA-495 AC6), which the operator journey grants the
   site from and requires on `approved`; re-accreditation stamps none, so its
   body has no `effectiveDate`.
-  Query and withdraw stay re-accreditation-only. The `query-during-*`
-  transitions are already `CallerInvocable: false`; since v2 (RA-495 review)
-  add-ORS's `withdraw*` transitions are too, so
+  Withdraw stays re-accreditation-only (query is add-ORS too since RA-698, see
+  [Add-ORS query and response](#add-ors-query-and-response-ra-698)). Since v2
+  (RA-495 review) add-ORS's `withdraw*` transitions are `CallerInvocable: false`, so
   `POST /work-items/{id}/actions/withdraw*` returns `400` for an add-ORS item
   and `availableActions` no longer lists them. Before that the generic route
   could withdraw one, and the status push hook (which never pushes a move onto
@@ -448,6 +448,58 @@ type is configured. Every setting is code, not runtime data:
   version to `v2`, writes only `TemplateSnapshot` and `TemplateVersion`, and
   skips an item with no caller-invocable `withdraw*` declaration. Management-fe
   registers its add-ORS detail template for both versions.
+
+### Add-ORS query and response (RA-698)
+
+A regulator can query an add-ORS item, and the operator answers it. The item is
+one ORS, so the query is implicitly a combined ORS and BES query: there are no
+section keys. The shared state machine already declares the transitions
+(`query-during-*`, `resume-during-*`, `continue-review-during-*`, all
+`CallerInvocable: false`); add-ORS **v3** wires them to bespoke endpoints in
+`WorkItems/AddOverseasSite/` and bumps `TemplateVersion` to `v3`.
+`AddOverseasSiteQuerySnapshotMigration` (registered after the v2 migration)
+brings v1/v2 snapshots onto v3: it makes those declarations (and `withdraw*`)
+non-invocable, adds any a snapshot lacks, and sets the version; it writes only
+`TemplateSnapshot` and `TemplateVersion`. The transition is resolved
+server-side (never named by the caller) as for re-accreditation, by
+`StandardQueryActions`.
+
+| Route | Caller | What it does |
+|---|---|---|
+| `POST /work-items/{id}/query` | regulator (management-fe) | Body `{ reason }` only (required, at most 200 words; `sections` is refused with `400`). Self-assigns the querier, stamps `payload.currentQuery`, applies `query-during-*` from `submitted`/`duly-made`/`assessment-in-progress`/`assessment-started`/`awaiting-decision` to `queried`, and records an `application-queried` audit entry (`actionId`, `reason`). `409` when already `queried` or decided; `400` for another type. |
+| `POST /work-items/add-overseas-site/{id}/resume-from-query` | operator backend | Body `{ responderContactDetails:{fullName,email,role}, submittedAt, site:{changed ORS values}, interimSites:[{siteId,siteNumber,changes}], besEvidenceFiles:[{fileId,filename,contentType,s3Key,s3Bucket,besEvidenceValidFromDate,besEvidenceExpiryDate}] }`. See below. |
+| `POST /work-items/{id}/continue-review` | regulator | Moves an `updated` item back to where it was queried from (resolved from its `resume-during-*` audit entry). Idempotent (`X-Idempotent-Replay`); `409` from any other state. |
+
+**Query push (MBE-3).** `AddOverseasSiteQueryPushHook` pushes the note to the
+operator backend through `IOperatorBackendPushAdapter.PushChangeRequestQueryRaisedAsync`:
+`POST api/v1/accreditation-changes/case-management/{workItemId}/query` with
+`{ note, raisedAt }`, the same client id, signing, retries and correlation id
+as the status push. The outcome is audited as `query-push-sent`,
+`query-push-skipped` (push disabled) or `query-push-failed`; a failed push
+never undoes the query. A query is excluded from the status push, so it is sent
+once, with its note.
+
+**Resume from query (MBE-4).** The item must be `queried` (an item already
+resumed is an idempotent replay; any other state is `409`). The response must
+change something and is validated: ORS fields are limited to `siteName`,
+`addressLine1`, `addressLine2`, `townOrCity`, `stateOrRegion`,
+`postcode`, `contactName`, `contactEmail`, `contactPhone` and
+`rejectedLoadsArrangements`; interim site changes to the same without
+`rejectedLoadsArrangements`. Any other key (country, coordinates, operation
+codes, `orsId`) is a `400`, so a locked field cannot be overwritten. Values
+are applied to `payload.site` and to the `payload.site.interimSites` entry
+matched on `siteNumber` (else `siteId`), the response is stamped on
+`payload.latestQueryResponse` (including the new BES files), and the item
+moves by the `resume-during-*` for the query it answers (to `updated`;
+`resume-during-duly-made` lands in `assessment-in-progress`, also shown as
+"Updated"), after which the querier is re-assigned. A `query-responded` audit
+entry records the responder, `siteChanges` and `interimSiteChanges` as JSON
+(old and new values per field), `fileReferences`
+(`bes-evidence:{fileId}:{filename}`) and `unmatchedInterimSites` (interim
+changes that matched no interim site: audited, not applied). The status push
+for this move is suppressed (`IStandardLifecycleStrategy.PushesQueryResponseStatus`
+is `false` for add-ORS), because the operator journey sent the response and
+already holds that status; the later `continue-review` move is pushed as usual.
 
 ## Conventions
 

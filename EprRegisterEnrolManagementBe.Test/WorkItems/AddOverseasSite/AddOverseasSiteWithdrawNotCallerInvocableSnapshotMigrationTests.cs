@@ -94,7 +94,7 @@ public sealed class AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigrationTe
     }
 
     [Fact]
-    public async Task ApplyAsync_skips_an_item_already_on_the_v2_rules()
+    public async Task ApplyAsync_skips_an_item_already_on_the_live_rules()
     {
         var ct = TestContext.Current.CancellationToken;
         var item = BuildItem(WorkItemTemplateSnapshot.Capture(new AddOverseasSiteType()));
@@ -104,7 +104,7 @@ public sealed class AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigrationTe
 
         await persistence.DidNotReceiveWithAnyArgs().GetByIdAsync(default, ct);
         await persistence.DidNotReceiveWithAnyArgs().ReplaceAsync(default!, ct);
-        Assert.Equal("v2", item.TemplateVersion);
+        Assert.Equal("v3", item.TemplateVersion);
     }
 
     [Fact]

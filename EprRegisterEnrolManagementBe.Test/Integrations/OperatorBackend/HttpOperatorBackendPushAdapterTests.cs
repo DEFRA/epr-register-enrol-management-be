@@ -100,6 +100,63 @@ public class HttpOperatorBackendPushAdapterTests
     }
 
     [Fact]
+    public async Task PushChangeRequestQueryRaisedAsync_fails_fast_when_url_is_not_configured()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut(url: string.Empty);
+
+        var result = await adapter.PushChangeRequestQueryRaisedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "why", DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task PushChangeRequestQueryRaisedAsync_posts_note_and_raisedAt_to_the_change_request_query_route()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut(sharedSecret: "secret");
+        handler.Respond(HttpStatusCode.OK);
+        var workItemId = Guid.NewGuid();
+        var correlationId = Guid.NewGuid();
+        var raisedAt = new DateTime(2026, 11, 25, 10, 30, 0, DateTimeKind.Utc);
+
+        var result = await adapter.PushChangeRequestQueryRaisedAsync(workItemId, correlationId, "Confirm the address", raisedAt, ct);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(HttpMethod.Post, handler.LastRequest!.Method);
+        Assert.Equal(
+            $"{BaseUrl}/api/v1/accreditation-changes/case-management/{workItemId}/query",
+            handler.LastRequest.RequestUri!.ToString());
+        // Same client id, correlation id and signing as the status push route.
+        Assert.Equal("epr-register-enrol-management-be", handler.LastRequest.Headers.GetValues("x-cdp-client-id").Single());
+        Assert.Equal(correlationId.ToString(), handler.LastRequest.Headers.GetValues("X-Correlation-Id").Single());
+        Assert.True(handler.LastRequest.Headers.Contains("x-cdp-auth-signature"));
+
+        using var body = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal("Confirm the address", body.RootElement.GetProperty("note").GetString());
+        Assert.Equal(raisedAt, body.RootElement.GetProperty("raisedAt").GetDateTime().ToUniversalTime());
+        // The item is one ORS: no section keys, and the work item id is in the route only.
+        Assert.Equal(["note", "raisedAt"], body.RootElement.EnumerateObject().Select(p => p.Name).Order().ToArray());
+    }
+
+    [Fact]
+    public async Task PushChangeRequestQueryRaisedAsync_fails_on_a_non_success_status_code_without_throwing()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (adapter, handler) = BuildSut();
+        handler.Respond(HttpStatusCode.Conflict);
+
+        var result = await adapter.PushChangeRequestQueryRaisedAsync(
+            Guid.NewGuid(), Guid.NewGuid(), "why", DateTime.UtcNow, ct);
+
+        Assert.False(result.IsSuccess);
+        Assert.False(result.IsSkipped);
+        Assert.Contains("409", result.ErrorMessage);
+    }
+
+    [Fact]
     public async Task PushQueryRaisedAsync_fails_fast_when_url_is_not_configured()
     {
         var ct = TestContext.Current.CancellationToken;

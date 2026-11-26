@@ -98,7 +98,8 @@ internal sealed class StandardStatusPushHook(
     IWorkItemRegistry registry,
     IBackgroundTaskQueue backgroundTaskQueue,
     HeaderPropagationValues headerPropagationValues,
-    ILogger logger) : IWorkItemPostActionHook
+    ILogger logger,
+    bool pushesQueryResponses = true) : IWorkItemPostActionHook
 {
 
     /// <summary>
@@ -128,7 +129,7 @@ internal sealed class StandardStatusPushHook(
         StandardWorkflow.AssessmentStartedStateId,
     };
 
-    private readonly HashSet<string> _excludedActionIds = BuildExcludedActionIds(type);
+    private readonly HashSet<string> _excludedActionIds = BuildExcludedActionIds(type, pushesQueryResponses);
 
     public Task OnSubmittedAsync(WorkItem workItem, ClaimsPrincipal user, CancellationToken cancellationToken) =>
         Task.CompletedTask;
@@ -355,7 +356,7 @@ internal sealed class StandardStatusPushHook(
     /// <c>assessment-started</c>, moves onto <c>assessment-in-progress</c>,
     /// so it is not excluded either and the operator is pushed Updated.)
     /// </summary>
-    private static HashSet<string> BuildExcludedActionIds(IWorkItemType type)
+    private static HashSet<string> BuildExcludedActionIds(IWorkItemType type, bool pushesQueryResponses)
     {
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var transition in type.Transitions)
@@ -386,6 +387,21 @@ internal sealed class StandardStatusPushHook(
         // (submit-for-decision + approve/reject) that once stranded
         // applications in 'awaiting-decision' when the operator journey was
         // unreachable.
+
+        // RA-698: a type whose operator journey is the source of the query
+        // response (add-ORS) already holds the Updated status it just sent, so
+        // the resume-during-* move is not echoed back to it.
+        if (!pushesQueryResponses)
+        {
+            foreach (var transition in type.Transitions)
+            {
+                if (transition.ActionId.StartsWith("resume-during-", StringComparison.OrdinalIgnoreCase))
+                {
+                    excluded.Add(transition.ActionId);
+                }
+            }
+        }
+
         excluded.Add("submit-for-decision");
         excluded.Add(StandardWorkflow.ConfirmContactApprovedActionId);
         excluded.Add(StandardWorkflow.ConfirmContactRejectedActionId);

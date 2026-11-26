@@ -13,7 +13,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 /// (<see cref="AddOverseasSiteLifecycleStrategy"/>), so its work items are
 /// duly made, determined and closed through the type-less
 /// <c>/work-items/{id}/duly-make|decision|confirm-contact</c> routes. It has
-/// no endpoints of its own.
+/// no lifecycle endpoints of its own.
+///
+/// RA-698: adds the regulator query, the operator's resume-from-query and
+/// continue review (<see cref="AddOverseasSiteEndpoints"/>), the query push
+/// hook, and the v2 to v3 snapshot migration
+/// (<see cref="AddOverseasSiteQuerySnapshotMigration"/>).
 ///
 /// RA-495 review: registers the type's v1 to v2 snapshot migration
 /// (<see cref="AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigration"/>).
@@ -33,7 +38,20 @@ internal sealed class AddOverseasSiteModule : IWorkItemModule
         // and template version. The type's only snapshot migration, so it has
         // no ordering dependency.
         services.AddSingleton<IWorkItemMigration, AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigration>();
+        // RA-698: brings v1/v2 snapshots onto v3 (query, resume and
+        // continue-review transitions present and bespoke-only). Registered
+        // after the v2 migration, which it subsumes, so a v1 item is
+        // migrated v1 to v2 to v3 in order.
+        services.AddSingleton<IWorkItemMigration, AddOverseasSiteQuerySnapshotMigration>();
+
+        // RA-698: regulator query, operator response and continue review.
+        services.AddSingleton<IAddOverseasSiteQueryService, AddOverseasSiteQueryService>();
+        services.AddSingleton<IAddOverseasSiteResumeService, AddOverseasSiteResumeService>();
+        services.AddSingleton<IAddOverseasSiteContinueReviewService, AddOverseasSiteContinueReviewService>();
+        // After the status push hook AddStandardLifecycle registers: a query
+        // is excluded from that push, and this hook pushes it with its note.
+        services.AddSingleton<IWorkItemPostActionHook, AddOverseasSiteQueryPushHook>();
     }
 
-    public void MapEndpoints(IEndpointRouteBuilder endpoints) { }
+    public void MapEndpoints(IEndpointRouteBuilder endpoints) => endpoints.MapAddOverseasSiteEndpoints();
 }
