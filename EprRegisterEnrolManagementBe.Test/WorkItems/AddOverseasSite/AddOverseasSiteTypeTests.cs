@@ -24,6 +24,23 @@ public sealed class AddOverseasSiteTypeTests
         Assert.Equal("submitted", type.InitialState.Id);
     }
 
+    // RA-751 AC06: the Admin UI has no add-overseas-site states list. It
+    // labels add-overseas-site rows and builds its state filter from
+    // GET /work-items/re-accreditation/states, which is correct only while
+    // both types share the Standard workflow's states. If this fails, the
+    // Admin UI needs a states list per type before the states may diverge.
+    [Fact]
+    public void Has_the_same_states_as_re_accreditation_which_the_admin_ui_relies_on()
+    {
+        IWorkItemType addOverseasSite = new AddOverseasSiteType();
+        IWorkItemType reAccreditation = new ReAccreditationType();
+
+        Assert.Equal(
+            reAccreditation.States.Select(s => (s.Id, s.DisplayName)),
+            addOverseasSite.States.Select(s => (s.Id, s.DisplayName))
+        );
+    }
+
     // RA-495 review: the Standard workflow's states and transitions, except
     // that no withdraw* declaration is caller-invocable.
     [Fact]

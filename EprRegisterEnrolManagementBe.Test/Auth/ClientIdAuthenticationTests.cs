@@ -201,30 +201,21 @@ public class ClientIdAuthenticationTests
     }
 
     [Fact]
-    public async Task Colliding_caller_client_ids_fail_loudly_on_first_options_resolution()
+    public void Colliding_caller_client_ids_fail_at_startup()
     {
         // RA-345: Auth:ManagementFeClientId and Auth:BackendClientId must
         // resolve to distinct clientIds — a misconfiguration that points
         // both at the same value would let one caller's secret silently
         // overwrite the other's in the resolved ClientSecrets map
-        // (Program.cs::BuildClientSecrets/AddCallerSecret). NOT a startup
-        // check: ClientSecrets is bound lazily (see the comment on
-        // ClientIdAuthenticationOptions.ClientSecrets binding in
-        // Program.cs), so this throws on first options resolution — the
-        // first request that hits the auth handler — not at app boot.
-        // /health is anonymous and never resolves auth options, so this
-        // misconfiguration passes health checks and looks like a green
-        // deploy right up until the first real request 500s. This exercises
-        // BuildClientSecrets' binding logic via config KEYS (colon form,
-        // the same form IConfiguration exposes real "__"-separated env
-        // vars under — see AUTH_SHARED_SECRET:MANAGEMENT_FE below) rather
-        // than a hand-built ClientSecrets dictionary. It does NOT exercise
-        // the actual EnvironmentVariablesConfigurationProvider "__" -> ":"
-        // rewrite itself — see
+        // (Program.cs::BuildClientSecrets/AddCallerSecret). RA-751: the auth
+        // options are now resolved at startup (ValidateOnStart), so this stops
+        // the service starting instead of passing /health and failing its
+        // first real request with a 500. Exercised via config KEYS (colon
+        // form, the same form IConfiguration exposes real "__"-separated env
+        // vars under); see
         // ClientSecrets_bind_from_real_double_underscore_environment_variables
-        // for that.
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new BareFactory(
+        // for the "__" -> ":" rewrite itself.
+        using var factory = new BareFactory(
             configOverrides: new Dictionary<string, string?>
             {
                 ["AUTH_SHARED_SECRET:MANAGEMENT_FE"] = Secret,
@@ -233,17 +224,13 @@ public class ClientIdAuthenticationTests
             }
         );
 
-        using var client = factory.CreateClient();
-        client.DefaultRequestHeaders.Add(ClientIdDefaults.DefaultHeaderName, "frontend");
+        var thrown = Assert.ThrowsAny<Exception>(() => factory.CreateClient());
 
-        var response = await client.GetAsync("/work-items", cancellationToken);
-
-        // Options resolution throws InvalidOperationException; the app's
-        // global exception handler (ExceptionLoggingHandler) turns that
-        // into a 500 ProblemDetails response rather than a bare 401 — the
-        // point is this fails LOUDLY and distinctly from ordinary auth
-        // failures, not that it 401s.
-        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Contains(
+            "is already registered to another caller",
+            thrown.ToString(),
+            StringComparison.Ordinal
+        );
     }
 
     [Fact]
@@ -579,7 +566,7 @@ public class ClientIdAuthenticationTests
     [Theory]
     [InlineData(ClientIdDefaults.DefaultHeaderName, 256)]
     [InlineData("x-cdp-user-id", 128)]
-    [InlineData("x-cdp-user-name", 256)]
+    [InlineData("x-cdp-user-name", 2304)]
     public async Task Identity_header_exceeding_cap_is_401_with_descriptive_reason(
         string header,
         int cap

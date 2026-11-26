@@ -10,7 +10,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// database.
 ///
 /// <para>
-/// Two of the three sorts cannot be expressed as a plain field sort:
+/// RA-751 adds <see cref="LastModifiedToken"/>, a plain field sort with no
+/// <c>$addFields</c> stage, which the persistence layer runs on the Find path.
+/// </para>
+///
+/// <para>
+/// Two of the three RA-324 sorts cannot be expressed as a plain field sort:
 /// <list type="bullet">
 /// <item><description><b>Due date</b> is not stored; it is
 /// <c>slaClock.startedAt + slaClock.targetDuration</c>. Both operands are
@@ -29,6 +34,14 @@ internal static class WorkItemSort
     internal const string StatusToken = "status";
     internal const string DueDateToken = "due-date";
 
+    /// <summary>
+    /// RA-751 AC8 ("as in RA-740": most recently updated first): sorts on
+    /// <see cref="WorkItem.LastModifiedAt"/>. Descending (newest first) unless
+    /// <c>?dir=asc</c>. A plain field sort, so it needs no computed field and
+    /// <see cref="WorkItemPersistence.QueryAsync"/> runs it on the Find path.
+    /// </summary>
+    internal const string LastModifiedToken = "last-modified";
+
     // Computed fields injected by an $addFields stage. They must be removed
     // ($unset) before the aggregation result is deserialised because WorkItem
     // does not ignore extra BSON elements.
@@ -45,6 +58,33 @@ internal static class WorkItemSort
     // unexpected states sort last under a Status sort rather than colliding
     // with rank 0.
     internal const int UnknownStateRank = int.MaxValue;
+
+    /// <summary>
+    /// RA-751: the tokens <see cref="BuildStages"/> understands. The endpoint
+    /// rejects any other non-blank <c>?sort=</c> value with 400 rather than
+    /// quietly falling back to the default order, so a mistyped or renamed
+    /// token can never show results in an order the caller did not ask for.
+    /// </summary>
+    internal static IReadOnlyCollection<string> Tokens => s_stageBuilders.Keys;
+
+    // The single list of sort tokens and how each builds its stages; Tokens,
+    // IsKnownToken and BuildStages all read it, so a new sort is one entry.
+    private static readonly Dictionary<
+        string,
+        Func<bool?, IReadOnlyDictionary<string, int>, (BsonDocument?, BsonDocument)>
+    > s_stageBuilders = new(StringComparer.Ordinal)
+    {
+        [OrganisationToken] = (descending, _) => BuildOrganisationStages(descending),
+        [StatusToken] = BuildStatusStages,
+        [DueDateToken] = (descending, _) => BuildDueDateStages(descending),
+        [LastModifiedToken] = (descending, _) => BuildLastModifiedStages(descending),
+    };
+
+    /// <summary>Whether <paramref name="sortToken"/> names a sort, matched as <see cref="BuildStages"/> matches it.</summary>
+    internal static bool IsKnownToken(string sortToken) =>
+        s_stageBuilders.ContainsKey(Normalise(sortToken));
+
+    private static string Normalise(string sortToken) => sortToken.Trim().ToLowerInvariant();
 
     /// <summary>
     /// Map each state id to a workflow rank derived from the order states are
@@ -75,11 +115,13 @@ internal static class WorkItemSort
     /// <summary>
     /// Build the <c>$addFields</c> (may be <c>null</c>) and <c>$sort</c> stages
     /// for the requested <c>sort</c> token, or <c>null</c> when the token is
-    /// blank or unrecognised — in which case the caller keeps the default
-    /// newest-submitted-first Find path, so the default ordering can never
-    /// regress. <paramref name="descendingOverride"/> is the optional
-    /// <c>?dir=</c> value; when <c>null</c> each column applies its natural
-    /// default direction.
+    /// blank, in which case the caller keeps the default newest-submitted-first
+    /// Find path. An unrecognised non-blank token throws: the endpoint rejects
+    /// it with 400 first (<see cref="WorkItemQueryBinding.Validate"/>), so
+    /// reaching here with one is a defect, never a reason to pick an order the
+    /// caller did not ask for. <paramref name="descendingOverride"/> is the
+    /// optional <c>?dir=</c> value; when <c>null</c> each column applies its
+    /// natural default direction.
     /// </summary>
     internal static (BsonDocument? AddFields, BsonDocument Sort)? BuildStages(
         string? sortToken,
@@ -88,13 +130,14 @@ internal static class WorkItemSort
     {
         ArgumentNullException.ThrowIfNull(statusRank);
 
-        return sortToken?.Trim().ToLowerInvariant() switch
+        if (string.IsNullOrWhiteSpace(sortToken))
         {
-            OrganisationToken => BuildOrganisationStages(descendingOverride),
-            StatusToken => BuildStatusStages(descendingOverride, statusRank),
-            DueDateToken => BuildDueDateStages(descendingOverride),
-            _ => null
-        };
+            return null;
+        }
+
+        return s_stageBuilders.TryGetValue(Normalise(sortToken), out var build)
+            ? build(descendingOverride, statusRank)
+            : throw new ArgumentException($"Unknown sort token '{sortToken}'.", nameof(sortToken));
     }
 
     private static (BsonDocument?, BsonDocument) BuildOrganisationStages(bool? descendingOverride)
@@ -129,6 +172,20 @@ internal static class WorkItemSort
             }));
         var sort = StableSort(RankField, dir);
         return (addFields, sort);
+    }
+
+    private static (BsonDocument?, BsonDocument) BuildLastModifiedStages(bool? descendingOverride)
+    {
+        // Default newest first; only an explicit ?dir=asc reverses it. Ties
+        // break on _id in the same direction, so paging is stable and the
+        // { lastModifiedAt: -1, _id: -1 } index serves both directions.
+        var dir = descendingOverride == false ? 1 : -1;
+        var sort = new BsonDocument
+        {
+            { "lastModifiedAt", dir },
+            { "_id", dir }
+        };
+        return (null, sort);
     }
 
     private static (BsonDocument?, BsonDocument) BuildDueDateStages(bool? descendingOverride)

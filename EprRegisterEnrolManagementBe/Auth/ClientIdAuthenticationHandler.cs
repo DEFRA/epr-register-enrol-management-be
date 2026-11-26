@@ -179,6 +179,12 @@ public class ClientIdAuthenticationHandler(
         }
 
         var claims = BuildClaims(clientId, userId, userName, role, nation);
+        if (Options.ReadOnlyClientIds.Contains(clientId))
+        {
+            claims.Add(
+                new Claim(CallerAccessPolicies.AccessClaimType, CallerAccessPolicies.ReadOnlyAccess)
+            );
+        }
         var identity = new ClaimsIdentity(claims, Scheme.Name);
         var principal = new ClaimsPrincipal(identity);
         var ticket = new AuthenticationTicket(principal, Scheme.Name);

@@ -384,9 +384,11 @@ public sealed class WorkItemPersistence
 
         return await Collection
             .Find(SubmissionReferenceFilter(submissionReference))
-            .Sort(Builders<WorkItem>.Sort.Ascending("payload.applicationReference"))
+            .Sort(Builders<WorkItem>.Sort.Ascending(ApplicationReferencePath))
             .ToListAsync(cancellationToken);
     }
+
+    private const string ApplicationReferencePath = "payload.applicationReference";
 
     private const string SubmissionReferencePath = "payload." + SubmissionPayload.SubmissionReferenceField;
 
@@ -423,21 +425,34 @@ public sealed class WorkItemPersistence
 
         var sortStages = WorkItemSort.BuildStages(query.Sort, query.SortDescending, _statusRank);
 
+        // epr-4pf: the list endpoint never renders the per-item Notes /
+        // AuditLog collections and they dominate document size on chatty
+        // items, so every Find path projects them away.
+        var projection = Builders<WorkItem>
+            .Projection.Exclude(w => w.Notes)
+            .Exclude(w => w.AuditLog);
+
         List<WorkItem> items;
         if (sortStages is null)
         {
             // Default path (RA-324: unchanged from the original behaviour) —
-            // newest submitted first, with the per-item Notes / AuditLog
-            // collections projected away (epr-4pf): the list endpoint never
-            // renders them and they dominate document size on chatty items.
-            var projection = Builders<WorkItem>
-                .Projection.Exclude(w => w.Notes)
-                .Exclude(w => w.AuditLog);
-
+            // newest submitted first.
             items = await Collection
                 .Find(filter)
                 .Project<WorkItem>(projection)
                 .SortByDescending(w => w.SubmittedAt)
+                .Skip(skip)
+                .Limit(pageSize)
+                .ToListAsync(cancellationToken);
+        }
+        else if (sortStages.Value.AddFields is null)
+        {
+            // RA-751: a plain field sort (last-modified) needs no computed
+            // field, so it stays on the Find path and can use an index.
+            items = await Collection
+                .Find(filter)
+                .Project<WorkItem>(projection)
+                .Sort(new BsonDocumentSortDefinition<WorkItem>(sortStages.Value.Sort))
                 .Skip(skip)
                 .Limit(pageSize)
                 .ToListAsync(cancellationToken);
@@ -509,36 +524,25 @@ public sealed class WorkItemPersistence
             clauses.Add(builder.In(w => w.StateId, stateIds));
         }
 
-        var search = query.NormalisedSearch;
-        if (!string.IsNullOrEmpty(search))
+        if (SearchClause(builder, query.NormalisedSearch) is { } search)
         {
-            // Case-insensitive substring on submitter, plus prefix match on the
-            // string-serialised id (which lets a user paste a full or partial
-            // id into the search box).
-            var escaped = System.Text.RegularExpressions.Regex.Escape(search);
-            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
-
-            clauses.Add(
-                builder.Or(
-                    builder.Regex("_id", pattern),
-                    builder.Regex(nameof(WorkItem.SubmittedBy), pattern)
-                )
-            );
+            clauses.Add(search);
         }
+
+        // RA-751: the Admin UI's q / assigned / archived filters.
+        clauses.AddRange(SupportSearchClauses(builder, query));
 
         var orgId = query.NormalisedOrgId;
         if (!string.IsNullOrEmpty(orgId))
         {
-            var escaped = System.Text.RegularExpressions.Regex.Escape(orgId);
-            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
-            clauses.Add(builder.Regex("payload.applicationReference", pattern));
+            var pattern = ContainsRegex(orgId);
+            clauses.Add(builder.Regex(ApplicationReferencePath, pattern));
         }
 
         var registrationId = query.NormalisedRegistrationId;
         if (!string.IsNullOrEmpty(registrationId))
         {
-            var escaped = System.Text.RegularExpressions.Regex.Escape(registrationId);
-            var pattern = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            var pattern = ContainsRegex(registrationId);
             clauses.Add(builder.Regex("_id", pattern));
         }
 
@@ -563,8 +567,7 @@ public sealed class WorkItemPersistence
         var organisation = query.NormalisedOrganisation;
         if (!string.IsNullOrEmpty(organisation))
         {
-            var escaped = System.Text.RegularExpressions.Regex.Escape(organisation);
-            var contains = new MongoDB.Bson.BsonRegularExpression(escaped, "i");
+            var contains = ContainsRegex(organisation);
             clauses.Add(
                 builder.Or(
                     builder.Regex("payload.organisationName", contains),
@@ -686,6 +689,86 @@ public sealed class WorkItemPersistence
             "exporter"
         );
         return wantsExporter ? exporterFilter : builder.Not(exporterFilter);
+    }
+
+    // Extracted from BuildFilter (S3776): case-insensitive substring on
+    // submitter, plus prefix match on the string-serialised id (which lets a
+    // user paste a full or partial id into the search box).
+    private static FilterDefinition<WorkItem>? SearchClause(
+        FilterDefinitionBuilder<WorkItem> builder,
+        string? search
+    )
+    {
+        if (string.IsNullOrEmpty(search))
+        {
+            return null;
+        }
+
+        var pattern = ContainsRegex(search);
+        return builder.Or(
+            builder.Regex("_id", pattern),
+            builder.Regex(nameof(WorkItem.SubmittedBy), pattern)
+        );
+    }
+
+    // RA-751 (extracted from BuildFilter, S3776): the Admin UI's filters. Each
+    // is absent from the result when its parameter was not sent.
+    private static IEnumerable<FilterDefinition<WorkItem>> SupportSearchClauses(
+        FilterDefinitionBuilder<WorkItem> builder,
+        WorkItemQuery query
+    )
+    {
+        if (AdminSearchClause(builder, query.NormalisedQ) is { } adminSearch)
+        {
+            yield return adminSearch;
+        }
+
+        if (query.Assigned is { } assigned)
+        {
+            // Any assignee, or none.
+            yield return assigned
+                ? builder.Ne(w => w.AssignedToId, null)
+                : builder.Eq(w => w.AssignedToId, null);
+        }
+
+        if (query.Archived is { } archived)
+        {
+            // ArchiveBackgroundService stamps payload.archivedAt once a
+            // terminal item has aged out; it is never removed.
+            yield return builder.Exists(
+                $"payload.{ArchiveBackgroundService.ArchivedAtPayloadKey}",
+                archived
+            );
+        }
+    }
+
+    // A case-insensitive "contains" match on a needle taken literally (regex
+    // metacharacters escaped, so no injection and no catastrophic pattern).
+    private static MongoDB.Bson.BsonRegularExpression ContainsRegex(string needle) =>
+        new(System.Text.RegularExpressions.Regex.Escape(needle), "i");
+
+    // RA-751: the Admin UI's free-text search. A case-insensitive substring
+    // of any of the identifiers a support user might paste, OR-ed together.
+    // Unanchored regexes cannot use an index; the same trade-off as the
+    // RA-324 organisation search above, acceptable at this collection's size.
+    private static FilterDefinition<WorkItem>? AdminSearchClause(
+        FilterDefinitionBuilder<WorkItem> builder,
+        string? needle
+    )
+    {
+        if (needle is null)
+        {
+            return null;
+        }
+
+        var contains = ContainsRegex(needle);
+        return builder.Or(
+            builder.Regex("_id", contains),
+            builder.Regex("payload.accreditationId", contains),
+            builder.Regex(ApplicationReferencePath, contains),
+            builder.Regex("payload.operatorOrganisationId", contains),
+            builder.Regex("payload.organisationName", contains)
+        );
     }
 
     // Extracted from BuildFilter (S3776: cognitive complexity) - the assignee
@@ -943,6 +1026,13 @@ public sealed class WorkItemPersistence
         var submittedDescending = new CreateIndexModel<WorkItem>(
             builder.Descending(w => w.SubmittedAt)
         );
+        // RA-751: the Admin UI's "most recently updated first" sort
+        // (sort=last-modified). Matches WorkItemSort's { lastModifiedAt, _id }
+        // sort key, walked forwards or backwards for either direction, so the
+        // sort never runs in memory over the whole collection.
+        var lastModifiedDescending = new CreateIndexModel<WorkItem>(
+            builder.Combine(builder.Descending(w => w.LastModifiedAt), builder.Descending("_id"))
+        );
         var assigneeAndSubmitted = new CreateIndexModel<WorkItem>(
             builder.Combine(
                 builder.Ascending(w => w.AssignedToId),
@@ -968,7 +1058,7 @@ public sealed class WorkItemPersistence
         // the unique constraint — only documents that actually carry the field
         // are constrained, and every new submission sets it.
         var applicationReference = new CreateIndexModel<WorkItem>(
-            builder.Ascending("payload.applicationReference"),
+            builder.Ascending(ApplicationReferencePath),
             new CreateIndexOptions { Unique = true, Sparse = true }
         );
         // RA-311/MBE-3: the operator backend forwards the operator's own
@@ -1075,6 +1165,7 @@ public sealed class WorkItemPersistence
             typeAndSubmitted,
             stateAndSubmitted,
             submittedDescending,
+            lastModifiedDescending,
             assigneeAndSubmitted,
             nationAndState,
             orgNameText,

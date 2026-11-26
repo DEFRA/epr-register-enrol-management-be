@@ -1,7 +1,15 @@
 # ADR-0005: RBAC lives entirely in the frontend — drop role membership from the trust contract
 
 **Date:** 2026-07-21
-**Status:** Accepted
+**Status:** Accepted — amended by ADR-0010 (read-only callers), see amendment below
+
+> **2026-11 amendment (ADR-0010, RA-751):** "any authenticated caller can
+> read, list, or mutate any work item" no longer holds for every caller. A
+> caller listed as read-only (the Admin UI, `epr-register-enrol-admin`) is
+> refused with `403` everywhere except the GET endpoints that opt in to
+> `CallerAccessPolicies.ReadOnlyCallerAllowed`. This limits a *caller*
+> (a service), not a user role: per-user RBAC stays in the frontend as
+> decided below. See [ADR-0010](0010-read-only-admin-ui-caller.md).
 
 ## Context
 
