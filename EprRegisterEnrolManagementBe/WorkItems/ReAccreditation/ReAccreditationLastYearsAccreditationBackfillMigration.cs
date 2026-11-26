@@ -70,10 +70,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 ///   run.</item>
 /// </list>
 ///
-/// <para>A hosted lifecycle service like
-/// <see cref="ReAccreditationOrganisationNameCorrectionMigration"/>, so it runs
-/// in <see cref="StartedAsync"/>, after the journey-test fixtures are
-/// reset.</para>
+/// <para>A hosted lifecycle service rather than an
+/// <see cref="IWorkItemMigration"/>, so it runs in <see cref="StartedAsync"/>,
+/// after the journey-test fixtures are reset.</para>
 /// </summary>
 internal sealed class ReAccreditationLastYearsAccreditationBackfillMigration(
     IServiceProvider serviceProvider,

@@ -433,14 +433,6 @@ public sealed class ReAccreditationAccreditationNumberCorrectionMigrationTests :
             CancellationToken cancellationToken = default
         ) => throw new NotSupportedException();
 
-        public override Task<bool> CompareAndSetPayloadFieldAsync(
-            Guid workItemId,
-            string fieldName,
-            BsonValue expectedValue,
-            BsonValue newValue,
-            CancellationToken cancellationToken = default
-        ) => throw new NotSupportedException();
-
         public override Task CreateAsync(WorkItem workItem, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 

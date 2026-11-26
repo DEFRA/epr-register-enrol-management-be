@@ -60,14 +60,6 @@ public abstract class ForwardingWorkItemPersistence(IWorkItemPersistence inner) 
         CancellationToken cancellationToken = default
     ) => Inner.FindByPayloadFieldAsync(typeId, fieldName, value, cancellationToken);
 
-    public virtual Task<bool> CompareAndSetPayloadFieldAsync(
-        Guid workItemId,
-        string fieldName,
-        BsonValue expectedValue,
-        BsonValue newValue,
-        CancellationToken cancellationToken = default
-    ) => Inner.CompareAndSetPayloadFieldAsync(workItemId, fieldName, expectedValue, newValue, cancellationToken);
-
     public virtual Task<bool> CorrectPayloadFieldAsync(
         Guid workItemId,
         string fieldName,
