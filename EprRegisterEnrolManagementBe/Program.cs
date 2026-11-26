@@ -872,5 +872,7 @@ static void ConfigureEndpoints(WebApplication app)
     app.MapStandardLifecycleEndpoints();
     // RA-769: the Accreditation summary tab's read.
     app.MapAccreditationSummaryEndpoints();
+    // RA-770: the Related change requests tab, a page of the work items from one submission.
+    app.MapRelatedWorkItemsEndpoints();
     app.MapWorkItemModules();
 }
