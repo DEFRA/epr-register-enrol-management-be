@@ -323,6 +323,206 @@ public sealed class AddOverseasSiteQueryServicesTests
     }
 
     [Fact]
+    public async Task A_rejected_loads_answer_updates_the_submitted_repatriatedLoads_key_and_keeps_the_wire_key_in_the_audit()
+    {
+        var item = QueriedItem();
+        item.Payload["site"]["repatriatedLoads"] = "Old text";
+        var h = new Harness(item);
+        BsonDocument? saved = null;
+        h.Persistence
+            .SetPayloadFieldAsync(Arg.Any<Guid>(), "site", Arg.Do<BsonValue>(v => saved = v.AsBsonDocument), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        var result = await ResumeAsync(
+            h,
+            Response(site: new() { ["rejectedLoadsArrangements"] = "New text" })
+        );
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("New text", saved!["repatriatedLoads"].AsString);
+        Assert.False(saved.Contains("rejectedLoadsArrangements"));
+        await h.Audit
+            .Received(1)
+            .AppendAsync(
+                h.WorkItem!.Id,
+                AddOverseasSiteResumeService.AuditAction,
+                AddOverseasSiteResumeService.AuditActionDisplayName,
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["siteChanges"]!.Contains("\"rejectedLoadsArrangements\":{\"from\":\"Old text\",\"to\":\"New text\"}")
+                ),
+                s_user,
+                CancellationToken.None
+            );
+    }
+
+    [Fact]
+    public async Task A_rejected_loads_answer_replaces_a_legacy_rejectedLoadsArrangements_payload_key()
+    {
+        var item = QueriedItem();
+        item.Payload["site"]["rejectedLoadsArrangements"] = "Legacy text";
+        var h = new Harness(item);
+        BsonDocument? saved = null;
+        h.Persistence
+            .SetPayloadFieldAsync(Arg.Any<Guid>(), "site", Arg.Do<BsonValue>(v => saved = v.AsBsonDocument), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        await ResumeAsync(h, Response(site: new() { ["rejectedLoadsArrangements"] = "New text" }));
+
+        Assert.Equal("New text", saved!["repatriatedLoads"].AsString);
+        Assert.False(saved.Contains("rejectedLoadsArrangements"));
+    }
+
+    [Fact]
+    public async Task New_BES_files_are_appended_to_the_site_and_deduplicated_by_file_id()
+    {
+        var item = QueriedItem();
+        item.Payload["site"]["besEvidence"] = new BsonDocument
+        {
+            ["files"] = new BsonArray { new BsonDocument { ["fileId"] = "f-1", ["filename"] = "first.pdf" }, new BsonDocument { ["filename"] = "no id" } },
+        };
+        var h = new Harness(item);
+        BsonDocument? saved = null;
+        h.Persistence
+            .SetPayloadFieldAsync(Arg.Any<Guid>(), "site", Arg.Do<BsonValue>(v => saved = v.AsBsonDocument), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        await ResumeAsync(
+            h,
+            Response(
+                besFiles:
+                [
+                    new("f-1", "first.pdf", null, "bes/f-1.pdf", null, null, null),
+                    new("f-2", "second.pdf", "application/pdf", "bes/f-2.pdf", "bucket", "2026-01-01", "2027-01-01"),
+                ]
+            )
+        );
+
+        var files = saved!["besEvidence"]["files"].AsBsonArray;
+        Assert.Equal(3, files.Count);
+        Assert.Equal("first.pdf", files[0]["filename"].AsString);
+        Assert.Equal("f-2", files[2]["fileId"].AsString);
+        Assert.Equal("2027-01-01", files[2]["besEvidenceExpiryDate"].AsString);
+    }
+
+    [Fact]
+    public async Task BES_files_create_the_evidence_section_when_the_site_has_a_malformed_one()
+    {
+        var item = QueriedItem();
+        item.Payload["site"]["besEvidence"] = "not a document";
+        var h = new Harness(item);
+        BsonDocument? saved = null;
+        h.Persistence
+            .SetPayloadFieldAsync(Arg.Any<Guid>(), "site", Arg.Do<BsonValue>(v => saved = v.AsBsonDocument), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        await ResumeAsync(h, Response(besFiles: [new("f-9", "n.pdf", null, "bes/f-9.pdf", null, null, null)]));
+
+        Assert.Equal("f-9", saved!["besEvidence"]["files"][0]["fileId"].AsString);
+    }
+
+    private static BsonDocument PriorResponse(DateTime respondedAt) =>
+        new()
+        {
+            ["respondedAt"] = respondedAt,
+            ["siteChanges"] = new BsonDocument
+            {
+                ["siteName"] = new BsonDocument { ["from"] = "Old site", ["to"] = "New site" },
+                ["postcode"] = new BsonDocument { ["from"] = "X", ["to"] = "X" },
+                ["bad"] = "not a change",
+            },
+            ["interimSiteChanges"] = new BsonArray
+            {
+                new BsonDocument
+                {
+                    ["siteId"] = BsonNull.Value,
+                    ["siteNumber"] = "I-001",
+                    ["changes"] = new BsonDocument { ["siteName"] = new BsonDocument { ["from"] = "Old interim", ["to"] = "New interim" } },
+                },
+                new BsonDocument
+                {
+                    ["siteId"] = 8,
+                    ["siteNumber"] = BsonNull.Value,
+                    ["changes"] = new BsonDocument { ["postcode"] = new BsonDocument { ["from"] = BsonNull.Value, ["to"] = "AB1 2CD" } },
+                },
+            },
+        };
+
+    [Fact]
+    public async Task A_retry_after_a_failed_transition_keeps_the_original_from_values()
+    {
+        // The first attempt already saved the new values and the response; the
+        // transition then failed, so the item is still queried.
+        var item = QueriedItem();
+        item.Payload["site"]["siteName"] = "New site";
+        item.Payload["site"]["interimSites"][0]["siteName"] = "New interim";
+        item.Payload["site"]["interimSites"][1]["postcode"] = "AB1 2CD";
+        item.Payload["latestQueryResponse"] = PriorResponse(s_now.UtcDateTime);
+        var h = new Harness(item);
+
+        var result = await ResumeAsync(
+            h,
+            Response(
+                site: new() { ["siteName"] = "New site", ["addressLine1"] = "1 Road" },
+                interimSites: [new(null, "I-001", new() { ["siteName"] = "New interim", ["postcode"] = "Z1" })]
+            )
+        );
+
+        Assert.True(result.IsSuccess);
+        await h.Audit
+            .Received(1)
+            .AppendAsync(
+                h.WorkItem!.Id,
+                AddOverseasSiteResumeService.AuditAction,
+                AddOverseasSiteResumeService.AuditActionDisplayName,
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["siteChanges"]!.Contains("\"siteName\":{\"from\":\"Old site\",\"to\":\"New site\"}")
+                    && d["siteChanges"]!.Contains("addressLine1")
+                    && !d["siteChanges"]!.Contains("postcode")
+                    && d["interimSiteChanges"]!.Contains("\"from\":\"Old interim\",\"to\":\"New interim\"")
+                    && d["interimSiteChanges"]!.Contains("\"postcode\":{\"from\":null,\"to\":\"AB1 2CD\"}")
+                ),
+                s_user,
+                CancellationToken.None
+            );
+    }
+
+    [Fact]
+    public async Task A_response_recorded_for_an_earlier_query_round_is_not_merged()
+    {
+        var item = QueriedItem();
+        item.Payload["latestQueryResponse"] = PriorResponse(s_now.UtcDateTime.AddDays(-2));
+        var h = new Harness(item);
+
+        await ResumeAsync(h, Response(site: new() { ["siteName"] = "Fresh" }));
+
+        await h.Audit
+            .Received(1)
+            .AppendAsync(
+                h.WorkItem!.Id,
+                AddOverseasSiteResumeService.AuditAction,
+                AddOverseasSiteResumeService.AuditActionDisplayName,
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["siteChanges"]!.Contains("\"from\":\"Old site\",\"to\":\"Fresh\"")
+                    && !d["siteChanges"]!.Contains("New site")
+                    && d["interimSiteChanges"] == "[]"
+                ),
+                s_user,
+                CancellationToken.None
+            );
+    }
+
+    [Fact]
+    public async Task A_latest_response_without_a_response_time_is_ignored()
+    {
+        var item = QueriedItem();
+        item.Payload["latestQueryResponse"] = new BsonDocument { ["siteChanges"] = new BsonDocument() };
+
+        var result = await ResumeAsync(new Harness(item));
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
     public async Task A_response_whose_audit_entry_cannot_be_written_still_succeeds()
     {
         var h = new Harness(QueriedItem(assignedToId: "carol-3"));

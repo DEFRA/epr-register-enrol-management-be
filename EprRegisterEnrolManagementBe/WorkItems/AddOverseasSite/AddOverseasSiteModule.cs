@@ -51,6 +51,9 @@ internal sealed class AddOverseasSiteModule : IWorkItemModule
         // After the status push hook AddStandardLifecycle registers: a query
         // is excluded from that push, and this hook pushes it with its note.
         services.AddSingleton<IWorkItemPostActionHook, AddOverseasSiteQueryPushHook>();
+        // Reports where an item in the 'updated' waypoint was queried from, so
+        // the case page offers Duly make / Continue review correctly.
+        services.AddSingleton<IWorkItemOriginStateResolver, AddOverseasSiteOriginStateResolver>();
     }
 
     public void MapEndpoints(IEndpointRouteBuilder endpoints) => endpoints.MapAddOverseasSiteEndpoints();

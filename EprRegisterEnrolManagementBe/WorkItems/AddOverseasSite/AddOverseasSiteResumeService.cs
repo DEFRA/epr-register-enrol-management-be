@@ -209,6 +209,12 @@ internal sealed class AddOverseasSiteResumeService(
 
     private const string InterimSitesField = "interimSites";
 
+    private const string RejectedLoadsWireField = "rejectedLoadsArrangements";
+
+    private const string RepatriatedLoadsPayloadField = "repatriatedLoads";
+
+    private const string BesEvidenceField = "besEvidence";
+
     private const int MaxAssignAttempts = 4;
 
     private static readonly TimeSpan s_assignRetryDelay = TimeSpan.FromMilliseconds(25);
@@ -291,6 +297,17 @@ internal sealed class AddOverseasSiteResumeService(
 
         var siteChanges = ApplyChanges(site, request.Site);
         var interimChanges = ApplyInterimSiteChanges(site, request.InterimSites, out var unmatchedInterimSites);
+        // A retry after a failed transition finds the payload already updated, so
+        // the diff above is empty: carry the original "from" values over from the
+        // response stamped earlier in this same query round.
+        var priorResponse = PriorResponseThisRound(workItem, queryEntry);
+        if (priorResponse is not null)
+        {
+            siteChanges = MergeChanges(priorResponse.GetValue("siteChanges", null) as BsonDocument, siteChanges);
+            interimChanges = MergeInterimChanges(priorResponse.GetValue("interimSiteChanges", null) as BsonArray, interimChanges);
+        }
+
+        AppendBesFiles(site, request.BesEvidenceFiles);
         if (unmatchedInterimSites.Count > 0)
         {
             logger.LogWarning(
@@ -377,17 +394,143 @@ internal sealed class AddOverseasSiteResumeService(
         var applied = new Dictionary<string, FieldChange>(StringComparer.Ordinal);
         foreach (var (field, value) in changes ?? [])
         {
-            var previous = target.TryGetValue(field, out var existing) && existing.IsString ? existing.AsString : null;
+            // The wire key (and the audit/latest-response key) stays as the
+            // operator backend sends it; the payload uses the submitted key.
+            var payloadKey = PayloadKey(field);
+            var previous = ReadString(target, payloadKey) ?? (payloadKey == field ? null : ReadString(target, field));
             if (string.Equals(previous, value, StringComparison.Ordinal))
             {
                 continue;
             }
 
-            target[field] = value is null ? BsonNull.Value : new BsonString(value);
+            target[payloadKey] = value is null ? BsonNull.Value : new BsonString(value);
+            if (payloadKey != field)
+            {
+                target.Remove(field);
+            }
+
             applied[field] = new FieldChange(previous, value);
         }
 
         return applied;
+    }
+
+    private static string? ReadString(BsonDocument document, string key) =>
+        document.TryGetValue(key, out var existing) && existing.IsString ? existing.AsString : null;
+
+    /// <summary>
+    /// The operator backend submits the site's rejected-loads text as
+    /// <c>repatriatedLoads</c> but answers a query with
+    /// <c>rejectedLoadsArrangements</c>; management-fe reads the former.
+    /// </summary>
+    private static string PayloadKey(string wireField) =>
+        string.Equals(wireField, RejectedLoadsWireField, StringComparison.Ordinal) ? RepatriatedLoadsPayloadField : wireField;
+
+    /// <summary>The response stamped since the item was last queried, if any (the item is still queried, so only a failed earlier attempt can have left one).</summary>
+    private static BsonDocument? PriorResponseThisRound(WorkItem workItem, WorkItemAuditEntry queryEntry)
+    {
+        if (
+            !workItem.Payload.TryGetValue(LatestResponsePayloadField, out var latest)
+            || latest is not BsonDocument document
+            || !document.TryGetValue("respondedAt", out var respondedAt)
+            || !respondedAt.IsBsonDateTime
+        )
+        {
+            return null;
+        }
+
+        return respondedAt.ToUniversalTime() >= queryEntry.CreatedAt.ToUniversalTime() ? document : null;
+    }
+
+    private static Dictionary<string, FieldChange> MergeChanges(BsonDocument? prior, Dictionary<string, FieldChange> fresh)
+    {
+        var merged = new Dictionary<string, FieldChange>(fresh, StringComparer.Ordinal);
+        foreach (var element in prior ?? new BsonDocument())
+        {
+            if (element.Value is not BsonDocument change)
+            {
+                continue;
+            }
+
+            var from = change.GetValue("from", BsonNull.Value);
+            var original = from.IsString ? from.AsString : null;
+            var to = merged.TryGetValue(element.Name, out var latest)
+                ? latest.To
+                : (change.GetValue("to", BsonNull.Value) is { IsString: true } t ? t.AsString : null);
+            merged[element.Name] = new FieldChange(original, to);
+        }
+
+        return merged.Where(kv => !string.Equals(kv.Value.From, kv.Value.To, StringComparison.Ordinal))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.Ordinal);
+    }
+
+    private static List<InterimSiteChange> MergeInterimChanges(BsonArray? prior, List<InterimSiteChange> fresh)
+    {
+        var merged = fresh.ToList();
+        foreach (var entry in (prior ?? new BsonArray()).OfType<BsonDocument>())
+        {
+            var siteNumber = entry.GetValue("siteNumber", BsonNull.Value) is { IsString: true } n ? n.AsString : null;
+            var siteId = entry.GetValue("siteId", BsonNull.Value) is { IsInt32: true } i ? i.AsInt32 : (int?)null;
+            var existing = merged.FindIndex(c => c.SiteNumber == siteNumber && c.SiteId == siteId);
+            var changes = MergeChanges(
+                entry.GetValue("changes", null) as BsonDocument,
+                existing >= 0 ? merged[existing].Changes : []
+            );
+            var combined = new InterimSiteChange(siteId, siteNumber, changes);
+            if (existing >= 0)
+            {
+                merged[existing] = combined;
+            }
+            else
+            {
+                merged.Add(combined);
+            }
+        }
+
+        return merged;
+    }
+
+    /// <summary>Appends the response's new BES files to <c>site.besEvidence.files</c>, skipping any <c>fileId</c> already there.</summary>
+    private static void AppendBesFiles(BsonDocument site, IReadOnlyList<AddOverseasSiteBesFile>? files)
+    {
+        if (files is null || files.Count == 0)
+        {
+            return;
+        }
+
+        if (!site.TryGetValue(BesEvidenceField, out var evidence) || evidence is not BsonDocument evidenceDocument)
+        {
+            evidenceDocument = [];
+            site[BesEvidenceField] = evidenceDocument;
+        }
+
+        if (!evidenceDocument.TryGetValue("files", out var list) || list is not BsonArray existing)
+        {
+            existing = [];
+            evidenceDocument["files"] = existing;
+        }
+
+        var known = existing
+            .OfType<BsonDocument>()
+            .Select(f => f.GetValue("fileId", BsonNull.Value))
+            .Where(v => v.IsString)
+            .Select(v => v.AsString)
+            .ToHashSet(StringComparer.Ordinal);
+        foreach (var file in files.Where(f => known.Add(f.FileId!)))
+        {
+            existing.Add(
+                new BsonDocument
+                {
+                    ["fileId"] = file.FileId,
+                    ["filename"] = file.Filename,
+                    ["contentType"] = Text(file.ContentType),
+                    ["s3Key"] = file.S3Key,
+                    ["s3Bucket"] = Text(file.S3Bucket),
+                    ["besEvidenceValidFromDate"] = Text(file.BesEvidenceValidFromDate),
+                    ["besEvidenceExpiryDate"] = Text(file.BesEvidenceExpiryDate),
+                }
+            );
+        }
     }
 
     private static List<InterimSiteChange> ApplyInterimSiteChanges(

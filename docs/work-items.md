@@ -523,8 +523,11 @@ already holds that status; the later `continue-review` move is pushed as usual.
 - Module DI registrations should use **module-scoped interfaces**
   (`IMyTypePersistence`, not `IPersistence`) to avoid colliding with other
   modules.
-- A module's HTTP routes should namespace themselves under
+- A module's type-specific HTTP routes should namespace themselves under
   `/work-items/<type-id>` so they do not clash with another module's routes.
+  Routes keyed by work item id alone (the framework lifecycle routes, and
+  add-ORS's `/work-items/{id}/query` and `/continue-review`) are allowed where
+  the type is resolved from the item and the service refuses other types.
 - Treat `IWorkItemType` as data: no I/O, no DI dependencies. Behaviour
   belongs in service objects registered via `RegisterServices`.
 - Form submissions (state transitions, type-specific payload edits)

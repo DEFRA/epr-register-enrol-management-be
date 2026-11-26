@@ -34,7 +34,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
         site["addressLine1"] = "1 Old Street";
         site["postcode"] = "75001";
         site["contactName"] = "Old Contact";
-        site["rejectedLoadsArrangements"] = "Old arrangements";
+        site["repatriatedLoads"] = "Old arrangements";
         site["interimSites"] = new JsonArray(
             new JsonObject
             {
@@ -310,7 +310,8 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
         var site = item.Payload["site"].AsBsonDocument;
         Assert.Equal("New site name", site["siteName"].AsString);
         Assert.Equal("2 New Street", site["addressLine1"].AsString);
-        Assert.Equal("New arrangements", site["rejectedLoadsArrangements"].AsString);
+        Assert.Equal("New arrangements", site["repatriatedLoads"].AsString);
+        Assert.False(site.Contains("rejectedLoadsArrangements"));
         Assert.Equal("Old Contact", site["contactName"].AsString);
         Assert.Equal("France", site["country"].AsString);
         var interim = site["interimSites"].AsBsonArray.Single().AsBsonDocument;
@@ -319,6 +320,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
         Assert.Equal("9 Interim Road", interim["addressLine1"].AsString);
         Assert.Equal("Belgium", interim["country"].AsString);
 
+        Assert.Equal("file-1", item.Payload["site"]["besEvidence"]["files"][0]["fileId"].AsString);
         // The latest response is on the payload for caseworkers.
         var latest = item.Payload["latestQueryResponse"].AsBsonDocument;
         Assert.Equal("file-1", latest["besEvidenceFiles"].AsBsonArray.Single()["fileId"].AsString);
@@ -418,6 +420,21 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
         var item = (await factory.Persistence.GetByIdAsync(id, ct))!;
         Assert.Equal("Old interim", item.Payload["site"]["interimSites"][0]["siteName"].AsString);
         Assert.Equal("I-099", Assert.Single(item.AuditLog, a => a.Action == "query-responded").Details["unmatchedInterimSites"]);
+    }
+
+    [Fact]
+    public async Task An_updated_item_reports_the_state_it_was_queried_from_as_its_origin()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (factory, client, id) = await QueriedAsync("origin-state", ct);
+        await using var _ = factory;
+        using var __ = client;
+        Assert.Equal(HttpStatusCode.OK, (await PostResumeAsync(client, id, ResumeBody(), ct)).StatusCode);
+
+        var item = await client.GetFromJsonAsync<JsonElement>($"/work-items/{id}", ct);
+
+        Assert.Equal("updated", item.GetProperty("stateId").GetString());
+        Assert.Equal("submitted", item.GetProperty("originStateId").GetString());
     }
 
     [Fact]
