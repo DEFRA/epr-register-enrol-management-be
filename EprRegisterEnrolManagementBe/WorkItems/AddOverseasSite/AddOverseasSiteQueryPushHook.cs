@@ -278,8 +278,7 @@ internal sealed class AddOverseasSiteQueryPushHook(
             "Query push to operator backend failed",
             details,
             user,
-            cancellationToken,
-            LogLevel.Error
+            cancellationToken
         );
 
     private async Task AppendAsync(
@@ -289,14 +288,14 @@ internal sealed class AddOverseasSiteQueryPushHook(
         string displayName,
         Dictionary<string, string?> details,
         ClaimsPrincipal user,
-        CancellationToken cancellationToken,
-        LogLevel failureLevel = LogLevel.Warning
+        CancellationToken cancellationToken
     )
     {
         if (!await auditAppender.AppendAsync(workItem.Id, action, displayName, details, user, cancellationToken))
         {
+            // A failure record that cannot be persisted is lost, so that is logged at Error.
             logger.Log(
-                failureLevel,
+                action == "query-push-failed" ? LogLevel.Error : LogLevel.Warning,
                 "{Action} audit entry could not be persisted for work item {WorkItemId} (correlation {CorrelationId}).",
                 action,
                 workItem.Id,

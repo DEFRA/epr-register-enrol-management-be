@@ -393,12 +393,13 @@ internal sealed class StandardStatusPushHook(
         // the resume-during-* move is not echoed back to it.
         if (!pushesQueryResponses)
         {
-            foreach (var transition in type.Transitions)
+            foreach (
+                var transition in type.Transitions.Where(t =>
+                    t.ActionId.StartsWith("resume-during-", StringComparison.OrdinalIgnoreCase)
+                )
+            )
             {
-                if (transition.ActionId.StartsWith("resume-during-", StringComparison.OrdinalIgnoreCase))
-                {
-                    excluded.Add(transition.ActionId);
-                }
+                excluded.Add(transition.ActionId);
             }
         }
 

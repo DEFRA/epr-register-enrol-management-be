@@ -99,17 +99,16 @@ internal static class AddOverseasSiteResumeValidator
 
     public static string? Validate(AddOverseasSiteResumeRequest? request)
     {
-        var responder = request?.ResponderContactDetails;
-        if (
-            string.IsNullOrWhiteSpace(responder?.FullName)
-            || string.IsNullOrWhiteSpace(responder?.Email)
-            || string.IsNullOrWhiteSpace(responder?.Role)
+        if (request?.ResponderContactDetails is not { } responder
+            || string.IsNullOrWhiteSpace(responder.FullName)
+            || string.IsNullOrWhiteSpace(responder.Email)
+            || string.IsNullOrWhiteSpace(responder.Role)
         )
         {
             return MissingResponderMessage;
         }
 
-        var site = request!.Site ?? [];
+        var site = request.Site ?? [];
         if (site.Keys.Any(k => !AddOverseasSiteResumeRules.SiteFields.Contains(k)))
         {
             // Deliberately does not echo the offending key: unvalidated client input.

@@ -30,24 +30,29 @@ internal sealed class AddOverseasSiteQuerySnapshotMigration(ILogger<AddOverseasS
     : WorkItemSnapshotMigrationBase(AddOverseasSiteType.Id, logger)
 {
     private const string TargetVersion = "v3";
+    private const string QueryName = "Query";
+    private const string ResumeName = "Resume";
+    private const string ContinueReviewName = "Continue review";
+    private const string Queried = "queried";
+    private const string Updated = "updated";
 
     // Frozen as literals, like the other snapshot migrations: a later change
     // to the live type must not silently change what this v3 migration writes.
     private static readonly IReadOnlyList<WorkItemTransition> s_queryTransitions =
     [
-        new("query-during-duly-making", "Query", "submitted", "queried", false),
-        new("query-during-duly-made", "Query", "duly-made", "queried", false),
-        new("query-during-assessment", "Query", "assessment-in-progress", "queried", false),
-        new("query-during-assessment", "Query", "assessment-started", "queried", false),
-        new("query-during-decision", "Query", "awaiting-decision", "queried", false),
-        new("resume-during-duly-making", "Resume", "queried", "updated", false),
-        new("resume-during-duly-made", "Resume", "queried", "assessment-in-progress", false),
-        new("resume-during-assessment", "Resume", "queried", "updated", false),
-        new("resume-during-decision", "Resume", "queried", "updated", false),
-        new("continue-review-during-duly-making", "Continue review", "updated", "submitted", false),
-        new("continue-review-during-duly-made", "Continue review", "updated", "duly-made", false),
-        new("continue-review-during-assessment", "Continue review", "updated", "assessment-in-progress", false),
-        new("continue-review-during-decision", "Continue review", "updated", "awaiting-decision", false),
+        new("query-during-duly-making", QueryName, "submitted", Queried, false),
+        new("query-during-duly-made", QueryName, "duly-made", Queried, false),
+        new("query-during-assessment", QueryName, "assessment-in-progress", Queried, false),
+        new("query-during-assessment", QueryName, "assessment-started", Queried, false),
+        new("query-during-decision", QueryName, "awaiting-decision", Queried, false),
+        new("resume-during-duly-making", ResumeName, Queried, Updated, false),
+        new("resume-during-duly-made", ResumeName, Queried, "assessment-in-progress", false),
+        new("resume-during-assessment", ResumeName, Queried, Updated, false),
+        new("resume-during-decision", ResumeName, Queried, Updated, false),
+        new("continue-review-during-duly-making", ContinueReviewName, Updated, "submitted", false),
+        new("continue-review-during-duly-made", ContinueReviewName, Updated, "duly-made", false),
+        new("continue-review-during-assessment", ContinueReviewName, Updated, "assessment-in-progress", false),
+        new("continue-review-during-decision", ContinueReviewName, Updated, "awaiting-decision", false),
     ];
 
     public override string Name =>
