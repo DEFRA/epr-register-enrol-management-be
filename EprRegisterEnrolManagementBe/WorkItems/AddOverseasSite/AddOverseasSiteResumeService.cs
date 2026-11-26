@@ -454,9 +454,16 @@ internal sealed class AddOverseasSiteResumeService(
 
             var from = change.GetValue("from", BsonNull.Value);
             var original = from.IsString ? from.AsString : null;
-            var to = merged.TryGetValue(element.Name, out var latest)
-                ? latest.To
-                : (change.GetValue("to", BsonNull.Value) is { IsString: true } t ? t.AsString : null);
+            string? to;
+            if (merged.TryGetValue(element.Name, out var latest))
+            {
+                to = latest.To;
+            }
+            else
+            {
+                to = change.GetValue("to", BsonNull.Value) is { IsString: true } t ? t.AsString : null;
+            }
+
             merged[element.Name] = new FieldChange(original, to);
         }
 
