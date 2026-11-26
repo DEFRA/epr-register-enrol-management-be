@@ -1,5 +1,6 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.Workflows;
+using EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
 
@@ -11,28 +12,27 @@ namespace EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
 /// (<see cref="WorkItemCategories.InYearChange"/>) sharing the <c>ORS</c> code,
 /// so its work items take <c>IYC-ORS-{yyyy}-{sequence}</c> references from the
 /// same series as add-ORS. A submission is split into one work item per site,
-/// and the type follows the same Standard workflow with the withdraw*
-/// transitions not caller-invocable. Unlike add-ORS it carries no charge, so a
-/// submission needs no payment reference (AC05).
+/// and the type follows add-ORS's workflow rules
+/// (<see cref="AddOverseasSiteType.WithdrawNotCallerInvocable"/>). Unlike
+/// add-ORS it carries no charge, so a submission needs no payment reference
+/// (AC05).
 /// </summary>
 internal sealed class UpdateOverseasSiteType : IWorkItemType
 {
     public const string Id = "update-overseas-site";
 
-    internal static readonly WorkItemWorkflow WorkflowDefinition = StandardWorkflow.Definition with
-    {
-        Id = "standard-update-overseas-site",
-        Transitions = StandardWorkflow
-            .Definition.Transitions.Select(t => IsWithdraw(t) ? t with { CallerInvocable = false } : t)
-            .ToList(),
-    };
+    internal static readonly WorkItemWorkflow WorkflowDefinition =
+        AddOverseasSiteType.WithdrawNotCallerInvocable("standard-update-overseas-site");
 
     public string TypeId => Id;
     public string DisplayName => "ORS update";
 
     public string? Category => WorkItemCategories.InYearChange;
 
-    /// <summary>The same code as add-ORS (user, 2026-11-26): one reference series for ORS changes.</summary>
+    /// <summary>
+    /// The same code as add-ORS, decided on RA-682: one reference series for
+    /// ORS changes (see docs/work-items.md).
+    /// </summary>
     public string? InYearChangeCode => "ORS";
 
     public bool SplitsSubmissionPerSite => true;
@@ -44,9 +44,4 @@ internal sealed class UpdateOverseasSiteType : IWorkItemType
     public WorkItemState InitialState => Workflow.InitialState;
     public IReadOnlyCollection<WorkItemState> States => Workflow.States;
     public IReadOnlyCollection<WorkItemTransition> Transitions => Workflow.Transitions;
-
-    // As add-ORS: a withdraw is any move onto the Withdrawn state, and the push
-    // hook never pushes one, so the operator journey must not be able to take it.
-    private static bool IsWithdraw(WorkItemTransition transition) =>
-        transition.ToStateId == StandardWorkflow.WithdrawnStateId;
 }

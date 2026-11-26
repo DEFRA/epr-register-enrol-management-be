@@ -34,13 +34,24 @@ internal sealed class AddOverseasSiteType : IWorkItemType
     /// <see cref="StandardWorkflow"/> itself is left alone because
     /// re-accreditation withdraws through it.
     /// </summary>
-    internal static readonly WorkItemWorkflow WorkflowDefinition = StandardWorkflow.Definition with
-    {
-        Id = "standard-add-overseas-site",
-        Transitions = StandardWorkflow
-            .Definition.Transitions.Select(t => IsWithdraw(t) ? t with { CallerInvocable = false } : t)
-            .ToList(),
-    };
+    internal static readonly WorkItemWorkflow WorkflowDefinition = WithdrawNotCallerInvocable(
+        "standard-add-overseas-site"
+    );
+
+    /// <summary>
+    /// The Standard workflow under its own id, with every <c>withdraw*</c>
+    /// declaration made <c>CallerInvocable: false</c>. Shared with the ORS
+    /// update (RA-682), which has no withdraw service either, so the two keep
+    /// the same rules.
+    /// </summary>
+    internal static WorkItemWorkflow WithdrawNotCallerInvocable(string workflowId) =>
+        StandardWorkflow.Definition with
+        {
+            Id = workflowId,
+            Transitions = StandardWorkflow
+                .Definition.Transitions.Select(t => IsWithdraw(t) ? t with { CallerInvocable = false } : t)
+                .ToList(),
+        };
 
     public string TypeId => Id;
     public string DisplayName => "New ORS accreditation";

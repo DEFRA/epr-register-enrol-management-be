@@ -36,7 +36,7 @@ internal static class UpdateOverseasSiteSubmissions
                         (JsonNode)
                             new JsonObject
                             {
-                                ["siteId"] = $"site-{n}",
+                                ["siteId"] = 902500 + n,
                                 ["orsId"] = $"ORS-{n:D3}",
                                 ["siteName"] = $"Overseas site {n}",
                                 ["country"] = "France",
@@ -52,7 +52,7 @@ internal static class UpdateOverseasSiteSubmissions
                                     ["contactName"] = "New Manager",
                                 },
                                 ["interimSiteChanges"] = new JsonArray(
-                                    new JsonObject { ["action"] = "remove", ["interimSiteId"] = $"interim-{n}" },
+                                    new JsonObject { ["action"] = "remove", ["interimSiteId"] = 902510 + n },
                                     new JsonObject
                                     {
                                         ["action"] = "add",

@@ -53,7 +53,8 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state; `400` for unknown actions, transitions whose from-state does not match, and transitions declared `CallerInvocable: false`. The `CallerInvocable` check and the engine resolve the transition with the same `WorkItemEngineRules.ResolveTransition` lookup (ids match case-insensitively; the declaration for the item's current state wins, else the first), so the guard always checks the transition the engine would apply. |
 
 **Split submissions (RA-739).** For a type that declares
-`SplitsSubmissionPerSite` (add-ORS, `add-overseas-site`), `POST /work-items`
+`SplitsSubmissionPerSite` (add-ORS, `add-overseas-site`, and the ORS update,
+`update-overseas-site`), `POST /work-items`
 splits the payload's `sites[]` into one work item per site. Each work item's
 payload is the shared request fields (organisation, `material`, `nation`,
 `accreditationYear` and so on, which the list's filters read as for
@@ -100,7 +101,9 @@ stores the rest of the site as sent.
 
 - **Validation (400, nothing created).** `SubmissionPayload.Validate` requires
   `operatorRequestId`, `operatorOrganisationId`, `organisationName`,
-  `material` and `paymentReference` (non-blank strings), a 4-digit
+  `material` and, for a type whose `RequiresPaymentReference` is `true` (every
+  type but the ORS update, which is never charged), `paymentReference`
+  (non-blank strings), a 4-digit
   `accreditationYear`, and at least one site, each with a `siteId` (string or
   whole number), `orsId` and `siteName`. `siteId`s must be unique within the
   submission (`7` and `"7"` are different sites, as in a Mongo index). Every
@@ -163,7 +166,14 @@ and `WorkItemReferenceGenerator` picks one from the type's
   overrides it in its own module folder, so Core never lists module type ids.
   The `add-overseas-site` type (RA-739, `WorkItems/AddOverseasSite/`) sets
   `InYearChangeCode => "ORS"`, and each work item a submission is split into
-  gets its own IYC reference (see [Ingestion API](#ingestion-api)).
+  gets its own IYC reference (see [Ingestion API](#ingestion-api)). The
+  `update-overseas-site` type (RA-682, `WorkItems/UpdateOverseasSite/`) sets
+  the same `"ORS"` code.
+- **Decided on RA-682 (26 Nov 2026): the ORS update shares the `ORS` code.**
+  Adds and updates are both ORS changes and take numbers from one
+  `IYC-ORS-{yyyy}` counter. The reference identifies the ORS change; whether it
+  is an add or an update is the work item's type (`add-overseas-site` or
+  `update-overseas-site`), which Case Management shows alongside it.
 - **What regulators agreed (Jira comment, 10 Nov 2026):** the shape
   `IYC-<type code>-<year>-<5-digit sequence>`, with one sequence per change
   type per year.
@@ -184,7 +194,8 @@ and `WorkItemReferenceGenerator` picks one from the type's
   created before the change simply skips one number.
 - **The wrap acts as a cap (accepted, not fixed).**
   - A counter is keyed `IYC-{code}-{yyyy}`, so every number in one counter has
-    the same change type and the same year.
+    the same code and the same year (for `ORS`, adds and updates; see RA-682
+    above).
   - After a wrap, the reference for the next number already exists with that
     same type and year. The `applicationReference` unique index makes each
     retry take the next number, and every one collides.
@@ -289,18 +300,26 @@ That is still a module-only change.
 The work item type definition (`IWorkItemType`) is the single place a case
 type is configured. Every setting is code, not runtime data:
 
-| Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) |
-| --- | --- | --- | --- | --- |
-| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` |
-| Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` |
-| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` |
-| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` |
-| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `AddOverseasSiteType.WorkflowDefinition`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` |
-| Template version | `TemplateVersion` | — (required) | `v19` | `v2` |
+| Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) | ORS update (`update-overseas-site`) |
+| --- | --- | --- | --- | --- | --- |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` | `"ORS update"` |
+| Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` | `in-year-change` |
+| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` | `"ORS"` (shared, RA-682) |
+| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` | `true` |
+| Requires a payment reference | `RequiresPaymentReference` (RA-682) | `true` | `true` | `true` | `false` |
+| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `AddOverseasSiteType.WorkflowDefinition`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` | the same rules under `standard-update-overseas-site` (`AddOverseasSiteType.WithdrawNotCallerInvocable`) |
+| Template version | `TemplateVersion` | — (required) | `v19` | `v2` | `v1` |
+
+- **Requires a payment reference** is `false` only for a type that is never
+  charged. Its submission may leave `paymentReference` out, and then each work
+  item gets the RA-503 fallback: `paymentReference` is set to the item's own
+  `applicationReference`. So an ORS update work item shows its IYC reference
+  as its payment reference, which a detail page (RA-767) shouldn't present as
+  a payment.
 
 - **Category** groups related types so the list can filter on the group
   without naming each type: `GET /work-items?category=in-year-change`
-  (repeatable, and unioned with any `typeId`). In-year change types (add-ORS now; update ORS and
+  (repeatable, and unioned with any `typeId`). In-year change types (add-ORS and the ORS update now;
   tonnage band upgrade later) declare `WorkItemCategories.InYearChange`
   (`in-year-change`). Each change type still has its own `TypeId`, so a
   type's workflow can change on its own.

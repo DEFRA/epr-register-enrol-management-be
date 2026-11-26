@@ -88,8 +88,8 @@ public sealed class AddOverseasSiteSubmissionIntegrityTests(MongoIntegrationFixt
     /// submits per site. Reused for a different type it must not hand back the
     /// first submission as a success: the caller would read another request's
     /// references as its own and never learn that its submission was ignored.
-    /// Production has only <c>add-overseas-site</c> today, so the second
-    /// per-site type is registered by this test.
+    /// The second per-site type is registered by this test, so it doesn't
+    /// depend on which per-site types production registers.
     /// </summary>
     [Fact]
     public async Task Reusing_an_operatorRequestId_for_a_different_type_is_refused_not_replayed()
