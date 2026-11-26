@@ -156,10 +156,25 @@ and audit log, with the status pushes to the Operator journey", which a
 projection would remove, and AC10 places the masking of names and email
 addresses in the Admin UI when it shows them. So for this route, decision 5's
 guarantee does not hold: personal data reaches the Admin UI and it is the
-Admin UI's masking that keeps it off screen.
+Admin UI's masking that keeps it off screen. Where the masking happens comes
+from the ticket: AC10, and RA-752's Admin UI technical note, which extends the
+Admin UI's `mask-personal-data.js` to the names work items hold. Server-side
+masking for read-only callers was considered and not chosen (tech lead,
+2026-11-26). A team-wide rule for personal data in the Admin UI is still to be
+confirmed (beads epr-krbv).
+
+`GET /work-items/re-accreditation/{id}/prior-year` now tells "none" from
+"unavailable": `404` means there is no prior-year record, and `502`
+ProblemDetails means ReEx could not answer (a non-404 failure status including
+401/403, a timeout, a network failure or an unreadable body), logged at Error
+with the work item id. Before RA-752 the ReEx client turned every failure into
+"no record", so a caller that reads `404` as "no prior year" (the Admin UI)
+could never show that the data was unavailable.
 
 Nothing else in this ADR changes. Verification:
 `ClientIdAuthenticationAdminUiCallerTests` now also asserts that the routing
 table opens exactly these four GET-only endpoints to read-only callers, that
 the Admin UI reads a work item (byte-identical to management-fe's) and its prior-year data, gets a plain `404`
-for a missing work item or a non-GUID id, and is still refused on writes.
+for a missing work item or a non-GUID id, gets `404` for prior-year data
+ReEx has no record of and `502` when ReEx fails, and is still refused on
+writes. `HttpReExAccreditationClientTests` cover each ReEx failure.

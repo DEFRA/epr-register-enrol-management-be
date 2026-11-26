@@ -5,6 +5,7 @@ using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 using Microsoft.AspNetCore.Authorization;
@@ -412,6 +413,89 @@ public class ClientIdAuthenticationAdminUiCallerTests
             await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
         );
         Assert.Equal(2025, body.RootElement.GetProperty("year").GetInt32());
+    }
+
+    /// <summary>
+    /// A real <see cref="HttpReExAccreditationClient"/> over a fake ReEx, so
+    /// the whole path from ReEx's answer to this service's status is covered.
+    /// </summary>
+    private static IReExAccreditationClient ReExAnswering(Func<HttpResponseMessage> answer) =>
+        new HttpReExAccreditationClient(
+            new HttpClient(new FakeReExHandler(answer)),
+            Microsoft.Extensions.Options.Options.Create(
+                new ReExAccreditationConfig { BaseUrl = "https://reex.test/" }
+            ),
+            Substitute.For<EprRegisterEnrolManagementBe.Utils.Logging.IStructuredLogger<HttpReExAccreditationClient>>()
+        );
+
+    private sealed class FakeReExHandler(Func<HttpResponseMessage> answer) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => Task.FromResult(answer());
+    }
+
+    public static TheoryData<string> ReExFailures => new() { "500", "503", "401", "403", "timeout", "unreachable" };
+
+    [Theory]
+    [MemberData(nameof(ReExFailures))]
+    public async Task Admin_ui_gets_502_not_404_for_prior_year_data_when_reex_fails(string failure)
+    {
+        // RA-752: the Admin UI reads 404 as "no prior year" and 502 as
+        // "unavailable", so a ReEx outage must never look like a 404.
+        var reEx = ReExAnswering(() =>
+            failure switch
+            {
+                "timeout" => throw new TaskCanceledException("ReEx timed out"),
+                "unreachable" => throw new HttpRequestException("ReEx unreachable"),
+                _ => new HttpResponseMessage((HttpStatusCode)int.Parse(failure, System.Globalization.CultureInfo.InvariantCulture)),
+            }
+        );
+        var (factory, app, logs) = NewApp(reExClient: reEx);
+        await using var _f = factory;
+        await using var _a = app;
+        factory.MockPersistence.GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>()).Returns(StoredWorkItem());
+        using var client = AdminClient(factory, app, $"nonce-admin-prior-year-{failure}");
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{s_workItemId}/prior-year",
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        Assert.Equal(
+            ReAccreditationEndpoints.PriorYearUnavailableProblemTitle,
+            body.RootElement.GetProperty("title").GetString()
+        );
+        var error = Assert.Single(
+            logs.Records,
+            r => r.Level == LogLevel.Error && r.Message.StartsWith("Prior-year data for work item", StringComparison.Ordinal)
+        );
+        Assert.Equal(s_workItemId, error.Properties["WorkItemId"]);
+    }
+
+    [Fact]
+    public async Task Admin_ui_gets_404_for_prior_year_data_when_reex_has_no_record()
+    {
+        var reEx = ReExAnswering(() => new HttpResponseMessage(HttpStatusCode.NotFound));
+        var (factory, app, logs) = NewApp(reExClient: reEx);
+        await using var _f = factory;
+        await using var _a = app;
+        factory.MockPersistence.GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>()).Returns(StoredWorkItem());
+        using var client = AdminClient(factory, app, "nonce-admin-prior-year-no-record");
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{s_workItemId}/prior-year",
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        Assert.DoesNotContain(logs.Records, r => r.Level == LogLevel.Error);
     }
 
     [Fact]

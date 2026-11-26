@@ -128,6 +128,13 @@ internal static class ReAccreditationEndpoints
     /// </summary>
     public const string RecyclingOperationsProblemTitle = "Could not update recycling operations";
 
+    /// <summary>
+    /// RA-752: ProblemDetails title for the 502 <c>GET .../prior-year</c>
+    /// returns when ReEx cannot answer. A 404 from that route means only that
+    /// there is no prior-year record.
+    /// </summary>
+    public const string PriorYearUnavailableProblemTitle = "Prior-year data unavailable";
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
     {
@@ -551,7 +558,9 @@ internal static class ReAccreditationEndpoints
     /// identifiers stored in the work item payload (populated by the operator
     /// backend at submission time). Returns 404 when the identifiers are absent
     /// (work item created via the case management form) or when ReEx returns no
-    /// matching accreditation for the prior year.
+    /// matching accreditation for the prior year. RA-752: returns 502 when ReEx
+    /// cannot answer (<see cref="ReExUnavailableException"/>), so a caller never
+    /// reads an outage as "no prior year".
     /// </summary>
     private static async Task<
         Results<Ok<PriorYearAccreditationDto>, NotFound, ProblemHttpResult>
@@ -560,6 +569,7 @@ internal static class ReAccreditationEndpoints
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IReExAccreditationClient reExClient,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
@@ -601,12 +611,33 @@ internal static class ReAccreditationEndpoints
             payload?.PreviousAccreditationYear
             ?? (payload?.AccreditationYear is int ay ? ay - 1 : (int?)null);
 
-        var priorYear = await reExClient.GetPriorYearAsync(
-            payload?.OperatorOrganisationId,
-            payload?.OperatorRegistrationId,
-            priorYearValue,
-            cancellationToken
-        );
+        PriorYearAccreditationDto? priorYear;
+        try
+        {
+            priorYear = await reExClient.GetPriorYearAsync(
+                payload?.OperatorOrganisationId,
+                payload?.OperatorRegistrationId,
+                priorYearValue,
+                cancellationToken
+            );
+        }
+        catch (ReExUnavailableException ex)
+        {
+            var logger = loggerFactory.CreateLogger("ReAccreditationEndpoints.GetPriorYear");
+            if (logger.IsEnabled(LogLevel.Error))
+            {
+                logger.LogError(
+                    ex,
+                    "Prior-year data for work item {WorkItemId} is unavailable: ReEx could not answer.",
+                    id
+                );
+            }
+            return TypedResults.Problem(
+                title: PriorYearUnavailableProblemTitle,
+                detail: "ReEx, the source of prior-year accreditation data, could not answer. Try again later.",
+                statusCode: StatusCodes.Status502BadGateway
+            );
+        }
 
         if (priorYear is null)
             return TypedResults.NotFound();

@@ -5,9 +5,7 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 
 /// <summary>
 /// Fetches prior-year accreditation data from the ReEx registry for a
-/// re-accreditation work item. Returns null when the data is unavailable
-/// (organisation not found, no matching prior-year accreditation, or the
-/// call fails).
+/// re-accreditation work item.
 /// </summary>
 public interface IReExAccreditationClient
 {
@@ -16,7 +14,8 @@ public interface IReExAccreditationClient
     /// year combination. <paramref name="organisationId"/> and
     /// <paramref name="registrationId"/> are the ReEx-native identifiers
     /// carried in the work item payload. Returns null if any parameter is
-    /// missing or if the remote call fails / returns no result.
+    /// missing or ReEx holds no matching prior-year accreditation. Throws
+    /// <see cref="ReExUnavailableException"/> when ReEx cannot answer (RA-752).
     /// </summary>
     Task<PriorYearAccreditationDto?> GetPriorYearAsync(
         string? organisationId,

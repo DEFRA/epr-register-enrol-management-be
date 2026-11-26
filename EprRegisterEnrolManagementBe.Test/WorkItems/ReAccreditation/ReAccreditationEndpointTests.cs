@@ -797,6 +797,55 @@ public class ReAccreditationEndpointTests
     }
 
     [Fact]
+    public async Task PriorYear_returns_502_problem_when_reex_is_unavailable()
+    {
+        // RA-752: a ReEx outage is a 502, never the 404 that means "no prior
+        // year", for every caller (management-fe omits the section on both).
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await using var factory = new ReAccreditationFactory(_fixture);
+        using var client = factory.CreateClient();
+
+        factory
+            .ReExClient.GetPriorYearAsync(
+                Arg.Any<string?>(),
+                Arg.Any<string?>(),
+                Arg.Any<int?>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns<Task<PriorYearAccreditationDto?>>(_ => throw new ReExUnavailableException("ReEx returned 503."));
+
+        var id = Guid.NewGuid();
+        await factory.SeedAsync(
+            new WorkItem
+            {
+                Id = id,
+                TypeId = ReAccreditationType.Id,
+                StateId = "submitted",
+                SubmittedBy = TenantClientId,
+                Payload = new BsonDocument
+                {
+                    ["operatorOrganisationId"] = "org-42",
+                    ["operatorRegistrationId"] = "reg-99",
+                    ["previousAccreditationYear"] = 2024,
+                },
+            },
+            cancellationToken
+        );
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{id}/prior-year",
+            cancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.BadGateway, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+        Assert.Equal(
+            ReAccreditationEndpoints.PriorYearUnavailableProblemTitle,
+            problem.GetProperty("title").GetString()
+        );
+    }
+
+    [Fact]
     public async Task PriorYear_returns_not_found_when_reex_returns_null()
     {
         var cancellationToken = TestContext.Current.CancellationToken;

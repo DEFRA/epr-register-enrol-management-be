@@ -148,7 +148,19 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
             return null;
         }
 
-        var org = await FetchOrganisationAsync(organisationId, cancellationToken);
+        // The RA-526 nation migration records a failed lookup per candidate
+        // (CorrectionOutcome.LookupFailed) and leaves the item untouched, so it
+        // keeps its null-on-failure contract; FetchOrganisationAsync has already
+        // logged the cause at Error.
+        ReExOrganisationDto? org;
+        try
+        {
+            org = await FetchOrganisationAsync(organisationId, cancellationToken);
+        }
+        catch (ReExUnavailableException)
+        {
+            return null;
+        }
         if (org is null)
             return null;
 
@@ -176,17 +188,55 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
     // Extracted from GetPriorYearAsync (S3776: cognitive complexity) - also keeps the
     // RA-475 auth-vs-data-gap distinction self-contained rather than nested inside the
     // caller's own branching.
+    //
+    // RA-752: returns null only when ReEx answers 404 (it has no such organisation).
+    // Every other failure throws ReExUnavailableException after logging at Error, so a
+    // caller can tell "no prior-year record" (404 from this service) from "ReEx is
+    // unavailable" (502). management-fe still omits the prior-year section in both
+    // cases; the Admin UI shows an unavailable banner for the second.
     private async Task<ReExOrganisationDto?> FetchOrganisationAsync(
         string organisationId,
         CancellationToken cancellationToken
     )
     {
+        HttpResponseMessage response;
         try
         {
-            using var response = await _httpClient.GetAsync(
+            response = await _httpClient.GetAsync(
                 $"v1/organisations/{Uri.EscapeDataString(organisationId)}",
                 cancellationToken
             );
+        }
+        catch (Exception ex)
+            when ((ex is HttpRequestException or TaskCanceledException)
+                && !cancellationToken.IsCancellationRequested)
+        {
+            // A TaskCanceledException without the caller's token cancelled is the
+            // HttpClient timeout, not the caller giving up.
+            _log.Log(
+                LogLevel.Error,
+                "ReEx prior-year request failed",
+                new Dictionary<string, object?> { ["reex.organisation_id"] = organisationId },
+                exception: ex
+            );
+            throw new ReExUnavailableException("ReEx request failed.", ex);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                _log.Log(
+                    LogLevel.Warning,
+                    "ReEx has no record of the organisation",
+                    new Dictionary<string, object?>
+                    {
+                        ["reex.organisation_id"] = organisationId,
+                        ["reex.status_code"] = (int)response.StatusCode,
+                    }
+                );
+                return null;
+            }
 
             if (!response.IsSuccessStatusCode)
             {
@@ -194,20 +244,13 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                 // service's ReEx Basic-auth credentials (REEX_API_BASIC_AUTH_USERNAME /
                 // REEX_API_BASIC_AUTH_PASSWORD) or ReExApi:BaseUrl are wrong for the
                 // environment, and EVERY prior-year lookup will fail for as long as
-                // they are. Logged at Error, and named as a credentials problem, so it
-                // is distinguishable from the ordinary "ReEx has no record for this
-                // organisation" 404 it otherwise degrades into identically — which is
-                // how a total outage of this lookup on dev read as routine noise.
-                //
-                // The RETURN is deliberately unchanged: the caller still gets null and
-                // the caseworker still gets an Application details page, just without
-                // the prior-year section. Failing the page over an optional panel would
-                // be a worse outcome than the missing data.
+                // they are. Named as a credentials problem so it is distinguishable
+                // from any other ReEx failure.
                 var isAuthFailure =
                     response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
 
                 _log.Log(
-                    isAuthFailure ? LogLevel.Error : LogLevel.Warning,
+                    LogLevel.Error,
                     isAuthFailure
                         ? "ReEx rejected this service's credentials; prior-year lookup is failing for "
                             + "every application until REEX_API_BASIC_AUTH_* / ReExApi:BaseUrl are corrected"
@@ -218,25 +261,42 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                         ["reex.status_code"] = (int)response.StatusCode,
                     }
                 );
-                return null;
+                throw new ReExUnavailableException(
+                    $"ReEx returned {(int)response.StatusCode}."
+                );
             }
 
-            return await response.Content.ReadFromJsonAsync<ReExOrganisationDto>(
-                s_jsonOptions,
-                cancellationToken
-            );
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-        {
-            _log.Log(
-                LogLevel.Error,
-                "ReEx prior-year request failed",
-                new Dictionary<string, object?> { ["reex.organisation_id"] = organisationId },
-                exception: ex
-            );
-            return null;
+            ReExOrganisationDto? organisation;
+            try
+            {
+                organisation = await response.Content.ReadFromJsonAsync<ReExOrganisationDto>(
+                    s_jsonOptions,
+                    cancellationToken
+                );
+            }
+            catch (JsonException ex)
+            {
+                LogUnreadableBody(organisationId, ex);
+                throw new ReExUnavailableException("ReEx returned an unreadable organisation.", ex);
+            }
+
+            if (organisation is null)
+            {
+                LogUnreadableBody(organisationId, null);
+                throw new ReExUnavailableException("ReEx returned an empty organisation.");
+            }
+
+            return organisation;
         }
     }
+
+    private void LogUnreadableBody(string organisationId, Exception? exception) =>
+        _log.Log(
+            LogLevel.Error,
+            "ReEx returned a body that is not an organisation",
+            new Dictionary<string, object?> { ["reex.organisation_id"] = organisationId },
+            exception: exception
+        );
 
     private string? MapTonnageBand(string? rawTonnageBand)
     {
