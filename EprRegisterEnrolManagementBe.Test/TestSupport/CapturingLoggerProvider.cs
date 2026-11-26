@@ -17,6 +17,10 @@ internal sealed class CapturingLoggerProvider : ILoggerProvider
 
     public ILogger CreateLogger(string categoryName) => new CapturingLogger(categoryName, _records);
 
+    /// <summary>A typed logger writing into this provider.</summary>
+    public ILogger<T> CreateLoggerFor<T>() =>
+        new Logger<T>(LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(this)));
+
     public void Dispose() { }
 
     internal sealed record CapturedLog(

@@ -55,6 +55,15 @@ internal sealed class ReAccreditationQueryPushHook(
         "query-during-decision",
     };
 
+    /// <summary>
+    /// RA-751: whether applying <paramref name="actionId"/> sends this hook's
+    /// query push. The read-only state list
+    /// (<c>GET /work-items/re-accreditation/states</c>) reads this same set, so
+    /// it reports a state as query-pushed exactly when this hook would push a
+    /// move onto it.
+    /// </summary>
+    internal static bool IsQueryPushAction(string actionId) => s_queryActionIds.Contains(actionId);
+
     public Task OnSubmittedAsync(WorkItem workItem, ClaimsPrincipal user, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
