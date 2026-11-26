@@ -21,7 +21,7 @@ internal sealed class TestOrganisationReExAccreditationClient(
     public Task<PriorYearAccreditationDto?> GetPriorYearAsync(
         string? organisationId,
         string? registrationId,
-        int? year,
+        int year,
         CancellationToken cancellationToken = default
     ) =>
         Route(organisationId)

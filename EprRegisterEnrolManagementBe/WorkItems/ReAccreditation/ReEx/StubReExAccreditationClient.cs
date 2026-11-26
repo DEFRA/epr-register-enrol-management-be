@@ -12,20 +12,17 @@ namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 /// <see cref="TestOrganisationReExAccreditationClient"/> when
 /// <c>TestOrganisations__Enabled</c> is on (CDP test).
 /// </summary>
-internal sealed class StubReExAccreditationClient(TimeProvider timeProvider)
-    : IReExAccreditationClient
+internal sealed class StubReExAccreditationClient : IReExAccreditationClient
 {
     public Task<PriorYearAccreditationDto?> GetPriorYearAsync(
         string? organisationId,
         string? registrationId,
-        int? year,
+        int year,
         CancellationToken cancellationToken = default)
     {
-        var priorYear = year ?? timeProvider.GetUtcNow().Year - 1;
-
         return Task.FromResult<PriorYearAccreditationDto?>(new PriorYearAccreditationDto
         {
-            Year = priorYear,
+            Year = year,
             TonnageBand = "UpTo5000",
             Authorisers =
             [

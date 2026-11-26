@@ -806,7 +806,7 @@ public class ReAccreditationEndpointTests
             .ReExClient.GetPriorYearAsync(
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
-                Arg.Any<int?>(),
+                Arg.Any<int>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(Task.FromResult<PriorYearAccreditationDto?>(new PriorYearAccreditationDto { Year = 2024 }));
@@ -896,7 +896,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(1, CountLogs(factory, LogLevel.Error, "neither previousAccreditationYear nor accreditationYear"));
         await factory
             .ReExClient.DidNotReceive()
-            .GetPriorYearAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+            .GetPriorYearAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -909,7 +909,7 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         await factory
             .ReExClient.DidNotReceive()
-            .GetPriorYearAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+            .GetPriorYearAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
@@ -925,7 +925,7 @@ public class ReAccreditationEndpointTests
             .ReExClient.GetPriorYearAsync(
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
-                Arg.Any<int?>(),
+                Arg.Any<int>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns<Task<PriorYearAccreditationDto?>>(_ => throw new ReExUnavailableException("ReEx returned 503."));
@@ -972,7 +972,7 @@ public class ReAccreditationEndpointTests
             .ReExClient.GetPriorYearAsync(
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
-                Arg.Any<int?>(),
+                Arg.Any<int>(),
                 Arg.Any<CancellationToken>()
             )
             .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
@@ -1077,7 +1077,7 @@ public class ReAccreditationEndpointTests
             .ReExClient.GetPriorYearAsync(
                 Arg.Do<string?>(v => capturedOrgId = v),
                 Arg.Do<string?>(v => capturedRegId = v),
-                Arg.Do<int?>(v => capturedYear = v),
+                Arg.Do<int>(v => capturedYear = v),
                 Arg.Any<CancellationToken>()
             )
             .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));

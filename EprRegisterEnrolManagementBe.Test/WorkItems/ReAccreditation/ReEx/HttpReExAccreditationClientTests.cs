@@ -201,21 +201,6 @@ public class HttpReExAccreditationClientTests
     }
 
     [Fact]
-    public async Task GetPriorYearAsync_returns_null_when_year_is_null()
-    {
-        var client = CreateClient(OrganisationJson("up_to_500"));
-
-        var result = await client.GetPriorYearAsync(
-            "org-1",
-            "reg-1",
-            null,
-            TestContext.Current.CancellationToken
-        );
-
-        Assert.Null(result);
-    }
-
-    [Fact]
     public async Task GetPriorYearAsync_returns_null_and_logs_a_warning_when_reex_has_no_record_of_the_organisation()
     {
         var handler = new StatusCodeHttpMessageHandler(HttpStatusCode.NotFound);

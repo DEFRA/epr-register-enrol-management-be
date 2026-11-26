@@ -1,6 +1,5 @@
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
-using Microsoft.Extensions.Time.Testing;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation.ReEx;
 
@@ -11,12 +10,10 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation.ReEx;
 /// </summary>
 public class StubReExAccreditationClientTests
 {
-    private static readonly FakeTimeProvider s_time = new(DateTimeOffset.Parse("2026-03-01T12:00:00Z"));
-
     [Fact]
     public async Task GetPriorYearAsync_returns_a_fixed_record_for_any_identifiers()
     {
-        var client = new StubReExAccreditationClient(s_time);
+        var client = new StubReExAccreditationClient();
 
         var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
@@ -37,7 +34,7 @@ public class StubReExAccreditationClientTests
         // leaving it inconsistent with HttpReExAccreditationClient's
         // s_businessPlanMap, which already maps all seven. Pin both that the
         // field is populated and that every percentage still sums to 100.
-        var client = new StubReExAccreditationClient(s_time);
+        var client = new StubReExAccreditationClient();
 
         var result = await client.GetPriorYearAsync(
             "org-1",
@@ -61,20 +58,9 @@ public class StubReExAccreditationClientTests
     }
 
     [Fact]
-    public async Task GetPriorYearAsync_defaults_the_year_to_the_previous_calendar_year_when_null()
-    {
-        var client = new StubReExAccreditationClient(s_time);
-
-        var result = await client.GetPriorYearAsync(null, null, null, TestContext.Current.CancellationToken);
-
-        Assert.NotNull(result);
-        Assert.Equal(2025, result!.Year);
-    }
-
-    [Fact]
     public async Task GetPriorYearAsync_honours_a_cancellation_token_parameter()
     {
-        var client = new StubReExAccreditationClient(s_time);
+        var client = new StubReExAccreditationClient();
         using var cts = new CancellationTokenSource();
 
         var result = await client.GetPriorYearAsync("org-1", "reg-1", 2024, cts.Token);
@@ -91,10 +77,10 @@ public class StubReExAccreditationClientTests
     [Fact]
     public async Task An_e2e_test_organisation_gets_the_fixed_record_and_england()
     {
-        var client = new StubReExAccreditationClient(s_time);
+        var client = new StubReExAccreditationClient();
         var ct = TestContext.Current.CancellationToken;
 
-        var priorYear = await client.GetPriorYearAsync("e2e-3f2a9c", "e2e-reg-3f2a9c", null, ct);
+        var priorYear = await client.GetPriorYearAsync("e2e-3f2a9c", "e2e-reg-3f2a9c", 2025, ct);
         var nation = await client.GetNationAsync("e2e-3f2a9c", "e2e-reg-3f2a9c", ct);
 
         Assert.NotNull(priorYear);

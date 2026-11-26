@@ -519,7 +519,7 @@ public class ClientIdAuthenticationAdminUiCallerTests
             .GetPriorYearAsync(
                 Arg.Any<string?>(),
                 Arg.Any<string?>(),
-                Arg.Any<int?>(),
+                Arg.Any<int>(),
                 Arg.Any<CancellationToken>()
             );
     }

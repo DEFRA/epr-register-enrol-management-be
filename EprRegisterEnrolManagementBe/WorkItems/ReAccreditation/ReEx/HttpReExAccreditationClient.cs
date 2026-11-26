@@ -74,14 +74,13 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
     public async Task<PriorYearAccreditationDto?> GetPriorYearAsync(
         string? organisationId,
         string? registrationId,
-        int? year,
+        int year,
         CancellationToken cancellationToken = default
     )
     {
         if (
             string.IsNullOrWhiteSpace(organisationId)
             || string.IsNullOrWhiteSpace(registrationId)
-            || year is null
         )
         {
             return null;
@@ -107,7 +106,7 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                 CultureInfo.InvariantCulture,
                 out var validFrom
             )
-            || validFrom.Year != year.Value
+            || validFrom.Year != year
         )
         {
             return null;
@@ -130,7 +129,7 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
 
         return new PriorYearAccreditationDto
         {
-            Year = year.Value,
+            Year = year,
             TonnageBand = tonnageBand,
             Authorisers = authorisers,
             BusinessPlan = businessPlan,

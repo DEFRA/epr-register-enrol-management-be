@@ -13,14 +13,16 @@ public interface IReExAccreditationClient
     /// Fetch the accreditation for the given organisation / registration /
     /// year combination. <paramref name="organisationId"/> and
     /// <paramref name="registrationId"/> are the ReEx-native identifiers
-    /// carried in the work item payload. Returns null if any parameter is
-    /// missing or ReEx holds no matching prior-year accreditation. Throws
+    /// carried in the work item payload; <paramref name="year"/> is the prior
+    /// accreditation year, which the caller must know (RA-752: the endpoint
+    /// never looks up a guessed year). Returns null if an identifier is blank
+    /// or ReEx holds no matching prior-year accreditation. Throws
     /// <see cref="ReExUnavailableException"/> when ReEx cannot answer (RA-752).
     /// </summary>
     Task<PriorYearAccreditationDto?> GetPriorYearAsync(
         string? organisationId,
         string? registrationId,
-        int? year,
+        int year,
         CancellationToken cancellationToken = default);
 
     /// <summary>
