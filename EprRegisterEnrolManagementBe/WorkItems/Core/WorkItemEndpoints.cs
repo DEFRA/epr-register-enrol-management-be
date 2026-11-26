@@ -58,6 +58,7 @@ public static class WorkItemEndpoints
         group
             .MapGet("/{id:guid}", GetById)
             .WithName("GetWorkItemById")
+            .ProducesProblem(StatusCodes.Status404NotFound)
             .RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed);
 
         // RA-751: read-only callers (the Admin UI) may list work items.
@@ -464,7 +465,7 @@ public static class WorkItemEndpoints
             statusCode: StatusCodes.Status400BadRequest
         );
 
-    internal static async Task<Results<Ok<WorkItemResponse>, NotFound>> GetById(
+    internal static async Task<Results<Ok<WorkItemResponse>, ProblemHttpResult>> GetById(
         [FromRoute] Guid id,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
@@ -476,7 +477,7 @@ public static class WorkItemEndpoints
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
         if (workItem is null)
         {
-            return TypedResults.NotFound();
+            return WorkItemProblems.WorkItemNotFound(id);
         }
         return TypedResults.Ok(ToResponse(engine.Project(workItem), timeProvider));
     }

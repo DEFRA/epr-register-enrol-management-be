@@ -17,13 +17,13 @@ public class StubReExAccreditationClientTests
 
         var result = await client.GetPriorYearAsync("org-1", "reg-1", 2025, TestContext.Current.CancellationToken);
 
-        Assert.NotNull(result);
-        Assert.Equal(2025, result!.Year);
-        Assert.Equal("UpTo5000", result.TonnageBand);
-        Assert.Single(result.Authorisers);
-        Assert.Equal("Jane Stub", result.Authorisers[0].FullName);
-        Assert.Equal("jane.stub@example.com", result.Authorisers[0].Email);
-        Assert.NotNull(result.BusinessPlan);
+        Assert.Equal(ReExReadOutcome.Found, result.Outcome);
+        Assert.Equal(2025, result.Accreditation!.Year);
+        Assert.Equal("UpTo5000", result.Accreditation!.TonnageBand);
+        Assert.Single(result.Accreditation!.Authorisers);
+        Assert.Equal("Jane Stub", result.Accreditation!.Authorisers[0].FullName);
+        Assert.Equal("jane.stub@example.com", result.Accreditation!.Authorisers[0].Email);
+        Assert.NotNull(result.Accreditation!.BusinessPlan);
     }
 
     [Fact]
@@ -43,8 +43,8 @@ public class StubReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.NotNull(result);
-        var plan = result!.BusinessPlan;
+        Assert.Equal(ReExReadOutcome.Found, result.Outcome);
+        var plan = result.Accreditation!.BusinessPlan;
         Assert.NotNull(plan.OtherPercent);
 
         var total = (plan.NewInfrastructurePercent ?? 0)
@@ -65,8 +65,8 @@ public class StubReExAccreditationClientTests
 
         var result = await client.GetPriorYearAsync("org-1", "reg-1", 2024, cts.Token);
 
-        Assert.NotNull(result);
-        Assert.Equal(2024, result!.Year);
+        Assert.Equal(ReExReadOutcome.Found, result.Outcome);
+        Assert.Equal(2024, result.Accreditation!.Year);
     }
 
     /// <summary>
@@ -83,8 +83,7 @@ public class StubReExAccreditationClientTests
         var priorYear = await client.GetPriorYearAsync("e2e-3f2a9c", "e2e-reg-3f2a9c", 2025, ct);
         var nation = await client.GetNationAsync("e2e-3f2a9c", "e2e-reg-3f2a9c", ct);
 
-        Assert.NotNull(priorYear);
-        Assert.Equal(2025, priorYear!.Year);
-        Assert.Equal(Nation.England, nation);
+        Assert.Equal(2025, priorYear.Accreditation!.Year);
+        Assert.Equal(NationReadResult.Found(Nation.England), nation);
     }
 }

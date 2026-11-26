@@ -1,5 +1,4 @@
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 
@@ -14,14 +13,14 @@ public interface IReExAccreditationClient
     /// year combination. <paramref name="organisationId"/> and
     /// <paramref name="registrationId"/> are the ReEx-native identifiers
     /// carried in the work item payload; <paramref name="year"/> is the prior
-    /// accreditation year, which the caller must know (RA-752: the endpoint
-    /// never looks up a guessed year). Returns null if an identifier is blank
-    /// or ReEx holds no matching prior-year accreditation. Throws
-    /// <see cref="ReExUnavailableException"/> when ReEx cannot answer (RA-752).
+    /// accreditation year to look up. Found with the accreditation; NotFound
+    /// when ReEx holds no such organisation, registration or accreditation for
+    /// that year; Unavailable when ReEx cannot answer (logged at Error). Throws
+    /// <see cref="ArgumentException"/> for a blank identifier.
     /// </summary>
-    Task<PriorYearAccreditationDto?> GetPriorYearAsync(
-        string? organisationId,
-        string? registrationId,
+    Task<PriorYearReadResult> GetPriorYearAsync(
+        string organisationId,
+        string registrationId,
         int year,
         CancellationToken cancellationToken = default);
 
@@ -30,11 +29,12 @@ public interface IReExAccreditationClient
     /// maps to, via <see cref="RegulatorNationMapper"/> — used by
     /// <see cref="ReAccreditationNationCorrectionMigration"/> to correct work items
     /// whose <c>payload.nation</c> was derived by the pre-RA-526 postcode-based
-    /// hook. Returns null if either parameter is missing, the organisation or
-    /// registration cannot be found, or the remote call fails.
+    /// hook. NotFound when ReEx holds no such organisation or registration;
+    /// Unavailable when ReEx cannot answer (logged at Error). Throws
+    /// <see cref="ArgumentException"/> for a blank identifier.
     /// </summary>
-    Task<Nation?> GetNationAsync(
-        string? organisationId,
-        string? registrationId,
+    Task<NationReadResult> GetNationAsync(
+        string organisationId,
+        string registrationId,
         CancellationToken cancellationToken = default);
 }

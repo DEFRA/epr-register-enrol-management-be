@@ -67,8 +67,9 @@ internal sealed record ReAccreditationPayload
     /// <summary>
     /// ReEx organisation identifier for the submitting operator. Used by the
     /// prior-year endpoint to look up accreditation data from ReEx. Populated
-    /// by the operator backend at submission time; absent for work items created
-    /// through the case management form.
+    /// by the operator backend at submission time, and (RA-448) by
+    /// management-fe's create form, which collects no accreditation year, so a
+    /// form-created item has identifiers but no prior year to look up.
     /// </summary>
     public string? OperatorOrganisationId { get; init; }
 

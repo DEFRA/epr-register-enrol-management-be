@@ -1,8 +1,10 @@
-﻿using EprRegisterEnrolManagementBe.WorkItems.Core;
+﻿using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using Microsoft.AspNetCore.HeaderPropagation;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using MongoDB.Bson;
@@ -78,10 +80,11 @@ public class ReAccreditationNationCorrectionMigrationTests
 
     private static ReAccreditationNationCorrectionMigration BuildSut(
         IReExAccreditationClient reExClient,
-        HeaderPropagationValues? headerPropagationValues = null) =>
+        HeaderPropagationValues? headerPropagationValues = null,
+        ILogger<ReAccreditationNationCorrectionMigration>? logger = null) =>
         new(reExClient,
             headerPropagationValues ?? new HeaderPropagationValues(),
-            NullLogger<ReAccreditationNationCorrectionMigration>.Instance,
+            logger ?? NullLogger<ReAccreditationNationCorrectionMigration>.Instance,
             new FakeTimeProvider(s_now));
 
     private static IWorkItemPersistence PersistenceWith(params WorkItem[] items)
@@ -151,7 +154,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         var reExClient = Substitute.For<IReExAccreditationClient>();
         reExClient
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
-            .Returns(Nation.Wales);
+            .Returns(NationReadResult.Found(Nation.Wales));
         var sut = BuildSut(reExClient);
 
         await sut.ApplyAsync(persistence, ct);
@@ -187,7 +190,7 @@ public class ReAccreditationNationCorrectionMigrationTests
         var reExClient = Substitute.For<IReExAccreditationClient>();
         reExClient
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
-            .Returns(Nation.England);
+            .Returns(NationReadResult.Found(Nation.England));
         var sut = BuildSut(reExClient);
 
         await sut.ApplyAsync(persistence, ct);
@@ -212,8 +215,13 @@ public class ReAccreditationNationCorrectionMigrationTests
         await persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
     }
 
-    [Fact]
-    public async Task ApplyAsync_skips_when_the_ReEx_lookup_fails_and_does_not_write()
+    public static TheoryData<string> SkippedLookups => new() { "not-in-reex", "unavailable" };
+
+    [Theory]
+    [MemberData(nameof(SkippedLookups))]
+    public async Task ApplyAsync_skips_and_does_not_write_when_ReEx_has_no_record_or_cannot_answer(
+        string lookup
+    )
     {
         var ct = TestContext.Current.CancellationToken;
         var item = BuildBrokenItem();
@@ -221,12 +229,20 @@ public class ReAccreditationNationCorrectionMigrationTests
         var reExClient = Substitute.For<IReExAccreditationClient>();
         reExClient
             .GetNationAsync("org-1", "reg-1", Arg.Any<CancellationToken>())
-            .Returns((Nation?)null);
-        var sut = BuildSut(reExClient);
+            .Returns(lookup == "not-in-reex" ? NationReadResult.NotFound() : NationReadResult.Unavailable());
+        var logger = new ListLogger<ReAccreditationNationCorrectionMigration>();
+        var sut = BuildSut(reExClient, logger: logger);
 
         await sut.ApplyAsync(persistence, ct);
 
         await persistence.DidNotReceive().ReplaceAsync(Arg.Any<WorkItem>(), Arg.Any<CancellationToken>());
+        var expected = lookup == "not-in-reex"
+            ? "ReEx has no record of its organisation or registration"
+            : "ReEx could not answer; will retry on the next run";
+        Assert.Contains(
+            logger.Records,
+            e => e.Level == LogLevel.Warning && e.Message.Contains(expected, StringComparison.Ordinal)
+        );
     }
 
     [Fact]
@@ -258,7 +274,7 @@ public class ReAccreditationNationCorrectionMigrationTests
             {
                 Assert.NotNull(headerPropagationValues.Headers);
                 Assert.Empty(headerPropagationValues.Headers);
-                return Task.FromResult<Nation?>(Nation.Wales);
+                return Task.FromResult(NationReadResult.Found(Nation.Wales));
             });
         var sut = BuildSut(reExClient, headerPropagationValues);
 
