@@ -548,16 +548,6 @@ public class ReAccreditationLifecycleTests
                 TestReferenceGenerators.FixedSubmissionReference()
             )
         );
-        // The query stamps the open query with a targeted payload write
-        // before transitioning; the substitute must report a match.
-        persistence
-            .SetPayloadFieldAsync(
-                Arg.Any<Guid>(),
-                Arg.Any<string>(),
-                Arg.Any<BsonValue>(),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(true);
         var queryService = new ReAccreditationQueryService(
             persistence,
             engine,

@@ -6,7 +6,8 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.ReAccreditation;
 
 /// <summary>
 /// RA-000: a post-action hook only acts on a <c>currentQuery</c> stamped for
-/// the query transition it is handling.
+/// the query transition it is handling: its query id must match the one on
+/// that transition's <c>action-applied</c> entry. No timestamp is compared.
 /// </summary>
 public class ReAccreditationFreshQueryTests
 {
@@ -18,16 +19,21 @@ public class ReAccreditationFreshQueryTests
         IReadOnlyList<string>? sections = null,
         string? reason = FreshQueryTestData.Reason,
         bool nullRaisedAt = false,
-        bool nullSections = false) =>
+        bool nullSections = false,
+        string? queryId = FreshQueryTestData.QueryId) =>
         new()
         {
+            QueryId = queryId,
             Reason = reason,
             Sections = nullSections ? null : sections ?? FreshQueryTestData.Sections,
             RaisedAt = nullRaisedAt ? null : raisedAt ?? FreshQueryTestData.RaisedAt,
             RaisedBy = "alice-1",
         };
 
-    private static WorkItem QueriedItem(string actionId = ActionId, string fromStateId = FromStateId)
+    private static WorkItem QueriedItem(
+        string actionId = ActionId,
+        string fromStateId = FromStateId,
+        string? transitionQueryId = FreshQueryTestData.QueryId)
     {
         var item = new WorkItem
         {
@@ -35,7 +41,7 @@ public class ReAccreditationFreshQueryTests
             StateId = "queried",
             SubmittedAt = FreshQueryTestData.SubmittedAt,
         };
-        FreshQueryTestData.AppendQueryTransition(item, actionId, fromStateId);
+        FreshQueryTestData.AppendQueryTransition(item, actionId, fromStateId, transitionQueryId);
         return item;
     }
 
@@ -51,7 +57,7 @@ public class ReAccreditationFreshQueryTests
     }
 
     [Fact]
-    public void A_query_stamped_after_the_item_entered_its_state_and_before_the_transition_is_fresh()
+    public void A_query_whose_id_matches_the_transition_is_fresh()
     {
         var result = Verify(QueriedItem(), Query(), ActionId, FromStateId);
 
@@ -70,27 +76,22 @@ public class ReAccreditationFreshQueryTests
         Assert.True(result.Fresh);
     }
 
-    [Fact]
-    public void A_stamp_in_the_same_instant_as_the_transition_into_the_from_state_is_fresh()
+    [Theory]
+    // The pod that moved the item into duly-made ran ahead: the stamp looks
+    // older than the item's arrival in its from-state.
+    [InlineData(-1)]
+    // The stamping pod ran ahead of the one whose clock the transition used.
+    [InlineData(1)]
+    public void Clock_skew_between_pods_does_not_fail_a_genuine_query(int direction)
     {
-        var result = Verify(
-            QueriedItem(), Query(raisedAt: FreshQueryTestData.EnteredFromStateAt), ActionId, FromStateId);
+        var raisedAt = direction < 0
+            ? FreshQueryTestData.EnteredFromStateAt.AddMinutes(-5)
+            : FreshQueryTestData.TransitionAt.AddMinutes(5);
 
-        Assert.True(result.Fresh);
-    }
+        var result = Verify(QueriedItem(), Query(raisedAt: raisedAt), ActionId, FromStateId);
 
-    [Fact]
-    public void With_no_earlier_transition_the_lower_bound_is_the_submission()
-    {
-        var item = QueriedItem("query-during-duly-making", "submitted");
-
-        Assert.True(Verify(
-            item, Query(), "query-during-duly-making", "submitted").Fresh);
-
-        var stale = Verify(
-            item, Query(raisedAt: FreshQueryTestData.SubmittedAt.AddDays(-1)), "query-during-duly-making", "submitted");
-        Assert.False(stale.Fresh);
-        Assert.Contains("belongs to an earlier query", stale.Reason);
+        Assert.True(result.Fresh, result.Reason);
+        Assert.Equal(raisedAt, result.Query!.RaisedAt);
     }
 
     [Theory]
@@ -99,6 +100,7 @@ public class ReAccreditationFreshQueryTests
     [InlineData("sections-null", "payload.currentQuery.sections is missing or empty")]
     [InlineData("sections-empty", "payload.currentQuery.sections is missing or empty")]
     [InlineData("reason", "payload.currentQuery.reason is missing")]
+    [InlineData("queryId", "payload.currentQuery.queryId is missing, so it belongs to an earlier query")]
     public void A_missing_value_is_not_fresh(string missing, string expectedReason)
     {
         var query = missing switch
@@ -108,6 +110,8 @@ public class ReAccreditationFreshQueryTests
             "sections-null" => Query(nullSections: true),
             "sections-empty" => Query(sections: []),
             "reason" => Query(reason: null),
+            // A stamp written before RA-000 has no query id.
+            "queryId" => Query(queryId: null),
             _ => throw new ArgumentOutOfRangeException(nameof(missing)),
         };
 
@@ -119,14 +123,18 @@ public class ReAccreditationFreshQueryTests
     }
 
     [Fact]
-    public void A_query_raised_before_the_item_entered_its_from_state_is_stale()
+    public void A_query_with_another_queries_id_is_not_fresh()
     {
+        // An earlier query's stamp, or one written by a request that did not
+        // apply this transition.
         var result = Verify(
-            QueriedItem(), Query(raisedAt: FreshQueryTestData.StaleRaisedAt), ActionId, FromStateId);
+            QueriedItem(), Query(queryId: FreshQueryTestData.StaleQueryId), ActionId, FromStateId);
 
         Assert.False(result.Fresh);
-        Assert.StartsWith("payload.currentQuery was raised at 2025-10-20T10:00:00", result.Reason);
-        Assert.Contains($"before the work item entered '{FromStateId}' at 2025-11-02T09:00:00", result.Reason);
+        Assert.Equal(
+            $"payload.currentQuery is query {FreshQueryTestData.StaleQueryId}, but the {ActionId} transition "
+                + $"was applied for query {FreshQueryTestData.QueryId}",
+            result.Reason);
     }
 
     [Fact]
@@ -142,7 +150,8 @@ public class ReAccreditationFreshQueryTests
         };
         var t0 = FreshQueryTestData.SubmittedAt;
         item.AuditLog.Add(FreshQueryTestData.ActionApplied("duly-make", "submitted", "duly-made", t0.AddDays(1)));
-        item.AuditLog.Add(FreshQueryTestData.ActionApplied(ActionId, FromStateId, "queried", t0.AddDays(2)));
+        item.AuditLog.Add(FreshQueryTestData.ActionApplied(
+            ActionId, FromStateId, "queried", t0.AddDays(2), FreshQueryTestData.StaleQueryId));
         item.AuditLog.Add(new WorkItemAuditEntry
         {
             Action = "application-queried",
@@ -151,23 +160,28 @@ public class ReAccreditationFreshQueryTests
         });
         item.AuditLog.Add(FreshQueryTestData.ActionApplied("resume-during-duly-made", "queried", "updated", t0.AddDays(3)));
         item.AuditLog.Add(FreshQueryTestData.ActionApplied("continue-review-during-duly-made", "updated", FromStateId, t0.AddDays(4)));
-        item.AuditLog.Add(FreshQueryTestData.ActionApplied(ActionId, FromStateId, "queried", t0.AddDays(5)));
+        item.AuditLog.Add(FreshQueryTestData.ActionApplied(
+            ActionId, FromStateId, "queried", t0.AddDays(5), FreshQueryTestData.QueryId));
 
-        var firstQueryStamp = Query(raisedAt: t0.AddDays(2).AddSeconds(-1));
+        var firstQueryStamp = Query(queryId: FreshQueryTestData.StaleQueryId);
         var result = Verify(item, firstQueryStamp, ActionId, FromStateId);
 
         Assert.False(result.Fresh);
-        Assert.Contains("belongs to an earlier query", result.Reason);
+        Assert.StartsWith($"payload.currentQuery is query {FreshQueryTestData.StaleQueryId}", result.Reason);
     }
 
     [Fact]
-    public void A_query_raised_after_the_transition_is_not_fresh()
+    public void A_transition_not_applied_by_the_query_service_is_not_fresh()
     {
-        var result = Verify(
-            QueriedItem(), Query(raisedAt: FreshQueryTestData.TransitionAt.AddSeconds(1)), ActionId, FromStateId);
+        // No queryId on the action-applied entry: the transition was applied
+        // without ReAccreditationQueryService, so no stamp belongs to it.
+        var result = Verify(QueriedItem(transitionQueryId: null), Query(), ActionId, FromStateId);
 
         Assert.False(result.Fresh);
-        Assert.Contains($"after the {ActionId} transition", result.Reason);
+        Assert.Equal(
+            $"the {ActionId} transition's action-applied entry records no queryId, "
+                + "so it was not applied by the query service",
+            result.Reason);
     }
 
     [Fact]
