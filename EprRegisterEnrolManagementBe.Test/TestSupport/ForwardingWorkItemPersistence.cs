@@ -96,9 +96,4 @@ public abstract class ForwardingWorkItemPersistence(IWorkItemPersistence inner) 
         string submissionReference,
         CancellationToken cancellationToken = default
     ) => Inner.FindBySubmissionReferenceAsync(submissionReference, cancellationToken);
-
-    public virtual Task<long> CountBySubmissionReferenceAsync(
-        string submissionReference,
-        CancellationToken cancellationToken = default
-    ) => Inner.CountBySubmissionReferenceAsync(submissionReference, cancellationToken);
 }

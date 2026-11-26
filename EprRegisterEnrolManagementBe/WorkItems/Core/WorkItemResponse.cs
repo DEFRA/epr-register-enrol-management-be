@@ -79,13 +79,7 @@ public sealed record WorkItemResponse(
     // hardcoding module state ids.
     //
     // Additive + nullable, so the DTO stays backward-compatible.
-    string? OriginStateId = null,
-    // RA-770: how many work items came in the same submission as this one,
-    // itself included, for the "Related change requests (n)" tab every case
-    // tab shows. Set by GET /work-items/{id} only; null for a work item with
-    // no submission reference (every type that does not split per site).
-    // Additive + nullable, so the DTO stays backward-compatible.
-    int? SubmissionWorkItemCount = null
+    string? OriginStateId = null
 );
 
 /// <summary>
