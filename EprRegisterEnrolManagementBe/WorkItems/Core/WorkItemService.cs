@@ -341,7 +341,8 @@ public sealed class WorkItemService : IWorkItemService
 
         var referenceFormat = _referenceGenerator.ForType(type);
         var payloadError =
-            SubmissionPayload.Validate(payload) ?? referenceFormat.ValidatePayload(payload);
+            SubmissionPayload.Validate(payload, type.RequiresPaymentReference)
+            ?? referenceFormat.ValidatePayload(payload);
         if (payloadError is not null)
         {
             return WorkItemSubmissionResult.Failure(

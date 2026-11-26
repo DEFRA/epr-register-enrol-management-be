@@ -36,8 +36,11 @@ internal static class SubmissionPayload
         "operatorOrganisationId",
         "organisationName",
         "material",
-        "paymentReference",
+        PaymentReferenceField,
     ];
+
+    /// <summary>RA-682: required unless the type says otherwise (<see cref="IWorkItemType.RequiresPaymentReference"/>).</summary>
+    private const string PaymentReferenceField = "paymentReference";
 
     private static readonly string[] s_requiredSiteFields = ["orsId", "siteName"];
 
@@ -66,12 +69,21 @@ internal static class SubmissionPayload
             ? site.AsBsonDocument
             : null;
 
-    /// <summary>Why <paramref name="payload"/> cannot be submitted, or <c>null</c> when it can.</summary>
-    public static string? Validate(BsonDocument payload)
+    /// <summary>
+    /// Why <paramref name="payload"/> cannot be submitted, or <c>null</c> when it can.
+    /// RA-682: <paramref name="requirePaymentReference"/> is the type's
+    /// <see cref="IWorkItemType.RequiresPaymentReference"/>; when false,
+    /// <c>paymentReference</c> may be absent.
+    /// </summary>
+    public static string? Validate(BsonDocument payload, bool requirePaymentReference = true)
     {
         ArgumentNullException.ThrowIfNull(payload);
 
-        if (s_requiredFields.FirstOrDefault(field => !IsPresentString(payload, field)) is { } missing)
+        if (
+            s_requiredFields.FirstOrDefault(field =>
+                (requirePaymentReference || field != PaymentReferenceField) && !IsPresentString(payload, field)
+            ) is { } missing
+        )
         {
             return $"payload.{missing} is required.";
         }
