@@ -172,6 +172,9 @@ public class ClientIdAuthenticationAdminUiCallerTests
             // A read the Admin UI has not been given (RA-752 is not built).
             { "GET", $"/work-items/{s_workItemId}" },
             { "GET", $"/work-items/re-accreditation/{s_workItemId}/recommendation" },
+            // RA-770's Related change requests read: plain RequireAuthorization(),
+            // so the default (not read-only) policy keeps the Admin UI out.
+            { "GET", $"/work-items/{s_workItemId}/related-work-items" },
         };
 
     [Theory]

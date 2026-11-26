@@ -397,6 +397,20 @@ type is configured. Every setting is code, not runtime data:
     is logged with the work item, accreditation number and reason. That is
     right for every grant before mid-year grants exist and a date too early
     for one granted later. A failed lookup is a 503, never a guessed date.
+- **Related change requests (RA-770).** `GET /work-items/{id}/related-work-items?page=`
+  (`WorkItems/Workflows/StandardLifecycle/RelatedWorkItemsEndpoints.cs`) serves
+  an In-Year Change case's Related change requests tab: `{ totalCount, page,
+  pageSize, items }`, ten to a page, the work item asked about first on page 1
+  and the rest of its submission in reference order, each item shaped as the
+  Duly make page's related list (`RelatedWorkItemResponse`). It reads the whole
+  submission with `IWorkItemPersistence.FindBySubmissionReferenceAsync` (one
+  work item per site, so small) and pages in memory. Any `page` value answers a
+  page: not a whole number or below 1 is page 1, past the end is the last page.
+  A work item with no submission reference lists only itself. The tab's
+  "(n)" label comes from the work item's own `payload.submissionSize`, not a
+  separate count. The submission-reference read filters on `$type: string` as
+  well as the value, because its index is partial on that type and a plain
+  equality match would not use it.
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services
   (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:

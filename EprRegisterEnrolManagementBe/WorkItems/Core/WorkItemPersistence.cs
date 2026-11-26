@@ -233,7 +233,8 @@ public interface IWorkItemPersistence
     /// <c>payload.submissionReference</c> is <paramref name="submissionReference"/>
     /// (one per site, see <see cref="IWorkItemType.SplitsSubmissionPerSite"/>),
     /// archived included, ordered by <c>payload.applicationReference</c>.
-    /// Backs the related change requests on the Duly make page.
+    /// Backs the related change requests on the Duly make page and (RA-770)
+    /// the Related change requests tab.
     /// </summary>
     Task<IReadOnlyList<WorkItem>> FindBySubmissionReferenceAsync(
         string submissionReference,
@@ -382,7 +383,7 @@ public sealed class WorkItemPersistence
         ArgumentException.ThrowIfNullOrWhiteSpace(submissionReference);
 
         return await Collection
-            .Find(Builders<WorkItem>.Filter.Eq(SubmissionReferencePath, submissionReference))
+            .Find(SubmissionReferenceFilter(submissionReference))
             .Sort(Builders<WorkItem>.Sort.Ascending(ApplicationReferencePath))
             .ToListAsync(cancellationToken);
     }
@@ -390,6 +391,18 @@ public sealed class WorkItemPersistence
     private const string ApplicationReferencePath = "payload.applicationReference";
 
     private const string SubmissionReferencePath = "payload." + SubmissionPayload.SubmissionReferenceField;
+
+    /// <summary>
+    /// RA-770: the work items of one submission. The <c>$type</c> condition
+    /// is what lets MongoDB use the partial index on the submission reference
+    /// (its filter is <c>$type: string</c>): a plain equality match does not
+    /// imply that filter, so without it the read scans the whole collection.
+    /// </summary>
+    internal static FilterDefinition<WorkItem> SubmissionReferenceFilter(string submissionReference) =>
+        Builders<WorkItem>.Filter.And(
+            Builders<WorkItem>.Filter.Eq(SubmissionReferencePath, submissionReference),
+            Builders<WorkItem>.Filter.Type(SubmissionReferencePath, BsonType.String)
+        );
 
     [ExcludeFromCodeCoverage]
     public async Task<WorkItemPage> QueryAsync(
