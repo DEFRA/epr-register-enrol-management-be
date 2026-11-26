@@ -55,6 +55,9 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
             dto.OtherPercent = v,
     };
 
+    // Structured-log field naming the ReEx organisation a lookup was for.
+    private const string OrganisationIdLogField = "reex.organisation_id";
+
     private readonly HttpClient _httpClient;
     private readonly IStructuredLogger<HttpReExAccreditationClient> _log;
 
@@ -174,7 +177,7 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                 "Unrecognised regulator code for ReEx registration",
                 new Dictionary<string, object?>
                 {
-                    ["reex.organisation_id"] = organisationId,
+                    [OrganisationIdLogField] = organisationId,
                     ["reex.registration_id"] = registrationId,
                     ["reex.regulator_code"] = registration.SubmittedToRegulator,
                 }
@@ -215,7 +218,7 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
             _log.Log(
                 LogLevel.Error,
                 "ReEx prior-year request failed",
-                new Dictionary<string, object?> { ["reex.organisation_id"] = organisationId },
+                new Dictionary<string, object?> { [OrganisationIdLogField] = organisationId },
                 exception: ex
             );
             throw new ReExUnavailableException("ReEx request failed.", ex);
@@ -230,7 +233,7 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                     "ReEx has no record of the organisation",
                     new Dictionary<string, object?>
                     {
-                        ["reex.organisation_id"] = organisationId,
+                        [OrganisationIdLogField] = organisationId,
                         ["reex.status_code"] = (int)response.StatusCode,
                     }
                 );
@@ -256,7 +259,7 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                         : "ReEx prior-year lookup failed",
                     new Dictionary<string, object?>
                     {
-                        ["reex.organisation_id"] = organisationId,
+                        [OrganisationIdLogField] = organisationId,
                         ["reex.status_code"] = (int)response.StatusCode,
                     }
                 );
@@ -293,7 +296,7 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
         _log.Log(
             LogLevel.Error,
             "ReEx returned a body that is not an organisation",
-            new Dictionary<string, object?> { ["reex.organisation_id"] = organisationId },
+            new Dictionary<string, object?> { [OrganisationIdLogField] = organisationId },
             exception: exception
         );
 

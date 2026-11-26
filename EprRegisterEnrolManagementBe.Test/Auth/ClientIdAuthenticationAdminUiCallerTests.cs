@@ -419,7 +419,7 @@ public class ClientIdAuthenticationAdminUiCallerTests
     /// A real <see cref="HttpReExAccreditationClient"/> over a fake ReEx, so
     /// the whole path from ReEx's answer to this service's status is covered.
     /// </summary>
-    private static IReExAccreditationClient ReExAnswering(Func<HttpResponseMessage> answer) =>
+    private static HttpReExAccreditationClient ReExAnswering(Func<HttpResponseMessage> answer) =>
         new HttpReExAccreditationClient(
             new HttpClient(new FakeReExHandler(answer)),
             Microsoft.Extensions.Options.Options.Create(

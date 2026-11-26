@@ -614,47 +614,16 @@ internal static class ReAccreditationEndpoints
         // management form, so there is no prior year to look up (404, as
         // documented above). ReEx is not called.
         if (
-            string.IsNullOrWhiteSpace(payload?.OperatorOrganisationId)
-            || string.IsNullOrWhiteSpace(payload?.OperatorRegistrationId)
+            payload is null
+            || string.IsNullOrWhiteSpace(payload.OperatorOrganisationId)
+            || string.IsNullOrWhiteSpace(payload.OperatorRegistrationId)
         )
         {
             return TypedResults.NotFound();
         }
 
-        // PreviousAccreditationYear is set by new operator submissions (Year − 1).
-        // Older work items only carry AccreditationYear, so the prior year is
-        // derived from that: a read-side default for old stored data, logged at
-        // Warning every time it fires until a migration backfills the field and
-        // removes it (beads epr-3zfw).
-        int priorYearValue;
-        if (payload!.PreviousAccreditationYear is int previousYear)
+        if (ResolvePriorYear(payload, id, logger) is not int priorYearValue)
         {
-            priorYearValue = previousYear;
-        }
-        else if (payload.AccreditationYear is int accreditationYear)
-        {
-            priorYearValue = accreditationYear - 1;
-            if (logger.IsEnabled(LogLevel.Warning))
-            {
-                logger.LogWarning(
-                    "Work item {WorkItemId} has no previousAccreditationYear; prior year derived as accreditationYear - 1 = {PriorYear} (epr-3zfw).",
-                    id,
-                    priorYearValue
-                );
-            }
-        }
-        else
-        {
-            // ReEx identifiers but no year at all: the stored work item is
-            // missing a value the lookup needs. Not "no prior year" (404) and
-            // not a ReEx outage (502); never guess a year.
-            if (logger.IsEnabled(LogLevel.Error))
-            {
-                logger.LogError(
-                    "Work item {WorkItemId} has ReEx identifiers but neither previousAccreditationYear nor accreditationYear; prior year cannot be looked up.",
-                    id
-                );
-            }
             return TypedResults.Problem(
                 title: PriorYearUnavailableProblemTitle,
                 detail: $"Work item {id} has no accreditation year, so its prior year cannot be looked up.",
@@ -693,6 +662,49 @@ internal static class ReAccreditationEndpoints
             return TypedResults.NotFound();
 
         return TypedResults.Ok(priorYear);
+    }
+
+    /// <summary>
+    /// The prior accreditation year to look up for a work item that has ReEx
+    /// identifiers, or <c>null</c> (after an Error log) when it stores no year.
+    /// PreviousAccreditationYear is set by new operator submissions (Year − 1).
+    /// Older work items only carry AccreditationYear, so the prior year is
+    /// derived from that: a read-side default for old stored data, logged at
+    /// Warning every time it fires until a migration backfills the field and
+    /// removes it (beads epr-3zfw).
+    /// </summary>
+    private static int? ResolvePriorYear(ReAccreditationPayload payload, Guid id, ILogger logger)
+    {
+        if (payload.PreviousAccreditationYear is int previousYear)
+        {
+            return previousYear;
+        }
+
+        if (payload.AccreditationYear is int accreditationYear)
+        {
+            var derived = accreditationYear - 1;
+            if (logger.IsEnabled(LogLevel.Warning))
+            {
+                logger.LogWarning(
+                    "Work item {WorkItemId} has no previousAccreditationYear; prior year derived as accreditationYear - 1 = {PriorYear} (epr-3zfw).",
+                    id,
+                    derived
+                );
+            }
+            return derived;
+        }
+
+        // ReEx identifiers but no year at all: the stored work item is
+        // missing a value the lookup needs. Not "no prior year" (404) and
+        // not a ReEx outage (502); never guess a year.
+        if (logger.IsEnabled(LogLevel.Error))
+        {
+            logger.LogError(
+                "Work item {WorkItemId} has ReEx identifiers but neither previousAccreditationYear nor accreditationYear; prior year cannot be looked up.",
+                id
+            );
+        }
+        return null;
     }
 
     /// <summary>
