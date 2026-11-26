@@ -690,7 +690,12 @@ accreditation); `502` ProblemDetails (title `Prior-year data unavailable`,
 logged at Error with the work item id) means ReEx could not answer: a 5xx,
 401/403 or other non-404 status, a timeout, a network failure or an unreadable
 body (RA-752). `400` ProblemDetails for a work item that is not
-re-accreditation or has an unparseable payload.
+re-accreditation or has an unparseable payload. `500` ProblemDetails (same
+title, logged at Error) for a work item with ReEx identifiers but neither
+`previousAccreditationYear` nor `accreditationYear`; ReEx is not called. An
+item with only `accreditationYear` (stored before `previousAccreditationYear`
+existed) is looked up for `accreditationYear - 1` with a Warning each time,
+until a migration backfills the field (beads epr-3zfw).
 
 Every other request it makes is refused with `403` and logged at Error,
 including `GET /work-items/re-accreditation/{id}/recommendation`, which
