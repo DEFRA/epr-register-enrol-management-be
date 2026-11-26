@@ -128,7 +128,37 @@ internal sealed class StandardStatusPushHook(
         StandardWorkflow.AssessmentStartedStateId,
     };
 
+    // epr-p86e / RA-410 / RA-527: the decision actions this hook never pushes
+    // (see BuildExcludedActionIds for why).
+    private static readonly HashSet<string> s_decisionActionIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "submit-for-decision",
+        StandardWorkflow.ConfirmContactApprovedActionId,
+        StandardWorkflow.ConfirmContactRejectedActionId,
+    };
+
+    // The decision actions whose push StandardConfirmContactService owns
+    // (pushed once, before commit). submit-for-decision is pushed by nobody.
+    private static readonly HashSet<string> s_decisionServicePushedActionIds = new(StringComparer.OrdinalIgnoreCase)
+    {
+        StandardWorkflow.ConfirmContactApprovedActionId,
+        StandardWorkflow.ConfirmContactRejectedActionId,
+    };
+
     private readonly HashSet<string> _excludedActionIds = BuildExcludedActionIds(type);
+
+    /// <summary>
+    /// RA-751: whether applying <paramref name="actionId"/> on
+    /// <paramref name="type"/> sends a status push: either this hook pushes it,
+    /// or it is one of the final-outcome actions
+    /// (<see cref="s_decisionServicePushedActionIds"/>) whose push the decision
+    /// service owns. The read-only state list
+    /// (<c>GET /work-items/re-accreditation/states</c>) reads this rather than
+    /// a copy of the rules, so the two cannot drift.
+    /// </summary>
+    internal static bool IsActionStatusPushed(IWorkItemType type, string actionId) =>
+        !BuildExcludedActionIds(type).Contains(actionId)
+        || s_decisionServicePushedActionIds.Contains(actionId);
 
     public Task OnSubmittedAsync(WorkItem workItem, ClaimsPrincipal user, CancellationToken cancellationToken) =>
         Task.CompletedTask;
@@ -386,9 +416,7 @@ internal sealed class StandardStatusPushHook(
         // (submit-for-decision + approve/reject) that once stranded
         // applications in 'awaiting-decision' when the operator journey was
         // unreachable.
-        excluded.Add("submit-for-decision");
-        excluded.Add(StandardWorkflow.ConfirmContactApprovedActionId);
-        excluded.Add(StandardWorkflow.ConfirmContactRejectedActionId);
+        excluded.UnionWith(s_decisionActionIds);
         return excluded;
     }
 

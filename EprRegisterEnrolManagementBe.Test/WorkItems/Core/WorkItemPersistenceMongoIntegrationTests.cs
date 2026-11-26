@@ -143,7 +143,7 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
     }
 
     [Fact]
-    public async Task DefineIndexes_creates_the_eleven_documented_indexes_on_startup()
+    public async Task DefineIndexes_creates_the_twelve_documented_indexes_on_startup()
     {
         // Constructor of WorkItemPersistence calls EnsureIndexes; we
         // assert what the driver actually wrote (not what we asked for)
@@ -160,7 +160,9 @@ public sealed class WorkItemPersistenceMongoIntegrationTests : IAsyncDisposable,
             .OrderBy(s => s, StringComparer.Ordinal)
             .ToList();
 
-        Assert.Equal(11, keyDocs.Count);
+        Assert.Equal(12, keyDocs.Count);
+        // RA-751: backs sort=last-modified in either direction.
+        Assert.Contains(keyDocs, k => k == "{ \"lastModifiedAt\" : -1, \"_id\" : -1 }");
         Assert.Contains(
             keyDocs,
             k => k.Contains("\"typeId\" : 1") && k.Contains("\"submittedAt\" : -1")

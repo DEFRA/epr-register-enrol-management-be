@@ -341,6 +341,7 @@ public class WorkItemQueryBindingTests
     [InlineData("organisation")]
     [InlineData("status")]
     [InlineData("due-date")]
+    [InlineData("last-modified")]
     public void SortTokenIsBound(string token)
     {
         var query = WorkItemQueryBinding.FromQueryString(Q(("sort", token)));

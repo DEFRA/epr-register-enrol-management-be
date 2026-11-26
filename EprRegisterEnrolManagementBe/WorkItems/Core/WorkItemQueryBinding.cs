@@ -34,6 +34,18 @@ internal static class WorkItemQueryBinding
 
     internal const string SubmittedByParam = "submittedBy";
 
+    // RA-751 (Admin UI work item search). Strictly parsed: see Validate.
+    internal const string QParam = "q";
+    internal const string AssignedParam = "assigned";
+    internal const string ArchivedParam = "archived";
+
+    /// <summary>
+    /// RA-751: longest <c>q</c> accepted, after trimming. <c>q</c> becomes an
+    /// unindexed case-insensitive regex over five fields, so its size is
+    /// bounded; 100 is the Admin UI's own search box limit.
+    /// </summary>
+    internal const int MaxQLength = 100;
+
     public static WorkItemQuery FromQueryString(IQueryCollection query)
     {
         ArgumentNullException.ThrowIfNull(query);
@@ -57,29 +69,167 @@ internal static class WorkItemQueryBinding
             Organisation: ReadString(query, OrganisationParam),
             Sort: ReadString(query, SortParam),
             SortDescending: ReadSortDirection(query, SortDirectionParam),
-            Categories: ReadStrings(query, CategoryParam));
+            Categories: ReadStrings(query, CategoryParam),
+            Q: ReadString(query, QParam),
+            Assigned: ReadStrictBool(query, AssignedParam).Value,
+            Archived: ReadStrictBool(query, ArchivedParam).Value);
+    }
+
+    /// <summary>
+    /// RA-751: checks the strictly parsed parameters. Returns the problems
+    /// keyed by parameter name (empty when there are none), so the endpoint
+    /// can answer 400 instead of quietly dropping a filter the caller asked
+    /// for. <c>assigned</c> and <c>archived</c> must be exactly <c>true</c> or
+    /// <c>false</c> (any case) when present, and <c>assigned</c> cannot be
+    /// combined with <c>unassigned</c> or <c>assigneeId</c>, whose meaning it
+    /// would contradict or blur.
+    /// </summary>
+    public static Dictionary<string, string[]> Validate(IQueryCollection query)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        var errors = new Dictionary<string, string[]>(StringComparer.Ordinal);
+        ValidateAssignmentAndArchive(query, errors);
+        ValidateQ(query, errors);
+        ValidateSort(query, errors);
+        return errors;
+    }
+
+    private static void ValidateAssignmentAndArchive(
+        IQueryCollection query,
+        Dictionary<string, string[]> errors
+    )
+    {
+        foreach (var key in new[] { AssignedParam, ArchivedParam })
+        {
+            if (!ReadStrictBool(query, key).IsValid)
+            {
+                errors[key] = [$"'{key}' must be 'true' or 'false'."];
+            }
+        }
+
+        if (
+            query.ContainsKey(AssignedParam)
+            && (query.ContainsKey(UnassignedOnlyParam) || query.ContainsKey(AssigneeIdParam))
+        )
+        {
+            errors[AssignedParam] =
+            [
+                .. errors.GetValueOrDefault(AssignedParam, []),
+                $"'{AssignedParam}' cannot be combined with '{UnassignedOnlyParam}' or '{AssigneeIdParam}'.",
+            ];
+        }
+    }
+
+    // RA-751: q is sent at most once and is bounded in length.
+    private static void ValidateQ(IQueryCollection query, Dictionary<string, string[]> errors)
+    {
+        if (!query.TryGetValue(QParam, out var qValues))
+        {
+            return;
+        }
+        if (qValues.Count > 1)
+        {
+            errors[QParam] = [$"'{QParam}' must be sent once."];
+        }
+        else if ((qValues[0]?.Trim().Length ?? 0) > MaxQLength)
+        {
+            errors[QParam] = [$"'{QParam}' must be {MaxQLength} characters or fewer."];
+        }
+    }
+
+    // RA-751: a non-blank sort token or direction must be one this endpoint
+    // understands; blank or absent keeps the default order. A repeated sort
+    // or dir is refused like a repeated q: binding reads only the first value,
+    // so ?sort=&sort=status would otherwise pass here and then sort by nothing.
+    private static void ValidateSort(IQueryCollection query, Dictionary<string, string[]> errors)
+    {
+        ValidateSingleKnownValue(
+            query,
+            errors,
+            SortParam,
+            WorkItemSort.IsKnownToken,
+            $"'{SortParam}' must be one of: {string.Join(", ", WorkItemSort.Tokens.Order(StringComparer.Ordinal))}."
+        );
+        ValidateSingleKnownValue(
+            query,
+            errors,
+            SortDirectionParam,
+            v => ParseSortDirection(v) is not null,
+            $"'{SortDirectionParam}' must be 'asc' or 'desc'."
+        );
+    }
+
+    private static void ValidateSingleKnownValue(
+        IQueryCollection query,
+        Dictionary<string, string[]> errors,
+        string key,
+        Func<string, bool> isKnown,
+        string unknownMessage
+    )
+    {
+        if (query.TryGetValue(key, out var values) && values.Count > 1)
+        {
+            errors[key] = [$"'{key}' must be sent once."];
+        }
+        else if (NonBlankValues(query, key).Any(v => !isKnown(v)))
+        {
+            errors[key] = [unknownMessage];
+        }
+    }
+
+    private static IEnumerable<string> NonBlankValues(IQueryCollection query, string key) =>
+        query.TryGetValue(key, out var values)
+            ? values.Where(v => !string.IsNullOrWhiteSpace(v)).Select(v => v!)
+            : [];
+
+    /// <summary>
+    /// Absent → valid, no value. Exactly one value of <c>true</c> or
+    /// <c>false</c> (any case, surrounding whitespace ignored) → valid, that
+    /// value. Anything else, including an empty value or a repeated key, is
+    /// invalid.
+    /// </summary>
+    private static (bool IsValid, bool? Value) ReadStrictBool(IQueryCollection query, string key)
+    {
+        if (!query.TryGetValue(key, out var values))
+        {
+            return (true, null);
+        }
+        if (values.Count != 1)
+        {
+            return (false, null);
+        }
+
+        return bool.TryParse(values[0]?.Trim(), out var parsed) ? (true, parsed) : (false, null);
     }
 
     /// <summary>
     /// Reads the optional <c>?dir=</c> value: <c>desc</c>/<c>descending</c> →
-    /// <c>true</c>, <c>asc</c>/<c>ascending</c> → <c>false</c>, anything else
-    /// (absent, blank, unrecognised) → <c>null</c> so the requested sort column
-    /// applies its own natural default direction.
+    /// <c>true</c>, <c>asc</c>/<c>ascending</c> → <c>false</c>, absent or blank
+    /// → <c>null</c> so the requested sort column applies its own natural
+    /// default direction. An unrecognised value is rejected with 400 by
+    /// <see cref="Validate"/> before binding (RA-751).
     /// </summary>
     private static bool? ReadSortDirection(IQueryCollection query, string key)
     {
-        var value = ReadString(query, key)?.Trim();
-        if (string.IsNullOrEmpty(value))
-        {
-            return null;
-        }
-        if (value.Equals("desc", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("descending", StringComparison.OrdinalIgnoreCase))
+        var value = ReadString(query, key);
+        return string.IsNullOrWhiteSpace(value) ? null : ParseSortDirection(value);
+    }
+
+    /// <summary>
+    /// <c>desc</c>/<c>descending</c> → <c>true</c>, <c>asc</c>/<c>ascending</c>
+    /// → <c>false</c> (any case, surrounding whitespace ignored); anything else
+    /// → <c>null</c>, which <see cref="Validate"/> rejects.
+    /// </summary>
+    private static bool? ParseSortDirection(string value)
+    {
+        var trimmed = value.Trim();
+        if (trimmed.Equals("desc", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("descending", StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
-        if (value.Equals("asc", StringComparison.OrdinalIgnoreCase)
-            || value.Equals("ascending", StringComparison.OrdinalIgnoreCase))
+        if (trimmed.Equals("asc", StringComparison.OrdinalIgnoreCase)
+            || trimmed.Equals("ascending", StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }

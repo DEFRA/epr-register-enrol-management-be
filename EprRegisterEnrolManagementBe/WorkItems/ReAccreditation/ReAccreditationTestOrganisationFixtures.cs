@@ -1,5 +1,6 @@
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using MongoDB.Bson;
+using EprRegisterEnrolManagementBe.WorkItems.Workflows;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 
@@ -59,6 +60,24 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     public const string AccreditationNumberCorrectedTo = "A27ER9006910246PL";
 
     /// <summary>
+    /// RA-751 archived fixture id: a <c>withdrawn</c> item whose
+    /// <c>payload.archivedAt</c> is set, so the e2e suite can prove the
+    /// <c>archived=true</c> filter of <c>GET /work-items</c> returns an
+    /// archived item. Only <c>ArchiveBackgroundService</c> stamps that field,
+    /// days after an item ends, so no API path can produce one during a run.
+    /// </summary>
+    public const string ArchivedId = "00000751-0000-4000-8000-000000000751";
+
+    /// <summary>Organisation id of the RA-751 archived fixture.</summary>
+    public const string ArchivedOrganisationId = "e2e-ra751-archived";
+
+    /// <summary>Organisation name of the RA-751 archived fixture.</summary>
+    public const string ArchivedOrganisationName = "E2E RA-751 Archived Ltd";
+
+    /// <summary>Application reference of the RA-751 archived fixture.</summary>
+    public const string ArchivedApplicationReference = "RA-900000751";
+
+    /// <summary>
     /// RA-764 organisation-name-correction fixture id: the case under the
     /// NIEA registration
     /// <see cref="ReAccreditationOrganisationNameCorrectionMigration.NorthernIrelandRegistrationNumber"/>.
@@ -101,6 +120,8 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
     }
 
     private const string EnglandNation = "England";
+    private const string PlasticMaterial = "plastic";
+    private const string FixtureSubmittedBy = "e2e-fixture";
 
     private const string SimulatedDeliveredEmail = "simulate-delivered@notifications.service.gov.uk";
 
@@ -112,6 +133,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
         yield return BuildLegacySnapshot(now);
         yield return BuildPreYearStart(type, now);
         yield return BuildAccreditationNumberCorrected(type, now);
+        yield return BuildArchived(type, now);
         yield return BuildOrganisationNameCorrection(type, now, s_organisationNameCorrectionNorthernIreland);
         yield return BuildOrganisationNameCorrection(type, now, s_organisationNameCorrectionEngland);
     }
@@ -164,7 +186,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 [Field.OperatorOrganisationId] = LegacySnapshotOrganisationId,
                 [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = RegistrationReference(now, "9003420342"),
                 ["operatorRegistrationId"] = "reg-342",
-                [Field.Material] = "plastic",
+                [Field.Material] = PlasticMaterial,
                 [Field.PreviousAccreditationYear] = now.Year - 1,
                 [Field.ComplianceIssuesReported] = 0,
                 [Field.OperatorEmail] = SimulatedDeliveredEmail,
@@ -237,7 +259,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             StateId = "assessment-in-progress",
             SubmittedAt = submittedAt,
             LastModifiedAt = submittedAt,
-            SubmittedBy = "e2e-fixture",
+            SubmittedBy = FixtureSubmittedBy,
             TemplateSnapshot = snapshot,
             TemplateVersion = snapshot.TemplateVersion,
             SlaClock = new WorkItemSlaClock { StartedAt = clockStart },
@@ -248,7 +270,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 [Field.OperatorOrganisationId] = PreYearStartOrganisationId,
                 [Field.OperatorApplicationId] = "e2e-app-ra611-pre-year-start",
                 [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = RegistrationReference(now, "9006110611"),
-                [Field.Material] = "plastic",
+                [Field.Material] = PlasticMaterial,
                 [AccreditationYear.Field] = now.Year,
                 [Field.PreviousAccreditationYear] = now.Year - 1,
                 [Field.ComplianceIssuesReported] = 0,
@@ -283,7 +305,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             StateId = ReAccreditationType.ApprovedStateId,
             SubmittedAt = submittedAt,
             LastModifiedAt = now.AddDays(-1),
-            SubmittedBy = "e2e-fixture",
+            SubmittedBy = FixtureSubmittedBy,
             TemplateSnapshot = snapshot,
             TemplateVersion = snapshot.TemplateVersion,
             Payload = new BsonDocument
@@ -296,7 +318,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                 // 2026 previous accreditation year, sharing the corrected number's
                 // org id and sequence.
                 [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = "R26ER9006910246PL",
-                [Field.Material] = "plastic",
+                [Field.Material] = PlasticMaterial,
                 [AccreditationYear.Field] = 2027,
                 [Field.PreviousAccreditationYear] = 2026,
                 [Field.ComplianceIssuesReported] = 0,
@@ -316,6 +338,47 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
                     now.AddDays(-1)
                 ),
             ],
+        };
+        return item.ToBsonDocument();
+    }
+
+    /// <summary>
+    /// RA-751: a <c>withdrawn</c> item ended 10 days ago and archived 3 days
+    /// ago, as <c>ArchiveBackgroundService</c> would leave it.
+    /// </summary>
+    private static BsonDocument BuildArchived(IWorkItemType type, DateTime now)
+    {
+        var snapshot = WorkItemTemplateSnapshot.Capture(type);
+        var item = new WorkItem
+        {
+            Id = Guid.Parse(ArchivedId),
+            TypeId = ReAccreditationType.Id,
+            StateId = StandardWorkflow.WithdrawnStateId,
+            SubmittedAt = now.AddDays(-40),
+            LastModifiedAt = now.AddDays(-10),
+            SubmittedBy = FixtureSubmittedBy,
+            TemplateSnapshot = snapshot,
+            TemplateVersion = snapshot.TemplateVersion,
+            Payload = new BsonDocument
+            {
+                [Field.ApplicationReference] = ArchivedApplicationReference,
+                [ReAccreditationOrganisationNameCorrectionMigration.OrganisationNameField] = ArchivedOrganisationName,
+                [Field.OperatorOrganisationId] = ArchivedOrganisationId,
+                [Field.OperatorApplicationId] = "e2e-app-ra751-archived",
+                // A valid registration reference on the fictitious organisation
+                // 900751, like the RA-691 fixture's.
+                [ReAccreditationOrganisationNameCorrectionMigration.RegistrationNumberField] = "R26ER9007510001PL",
+                [Field.Material] = PlasticMaterial,
+                [AccreditationYear.Field] = 2027,
+                [Field.PreviousAccreditationYear] = 2026,
+                [Field.ComplianceIssuesReported] = 0,
+                [Field.OperatorEmail] = SimulatedDeliveredEmail,
+                [Field.SiteAddress] = "1 Archived Road, Leeds",
+                [Field.SiteAddressPostcode] = "LS1 4AP",
+                [Field.Nation] = EnglandNation,
+                [Field.ChargeAmountPence] = 218400,
+                [ArchiveBackgroundService.ArchivedAtPayloadKey] = new BsonDateTime(now.AddDays(-3)),
+            },
         };
         return item.ToBsonDocument();
     }
@@ -380,7 +443,7 @@ internal sealed class ReAccreditationTestOrganisationFixtures : ITestOrganisatio
             StateId = "submitted",
             SubmittedAt = submittedAt,
             LastModifiedAt = submittedAt,
-            SubmittedBy = "e2e-fixture",
+            SubmittedBy = FixtureSubmittedBy,
             TemplateSnapshot = snapshot,
             TemplateVersion = snapshot.TemplateVersion,
             Payload = new BsonDocument
