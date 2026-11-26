@@ -683,24 +683,38 @@ entries included), and AC10 has the Admin UI mask names and email addresses
 when it shows them. The response carries no `templateSnapshot`, `version` or
 raw `slaClock`.
 
-`GET /work-items/re-accreditation/{id}/prior-year` answers every caller the
-same way. `200` with the data; `404` means there is no prior-year record (no
-work item, no ReEx identifiers on it, or ReEx holds no matching
-accreditation); `502` ProblemDetails (title `Prior-year data unavailable`,
-logged at Error with the work item id) means ReEx could not answer: a 5xx,
-401/403 or other non-404 status, a timeout, a network failure or an unreadable
-body (RA-752). `400` ProblemDetails for a work item that is not
-re-accreditation or has an unparseable payload. `500` ProblemDetails (same
-title, logged at Error) for a work item with ReEx identifiers but neither
-`previousAccreditationYear` nor `accreditationYear`; ReEx is not called. An
-item with only `accreditationYear` (stored before `previousAccreditationYear`
-existed) is looked up for `accreditationYear - 1` with a Warning each time,
-until a migration backfills the field (beads epr-3zfw).
+Both RA-752 routes answer every caller the same way, with ProblemDetails
+carrying an `errorCode` so a caller never has to read a bare `404` as "no
+such thing" when it may be a route or proxy miss:
 
-Every other request it makes is refused with `403` and logged at Error,
+| Route | Case | Status | `errorCode` |
+| --- | --- | --- | --- |
+| `GET /work-items/{id}` | No work item with that id | `404` | `work-item-not-found` |
+| `.../prior-year` | No work item with that id | `404` | `work-item-not-found` |
+| `.../prior-year` | No prior year: no ReEx identifiers, identifiers but no year, or ReEx holds no matching accreditation | `404` | `prior-year-not-found` |
+| `.../prior-year` | ReEx could not answer | `502` | `reex-unavailable` |
+| `.../prior-year` | Not a re-accreditation item, or an unparseable payload | `400` | none |
+
+The operator backend sends `accreditationYear` on every submission, so an item
+with no year was created through management-fe's create form, which collects
+the ReEx identifiers (RA-448) but no year: it has no prior year, logged at
+Information, and ReEx is not called. An item with only `accreditationYear`
+(stored before `previousAccreditationYear` existed) is looked up for
+`accreditationYear - 1` with a Warning each time, until stored items are
+backfilled with `previousAccreditationYear`.
+
+"ReEx could not answer" is a request failure, a timeout (the ReEx client gives
+up after 4s, inside management-fe's 5s), a 401/403 or other non-404 status, an
+unreadable body, or a `404` without ReEx's own "organisation not found" error
+(for example a wrong `ReExApi:BaseUrl` path). The ReEx client logs the cause
+at Error; the endpoint adds one Information line with the work item id.
+
+Every other route it calls is refused with `403` and logged at Error,
 including `GET /work-items/re-accreditation/{id}/recommendation`, which
-neither the Admin UI nor management-fe's work item page reads. An id that is
-not a GUID matches no route, so it is `404`, not `403`.
+neither the Admin UI nor management-fe's work item page reads. A method the
+route doesn't map (`PUT`/`DELETE` on `/work-items/{id}`, `POST` on
+`.../prior-year`, or `HEAD`) is `405` from routing, with no refusal log. An id
+that is not a GUID matches no route, so it is `404`, not `403`.
 An endpoint opens itself to read-only callers with
 `RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed)`; a plain
 `RequireAuthorization()` keeps them out. See
@@ -944,7 +958,7 @@ registration line" promise. All files live under
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
 | `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
 | `Endpoints/ReAccreditationStatesEndpoint.cs` | RA-751: `GET /work-items/re-accreditation/states` — the template's states with their display names, terminal flags and operator-journey push kind. Open to read-only callers. |
-| `Endpoints/ReAccreditationEndpoints.cs` | Maps `GET /work-items/re-accreditation/states` (above), `GET /work-items/re-accreditation/{id}/prior-year` (live prior-year data from ReEx: `404` for no record, `502` when ReEx cannot answer; open to read-only callers since RA-752) and the module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
+| `Endpoints/ReAccreditationEndpoints.cs` | Maps `GET /work-items/re-accreditation/states` (above); `GET /work-items/re-accreditation/{id}/prior-year`, live prior-year data from ReEx (status codes above; open to read-only callers since RA-752); and `GET /work-items/re-accreditation/{id}/recommendation`, which fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
 | `IReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateValidator.cs` | RA-576: `POST /work-items/re-accreditation/{id}/change-payment-date` with body `{ paymentDate, reason }` corrects the payment date entered at duly making. One `ReplaceAsync` edits `payload.paymentDate` and appends an `action-applied` audit entry (`actionId=change-payment-date`, `previousPaymentDate`, `paymentDate`, `reason`). `StateId` and `SlaClock` are not changed and no hooks run, so status and "Due on" stay as they were. Allowed in any non-terminal state (repeat edits included); terminal items and items with no payment date get 409. 400 codes: the duly-making `payment-date-*` codes (`field: paymentDate`) plus `payment-date-reason-required` / `payment-date-reason-too-long` (`field: reason`, max 200 words). |
 | `IReAccreditationResumeService.cs` / `ReAccreditationResumeService.cs` / `ReAccreditationResumeValidator.cs` | `POST /work-items/re-accreditation/{id}/resume-from-query`, called by the operator backend when the applicant responds to a query: applies the matching `resume-during-*` transition and appends a `query-responded` audit entry. RA-766 (permanent): the body may carry `chargeAmountPence` (400 if negative). When it is sent and differs from the stored value, it is saved to the top-level `payload.chargeAmountPence`, so the duly-making page shows the charge as recalculated after the query, and the `query-responded` entry records `previousChargeAmountPence` and `chargeAmountPence`. |
 | `ReAccreditationModule.cs` | Glue: exposes the type, registers the decision service in DI, mounts the endpoints. |
