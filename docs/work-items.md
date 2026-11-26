@@ -448,7 +448,12 @@ type is configured. Every setting is code, not runtime data:
   `payload.effectiveDate` and appends a `valid-from-changed` audit entry
   (`previousEffectiveDate`, `effectiveDate`, `reason`, user, state); `StateId`,
   `SlaClock` and the operator are untouched (confirm contact pushes the stored
-  date). Same-date saves are accepted; any other state is `409`, no identity
+  date). The confirm-contact write commits only while the item still holds the
+  date its push carried (`409` otherwise), and the operator journey refuses
+  (`409`) a repeated `approved` naming a different date from the one it granted.
+  So after a push it applied but this service did not commit, confirmation
+  fails until the date is corrected back to that one. Same-date saves are
+  accepted; any other state is `409`, no identity
   `401`, a concurrency conflict is retried (3 attempts) then `409`. 400 codes
   (`field`): `effective-date-required` / `-invalid` / `-before-year-start` /
   `-after-year-end` (`effectiveDate`), `effective-date-reason-required` /
@@ -775,6 +780,9 @@ timeline without re-sorting.
   same user, unassigning an already-unassigned item, re-recording a decision
   that has already been made) and validation / authorization rejections do
   **not** append an entry. This keeps the timeline meaningful.
+  One deliberate exception (RA-800): saving the same valid-from date appends
+  `valid-from-changed`, with equal previous and new dates, because the
+  regulator's reason is part of the audit trail.
 - **No module-specific entry shape.** If a module needs richer details,
   extend the framework's `Details` keys rather than introducing a parallel
   audit channel.
