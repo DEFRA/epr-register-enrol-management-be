@@ -20,9 +20,9 @@ public class StubReExAccreditationClientTests
         Assert.Equal(ReExReadOutcome.Found, result.Outcome);
         Assert.Equal(2025, result.Accreditation!.Year);
         Assert.Equal("UpTo5000", result.Accreditation!.TonnageBand);
-        Assert.Single(result.Accreditation!.Authorisers);
-        Assert.Equal("Jane Stub", result.Accreditation!.Authorisers[0].FullName);
-        Assert.Equal("jane.stub@example.com", result.Accreditation!.Authorisers[0].Email);
+        var authoriser = Assert.Single(result.Accreditation!.Authorisers);
+        Assert.Equal("Jane Stub", authoriser.FullName);
+        Assert.Equal("jane.stub@example.com", authoriser.Email);
         Assert.NotNull(result.Accreditation!.BusinessPlan);
     }
 

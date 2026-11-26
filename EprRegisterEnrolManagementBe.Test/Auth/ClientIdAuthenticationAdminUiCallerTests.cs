@@ -282,7 +282,7 @@ public class ClientIdAuthenticationAdminUiCallerTests
             .SelectMany(s => s.Endpoints)
             .OfType<RouteEndpoint>()
             .Where(e =>
-                !e.Metadata.GetOrderedMetadata<IAuthorizeData>().Any()
+                e.Metadata.GetOrderedMetadata<IAuthorizeData>().Count == 0
                 || e.Metadata.GetMetadata<IAllowAnonymous>() is not null
             )
             .Select(e => e.RoutePattern.RawText)

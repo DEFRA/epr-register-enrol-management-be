@@ -919,7 +919,7 @@ public class ReAccreditationEndpointTests
 
         await AssertProblemAsync(response, HttpStatusCode.NotFound, "prior-year-not-found");
         Assert.Equal(1, CountLogs(factory, LogLevel.Information, "has no prior year to look up"));
-        Assert.Empty(factory.Logs!.Records.Where(r => r.Level >= LogLevel.Error));
+        Assert.DoesNotContain(factory.Logs!.Records, r => r.Level >= LogLevel.Error);
         await factory
             .ReExClient.DidNotReceive()
             .GetPriorYearAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
@@ -967,7 +967,7 @@ public class ReAccreditationEndpointTests
             problem.GetProperty("title").GetString()
         );
         Assert.Equal(1, CountLogs(factory, LogLevel.Information, "ReEx could not answer"));
-        Assert.Empty(factory.Logs!.Records.Where(r => r.Level >= LogLevel.Error));
+        Assert.DoesNotContain(factory.Logs!.Records, r => r.Level >= LogLevel.Error);
     }
 
     [Fact]
