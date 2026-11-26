@@ -195,6 +195,46 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         Assert.Empty(pushAdapter.ReceivedCalls());
     }
 
+    // RA-800: change valid from date is opt-in via "takes a valid-from date"; an
+    // opted-in type without it (like one not opted in) is refused with nothing changed.
+    [Theory]
+    [InlineData("Pushed")]
+    [InlineData("NoPush")]
+    [InlineData("NotOptedIn")]
+    public async Task A_type_that_does_not_take_a_valid_from_date_cannot_change_it(string typeName)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var pushAdapter = PushAdapterReturning(OperatorBackendPushResult.Success());
+        await using var factory = new LifecycleFactory(fixture, pushAdapter);
+        using var client = factory.CreateClient();
+        var type = typeName switch
+        {
+            "Pushed" => TestTypes.Pushed,
+            "NoPush" => TestTypes.NoPush,
+            _ => TestTypes.NotOptedIn,
+        };
+        var id = await factory.SeedAsync(
+            type,
+            "approved-pending-contact",
+            ct,
+            new BsonDocument { ["effectiveDate"] = "2026-06-15", ["accreditationYear"] = 2026 }
+        );
+
+        var response = await client.PostAsJsonAsync(
+            $"/work-items/{id}/change-valid-from",
+            new { effectiveDate = "2026-09-01", reason = "Typo" },
+            ct
+        );
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+        Assert.Equal("wrong-work-item-type", problem.GetProperty("errorCode").GetString());
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal("2026-06-15", persisted!.Payload["effectiveDate"].AsString);
+        Assert.Empty(persisted.AuditLog);
+        Assert.Empty(pushAdapter.ReceivedCalls());
+    }
+
     [Fact]
     public async Task Re_accreditation_routes_still_refuse_another_opted_in_type()
     {

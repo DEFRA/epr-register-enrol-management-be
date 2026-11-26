@@ -50,6 +50,12 @@ internal static class StandardLifecycleServiceCollectionExtensions
             Logger<StandardConfirmContactService>(sp),
             sp.GetRequiredService<TimeProvider>()
         ));
+        services.AddSingleton<IStandardChangeValidFromService>(sp => new StandardChangeValidFromService(
+            sp.GetRequiredService<IWorkItemPersistence>(),
+            sp.GetRequiredService<StandardLifecycleStrategies>(),
+            sp.GetRequiredService<TimeProvider>(),
+            Logger<StandardChangeValidFromService>(sp)
+        ));
         return services;
     }
 

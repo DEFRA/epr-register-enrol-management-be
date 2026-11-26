@@ -52,11 +52,18 @@ internal interface IStandardDeterminationSteps
         ILogger? logger
     );
 
-    /// <summary>Step 2 of an approval: <c>approved-pending-contact</c> → <c>approved</c> (Granted).</summary>
+    /// <summary>
+    /// Step 2 of an approval: <c>approved-pending-contact</c> → <c>approved</c> (Granted).
+    /// <paramref name="pushedEffectiveDate"/> is the valid-from date the operator journey was just
+    /// told (null for a type that takes none). That date can be corrected until this write lands
+    /// (RA-800), so a type that takes one refuses with a concurrency conflict if the item no longer
+    /// holds it.
+    /// </summary>
     Task<WorkItemActionResult> ApproveAsync(
         Guid workItemId,
         ClaimsPrincipal user,
         DateTimeOffset appliedAt,
+        DateOnly? pushedEffectiveDate,
         CancellationToken cancellationToken
     );
 

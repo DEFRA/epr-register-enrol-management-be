@@ -112,11 +112,11 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
         client.PostAsync($"/work-items/{id}/actions/start-assessment", content: null, ct);
 
     /// <summary>
-    /// RA-495 AC6: the effective date the helpers approve with. A month after
-    /// today, so it is never before the submission date (a future date is
-    /// allowed).
+    /// RA-495 AC6 / RA-795: the effective date the helpers approve with. A fixed
+    /// date inside the submissions' default accreditation year (2026), so it never
+    /// depends on when the suite runs.
     /// </summary>
-    public static readonly DateOnly EffectiveDate = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30);
+    public static readonly DateOnly EffectiveDate = new(2026, 6, 15);
 
     /// <summary>
     /// <c>POST /work-items/{id}/decision</c> with <paramref name="outcome"/>; an

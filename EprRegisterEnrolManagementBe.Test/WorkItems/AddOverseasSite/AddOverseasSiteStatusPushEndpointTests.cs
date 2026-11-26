@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using NSubstitute;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
@@ -79,6 +80,45 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
             ],
             factory.Pushes
         );
+    }
+
+    // RA-800: the valid-from date can be corrected until contact is confirmed,
+    // so it can change while the push carrying the old one is in flight. The
+    // operator journey then holds a date this service no longer does, so the
+    // confirmation must not commit.
+    [Fact]
+    public async Task Confirm_contact_commits_nothing_when_the_valid_from_date_changes_during_the_push()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await factory.DulyMadeAndStartedAsync(client, "push-date-changed-in-flight", ct);
+        Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, "approved", ct)).StatusCode);
+        factory
+            .PushAdapter.PushStatusChangedAsync(
+                Arg.Is(ChangeRequest),
+                Arg.Is(Decision),
+                Arg.Any<OperatorJourneyStatusChange>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(async _ =>
+            {
+                var changed = await client.PostAsJsonAsync(
+                    $"/work-items/{id}/change-valid-from",
+                    new { effectiveDate = "2026-07-20", reason = "Corrected while contact was being confirmed" },
+                    ct
+                );
+                Assert.Equal(HttpStatusCode.OK, changed.StatusCode);
+                return OperatorBackendPushResult.Success();
+            });
+
+        var confirmed = await PostConfirmContactAsync(client, id, ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, confirmed.StatusCode);
+        var untouched = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal("approved-pending-contact", untouched!.StateId);
+        Assert.Equal("2026-07-20", untouched.Payload["effectiveDate"].AsString);
+        Assert.DoesNotContain(untouched.AuditLog, a => a.Action == "applicant-contacted");
     }
 
     [Fact]

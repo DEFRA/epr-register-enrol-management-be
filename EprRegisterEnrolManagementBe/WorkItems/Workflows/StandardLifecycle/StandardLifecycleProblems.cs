@@ -45,7 +45,10 @@ internal static class StandardLifecycleProblems
             or WorkItemActionFailureCode.ConcurrencyConflict => StatusCodes.Status409Conflict,
             // RA-495 review: a work item whose template cannot be resolved (an
             // unregistered type with no snapshot) is a server-side problem.
-            WorkItemActionFailureCode.TemplateUnavailable => StatusCodes.Status500InternalServerError,
+            WorkItemActionFailureCode.TemplateUnavailable
+            // RA-795: the accreditation year is mandatory at submission, so an
+            // unreadable one is a data fault, not something the caller can fix.
+            or WorkItemActionFailureCode.AccreditationYearUnavailable => StatusCodes.Status500InternalServerError,
             _ => StatusCodes.Status400BadRequest,
         };
 
