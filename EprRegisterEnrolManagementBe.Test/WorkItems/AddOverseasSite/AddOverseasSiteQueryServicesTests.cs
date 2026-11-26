@@ -204,7 +204,7 @@ public sealed class AddOverseasSiteQueryServicesTests
             Assert.Equal(WorkItemActionFailureCode.InvalidTransition, result.FailureCode);
         }
 
-        await h.Engine.DidNotReceiveWithAnyArgs().ApplyActionAsync(default, default!, default!, default);
+        await h.Engine.DidNotReceiveWithAnyArgs().ApplyActionAsync(default, default!, default!, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -248,7 +248,7 @@ public sealed class AddOverseasSiteQueryServicesTests
         var result = await ResumeAsync(h);
 
         Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
-        await h.Engine.DidNotReceiveWithAnyArgs().ApplyActionAsync(default, default!, default!, default);
+        await h.Engine.DidNotReceiveWithAnyArgs().ApplyActionAsync(default, default!, default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -340,7 +340,7 @@ public sealed class AddOverseasSiteQueryServicesTests
         var result = await ResumeAsync(h);
 
         Assert.True(result.IsSuccess);
-        await h.Engine.DidNotReceiveWithAnyArgs().AssignAsync(default, default!, default, default!, default);
+        await h.Engine.DidNotReceiveWithAnyArgs().AssignAsync(default, default!, default, default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -372,7 +372,7 @@ public sealed class AddOverseasSiteQueryServicesTests
         var result = await ResumeAsync(h);
 
         Assert.True(result.IsSuccess);
-        await h.Engine.DidNotReceiveWithAnyArgs().AssignAsync(default, default!, default, default!, default);
+        await h.Engine.DidNotReceiveWithAnyArgs().AssignAsync(default, default!, default, default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -395,7 +395,7 @@ public sealed class AddOverseasSiteQueryServicesTests
         var result = await ResumeAsync(h);
 
         Assert.True(result.IsSuccess);
-        await h.Engine.ReceivedWithAnyArgs(2).AssignAsync(default, default!, default, default!, default);
+        await h.Engine.ReceivedWithAnyArgs(2).AssignAsync(default, default!, default, default!, TestContext.Current.CancellationToken);
     }
 
     [Theory]
@@ -420,7 +420,7 @@ public sealed class AddOverseasSiteQueryServicesTests
         var result = await ResumeAsync(h);
 
         Assert.True(result.IsSuccess);
-        await h.Engine.ReceivedWithAnyArgs(attempts).AssignAsync(default, default!, default, default!, default);
+        await h.Engine.ReceivedWithAnyArgs(attempts).AssignAsync(default, default!, default, default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -541,7 +541,7 @@ public sealed class AddOverseasSiteQueryServicesTests
         Assert.Equal(WorkItemActionFailureCode.ConcurrencyConflict, result.FailureCode);
         await h.Persistence
             .DidNotReceiveWithAnyArgs()
-            .SetPayloadFieldAsync(default, default!, default!, default);
+            .SetPayloadFieldAsync(default, default!, default!, TestContext.Current.CancellationToken);
     }
 
     [Fact]
