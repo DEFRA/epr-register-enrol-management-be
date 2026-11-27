@@ -526,7 +526,10 @@ change something and is validated: ORS fields are limited to `siteName`,
 codes, `orsId`) is a `400`, so a locked field cannot be overwritten. Values
 are applied to `payload.site` and to the `payload.site.interimSites` entry
 matched on `siteNumber` (else `siteId`), the response is stamped on
-`payload.latestQueryResponse` (including the new BES files), and the item
+`payload.latestQueryResponse` (including the new BES files, which are also
+appended to `payload.site.besEvidence.files`, de-duplicated by `fileId` and
+stamped `scanStatus: "Clean"` because the operator backend forwards only
+scanned files), and the item
 moves by the `resume-during-*` for the query it answers (to `updated`;
 `resume-during-duly-made` lands in `assessment-in-progress`, also shown as
 "Updated"), after which the querier is re-assigned. A `query-responded` audit

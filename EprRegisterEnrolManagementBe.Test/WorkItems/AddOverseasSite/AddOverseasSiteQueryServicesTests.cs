@@ -402,6 +402,8 @@ public sealed class AddOverseasSiteQueryServicesTests
         Assert.Equal("first.pdf", files[0]["filename"].AsString);
         Assert.Equal("f-2", files[2]["fileId"].AsString);
         Assert.Equal("2027-01-01", files[2]["besEvidenceExpiryDate"].AsString);
+        Assert.Equal("Clean", files[2]["scanStatus"].AsString);
+        Assert.False(files[0].AsBsonDocument.Contains("scanStatus"));
     }
 
     [Fact]

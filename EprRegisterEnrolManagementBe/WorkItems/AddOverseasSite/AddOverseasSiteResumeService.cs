@@ -535,6 +535,9 @@ internal sealed class AddOverseasSiteResumeService(
                     ["s3Bucket"] = Text(file.S3Bucket),
                     ["besEvidenceValidFromDate"] = Text(file.BesEvidenceValidFromDate),
                     ["besEvidenceExpiryDate"] = Text(file.BesEvidenceExpiryDate),
+                    // The operator backend only forwards files that passed its scan, so the site copy is Clean;
+                    // management-fe findFile reads this record first and serves only Clean files.
+                    ["scanStatus"] = "Clean",
                 }
             );
         }
