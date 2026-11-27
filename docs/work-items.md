@@ -64,7 +64,7 @@ re-accreditation) plus a single `site`, its own
 `referenceSequences` keyed `SUB-{yyyy}`, starting at `0001` and growing past
 `9999`), `submissionSize` and `paymentReference`. The response is `201` with
 `{ "submissionReference": "SUB-2026-0001", "workItems": [{ "siteId", "id",
-"applicationReference" }] }`. `siteId` is echoed as sent: the operator backend
+"applicationReference", "typeId" }] }`. `siteId` is echoed as sent: the operator backend
 sends a number. The unique index on `payload.operatorRequestId`
 is now on (`payload.operatorRequestId`, `payload.site.siteId`); startup drops
 the RA-492 single-field index. Re-accreditation's request and response are
@@ -101,8 +101,8 @@ stores the rest of the site as sent.
 
 - **Validation (400, nothing created).** `SubmissionPayload.Validate` requires
   `operatorRequestId`, `operatorOrganisationId`, `organisationName`,
-  `material` and, for a type whose `RequiredSubmissionFields` include it (every
-  type but the ORS update, which is never charged), `paymentReference`
+  `material` and, when any site's type has it in its `RequiredSubmissionFields`
+  (every type but the ORS update, which is never charged), `paymentReference`
   (non-blank strings), a 4-digit
   `accreditationYear`, and at least one site, each with a `siteId` (string or
   whole number), `orsId` and `siteName`. `siteId`s must be unique within the
@@ -117,53 +117,35 @@ stores the rest of the site as sent.
   (`MongoService`), never inside the transaction, since creating a collection
   in a transaction is not supported on every Mongo deployment.
 - **Replay guard.** The `submissions` collection (`MongoSubmissionStore`)
-  holds one document per POST: `_id` = `operatorRequestId`, `typeId`,
-  `submissionReference`, `workItems: [{ siteId, workItemId,
-  applicationReference }]`, `submittedAt`, `operatorOrganisationId` and
-  `submissionSize` (both RA-767; absent on records stored before it), with a
-  non-unique index on `submissionReference`. A sequential replay finds it
-  before validation or allocation and gets the stored body back with
-  `X-Idempotent-Replay: true`. A concurrent duplicate either sees the
-  winner's record when its transaction retries after a write conflict, or
-  collides on `_id`; either way it returns the winner's response. A replay
-  with a different payload returns the stored submission and ignores the
-  edits, as RA-492 documents below.
-- **One operator request sent as several groups (RA-767).** The operator
-  backend sends a change request holding both adds and updates as one POST
-  per type: the add group under the request's id, then the update group under
-  `{requestId}:update-overseas-site`. They are one submission, so every work
-  item shares one `submissionReference` and `submissionSize`. Two optional
-  payload fields carry that across the POSTs; without them each POST behaves
-  as above.
-  - `submissionSize` (whole number from this POST's site count to 1000):
-    stamped on every work item, and stored on the `submissions` record,
-    instead of this POST's own site count, so the card's "(n requests)" counts
-    the whole request. Anything else is `400` with `errorCode`
-    `invalid-submission-size`.
-  - `submissionReference` (non-blank string; otherwise `400`
-    `invalid-submission-reference`): reused instead of allocating one. Only a
-    later group may send it, an `operatorRequestId` holding `:`; on any other
-    it is `400` `submission-reference-not-allowed`. Inside the transaction at
-    least one `submissions` record of the same request (its `_id` is the base
-    request id, the `operatorRequestId` up to its first `:`, or starts with
-    `{base}:`) must hold that `submissionReference`, and none of them a
-    different `operatorOrganisationId`; otherwise it is `400`
-    `submission-reference-not-found`
-    (`WorkItemActionFailureCode.SubmissionReferenceNotFound`). A record stored
-    before RA-767 has no `operatorOrganisationId`, so instead every work item
-    carrying the reference must have this payload's
-    `payload.operatorOrganisationId` (and there must be at least one). Both
-    ids and the organisation are asserted by the caller, so this is a
-    consistency check against joining the wrong submission; the trust
-    boundary is the client-id policy on `POST /work-items`.
-    The group's `submissionSize`, when sent, must equal the stored one (the
-    record's, or on a pre-RA-767 record the work items'); when it is left out
-    the stored one is stamped. Either way it must cover this POST's sites.
-    Otherwise it is `400` `invalid-submission-size`. Nothing is created or
-    allocated on any refusal. The later group's own record stores the shared
-    reference and size, and its replay returns that record as any replay
-    does. Related work items (`payload.submissionReference`) then list every
-    group's work items together.
+  holds one document per POST: `_id` = `operatorRequestId`, `typeId` (the
+  request's), `submissionReference`, `workItems: [{ siteId, workItemId,
+  applicationReference, typeId }]` (each work item's own type, RA-767; absent
+  on records stored before it) and `submittedAt`. A sequential replay finds it
+  before validation or allocation and gets the stored body back, every site's
+  work item included, with `X-Idempotent-Replay: true`. A concurrent duplicate
+  either sees the winner's record when its transaction retries after a write
+  conflict, or collides on `_id`; either way it returns the winner's response.
+  A replay with a different payload returns the stored submission and ignores
+  the edits, as RA-492 documents below. An `operatorRequestId` on file under
+  a different request `typeId` is `409` (`SubmissionRequestIdReused`).
+- **One operator request, one POST (RA-767 AC2).** An operator change request
+  holding both adds and updates is one POST, so it is all or nothing. The
+  request's `typeId` is a split-per-site type (`add-overseas-site` or
+  `update-overseas-site`), and each site may carry its own `typeId`: a
+  registered split-per-site type that is the request's type or in its
+  category (`in-year-change`). A site without one takes the request's
+  `typeId`. A site `typeId` that is not a registered split-per-site type is
+  `400` with `errorCode` `unknown-site-type`; one in another category is
+  `400` `site-type-mismatch`. Each work item is created as its site's type:
+  its own `IYC-{code}` reference series, workflow, template snapshot and
+  lifecycle strategy. The site's `typeId` is not kept on the work item's
+  `site` (the work item's `typeId` holds it). Every work item shares the one
+  `submissionReference`, and `submissionSize` is the number of sites in the
+  POST. The required fields are every site type's, so `paymentReference` is
+  required when any site is an add and not for an update-only request. An
+  update's work item never takes the operator's `paymentReference` (it falls
+  back to its own `applicationReference`, as for any submission without one).
+  Each `workItems[]` entry of the response also carries its `typeId`.
 - **Collisions inside the transaction.** A duplicate key aborts the whole
   transaction. An `applicationReference` collision (only once an IYC
   sequence has wrapped) fails with `503` (`ApplicationReferenceExhausted`),
@@ -350,8 +332,9 @@ type is configured. Every setting is code, not runtime data:
 | Template version | `TemplateVersion` | — (required) | `v19` | `v2` | `v1` |
 
 - **Required submission fields** leave out `paymentReference` only for a type
-  that is never charged. Its submission may leave `paymentReference` out, and then each work
-  item gets the RA-503 fallback: `paymentReference` is set to the item's own
+  that is never charged. Its submission may leave `paymentReference` out, and its work
+  items never take one that is sent (it pays an add in the same request), so each
+  gets the RA-503 fallback: `paymentReference` is set to the item's own
   `applicationReference`. So an ORS update work item shows its IYC reference
   as its payment reference, which a detail page (RA-767) shouldn't present as
   a payment.
@@ -508,12 +491,15 @@ type is configured. Every setting is code, not runtime data:
   site from and requires on `approved`; re-accreditation stamps none, so its
   body has no `effectiveDate`.
   The ORS update (`UpdateOverseasSiteLifecycleStrategy`, RA-682) opts in like
-  add-ORS (same push route, no minting, no emails) with two differences
-  (RA-782). It takes no valid-from date (`TakesEffectiveDate` false): the
-  decision records none (an `effectiveDate` sent with it is ignored, as for
-  re-accreditation), its confirm-contact push has no `effectiveDate`
-  (null is omitted on the wire) and `change-valid-from` gets
-  `400 wrong-work-item-type`. It takes no payment date (`TakesPaymentDate`
+  add-ORS (same push route and status push hook, no minting, no GOV.UK Notify
+  email, as add-ORS has none) with two differences (RA-782). The caseworker
+  enters no valid-from date (`TakesEffectiveDate` false): the decision records
+  none (an `effectiveDate` sent with it is ignored, as for re-accreditation)
+  and `change-valid-from` gets `400 wrong-work-item-type`. An approval still
+  takes effect from the approval date (AC6): its confirm-contact push carries
+  `effectiveDate`, the UK calendar date of the Approved `determination-made`
+  audit entry (`IStandardLifecycleStrategy.AutomaticEffectiveDate`). A
+  refusal's push has no `effectiveDate` (null is omitted on the wire). It takes no payment date (`TakesPaymentDate`
   false, as it is never charged): `GET /work-items/{id}/duly-make` returns
   `takesPaymentDate: false` (true for every other type) so the page asks for
   none; `POST /work-items/{id}/duly-make` needs no `paymentDate` and refuses

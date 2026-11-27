@@ -25,53 +25,40 @@ internal static class SubmissionPayload
     public const string SubmissionReferenceField = "submissionReference";
 
     /// <summary>
+    /// RA-739: on each work item a per-site submission creates, that work
+    /// item's own entry from <see cref="SitesField"/>.
+    /// </summary>
+    public const string SiteField = "site";
+
+    /// <summary>
     /// RA-739: stamped on every work item a submission creates: the number of
     /// applications in the operator's submission.
     /// </summary>
     public const string SubmissionSizeField = "submissionSize";
 
-    /// <summary>
-    /// The operator organisation the request is from. RA-767: stored on the
-    /// submission record, so a later group can share an earlier group's
-    /// <see cref="SubmissionReferenceField"/> only from the same organisation.
-    /// </summary>
     public const string OperatorOrganisationIdField = "operatorOrganisationId";
 
     /// <summary>
-    /// RA-767: the largest <see cref="SubmissionSizeField"/> accepted, well
-    /// beyond any real operator request, so a typo cannot stamp a size that
-    /// would mislead the caseworker.
+    /// RA-767: on a site, the split-per-site type its work item is created as,
+    /// so one request can hold adds and updates. Optional: a site without one
+    /// takes the request's <c>typeId</c>.
     /// </summary>
-    public const int MaxSubmissionSize = 1000;
+    public const string SiteTypeIdField = "typeId";
 
     /// <summary>
-    /// RA-767: separates an operator request's id from the suffix naming a
-    /// later group of it, as in <c>{requestId}:update-overseas-site</c>.
+    /// RA-767: <c>errorCode</c> for a site <see cref="SiteTypeIdField"/> that
+    /// is not a registered type that splits a submission per site.
     /// </summary>
-    public const char RequestGroupSeparator = ':';
-
-    /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionReferenceField"/> that is not a non-blank string.</summary>
-    public const string InvalidSubmissionReferenceErrorCode = "invalid-submission-reference";
-
-    /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionReferenceField"/> on a request that is not a later group.</summary>
-    public const string SubmissionReferenceNotAllowedErrorCode = "submission-reference-not-allowed";
-
-    /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionReferenceField"/> that is not the base request's.</summary>
-    public const string SubmissionReferenceNotFoundErrorCode = "submission-reference-not-found";
+    public const string UnknownSiteTypeErrorCode = "unknown-site-type";
 
     /// <summary>
-    /// RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionSizeField"/>
-    /// that is not a whole number from this POST's site count to
-    /// <see cref="MaxSubmissionSize"/>, or, on a later group sharing a
-    /// reference, that differs from the size stored for the request.
+    /// RA-767: <c>errorCode</c> for a site <see cref="SiteTypeIdField"/> whose
+    /// type is not in the request type's category.
     /// </summary>
-    public const string InvalidSubmissionSizeErrorCode = "invalid-submission-size";
+    public const string SiteTypeMismatchErrorCode = "site-type-mismatch";
 
-    /// <summary>
-    /// RA-739: on each work item a per-site submission creates, that work
-    /// item's own entry from <see cref="SitesField"/>.
-    /// </summary>
-    public const string SiteField = "site";
+    /// <summary>A site type that cannot be used: the message and the wire <c>errorCode</c>.</summary>
+    public sealed record SiteTypeError(string Message, string ErrorCode);
 
     /// <summary>RA-682: required by every type that charges (see <see cref="ChargedRequiredFields"/>).</summary>
     public const string PaymentReferenceField = "paymentReference";
@@ -111,101 +98,89 @@ internal static class SubmissionPayload
     }
 
     /// <summary>
-    /// RA-767: what a per-site submission that is one group of a larger
-    /// operator request says about that request: the
-    /// <see cref="SubmissionReferenceField"/> an earlier group was given, and
-    /// the <see cref="SubmissionSizeField"/> across every group. Either is
-    /// <c>null</c> when not sent (absent or JSON null).
+    /// RA-767: the type each of the payload's sites is created as, in site
+    /// order: its <see cref="SiteTypeIdField"/>, or
+    /// <paramref name="requestType"/> when it has none. A site type must be
+    /// registered (<paramref name="findType"/>), split a submission per site,
+    /// and be <paramref name="requestType"/> or share its non-null
+    /// <see cref="IWorkItemType.Category"/>; otherwise <paramref name="error"/>
+    /// says why. A payload with no usable <see cref="SitesField"/>, or a site
+    /// that is not an object, is left to <see cref="Validate"/>.
     /// </summary>
-    public sealed record SharedSubmission(string? SubmissionReference, int? SubmissionSize);
-
-    /// <summary>A rejected <see cref="SharedSubmission"/>: the message and the wire <c>errorCode</c>.</summary>
-    public sealed record SharedSubmissionError(string Message, string ErrorCode);
-
-    /// <summary>
-    /// RA-767: why the optional <see cref="SharedSubmission"/> fields of an
-    /// already <see cref="Validate">validated</see> payload cannot be used, or
-    /// <c>null</c> when they can (<see cref="ReadSharedSubmission"/>). A
-    /// <see cref="SubmissionReferenceField"/> is accepted only on a later group
-    /// (an <see cref="OperatorRequestIdField"/> holding
-    /// <see cref="RequestGroupSeparator"/>), and a
-    /// <see cref="SubmissionSizeField"/> must be a whole number from this
-    /// POST's site count to <see cref="MaxSubmissionSize"/>.
-    /// </summary>
-    public static SharedSubmissionError? ValidateSharedSubmission(BsonDocument payload)
+    public static IReadOnlyList<IWorkItemType> ResolveSiteTypes(
+        BsonDocument payload,
+        IWorkItemType requestType,
+        Func<string, IWorkItemType?> findType,
+        out SiteTypeError? error
+    )
     {
         ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(requestType);
+        ArgumentNullException.ThrowIfNull(findType);
 
-        if (IsSent(payload, SubmissionReferenceField))
+        error = null;
+        if (!payload.TryGetValue(SitesField, out var sitesValue) || !sitesValue.IsBsonArray)
         {
-            if (!IsPresentString(payload, SubmissionReferenceField))
-            {
-                return new SharedSubmissionError(
-                    $"payload.{SubmissionReferenceField} must be a non-blank string when sent.",
-                    InvalidSubmissionReferenceErrorCode
-                );
-            }
-
-            TryReadOperatorRequestId(payload, out var operatorRequestId);
-            if (BaseRequestId(operatorRequestId) is null)
-            {
-                return new SharedSubmissionError(
-                    $"payload.{SubmissionReferenceField} may only be sent for a later group of an operator "
-                        + $"request, whose {OperatorRequestIdField} is '{{requestId}}{RequestGroupSeparator}{{group}}'.",
-                    SubmissionReferenceNotAllowedErrorCode
-                );
-            }
+            return [];
         }
 
-        var siteCount = payload[SitesField].AsBsonArray.Count;
-        if (
-            IsSent(payload, SubmissionSizeField)
-            && !BsonWholeNumber.TryGet(payload[SubmissionSizeField], siteCount, MaxSubmissionSize, out _)
-        )
+        var types = new List<IWorkItemType>(sitesValue.AsBsonArray.Count);
+        foreach (var (siteValue, index) in sitesValue.AsBsonArray.Select((site, i) => (site, i)))
         {
-            return new SharedSubmissionError(
-                $"payload.{SubmissionSizeField} must be a whole number from {siteCount}, "
-                    + $"the number of sites in this submission, to {MaxSubmissionSize}.",
-                InvalidSubmissionSizeErrorCode
+            if (!siteValue.IsBsonDocument || !siteValue.AsBsonDocument.TryGetValue(SiteTypeIdField, out var typeIdValue))
+            {
+                types.Add(requestType);
+                continue;
+            }
+
+            error = CheckSiteType(typeIdValue, index, requestType, findType, out var siteType);
+            if (error is not null)
+            {
+                return [];
+            }
+            types.Add(siteType!);
+        }
+
+        return types;
+    }
+
+    private static SiteTypeError? CheckSiteType(
+        BsonValue typeIdValue,
+        int index,
+        IWorkItemType requestType,
+        Func<string, IWorkItemType?> findType,
+        out IWorkItemType? siteType
+    )
+    {
+        var path = $"payload.{SitesField}[{index}].{SiteTypeIdField}";
+        siteType =
+            typeIdValue.IsString && !string.IsNullOrWhiteSpace(typeIdValue.AsString)
+                ? findType(typeIdValue.AsString)
+                : null;
+        if (siteType is not { SplitsSubmissionPerSite: true })
+        {
+            siteType = null;
+            return new SiteTypeError(
+                $"{path} must be a registered work item type that splits a submission per site.",
+                UnknownSiteTypeErrorCode
             );
         }
 
-        return null;
-    }
+        var sameGroup =
+            string.Equals(siteType.TypeId, requestType.TypeId, StringComparison.Ordinal)
+            || (requestType.Category is not null && siteType.Category == requestType.Category);
+        if (sameGroup)
+        {
+            return null;
+        }
 
-    /// <summary>
-    /// RA-767: the <see cref="SharedSubmission"/> fields of a payload that
-    /// passed <see cref="ValidateSharedSubmission"/>.
-    /// </summary>
-    public static SharedSubmission ReadSharedSubmission(BsonDocument payload)
-    {
-        ArgumentNullException.ThrowIfNull(payload);
-        var reference = IsPresentString(payload, SubmissionReferenceField)
-            ? payload[SubmissionReferenceField].AsString
-            : null;
-        int? size = IsSent(payload, SubmissionSizeField)
-            && BsonWholeNumber.TryGet(payload[SubmissionSizeField], 1, MaxSubmissionSize, out var value)
-            ? value
-            : null;
-        return new SharedSubmission(reference, size);
+        var mismatched = siteType.TypeId;
+        siteType = null;
+        return new SiteTypeError(
+            $"{path} '{mismatched}' is not in the same category as the request's type '{requestType.TypeId}'.",
+            SiteTypeMismatchErrorCode
+        );
     }
-
-    /// <summary>
-    /// RA-767: the operator request a later group belongs to, the
-    /// <paramref name="operatorRequestId"/> up to the first
-    /// <see cref="RequestGroupSeparator"/>, or <c>null</c> when it has none.
-    /// </summary>
-    public static string? BaseRequestId(string operatorRequestId)
-    {
-        var separator = operatorRequestId.IndexOf(RequestGroupSeparator, StringComparison.Ordinal);
-        return separator < 0 ? null : operatorRequestId[..separator];
-    }
-
-    /// <summary>The payload's <see cref="OperatorOrganisationIdField"/>, or <c>null</c> when it is not a non-blank string.</summary>
-    public static string? ReadOperatorOrganisationId(BsonDocument payload) =>
-        IsPresentString(payload, OperatorOrganisationIdField)
-            ? payload[OperatorOrganisationIdField].AsString
-            : null;
 
     /// <summary>The work item payload's <see cref="SubmissionReferenceField"/>, when it is a non-blank string.</summary>
     public static bool TryReadSubmissionReference(BsonDocument? payload, out string submissionReference)
@@ -304,9 +279,6 @@ internal static class SubmissionPayload
             ? "n:" + number.ToString(CultureInfo.InvariantCulture)
             : null;
     }
-
-    private static bool IsSent(BsonDocument document, string field) =>
-        document.TryGetValue(field, out var value) && !value.IsBsonNull;
 
     private static bool IsPresentString(BsonDocument document, string field) =>
         document.TryGetValue(field, out var value)

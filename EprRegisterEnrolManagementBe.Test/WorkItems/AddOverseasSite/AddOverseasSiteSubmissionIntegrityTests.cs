@@ -434,12 +434,6 @@ public sealed class AddOverseasSiteSubmissionIntegrityTests(MongoIntegrationFixt
             return inner.FindAsync(session, operatorRequestId, cancellationToken);
         }
 
-        public Task<IReadOnlyList<SubmissionRecord>> FindBySubmissionReferenceAsync(
-            IClientSessionHandle session,
-            string submissionReference,
-            CancellationToken cancellationToken = default
-        ) => inner.FindBySubmissionReferenceAsync(session, submissionReference, cancellationToken);
-
         public Task InsertAsync(
             IClientSessionHandle session,
             SubmissionRecord record,

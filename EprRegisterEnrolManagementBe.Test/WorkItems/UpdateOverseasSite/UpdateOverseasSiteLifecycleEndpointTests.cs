@@ -3,14 +3,14 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
-using EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.UpdateOverseasSite;
 
 /// <summary>
 /// An ORS update through the shared Standard-lifecycle routes. It is never
-/// charged and the operator backend applies it when told of the approval, so it
+/// charged and an approval takes effect from the date it was determined, so it
 /// takes neither a payment date at duly making nor a valid-from date at the
 /// decision. Driven through the real ASP.NET pipeline with the production
 /// modules registered, against ephemeral MongoDB.
@@ -125,10 +125,15 @@ public sealed class UpdateOverseasSiteLifecycleEndpointTests(MongoIntegrationFix
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
+    // RA-782 AC6: the caseworker enters no date, but an approval takes effect
+    // from the UK date it was determined, so its push carries that; a
+    // refusal's carries none.
     [Theory]
     [InlineData("approved")]
     [InlineData("rejected")]
-    public async Task The_decision_takes_no_valid_from_date_and_the_push_carries_none(string outcome)
+    public async Task The_decision_takes_no_valid_from_date_and_an_approval_push_carries_the_determination_date(
+        string outcome
+    )
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
@@ -149,10 +154,19 @@ public sealed class UpdateOverseasSiteLifecycleEndpointTests(MongoIntegrationFix
         var closed = await factory.WaitForAuditAsync(id, "status-push-sent", Ct, count: 2);
         Assert.Equal(outcome, closed.StateId);
         Assert.False(closed.Payload.Contains("effectiveDate"));
+        DateOnly? pushedDate = outcome == "approved" ? UkCalendar.DateOf(determination.CreatedAt) : null;
         Assert.Equal(
             [
                 new Push(ChangeRequest, BestEffort, id, "submitted", "duly-made", "duly-make"),
-                new Push(ChangeRequest, Decision, id, $"{outcome}-pending-contact", outcome, $"confirm-contact-{outcome}"),
+                new Push(
+                    ChangeRequest,
+                    Decision,
+                    id,
+                    $"{outcome}-pending-contact",
+                    outcome,
+                    $"confirm-contact-{outcome}",
+                    pushedDate
+                ),
             ],
             factory.Pushes
         );
@@ -199,7 +213,7 @@ public sealed class UpdateOverseasSiteLifecycleEndpointTests(MongoIntegrationFix
     {
         var response = await client.PostAsJsonAsync(
             "/work-items",
-            UpdateOverseasSiteSubmissions.Body($"{operatorRequestId}:{UpdateOverseasSiteType.Id}", siteCount: 1),
+            UpdateOverseasSiteSubmissions.Body(operatorRequestId, siteCount: 1),
             Ct
         );
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);

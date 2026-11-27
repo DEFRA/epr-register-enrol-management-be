@@ -45,10 +45,18 @@ internal interface IStandardLifecycleStrategy : IStandardDulyMakingRules
     /// from (<see cref="StandardEffectiveDate"/>): entered on approval, the
     /// submission date on refusal.
     /// Re-accreditation's does not; its accreditation starts at confirm
-    /// contact. Nor does an ORS update's, which the operator backend applies
-    /// when told of the approval.
+    /// contact. Nor does an ORS update's, which takes effect from the approval
+    /// date instead (<see cref="AutomaticEffectiveDate"/>).
     /// </summary>
     bool TakesEffectiveDate => false;
+
+    /// <summary>
+    /// RA-782 AC6: the effective date the confirm-contact push carries for an
+    /// outcome when the determination stamped none, so a type whose approval
+    /// takes effect without an entered date can still tell the operator
+    /// journey from when. Null (the default) pushes no date.
+    /// </summary>
+    DateOnly? AutomaticEffectiveDate(WorkItem workItem, StandardDecisionOutcome outcome) => null;
 }
 
 /// <summary>

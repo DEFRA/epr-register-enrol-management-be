@@ -109,13 +109,17 @@ internal sealed class StandardConfirmContactService(
         var step = StandardConfirmContactGuard.ForPendingState(workItem!.StateId)!;
         var appliedAt = _timeProvider.GetUtcNow();
         // Read before the push, which carries it: the write commits only if the item still holds it.
-        var pushedEffectiveDate = StandardEffectiveDate.ReadStamped(workItem);
+        var stampedEffectiveDate = StandardEffectiveDate.ReadStamped(workItem);
         var delivery = await decisionPush.PushAsync(
             workItem,
             WorkItemEngineRules.ResolveTemplate(workItem, registry),
             strategy!.OperatorJourneyPush,
             step,
-            new StandardDecisionPush.PushDetails(StandardWorkflow.ConfirmContactDisplayName, appliedAt.UtcDateTime),
+            new StandardDecisionPush.PushDetails(
+                StandardWorkflow.ConfirmContactDisplayName,
+                appliedAt.UtcDateTime,
+                stampedEffectiveDate ?? strategy.AutomaticEffectiveDate(workItem, step.Outcome)
+            ),
             user,
             cancellationToken
         );
@@ -134,7 +138,7 @@ internal sealed class StandardConfirmContactService(
                     workItemId,
                     user,
                     appliedAt,
-                    pushedEffectiveDate,
+                    stampedEffectiveDate,
                     cancellationToken
                 )
                 : await strategy.Determinations.RefuseAsync(workItemId, user, appliedAt, cancellationToken);

@@ -35,8 +35,8 @@ public sealed record WorkItemSubmissionResult
     public string? Message { get; }
 
     /// <summary>
-    /// The wire <c>errorCode</c> the caller can branch on (RA-767: a refused
-    /// shared submission reference or size), or <c>null</c>.
+    /// The wire <c>errorCode</c> the caller can branch on (RA-767: a site
+    /// <c>typeId</c> that cannot be used), or <c>null</c>.
     /// </summary>
     public string? ErrorCode { get; }
 
@@ -71,7 +71,7 @@ public sealed record WorkItemSubmissionResult
         string errorCode
     ) => new(submission: null, code, message, isIdempotentReplay: false, errorCode);
 
-    /// <summary>Carry a failed <see cref="WorkItemActionResult"/>'s code and message over.</summary>
+    /// <summary>Carry a failed <see cref="WorkItemActionResult"/>'s code, message and wire <c>errorCode</c> over.</summary>
     public static WorkItemSubmissionResult Failure(WorkItemActionResult failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
@@ -79,6 +79,6 @@ public sealed record WorkItemSubmissionResult
         {
             throw new ArgumentException("A failure result is required.", nameof(failure));
         }
-        return Failure(code, failure.Message ?? string.Empty);
+        return new(submission: null, code, failure.Message ?? string.Empty, isIdempotentReplay: false, failure.ErrorCode);
     }
 }

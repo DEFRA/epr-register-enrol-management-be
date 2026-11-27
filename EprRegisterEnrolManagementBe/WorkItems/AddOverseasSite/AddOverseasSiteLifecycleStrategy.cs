@@ -15,7 +15,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 ///   <item>Minting: none. The site joins an accreditation that already
 ///   exists, so the determination writes are
 ///   <see cref="StandardDeterminationWrites"/>.</item>
-///   <item>Notifications: none. The module registers no email hook.</item>
+///   <item>Notifications: the post-commit status push
+///   (<see cref="StandardStatusPushHook"/>) only. The module registers no
+///   GOV.UK Notify email hook.</item>
 ///   <item>Charge source: the site's own charge, <c>payload.site.chargePence</c>.</item>
 /// </list>
 /// The payment date is stamped as the default top-level <c>paymentDate</c>.

@@ -3,11 +3,9 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
-using EprRegisterEnrolManagementBe.Utils.Mongo;
+using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
-using Microsoft.Extensions.DependencyInjection;
-using MongoDB.Bson;
-using MongoDB.Driver;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.UpdateOverseasSite;
@@ -15,9 +13,8 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.UpdateOverseasSite;
 /// <summary>
 /// RA-682: an ORS update submission posted to <c>POST /work-items</c>, through
 /// the real ASP.NET pipeline with the production modules registered, against
-/// ephemeral MongoDB. The operator backend sends a request holding both adds
-/// and updates as one submission per change type: the add group under the
-/// request's id and the update group under <c>{requestId}:update-overseas-site</c>.
+/// ephemeral MongoDB. RA-767: the operator backend sends a request holding both
+/// adds and updates as one POST, each site naming its own type.
 /// </summary>
 public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFixture fixture)
 {
@@ -44,7 +41,7 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
 
         var body = await PostCreatedAsync(
             client,
-            UpdateOverseasSiteSubmissions.Body($"request-1:{UpdateOverseasSiteType.Id}")
+            UpdateOverseasSiteSubmissions.Body("request-1")
         );
 
         Assert.Equal(["IYC-ORS-2026-00001", "IYC-ORS-2026-00002"], ApplicationReferences(body));
@@ -84,344 +81,169 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
         Assert.Equal(0, await factory.CountAsync("workItems", Ct));
     }
 
-    // RA-682: one operator request holding two adds and one update arrives as
-    // two submissions. Both are created, from one IYC-ORS series, and each
-    // replays its own work items.
+    // RA-767 AC2: one operator request holding an add and two updates is one
+    // POST. Each site is created as its own type, all under one submission.
     [Fact]
-    public async Task An_add_group_and_an_update_group_from_one_request_both_create_their_work_items()
+    public async Task One_post_with_an_add_and_two_updates_creates_three_work_items_under_one_submission()
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-mixed", siteCount: 2);
-        var update = UpdateOverseasSiteSubmissions.Body($"request-mixed:{UpdateOverseasSiteType.Id}", siteCount: 1);
 
-        var addBody = await PostCreatedAsync(client, add);
-        var updateBody = await PostCreatedAsync(client, update);
+        var body = await PostCreatedAsync(client, MixedRequest("request-mixed"));
 
-        Assert.Equal(["IYC-ORS-2026-00001", "IYC-ORS-2026-00002"], ApplicationReferences(addBody));
-        Assert.Equal(["IYC-ORS-2026-00003"], ApplicationReferences(updateBody));
-        Assert.Equal(3, await factory.CountAsync("workItems", Ct));
-        Assert.Equal(2, await factory.CountAsync("submissions", Ct));
-
-        var addReplay = await PostCreatedAsync(client, add);
-        var updateReplay = await PostCreatedAsync(client, update);
-        Assert.Equal(ApplicationReferences(addBody), ApplicationReferences(addReplay));
-        Assert.Equal(ApplicationReferences(updateBody), ApplicationReferences(updateReplay));
-        Assert.Equal(3, await factory.CountAsync("workItems", Ct));
-    }
-
-    // RA-767 AC1: the two groups of one operator request are one submission.
-    // The later group sends the reference the first was given and both send
-    // the request's total size, so every work item carries the same
-    // reference and size and the related-work-items tab of either lists both.
-    [Fact]
-    public async Task A_later_group_sent_with_the_first_groups_reference_shares_its_reference_and_total_size()
-    {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-shared", siteCount: 1);
-        Payload(add)["submissionSize"] = 2;
-
-        var addBody = await PostCreatedAsync(client, add);
-        var reference = addBody.GetProperty("submissionReference").GetString();
-        var updateBody = await PostCreatedAsync(client, LaterGroup("request-shared", reference, submissionSize: 2));
-
-        Assert.Equal("SUB-2026-0001", reference);
-        Assert.Equal(reference, updateBody.GetProperty("submissionReference").GetString());
-        var ids = WorkItemIds(addBody).Concat(WorkItemIds(updateBody)).ToList();
-        foreach (var id in ids)
+        Assert.Equal("SUB-2026-0001", body.GetProperty("submissionReference").GetString());
+        // add-ORS and the ORS update share the IYC-ORS series (RA-682).
+        Assert.Equal(["IYC-ORS-2026-00001", "IYC-ORS-2026-00002", "IYC-ORS-2026-00003"], ApplicationReferences(body));
+        Assert.Equal(
+            [AddOverseasSiteSubmissions.TypeId, UpdateOverseasSiteType.Id, UpdateOverseasSiteType.Id],
+            body.GetProperty("workItems").EnumerateArray().Select(w => w.GetProperty("typeId").GetString())
+        );
+        var stored = new List<WorkItem>();
+        foreach (var id in WorkItemIds(body))
         {
-            var stored = await factory.Persistence.GetByIdAsync(id, Ct);
-            Assert.Equal(reference, stored!.Payload["submissionReference"].AsString);
-            Assert.Equal(2, stored.Payload["submissionSize"].AsInt32);
-
-            var related = await client.GetFromJsonAsync<JsonElement>($"/work-items/{id}/related-work-items", Ct);
-            Assert.Equal(2, related.GetProperty("totalCount").GetInt32());
-            Assert.Equal(
-                ids.Order(),
-                related.GetProperty("items").EnumerateArray().Select(i => i.GetProperty("id").GetGuid()).Order()
-            );
+            stored.Add((await factory.Persistence.GetByIdAsync(id, Ct))!);
         }
-        Assert.Equal(2, await factory.CountAsync("submissions", Ct));
+        Assert.Equal(
+            [AddOverseasSiteSubmissions.TypeId, UpdateOverseasSiteType.Id, UpdateOverseasSiteType.Id],
+            stored.Select(w => w.TypeId)
+        );
+        Assert.Equal(["v2", "v1", "v1"], stored.Select(w => w.TemplateVersion));
+        Assert.All(stored, w => Assert.Equal("submitted", w.StateId));
+        Assert.All(stored, w => Assert.Equal("SUB-2026-0001", w.Payload["submissionReference"].AsString));
+        Assert.All(stored, w => Assert.Equal(3, w.Payload["submissionSize"].AsInt32));
+        Assert.All(stored, w => Assert.False(w.Payload["site"].AsBsonDocument.Contains("typeId")));
+        // The operator paid for the add; an update falls back to its own reference.
+        Assert.Equal("PR/PK/REP/500500", stored[0].Payload["paymentReference"].AsString);
+        Assert.Equal("IYC-ORS-2026-00002", stored[1].Payload["paymentReference"].AsString);
+        Assert.Equal(1, await factory.CountAsync("submissions", Ct));
 
-        // The shared reference used no number: the next submission gets 0002.
-        var next = await PostCreatedAsync(client, AddOverseasSiteSubmissions.Body("request-next", siteCount: 1));
-        Assert.Equal("SUB-2026-0002", next.GetProperty("submissionReference").GetString());
+        var related = await client.GetFromJsonAsync<JsonElement>($"/work-items/{stored[1].Id}/related-work-items", Ct);
+        Assert.Equal(3, related.GetProperty("totalCount").GetInt32());
     }
 
     [Fact]
-    public async Task A_replayed_later_group_returns_its_stored_submission()
+    public async Task A_replayed_mixed_request_returns_all_three_work_items()
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-replay", siteCount: 1);
-        Payload(add)["submissionSize"] = 2;
-        var addBody = await PostCreatedAsync(client, add);
-        var update = LaterGroup("request-replay", addBody.GetProperty("submissionReference").GetString(), submissionSize: 2);
-        var first = await client.PostAsJsonAsync("/work-items", update, Ct);
+        var request = MixedRequest("request-replay");
+        var first = await client.PostAsJsonAsync("/work-items", request, Ct);
         var firstBody = await first.Content.ReadAsStringAsync(Ct);
 
-        var replay = await client.PostAsJsonAsync("/work-items", update, Ct);
+        var replay = await client.PostAsJsonAsync("/work-items", request, Ct);
 
         Assert.Equal(HttpStatusCode.Created, replay.StatusCode);
         Assert.Equal("true", Assert.Single(replay.Headers.GetValues("X-Idempotent-Replay")));
         Assert.Equal(firstBody, await replay.Content.ReadAsStringAsync(Ct));
-        Assert.Equal(2, await factory.CountAsync("workItems", Ct));
-        Assert.Equal(2, await factory.CountAsync("submissions", Ct));
+        var replayed = await replay.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Equal(3, replayed.GetProperty("workItems").GetArrayLength());
+        Assert.Equal(3, await factory.CountAsync("workItems", Ct));
+        Assert.Equal(1, await factory.CountAsync("submissions", Ct));
     }
 
-    public static TheoryData<string> RefusedReferences =>
-        new("another request's reference", "another organisation", "no submission for the base request", "a made-up reference");
-
-    [Theory]
-    [MemberData(nameof(RefusedReferences))]
-    public async Task A_later_group_whose_reference_is_not_its_requests_is_refused_and_creates_nothing(string refusal)
+    // The replay guard is still keyed on the request's typeId.
+    [Fact]
+    public async Task A_request_id_reused_under_another_request_type_is_refused()
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var mine = await PostCreatedAsync(client, AddOverseasSiteSubmissions.Body("request-mine", siteCount: 1));
-        var theirs = await PostCreatedAsync(client, AddOverseasSiteSubmissions.Body("request-theirs", siteCount: 1));
-        var myReference = mine.GetProperty("submissionReference").GetString();
-        var update = refusal switch
+        await PostCreatedAsync(client, MixedRequest("request-reused"));
+        var other = MixedRequest("request-reused");
+        other["typeId"] = UpdateOverseasSiteType.Id;
+
+        var response = await client.PostAsJsonAsync("/work-items", other, Ct);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.Equal(3, await factory.CountAsync("workItems", Ct));
+    }
+
+    // RA-767: an update request naming an add site needs the add's payment reference.
+    [Fact]
+    public async Task An_update_request_holding_an_add_without_a_payment_reference_is_refused_and_creates_nothing()
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var request = UpdateOverseasSiteSubmissions.Body("request-unpaid", siteCount: 1);
+        var addSite = AddOverseasSiteSubmissions.Body("unused", siteCount: 1)["payload"]!["sites"]![0]!.DeepClone();
+        addSite["typeId"] = AddOverseasSiteSubmissions.TypeId;
+        Sites(request).Add(addSite);
+
+        var response = await client.PostAsJsonAsync("/work-items", request, Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Contains("paymentReference", problem.GetProperty("detail").GetString());
+        await AssertNothingCreatedAsync(factory);
+
+        Payload(request)["paymentReference"] = "PR/PK/REP/500500";
+        var paid = await PostCreatedAsync(client, request);
+        Assert.Equal("SUB-2026-0001", paid.GetProperty("submissionReference").GetString());
+    }
+
+    public static TheoryData<string, string?> FailingSites =>
+        new()
         {
-            "another request's reference" => LaterGroup("request-mine", theirs.GetProperty("submissionReference").GetString()),
-            "another organisation" => LaterGroup("request-mine", myReference, organisationId: "org-2"),
-            "no submission for the base request" => LaterGroup("request-unknown", myReference),
-            "a made-up reference" => LaterGroup("request-mine", "SUB-2026-9999"),
-            _ => throw new ArgumentOutOfRangeException(nameof(refusal), refusal, null),
+            { "an unregistered type", "unknown-site-type" },
+            { "a type that is not split per site", "unknown-site-type" },
+            { "a type id that is not a string", "unknown-site-type" },
+            { "a site missing its orsId", null },
         };
 
-        var response = await client.PostAsJsonAsync("/work-items", update, Ct);
-
-        await AssertRefusedAsync(response, "submission-reference-not-found");
-        Assert.Equal(2, await factory.CountAsync("workItems", Ct));
-        Assert.Equal(2, await factory.CountAsync("submissions", Ct));
-    }
-
-    [Fact]
-    public async Task A_reference_sent_on_a_request_that_is_not_a_later_group_is_refused()
-    {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var first = await PostCreatedAsync(client, AddOverseasSiteSubmissions.Body("request-first", siteCount: 1));
-        var add = AddOverseasSiteSubmissions.Body("request-second", siteCount: 1);
-        Payload(add)["submissionReference"] = first.GetProperty("submissionReference").GetString();
-
-        var response = await client.PostAsJsonAsync("/work-items", add, Ct);
-
-        await AssertRefusedAsync(response, "submission-reference-not-allowed");
-        Assert.Equal(1, await factory.CountAsync("workItems", Ct));
-        Assert.Equal(1, await factory.CountAsync("submissions", Ct));
-    }
-
+    // RA-767 AC2: one site that cannot be accepted fails the whole request.
     [Theory]
-    [InlineData("smaller than the sites sent", "invalid-submission-size")]
-    [InlineData("not a number", "invalid-submission-size")]
-    [InlineData("blank reference", "invalid-submission-reference")]
-    public async Task A_malformed_shared_field_is_refused_and_creates_nothing(string malformation, string errorCode)
+    [MemberData(nameof(FailingSites))]
+    public async Task One_failing_site_refuses_the_whole_request_and_creates_nothing(string failure, string? errorCode)
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var update = UpdateOverseasSiteSubmissions.Body($"request-bad:{UpdateOverseasSiteType.Id}", siteCount: 2);
-        switch (malformation)
+        var request = MixedRequest("request-failing");
+        var lastSite = Sites(request)[2]!.AsObject();
+        switch (failure)
         {
-            case "smaller than the sites sent": Payload(update)["submissionSize"] = 1; break;
-            case "not a number": Payload(update)["submissionSize"] = "3"; break;
-            case "blank reference": Payload(update)["submissionReference"] = " "; break;
-            default: throw new ArgumentOutOfRangeException(nameof(malformation), malformation, null);
+            case "an unregistered type": lastSite["typeId"] = "no-such-type"; break;
+            case "a type that is not split per site": lastSite["typeId"] = ReAccreditationType.Id; break;
+            case "a type id that is not a string": lastSite["typeId"] = 5; break;
+            case "a site missing its orsId": lastSite.Remove("orsId"); break;
+            default: throw new ArgumentOutOfRangeException(nameof(failure), failure, null);
         }
 
-        var response = await client.PostAsJsonAsync("/work-items", update, Ct);
+        var response = await client.PostAsJsonAsync("/work-items", request, Ct);
 
-        await AssertRefusedAsync(response, errorCode);
-        Assert.Equal(0, await factory.CountAsync("workItems", Ct));
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Equal(errorCode, problem.TryGetProperty("errorCode", out var code) ? code.GetString() : null);
+        await AssertNothingCreatedAsync(factory);
+
+        // Nothing was allocated either: the next request takes the first numbers.
+        var next = await PostCreatedAsync(client, MixedRequest("request-next"));
+        Assert.Equal("SUB-2026-0001", next.GetProperty("submissionReference").GetString());
+        Assert.Equal("IYC-ORS-2026-00001", ApplicationReferences(next)[0]);
     }
 
-    // Unchanged without the shared fields: each group is its own submission.
-    [Fact]
-    public async Task Groups_sent_without_the_shared_fields_get_their_own_reference_and_size()
+    /// <summary>An add-ORS request with one add site, then two update sites naming their own type.</summary>
+    private static JsonObject MixedRequest(string operatorRequestId)
     {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-separate", siteCount: 2);
-        Payload(add)["submissionReference"] = null;
-        Payload(add)["submissionSize"] = null;
-
-        var addBody = await PostCreatedAsync(client, add);
-        var updateBody = await PostCreatedAsync(
-            client,
-            UpdateOverseasSiteSubmissions.Body($"request-separate:{UpdateOverseasSiteType.Id}", siteCount: 1)
-        );
-
-        Assert.Equal("SUB-2026-0001", addBody.GetProperty("submissionReference").GetString());
-        Assert.Equal("SUB-2026-0002", updateBody.GetProperty("submissionReference").GetString());
-        var update = await factory.Persistence.GetByIdAsync(WorkItemIds(updateBody)[0], Ct);
-        Assert.Equal(1, update!.Payload["submissionSize"].AsInt32);
-        var added = await factory.Persistence.GetByIdAsync(WorkItemIds(addBody)[0], Ct);
-        Assert.Equal(2, added!.Payload["submissionSize"].AsInt32);
-    }
-
-    // RA-767 review: the issuing group need not be stored under the bare base id.
-    [Fact]
-    public async Task A_later_group_shares_a_reference_issued_to_an_earlier_group_with_a_group_suffix()
-    {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-suffixed:first", siteCount: 1);
-        Payload(add)["submissionSize"] = 2;
-        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
-
-        var updateBody = await PostCreatedAsync(client, LaterGroup("request-suffixed", reference, submissionSize: 2));
-
-        Assert.Equal(reference, updateBody.GetProperty("submissionReference").GetString());
-    }
-
-    // A record stored before RA-767 holds no organisation or size, so the work
-    // items carrying the reference vouch for the organisation; the later group's
-    // sent size is taken as it is.
-    [Theory]
-    [InlineData("org-1", true)]
-    [InlineData("org-2", false)]
-    public async Task A_later_group_of_a_request_stored_before_RA_767_is_checked_against_its_work_items(
-        string organisationId,
-        bool accepted
-    )
-    {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        // As the operator backend sent it before RA-767: no size, so the record keeps none.
-        var add = AddOverseasSiteSubmissions.Body("request-legacy", siteCount: 1);
-        Payload(add)["submissionSize"] = null;
-        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
-        await Submissions(factory)
-            .UpdateOneAsync(
-                Builders<BsonDocument>.Filter.Eq("_id", "request-legacy"),
-                Builders<BsonDocument>.Update.Unset("operatorOrganisationId").Unset("submissionSize"),
-                cancellationToken: Ct
-            );
-
-        var response = await client.PostAsJsonAsync(
-            "/work-items",
-            LaterGroup("request-legacy", reference, submissionSize: 3, organisationId: organisationId),
-            Ct
-        );
-
-        if (!accepted)
+        var request = AddOverseasSiteSubmissions.Body(operatorRequestId, siteCount: 1);
+        var updates = UpdateOverseasSiteSubmissions.Body("unused", siteCount: 2);
+        foreach (var site in Sites(updates))
         {
-            await AssertRefusedAsync(response, "submission-reference-not-found");
-            Assert.Equal(1, await factory.CountAsync("workItems", Ct));
-            return;
+            var update = site!.DeepClone();
+            update["typeId"] = UpdateOverseasSiteType.Id;
+            Sites(request).Add(update);
         }
-        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
-        Assert.Equal(reference, body.GetProperty("submissionReference").GetString());
-        var update = await factory.Persistence.GetByIdAsync(WorkItemIds(body)[0], Ct);
-        Assert.Equal(3, update!.Payload["submissionSize"].AsInt32);
+        return request;
     }
 
-    [Fact]
-    public async Task A_later_group_that_omits_the_size_is_stamped_with_the_stored_one()
+    private static async Task AssertNothingCreatedAsync(OverseasSiteAppFactory factory)
     {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-no-size", siteCount: 1);
-        Payload(add)["submissionSize"] = 4;
-        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
-
-        var body = await PostCreatedAsync(client, LaterGroup("request-no-size", reference, submissionSize: null));
-
-        var update = await factory.Persistence.GetByIdAsync(WorkItemIds(body)[0], Ct);
-        Assert.Equal(4, update!.Payload["submissionSize"].AsInt32);
-        var stored = await Submissions(factory)
-            .Find(Builders<BsonDocument>.Filter.Eq("_id", $"request-no-size:{UpdateOverseasSiteType.Id}"))
-            .SingleAsync(Ct);
-        Assert.Equal(4, stored["submissionSize"].AsInt32);
-    }
-
-    // A request whose first group went before the caller sent sizes (the operator backend before RA-767) keeps no
-    // stored size, so a later group's size is taken as sent rather than refused for good.
-    [Fact]
-    public async Task A_later_group_of_a_request_whose_first_group_sent_no_size_takes_its_own_size()
-    {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-unsized", siteCount: 1);
-        Payload(add)["submissionSize"] = null;
-        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
-
-        var body = await PostCreatedAsync(client, LaterGroup("request-unsized", reference, submissionSize: 2));
-
-        var update = await factory.Persistence.GetByIdAsync(WorkItemIds(body)[0], Ct);
-        Assert.Equal(2, update!.Payload["submissionSize"].AsInt32);
-    }
-
-    [Theory]
-    [InlineData("a different size", 1, 3)]
-    [InlineData("a stored size smaller than its sites", 2, null)]
-    public async Task A_later_group_whose_size_does_not_fit_the_stored_one_is_refused(
-        string _,
-        int siteCount,
-        int? submissionSize
-    )
-    {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-size", siteCount: 1);
-        Payload(add)["submissionSize"] = 1;
-        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
-
-        var response = await client.PostAsJsonAsync(
-            "/work-items",
-            LaterGroup("request-size", reference, submissionSize, siteCount: siteCount),
-            Ct
-        );
-
-        await AssertRefusedAsync(response, "invalid-submission-size");
-        Assert.Equal(1, await factory.CountAsync("workItems", Ct));
-        Assert.Equal(1, await factory.CountAsync("submissions", Ct));
-    }
-
-    [Fact]
-    public async Task A_size_over_the_upper_bound_is_refused()
-    {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var add = AddOverseasSiteSubmissions.Body("request-huge", siteCount: 1);
-        Payload(add)["submissionSize"] = 1001;
-
-        var response = await client.PostAsJsonAsync("/work-items", add, Ct);
-
-        await AssertRefusedAsync(response, "invalid-submission-size");
         Assert.Equal(0, await factory.CountAsync("workItems", Ct));
+        Assert.Equal(0, await factory.CountAsync("submissions", Ct));
     }
-
-    private static IMongoCollection<BsonDocument> Submissions(OverseasSiteAppFactory factory) =>
-        factory.Services.GetRequiredService<IMongoDbClientFactory>().GetCollection<BsonDocument>("submissions");
 
     private static JsonObject Payload(JsonObject body) => body["payload"]!.AsObject();
 
-    private static JsonObject LaterGroup(
-        string requestId,
-        string? submissionReference,
-        int? submissionSize = 2,
-        string organisationId = "org-1",
-        int siteCount = 1
-    )
-    {
-        var body = UpdateOverseasSiteSubmissions.Body($"{requestId}:{UpdateOverseasSiteType.Id}", siteCount: siteCount);
-        Payload(body)["submissionReference"] = submissionReference;
-        Payload(body)["submissionSize"] = submissionSize;
-        Payload(body)["operatorOrganisationId"] = organisationId;
-        return body;
-    }
+    private static JsonArray Sites(JsonObject body) => Payload(body)["sites"]!.AsArray();
 
     private static List<Guid> WorkItemIds(JsonElement body) =>
         body.GetProperty("workItems").EnumerateArray().Select(w => w.GetProperty("id").GetGuid()).ToList();
-
-    private static async Task AssertRefusedAsync(HttpResponseMessage response, string errorCode)
-    {
-        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
-        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
-        Assert.Equal(errorCode, problem.GetProperty("errorCode").GetString());
-    }
 }

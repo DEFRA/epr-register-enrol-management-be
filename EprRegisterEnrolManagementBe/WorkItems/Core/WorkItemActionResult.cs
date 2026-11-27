@@ -97,16 +97,6 @@ public enum WorkItemActionFailureCode
     SubmissionRequestIdReused,
 
     /// <summary>
-    /// RA-767: a later group of an operator request sent a
-    /// <c>submissionReference</c> that is not the one stored for the request
-    /// it names (no submission on file under the base request id, a different
-    /// reference, or a different organisation). A client error (400) with
-    /// <c>errorCode</c> <c>submission-reference-not-found</c>. Nothing was
-    /// created.
-    /// </summary>
-    SubmissionReferenceNotFound,
-
-    /// <summary>
     /// RA-495 review: the work item's rules cannot be resolved, because its
     /// type is not registered and it has no stored template snapshot
     /// (<see cref="WorkItemEngineRules.ResolveTemplate"/> returned

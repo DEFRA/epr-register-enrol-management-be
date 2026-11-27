@@ -7,7 +7,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// RA-495 AC6: the effective date a caseworker enters when making the
 /// determination on a type that takes one
 /// (<see cref="IStandardLifecycleStrategy.TakesEffectiveDate"/>: add-ORS, not
-/// re-accreditation or an ORS update).
+/// re-accreditation or an ORS update, whose approval takes effect from the
+/// date it was determined, <see cref="OfApprovedDetermination"/>).
 /// On an approval it is the date the operator's accreditation shows the site
 /// as accredited from.
 ///
@@ -73,6 +74,26 @@ internal static class StandardEffectiveDate
         && value.IsString
         && TryParse(value.AsString, out var stamped)
             ? stamped
+            : null;
+
+    /// <summary>The audit action step 1 of a determination records (<see cref="StandardDeterminationWrites"/>).</summary>
+    public const string DeterminationMadeAction = "determination-made";
+
+    /// <summary>
+    /// RA-782 AC6: the UK calendar date the latest Approved determination was
+    /// made, read from its <see cref="DeterminationMadeAction"/> audit entry,
+    /// for a type whose approval takes effect from then rather than from an
+    /// entered date. Null when no approval has been determined.
+    /// </summary>
+    public static DateOnly? OfApprovedDetermination(WorkItem workItem) =>
+        workItem
+            .AuditLog.LastOrDefault(entry =>
+                entry.Action == DeterminationMadeAction
+                && entry.Details.TryGetValue("outcome", out var outcome)
+                && outcome == StandardWorkflow.ApprovedStateId
+            )
+            ?.CreatedAt is { } determinedAt
+            ? UkCalendar.DateOf(determinedAt)
             : null;
 
     /// <summary>A refusal's effective date: the UK calendar date the request was submitted.</summary>
