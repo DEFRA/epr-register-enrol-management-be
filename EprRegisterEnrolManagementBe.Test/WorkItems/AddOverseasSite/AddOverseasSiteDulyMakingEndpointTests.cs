@@ -100,6 +100,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
         var details = await client.GetFromJsonAsync<JsonElement>($"/work-items/{ids[0]}/duly-make", ct);
 
         Assert.Equal(SiteChargePence, details.GetProperty("chargePence").GetInt32());
+        Assert.True(details.GetProperty("takesPaymentDate").GetBoolean());
     }
 
     [Fact]

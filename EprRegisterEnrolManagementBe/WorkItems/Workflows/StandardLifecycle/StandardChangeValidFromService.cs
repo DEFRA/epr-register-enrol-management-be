@@ -24,8 +24,8 @@ internal interface IStandardChangeValidFromService
 
 /// <summary>
 /// RA-800: change valid from date, for a type that opts in to the lifecycle and
-/// takes a valid-from date (<see cref="IStandardLifecycleStrategy.TakesEffectiveDate"/>,
-/// add-ORS). Modelled on RA-576's change payment date: one version-guarded
+/// takes a valid-from date (<see cref="IStandardLifecycleStrategy.TakesEffectiveDate"/>:
+/// add-ORS, not an ORS update). Modelled on RA-576's change payment date: one version-guarded
 /// <see cref="IWorkItemPersistence.ReplaceAsync"/> rewrites <c>payload.effectiveDate</c>
 /// and appends a dedicated <c>valid-from-changed</c> audit entry. It does NOT touch
 /// <see cref="WorkItem.StateId"/> or <see cref="WorkItem.SlaClock"/>, runs no

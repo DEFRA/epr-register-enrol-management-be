@@ -7,14 +7,16 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// <summary>
 /// RA-495: completes duly making for a Standard-workflow work item: the
 /// <c>submitted → duly-made</c> transition with the payment date the caseworker
-/// entered. <paramref name="paymentDate"/> is already validated
-/// (<see cref="StandardDulyMakingValidator"/>, at the endpoint).
+/// entered. <paramref name="paymentDate"/>, when given, is already validated
+/// (<see cref="StandardDulyMakingValidator"/>, at the endpoint). Whether it
+/// must be given is the type's rule
+/// (<see cref="IStandardDulyMakingRules.TakesPaymentDate"/>), checked here.
 /// </summary>
 internal interface IStandardDulyMakingService
 {
     Task<WorkItemActionResult> CompleteDulyMakingAsync(
         Guid workItemId,
-        DateOnly paymentDate,
+        DateOnly? paymentDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default
     );
@@ -44,7 +46,8 @@ internal interface IStandardDulyMakingService
 ///   <see cref="WorkItem.StateId"/> to <c>duly-made</c>.</item>
 ///   <item>Starts the SLA clock with
 ///   <see cref="WorkItemSlaClock.StartedAt"/> anchored to midnight UTC of the
-///   entered payment date.</item>
+///   entered payment date. A type that takes no payment date (never charged)
+///   stamps none and anchors the clock to the moment it is duly made.</item>
 ///   <item>Appends the audit entries: the <c>action-applied</c> entry for
 ///   <c>duly-make</c> (plus one for the waypoint discharge when it happened)
 ///   and <c>sla-clock-started</c>.</item>
@@ -76,12 +79,14 @@ internal sealed class StandardDulyMakingService(
     private const string ActionId = "duly-make";
     private const string ActionDisplayName = "Duly make";
     private const string ContinueReviewActionId = "continue-review-during-duly-making";
+    private const string AnchoredToPaymentDate = "payment-date";
+    private const string AnchoredToDulyMade = "duly-made";
 
     private readonly IWorkItemPostActionHook[] _postActionHooks = postActionHooks.ToArray();
 
     public async Task<WorkItemActionResult> CompleteDulyMakingAsync(
         Guid workItemId,
-        DateOnly paymentDate,
+        DateOnly? paymentDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default
     )
@@ -105,6 +110,11 @@ internal sealed class StandardDulyMakingService(
             }
 
             var workItem = loaded.WorkItem!;
+            if (CheckPaymentDateTaken(workItem, loaded.Strategy!, paymentDate) is { } dateFailure)
+            {
+                return dateFailure;
+            }
+
             var starting = CheckStartingPoint(workItem, loaded.Template!);
             if (starting.Failure is { } startFailure)
             {
@@ -158,11 +168,12 @@ internal sealed class StandardDulyMakingService(
 
         logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) duly made by {UserId} with payment date "
-                + "{PaymentDate}; SLA clock anchored to that date{WaypointDischarge}.",
+                + "{PaymentDate}; SLA clock anchored to {AnchoredTo}{WaypointDischarge}.",
             persisted.Id,
             persisted.TypeId,
             user.FindFirstValue("user:id"),
-            paymentDate.ToString("yyyy-MM-dd"),
+            paymentDate?.ToString("yyyy-MM-dd") ?? "(none)",
+            paymentDate is null ? AnchoredToDulyMade : AnchoredToPaymentDate,
             dischargedWaypoint
                 ? ", having first left the 'updated' waypoint via continue-review-during-duly-making"
                 : string.Empty
@@ -231,6 +242,32 @@ internal sealed class StandardDulyMakingService(
 
         return new Loaded(null, workItem, strategy, template);
     }
+
+    /// <summary>
+    /// A payment date must be given for a type that takes one and must not be
+    /// for one that takes none: accepting it would stamp a payment on a change
+    /// that is never charged. Null when the request suits the type.
+    /// </summary>
+    private static WorkItemActionResult? CheckPaymentDateTaken(
+        WorkItem workItem,
+        IStandardDulyMakingRules strategy,
+        DateOnly? paymentDate
+    ) =>
+        (strategy.TakesPaymentDate, paymentDate.HasValue) switch
+        {
+            (true, false) => WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidPaymentDate,
+                "A payment date is required.",
+                StandardDulyMakingValidator.CodeRequired
+            ),
+            (false, true) => WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidPaymentDate,
+                $"Work item {workItem.Id} is of type '{workItem.TypeId}', which is not charged, "
+                    + "so its duly make takes no payment date.",
+                StandardDulyMakingValidator.CodeNotTaken
+            ),
+            _ => null,
+        };
 
     /// <summary>
     /// Whether duly making may start from where the item is, and whether the
@@ -341,7 +378,7 @@ internal sealed class StandardDulyMakingService(
     private WorkItemActionResult? ApplyDulyMake(
         WorkItem workItem,
         IStandardDulyMakingRules strategy,
-        DateOnly paymentDate,
+        DateOnly? paymentDate,
         ClaimsPrincipal user,
         bool needsWaypointDischarge
     )
@@ -353,7 +390,7 @@ internal sealed class StandardDulyMakingService(
             DischargeUpdatedWaypoint(workItem, user, now);
         }
 
-        if (!strategy.TryStampPaymentDate(workItem, paymentDate, logger))
+        if (paymentDate is { } date && !strategy.TryStampPaymentDate(workItem, date, logger))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
@@ -370,27 +407,27 @@ internal sealed class StandardDulyMakingService(
         // now. Midnight UTC of that date is the earliest instant consistent
         // with it, which keeps the regulator's 12 weeks from being
         // shortened by whatever part of the day the payment landed in.
-        var slaStartedAt = paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        // With nothing paid there is no earlier event to honour, so the
+        // clock runs from the duly make itself, over the same 12 weeks.
+        var slaStartedAt = paymentDate?.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc) ?? now;
         var slaClock = new WorkItemSlaClock { StartedAt = slaStartedAt };
         workItem.SlaClock = slaClock;
 
-        AppendAudit(
-            workItem,
-            "action-applied",
-            "Action applied",
-            user,
-            now,
-            new Dictionary<string, string?>
-            {
-                ["actionId"] = ActionId,
-                ["actionDisplayName"] = ActionDisplayName,
-                ["fromStateId"] = previousState,
-                ["toStateId"] = workItem.StateId,
-                // AC08: the entered date is part of the auditable record of
-                // what the regulator did, not just an input to the clock.
-                ["paymentDate"] = paymentDate.ToString("yyyy-MM-dd"),
-            }
-        );
+        var appliedDetails = new Dictionary<string, string?>
+        {
+            ["actionId"] = ActionId,
+            ["actionDisplayName"] = ActionDisplayName,
+            ["fromStateId"] = previousState,
+            ["toStateId"] = workItem.StateId,
+        };
+        if (paymentDate is { } entered)
+        {
+            // AC08: the entered date is part of the auditable record of
+            // what the regulator did, not just an input to the clock.
+            appliedDetails["paymentDate"] = entered.ToString("yyyy-MM-dd");
+        }
+
+        AppendAudit(workItem, "action-applied", "Action applied", user, now, appliedDetails);
         AppendAudit(
             workItem,
             "sla-clock-started",
@@ -404,7 +441,7 @@ internal sealed class StandardDulyMakingService(
                 // Stated explicitly so the audit trail shows the clock was
                 // back-dated on purpose rather than looking like a bug to
                 // whoever reads it months later.
-                ["anchoredTo"] = "payment-date",
+                ["anchoredTo"] = paymentDate is null ? AnchoredToDulyMade : AnchoredToPaymentDate,
             }
         );
 

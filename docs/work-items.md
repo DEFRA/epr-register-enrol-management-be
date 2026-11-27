@@ -303,7 +303,7 @@ type is configured. Every setting is code, not runtime data:
 
 | Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) | ORS update (`update-overseas-site`) |
 | --- | --- | --- | --- | --- | --- |
-| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` | `"ORS update"` |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` | `"Update ORS Accreditation"` |
 | Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` | `in-year-change` |
 | In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` | `"ORS"` (shared, RA-682) |
 | Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` | `true` |
@@ -469,6 +469,21 @@ type is configured. Every setting is code, not runtime data:
   `payload.effectiveDate` (RA-495 AC6), which the operator journey grants the
   site from and requires on `approved`; re-accreditation stamps none, so its
   body has no `effectiveDate`.
+  The ORS update (`UpdateOverseasSiteLifecycleStrategy`, RA-682) opts in like
+  add-ORS (same push route, no minting, no emails) with two differences
+  (RA-782). It takes no valid-from date (`TakesEffectiveDate` false): the
+  decision records none, its confirm-contact push has no `effectiveDate`
+  (null is omitted on the wire) and `change-valid-from` gets
+  `400 wrong-work-item-type`. It takes no payment date (`TakesPaymentDate`
+  false, as it is never charged): `GET /work-items/{id}/duly-make` returns
+  `takesPaymentDate: false` (true for every other type) so the page asks for
+  none; `POST /work-items/{id}/duly-make` needs no `paymentDate` and refuses one
+  that is sent with `400 errorCode: payment-date-not-taken`
+  (`field: paymentDate`); nothing is stamped on `payload.paymentDate`, and the
+  SLA clock starts at the moment it is duly made (UTC), over the same 12 weeks,
+  with `sla-clock-started` audited as `anchoredTo: duly-made` and no
+  `paymentDate` on the `action-applied` entry. A type that takes a payment date
+  and is sent none still gets `400 payment-date-required`.
   An approval's `effectiveDate` must fall between 1 January and 31 December
   (inclusive) of the work item's `payload.accreditationYear` (RA-795; it may be
   before the submission date): `400` with `errorCode`

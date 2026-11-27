@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
-using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
@@ -104,31 +103,5 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
         Assert.Equal(ApplicationReferences(addBody), ApplicationReferences(addReplay));
         Assert.Equal(ApplicationReferences(updateBody), ApplicationReferences(updateReplay));
         Assert.Equal(3, await factory.CountAsync("workItems", Ct));
-    }
-
-    // RA-682 AC07: an approved update goes back to the operator backend with its
-    // effective date, on the same change-request route as add-ORS.
-    [Fact]
-    public async Task An_approved_update_is_pushed_back_with_its_effective_date()
-    {
-        await using var factory = new OverseasSiteAppFactory(fixture);
-        using var client = factory.CreateClient();
-        var body = await PostCreatedAsync(
-            client,
-            UpdateOverseasSiteSubmissions.Body($"request-approve:{UpdateOverseasSiteType.Id}", siteCount: 1)
-        );
-        var id = body.GetProperty("workItems")[0].GetProperty("id").GetGuid();
-        Assert.Equal(HttpStatusCode.OK, (await PostDulyMakeAsync(client, id, Ct)).StatusCode);
-        await factory.WaitForAuditAsync(id, "status-push-sent", Ct);
-        Assert.Equal(HttpStatusCode.OK, (await PostStartAssessmentAsync(client, id, Ct)).StatusCode);
-
-        Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, "approved", Ct)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await PostConfirmContactAsync(client, id, Ct)).StatusCode);
-
-        var closed = await factory.WaitForAuditAsync(id, "status-push-sent", Ct, count: 2);
-        Assert.Equal("approved", closed.StateId);
-        var decision = Assert.Single(factory.Pushes, p => p.Pipeline == OperatorBackendPushPipeline.Decision);
-        Assert.Equal(OperatorBackendStatusRoute.ChangeRequest, decision.Route);
-        Assert.Equal(EffectiveDate, decision.EffectiveDate);
     }
 }

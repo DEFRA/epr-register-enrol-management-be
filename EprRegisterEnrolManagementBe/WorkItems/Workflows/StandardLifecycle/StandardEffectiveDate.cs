@@ -6,7 +6,8 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// <summary>
 /// RA-495 AC6: the effective date a caseworker enters when making the
 /// determination on a type that takes one
-/// (<see cref="IStandardLifecycleStrategy.TakesEffectiveDate"/>, add-ORS only).
+/// (<see cref="IStandardLifecycleStrategy.TakesEffectiveDate"/>: add-ORS, not
+/// re-accreditation or an ORS update).
 /// On an approval it is the date the operator's accreditation shows the site
 /// as accredited from.
 ///

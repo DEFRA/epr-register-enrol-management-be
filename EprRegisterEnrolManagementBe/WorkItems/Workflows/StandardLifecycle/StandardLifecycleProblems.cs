@@ -80,13 +80,21 @@ internal static class StandardLifecycleProblems
     // RA-495 AC6: a failure the frontend binds to a form field carries its
     // errorCode and the field it belongs to.
     private static Dictionary<string, object?>? FieldErrorExtensions(WorkItemActionResult result) =>
-        result.FailureCode == WorkItemActionFailureCode.InvalidEffectiveDate && result.ErrorCode is { } errorCode
-            ? new Dictionary<string, object?>
-            {
-                [ErrorCodeKey] = errorCode,
-                [FieldKey] = StandardEffectiveDate.Field,
-            }
-            : null;
+        (result.FailureCode, result.ErrorCode) switch
+        {
+            (WorkItemActionFailureCode.InvalidEffectiveDate, { } errorCode) => FieldError(
+                errorCode,
+                StandardEffectiveDate.Field
+            ),
+            (WorkItemActionFailureCode.InvalidPaymentDate, { } errorCode) => FieldError(
+                errorCode,
+                StandardDulyMakingValidator.Field
+            ),
+            _ => null,
+        };
+
+    private static Dictionary<string, object?> FieldError(string errorCode, string field) =>
+        new() { [ErrorCodeKey] = errorCode, [FieldKey] = field };
 
     // UnknownAction is the services' "type has not opted in" failure
     // (StandardLifecycleStrategies.NotOptedIn). RA-495 review: a work item whose
