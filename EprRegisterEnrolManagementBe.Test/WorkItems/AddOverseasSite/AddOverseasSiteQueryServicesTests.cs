@@ -193,6 +193,7 @@ public sealed class AddOverseasSiteQueryServicesTests
     {
         var item = QueriedItem();
         item.StateId = stateId;
+        item.Payload["site"]["siteName"] = "New site";
         var h = new Harness(item);
 
         var result = await ResumeAsync(h);
@@ -205,6 +206,189 @@ public sealed class AddOverseasSiteQueryServicesTests
         }
 
         await h.Engine.DidNotReceiveWithAnyArgs().ApplyActionAsync(default, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    // A replay on an item that already left queried: identical is a no-op, a differing response is applied.
+
+    private static WorkItem ResumedItem(string stateId = "updated")
+    {
+        var item = QueriedItem();
+        item.StateId = stateId;
+        item.Payload["site"]["siteName"] = "New site";
+        item.Payload["site"]["interimSites"][0]["siteName"] = "New interim";
+        item.Payload["site"]["besEvidence"] = new BsonDocument
+        {
+            ["files"] = new BsonArray { new BsonDocument { ["fileId"] = "f-1", ["filename"] = "first.pdf" } },
+        };
+        item.Payload["latestQueryResponse"] = new BsonDocument
+        {
+            ["respondedAt"] = s_now.UtcDateTime.AddMinutes(-5),
+            ["siteChanges"] = new BsonDocument { ["siteName"] = new BsonDocument { ["from"] = "Old site", ["to"] = "New site" } },
+            ["interimSiteChanges"] = new BsonArray(),
+        };
+        return item;
+    }
+
+    [Fact]
+    public async Task An_identical_replay_with_a_fresh_timestamp_and_files_already_held_is_a_no_op()
+    {
+        var h = new Harness(ResumedItem());
+        var request = Response(
+            interimSites: [new(null, "I-001", new() { ["siteName"] = "New interim" }), new(99, "X-404", new() { ["siteName"] = "Nowhere" })],
+            besFiles: [new("f-1", "first.pdf", null, "bes/f-1.pdf", null, null, null)],
+            submittedAt: s_now.UtcDateTime.AddHours(1)
+        );
+
+        var result = await ResumeAsync(h, request);
+
+        Assert.True(result.IsIdempotentReplay);
+        await h.Persistence
+            .DidNotReceiveWithAnyArgs()
+            .SetPayloadFieldAsync(default, default!, default!, TestContext.Current.CancellationToken);
+        await h.Audit
+            .DidNotReceiveWithAnyArgs()
+            .AppendAsync(default, default!, default!, default!, default!, TestContext.Current.CancellationToken);
+        await h.Engine.DidNotReceiveWithAnyArgs().ApplyActionAsync(default, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_replay_on_an_item_without_a_site_is_a_no_op()
+    {
+        var item = ResumedItem();
+        item.Payload.Remove("site");
+        var h = new Harness(item);
+
+        var result = await ResumeAsync(h);
+
+        Assert.True(result.IsIdempotentReplay);
+    }
+
+    [Theory]
+    [InlineData("updated")]
+    [InlineData("assessment-in-progress")]
+    public async Task A_replay_that_differs_is_applied_stamped_and_audited_without_a_transition(string stateId)
+    {
+        var h = new Harness(ResumedItem(stateId));
+        BsonDocument? site = null;
+        BsonDocument? latest = null;
+        h.Persistence
+            .SetPayloadFieldAsync(Arg.Any<Guid>(), "site", Arg.Do<BsonValue>(v => site = v.AsBsonDocument), Arg.Any<CancellationToken>())
+            .Returns(true);
+        h.Persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(),
+                "latestQueryResponse",
+                Arg.Do<BsonValue>(v => latest = v.AsBsonDocument),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+        var request = Response(
+            site: new() { ["siteName"] = "New site", ["postcode"] = "AB1 2CD" },
+            interimSites: [new(null, "I-001", new() { ["siteName"] = "Newer interim" }), new(99, "X-404", new() { ["siteName"] = "Nowhere" })],
+            besFiles:
+            [
+                new("f-1", "first.pdf", null, "bes/f-1.pdf", null, null, null),
+                new("f-2", "second.pdf", null, "bes/f-2.pdf", null, null, null),
+            ]
+        );
+
+        var result = await ResumeAsync(h, request);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.IsIdempotentReplay);
+        await h.Engine.DidNotReceiveWithAnyArgs().ApplyActionAsync(default, default!, default!, TestContext.Current.CancellationToken);
+        Assert.Equal("AB1 2CD", site!["postcode"].AsString);
+        Assert.Equal("Newer interim", site["interimSites"][0]["siteName"].AsString);
+        var files = site["besEvidence"]["files"].AsBsonArray;
+        Assert.Equal(["f-1", "f-2"], files.Select(f => f["fileId"].AsString));
+        Assert.Equal("Clean", files[1]["scanStatus"].AsString);
+        // The original "from" of the round survives the second response.
+        Assert.Equal("Old site", latest!["siteChanges"]["siteName"]["from"].AsString);
+        Assert.Equal("AB1 2CD", latest["siteChanges"]["postcode"]["to"].AsString);
+        Assert.Equal(2, latest["besEvidenceFiles"].AsBsonArray.Count);
+        await h.Audit
+            .Received(1)
+            .AppendAsync(
+                h.WorkItem!.Id,
+                AddOverseasSiteResumeService.AuditAction,
+                AddOverseasSiteResumeService.ReplayAuditActionDisplayName,
+                Arg.Is<Dictionary<string, string?>>(d =>
+                    d["actionId"] == null
+                    && d["fileReferences"] == "bes-evidence:f-1:first.pdf;bes-evidence:f-2:second.pdf"
+                    && d["siteChanges"]!.Contains("AB1 2CD")
+                    && d["unmatchedInterimSites"] == "X-404"
+                ),
+                s_user,
+                CancellationToken.None
+            );
+    }
+
+    [Fact]
+    public async Task A_replay_that_only_adds_a_BES_file_is_applied_and_survives_a_failed_audit_append()
+    {
+        var item = ResumedItem();
+        item.Payload.Remove("latestQueryResponse");
+        var h = new Harness(item);
+        h.Audit
+            .AppendAsync(
+                Arg.Any<Guid>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<Dictionary<string, string?>>(),
+                Arg.Any<ClaimsPrincipal>(),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(false);
+
+        var result = await ResumeAsync(
+            h,
+            Response(besFiles: [new("f-2", "second.pdf", null, "bes/f-2.pdf", null, null, null)])
+        );
+
+        Assert.True(result.IsSuccess);
+        await h.Persistence
+            .Received(1)
+            .SetPayloadFieldAsync(h.WorkItem!.Id, "latestQueryResponse", Arg.Any<BsonValue>(), Ct);
+    }
+
+    [Fact]
+    public async Task A_replay_on_an_item_with_no_query_entry_is_applied_without_merging_a_prior_response()
+    {
+        var item = ResumedItem();
+        item.AuditLog.Clear();
+        var h = new Harness(item);
+
+        var result = await ResumeAsync(h, Response(site: new() { ["postcode"] = "AB1 2CD" }));
+
+        Assert.True(result.IsSuccess);
+    }
+
+    [Fact]
+    public async Task A_replay_whose_payload_write_misses_is_not_found()
+    {
+        var h = new Harness(ResumedItem());
+        h.Persistence
+            .SetPayloadFieldAsync(Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<BsonValue>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        var result = await ResumeAsync(h, Response(site: new() { ["postcode"] = "AB1 2CD" }));
+
+        Assert.Equal(WorkItemActionFailureCode.WorkItemNotFound, result.FailureCode);
+        await h.Audit
+            .DidNotReceiveWithAnyArgs()
+            .AppendAsync(default, default!, default!, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_replay_returns_the_work_item_as_it_stands_when_the_re_read_finds_nothing()
+    {
+        var h = new Harness(ResumedItem());
+        h.Persistence.GetByIdAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns(h.WorkItem, (WorkItem?)null);
+
+        var result = await ResumeAsync(h, Response(site: new() { ["postcode"] = "AB1 2CD" }));
+
+        Assert.True(result.IsSuccess);
+        Assert.Same(h.WorkItem, result.WorkItem);
     }
 
     [Theory]

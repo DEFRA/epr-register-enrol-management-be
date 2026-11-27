@@ -356,12 +356,35 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
         using var __ = client;
         Assert.Equal(HttpStatusCode.OK, (await PostResumeAsync(client, id, ResumeBody(), ct)).StatusCode);
 
-        var again = await PostResumeAsync(client, id, ResumeBody(site: new { siteName = "Other" }), ct);
+        var again = await PostResumeAsync(client, id, ResumeBody(), ct);
 
         Assert.Equal(HttpStatusCode.OK, again.StatusCode);
         var item = (await factory.Persistence.GetByIdAsync(id, ct))!;
         Assert.Single(item.AuditLog, a => a.Action == "query-responded");
         Assert.Equal("New site name", item.Payload["site"]["siteName"].AsString);
+    }
+
+    [Fact]
+    public async Task A_repeated_response_that_differs_is_applied_and_audited()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (factory, client, id) = await QueriedAsync("resume-amended", ct);
+        await using var _ = factory;
+        using var __ = client;
+        Assert.Equal(HttpStatusCode.OK, (await PostResumeAsync(client, id, ResumeBody(), ct)).StatusCode);
+        var stateAfterFirst = (await factory.Persistence.GetByIdAsync(id, ct))!.StateId;
+
+        var again = await PostResumeAsync(client, id, ResumeBody(site: new { siteName = "Other" }), ct);
+
+        Assert.Equal(HttpStatusCode.OK, again.StatusCode);
+        var item = (await factory.Persistence.GetByIdAsync(id, ct))!;
+        Assert.Equal(stateAfterFirst, item.StateId);
+        Assert.Equal("Other", item.Payload["site"]["siteName"].AsString);
+        Assert.Equal("Other", item.Payload["latestQueryResponse"]["siteChanges"]["siteName"]["to"].AsString);
+        Assert.Equal("Overseas site 1", item.Payload["latestQueryResponse"]["siteChanges"]["siteName"]["from"].AsString);
+        var entries = item.AuditLog.Where(a => a.Action == "query-responded").ToList();
+        Assert.Equal(2, entries.Count);
+        Assert.Contains(entries, e => e.ActionDisplayName == "Query response updated");
     }
 
     [Fact]

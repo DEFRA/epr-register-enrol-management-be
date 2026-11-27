@@ -167,8 +167,10 @@ internal interface IAddOverseasSiteResumeService
     /// resume) and record who responded, what changed (old and new) and the new
     /// BES files on the audit log. The <c>resume-during-*</c> transition is
     /// resolved from the item's own query audit entry. An item that has already
-    /// left <c>queried</c> for a resume target succeeds as an idempotent replay;
-    /// any other state is an
+    /// left <c>queried</c> for a resume target succeeds: an identical response is
+    /// an idempotent no-op, a differing one (a changed value or new BES file, as
+    /// the operator backend resubmits after its own concurrent-edit 409) is
+    /// applied to the site and audited without a transition; any other state is an
     /// <see cref="WorkItemActionFailureCode.InvalidTransition"/>.
     /// </summary>
     Task<WorkItemActionResult> ResumeFromQueryAsync(
@@ -203,6 +205,9 @@ internal sealed class AddOverseasSiteResumeService(
     public const string AuditAction = "query-responded";
 
     public const string AuditActionDisplayName = "Query responded";
+
+    /// <summary>The display name of the entry for a differing replay applied after the item had already moved on.</summary>
+    public const string ReplayAuditActionDisplayName = "Query response updated";
 
     /// <summary>The payload field the latest response is stamped under.</summary>
     public const string LatestResponsePayloadField = "latestQueryResponse";
@@ -254,12 +259,7 @@ internal sealed class AddOverseasSiteResumeService(
             // other state means this item was never waiting on this call.
             if (StandardQueryActions.ResumeTargetStates.Contains(workItem.StateId))
             {
-                logger.LogInformation(
-                    "Resume-from-query for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
-                    workItemId,
-                    workItem.StateId
-                );
-                return WorkItemActionResult.IdempotentReplay(workItem);
+                return await ReplayAsync(workItem, request, user, cancellationToken);
             }
 
             return WorkItemActionResult.Failure(
@@ -271,10 +271,7 @@ internal sealed class AddOverseasSiteResumeService(
         // The whole query audit entry, not just its action id: its CreatedBy
         // identifies the caseworker who queried, whom the item is re-assigned
         // to once the resume has landed.
-        var queryEntry = workItem
-            .AuditLog.Where(e => string.Equals(e.Action, AddOverseasSiteQueryService.AuditAction, StringComparison.Ordinal))
-            .OrderByDescending(e => e.CreatedAt)
-            .FirstOrDefault(e => e.Details.GetValueOrDefault("actionId") is not null);
+        var queryEntry = FindQueryEntry(workItem);
 
         var resumeActionId = StandardQueryActions.ResolveResumeActionId(queryEntry?.Details.GetValueOrDefault("actionId"));
         if (queryEntry is null || resumeActionId is null)
@@ -308,14 +305,7 @@ internal sealed class AddOverseasSiteResumeService(
         }
 
         AppendBesFiles(site, request.BesEvidenceFiles);
-        if (unmatchedInterimSites.Count > 0)
-        {
-            logger.LogWarning(
-                "Resume-from-query for work item {WorkItemId}: {Count} interim site change(s) matched no interim site on the payload and were recorded on the audit log only.",
-                workItemId,
-                unmatchedInterimSites.Count
-            );
-        }
+        LogUnmatchedInterimSites(workItemId, unmatchedInterimSites);
 
         var stampFailure = await StampAsync(workItemId, site, request, user, siteChanges, interimChanges, cancellationToken);
         if (stampFailure is not null)
@@ -330,37 +320,13 @@ internal sealed class AddOverseasSiteResumeService(
         }
 
         var besFiles = request.BesEvidenceFiles ?? [];
-        var appended = await auditAppender.AppendAsync(
+        await AppendAuditAsync(
             workItemId,
-            action: AuditAction,
-            actionDisplayName: AuditActionDisplayName,
-            details: new Dictionary<string, string?>
-            {
-                ["actionId"] = resumeActionId,
-                ["responderFullName"] = request.ResponderContactDetails?.FullName,
-                ["responderEmail"] = request.ResponderContactDetails?.Email,
-                ["responderRole"] = request.ResponderContactDetails?.Role,
-                ["submittedAt"] = (request.SubmittedAt ?? _timeProvider.GetUtcNow().UtcDateTime).ToString("O", CultureInfo.InvariantCulture),
-                ["siteChanges"] = JsonSerializer.Serialize(ToWire(siteChanges), s_json),
-                ["interimSiteChanges"] = JsonSerializer.Serialize(
-                    interimChanges.Select(c => new { c.SiteId, c.SiteNumber, changes = ToWire(c.Changes) }),
-                    s_json
-                ),
-                ["unmatchedInterimSites"] = string.Join(",", unmatchedInterimSites),
-                ["fileReferences"] = string.Join(";", besFiles.Select(f => $"bes-evidence:{f.FileId}:{f.Filename}")),
-            },
-            user,
-            // The transition is committed: the audit record of what changed must be written regardless.
-            CancellationToken.None
+            AuditActionDisplayName,
+            BuildAuditDetails(resumeActionId, request, siteChanges, interimChanges, unmatchedInterimSites),
+            resumeActionId,
+            user
         );
-        if (!appended)
-        {
-            logger.LogError(
-                "Query-responded audit entry could not be appended to work item {WorkItemId} after action {ActionId} was applied.",
-                workItemId,
-                resumeActionId
-            );
-        }
 
         logger.LogInformation(
             "Add-ORS work item {WorkItemId} resumed from query by {UserId} via {ActionId}: {SiteFieldCount} site field(s), {InterimCount} interim site(s), {BesCount} BES file(s)",
@@ -378,6 +344,158 @@ internal sealed class AddOverseasSiteResumeService(
         // appender wrote and any re-established assignment.
         var refreshed = await persistence.GetByIdAsync(workItemId, cancellationToken);
         return refreshed is null ? result : WorkItemActionResult.Success(refreshed);
+    }
+
+    /// <summary>The newest query audit entry that names its action (its CreatedBy is the caseworker who queried).</summary>
+    private static WorkItemAuditEntry? FindQueryEntry(WorkItem workItem) =>
+        workItem
+            .AuditLog.Where(e => string.Equals(e.Action, AddOverseasSiteQueryService.AuditAction, StringComparison.Ordinal))
+            .OrderByDescending(e => e.CreatedAt)
+            .FirstOrDefault(e => e.Details.GetValueOrDefault("actionId") is not null);
+
+    private void LogUnmatchedInterimSites(Guid workItemId, List<string> unmatched)
+    {
+        if (unmatched.Count > 0)
+        {
+            logger.LogWarning(
+                "Resume-from-query for work item {WorkItemId}: {Count} interim site change(s) matched no interim site on the payload and were recorded on the audit log only.",
+                workItemId,
+                unmatched.Count
+            );
+        }
+    }
+
+    /// <summary>
+    /// A resume for an item that already left <c>queried</c>. The operator
+    /// backend retries a resume it did not see succeed, and a second tab can
+    /// add an answer or BES file after the first resume (the backend then
+    /// refuses to mark the item Updated and the operator resubmits the fuller
+    /// response). A response that adds nothing to what the payload already
+    /// holds stays an idempotent no-op; one that differs (a changed value or a
+    /// new BES file) is applied to the site, re-stamped as the latest response
+    /// and audited, with no transition (the item has already moved).
+    /// <c>submittedAt</c> and the responder are not compared: a retry sends a
+    /// fresh timestamp.
+    /// </summary>
+    private async Task<WorkItemActionResult> ReplayAsync(
+        WorkItem workItem,
+        AddOverseasSiteResumeRequest request,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
+    {
+        var workItemId = workItem.Id;
+        var site = SubmissionPayload.ReadSite(workItem.Payload)?.DeepClone().AsBsonDocument;
+        if (site is null)
+        {
+            return NoOpReplay(workItem);
+        }
+
+        var siteChanges = ApplyChanges(site, request.Site);
+        var interimChanges = ApplyInterimSiteChanges(site, request.InterimSites, out var unmatchedInterimSites);
+        var newFileCount = AppendBesFiles(site, request.BesEvidenceFiles);
+        if (siteChanges.Count == 0 && interimChanges.All(c => c.Changes.Count == 0) && newFileCount == 0)
+        {
+            return NoOpReplay(workItem);
+        }
+
+        // Keep the original "from" values of this query round (the earlier response already applied some).
+        var queryEntry = FindQueryEntry(workItem);
+        var priorResponse = queryEntry is null ? null : PriorResponseThisRound(workItem, queryEntry);
+        if (priorResponse is not null)
+        {
+            siteChanges = MergeChanges(priorResponse.GetValue("siteChanges", null) as BsonDocument, siteChanges);
+            interimChanges = MergeInterimChanges(priorResponse.GetValue("interimSiteChanges", null) as BsonArray, interimChanges);
+        }
+
+        LogUnmatchedInterimSites(workItemId, unmatchedInterimSites);
+        var stampFailure = await StampAsync(workItemId, site, request, user, siteChanges, interimChanges, cancellationToken);
+        if (stampFailure is not null)
+        {
+            return stampFailure;
+        }
+
+        await AppendAuditAsync(
+            workItemId,
+            ReplayAuditActionDisplayName,
+            BuildAuditDetails(null, request, siteChanges, interimChanges, unmatchedInterimSites),
+            workItem.StateId,
+            user
+        );
+        logger.LogInformation(
+            "Add-ORS work item {WorkItemId} in state '{StateId}': a differing resume replay was applied ({SiteFieldCount} site field(s), {InterimCount} interim site(s), {BesCount} new BES file(s)).",
+            workItemId,
+            workItem.StateId,
+            siteChanges.Count,
+            interimChanges.Count,
+            newFileCount
+        );
+
+        var refreshed = await persistence.GetByIdAsync(workItemId, cancellationToken);
+        return WorkItemActionResult.Success(refreshed ?? workItem);
+    }
+
+    private WorkItemActionResult NoOpReplay(WorkItem workItem)
+    {
+        logger.LogInformation(
+            "Resume-from-query for work item {WorkItemId} is a no-op: already in state '{StateId}'.",
+            workItem.Id,
+            workItem.StateId
+        );
+        return WorkItemActionResult.IdempotentReplay(workItem);
+    }
+
+    private Dictionary<string, string?> BuildAuditDetails(
+        string? resumeActionId,
+        AddOverseasSiteResumeRequest request,
+        Dictionary<string, FieldChange> siteChanges,
+        List<InterimSiteChange> interimChanges,
+        List<string> unmatchedInterimSites
+    ) =>
+        new()
+        {
+            ["actionId"] = resumeActionId,
+            ["responderFullName"] = request.ResponderContactDetails?.FullName,
+            ["responderEmail"] = request.ResponderContactDetails?.Email,
+            ["responderRole"] = request.ResponderContactDetails?.Role,
+            ["submittedAt"] = (request.SubmittedAt ?? _timeProvider.GetUtcNow().UtcDateTime).ToString("O", CultureInfo.InvariantCulture),
+            ["siteChanges"] = JsonSerializer.Serialize(ToWire(siteChanges), s_json),
+            ["interimSiteChanges"] = JsonSerializer.Serialize(
+                interimChanges.Select(c => new { c.SiteId, c.SiteNumber, changes = ToWire(c.Changes) }),
+                s_json
+            ),
+            ["unmatchedInterimSites"] = string.Join(",", unmatchedInterimSites),
+            ["fileReferences"] = string.Join(
+                ";",
+                (request.BesEvidenceFiles ?? []).Select(f => $"bes-evidence:{f.FileId}:{f.Filename}")
+            ),
+        };
+
+    private async Task AppendAuditAsync(
+        Guid workItemId,
+        string displayName,
+        Dictionary<string, string?> details,
+        string contextId,
+        ClaimsPrincipal user
+    )
+    {
+        var appended = await auditAppender.AppendAsync(
+            workItemId,
+            action: AuditAction,
+            actionDisplayName: displayName,
+            details: details,
+            user,
+            // The write is committed: the audit record of what changed must be written regardless.
+            CancellationToken.None
+        );
+        if (!appended)
+        {
+            logger.LogError(
+                "Query-responded audit entry could not be appended to work item {WorkItemId} ({Context}).",
+                workItemId,
+                contextId
+            );
+        }
     }
 
     /// <summary>A changed field's value before and after the response.</summary>
@@ -497,12 +615,12 @@ internal sealed class AddOverseasSiteResumeService(
         return merged;
     }
 
-    /// <summary>Appends the response's new BES files to <c>site.besEvidence.files</c>, skipping any <c>fileId</c> already there.</summary>
-    private static void AppendBesFiles(BsonDocument site, IReadOnlyList<AddOverseasSiteBesFile>? files)
+    /// <summary>Appends the response's new BES files to <c>site.besEvidence.files</c>, skipping any <c>fileId</c> already there; returns how many were added.</summary>
+    private static int AppendBesFiles(BsonDocument site, IReadOnlyList<AddOverseasSiteBesFile>? files)
     {
         if (files is null || files.Count == 0)
         {
-            return;
+            return 0;
         }
 
         if (!site.TryGetValue(BesEvidenceField, out var evidence) || evidence is not BsonDocument evidenceDocument)
@@ -523,8 +641,10 @@ internal sealed class AddOverseasSiteResumeService(
             .Where(v => v.IsString)
             .Select(v => v.AsString)
             .ToHashSet(StringComparer.Ordinal);
+        var added = 0;
         foreach (var file in files.Where(f => known.Add(f.FileId!)))
         {
+            added++;
             existing.Add(
                 new BsonDocument
                 {
@@ -541,6 +661,8 @@ internal sealed class AddOverseasSiteResumeService(
                 }
             );
         }
+
+        return added;
     }
 
     private static List<InterimSiteChange> ApplyInterimSiteChanges(

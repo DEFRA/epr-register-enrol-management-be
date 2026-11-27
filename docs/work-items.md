@@ -537,7 +537,15 @@ never undoes the query. A query is excluded from the status push, so it is sent
 once, with its note.
 
 **Resume from query (MBE-4).** The item must be `queried` (an item already
-resumed is an idempotent replay; any other state is `409`). The response must
+resumed is a replay: any other state is `409`). A replay whose values and BES
+files are all already on the site is an idempotent no-op (the operator backend's
+retry, which carries a fresh `submittedAt`); one that differs, because the
+operator resubmitted after the backend refused to mark the item Updated when a
+second tab had added an answer or BES file, is applied to `payload.site` the
+same way (changed values, new BES files appended by `fileId`, `scanStatus:
+"Clean"`), re-stamped on `payload.latestQueryResponse` (original `from` values
+of the round kept) and audited as a `query-responded` entry named "Query
+response updated" (no `actionId`), with no transition and no re-assignment. The response must
 change something and is validated: ORS fields are limited to `siteName`,
 `addressLine1`, `addressLine2`, `townOrCity`, `stateOrRegion`,
 `postcode`, `contactName`, `contactEmail`, `contactPhone` and
