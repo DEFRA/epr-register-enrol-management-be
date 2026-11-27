@@ -751,8 +751,29 @@ public class ReAccreditationEndpointTests
 
     // -------------------- GetPriorYear endpoint --------------------
 
+    private static readonly BsonDocument s_priorYearPayload = new()
+    {
+        ["operatorOrganisationId"] = "org-42",
+        ["operatorRegistrationId"] = "reg-99",
+        ["previousAccreditationYear"] = 2024,
+    };
+
+    private static async Task<JsonElement> AssertProblemAsync(
+        HttpResponseMessage response,
+        HttpStatusCode status,
+        string errorCode
+    )
+    {
+        Assert.Equal(status, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(
+            TestContext.Current.CancellationToken
+        );
+        Assert.Equal(errorCode, problem.GetProperty("errorCode").GetString());
+        return problem;
+    }
+
     [Fact]
-    public async Task PriorYear_returns_not_found_when_work_item_missing()
+    public async Task PriorYear_is_404_work_item_not_found_when_work_item_missing()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
         await using var factory = new ReAccreditationFactory(_fixture);
@@ -763,10 +784,10 @@ public class ReAccreditationEndpointTests
             cancellationToken
         );
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        await AssertProblemAsync(response, HttpStatusCode.NotFound, "work-item-not-found");
         await factory
             .ReExClient.DidNotReceiveWithAnyArgs()
-            .GetPriorYearAsync(default, default, default, cancellationToken);
+            .GetPriorYearAsync(default!, default!, default, cancellationToken);
     }
 
     [Fact]
@@ -796,22 +817,26 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
-    [Fact]
-    public async Task PriorYear_returns_not_found_when_reex_returns_null()
+    private async Task<(ReAccreditationFactory Factory, HttpResponseMessage Response)> GetPriorYearFor(
+        BsonDocument payload,
+        PriorYearReadResult? reExAnswer = null
+    )
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
+        var factory = new ReAccreditationFactory(_fixture, captureLogs: true);
         factory
             .ReExClient.GetPriorYearAsync(
-                Arg.Any<string?>(),
-                Arg.Any<string?>(),
-                Arg.Any<int?>(),
+                Arg.Any<string>(),
+                Arg.Any<string>(),
+                Arg.Any<int>(),
                 Arg.Any<CancellationToken>()
             )
-            .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
-
+            .Returns(
+                Task.FromResult(
+                    reExAnswer
+                        ?? PriorYearReadResult.Found(new PriorYearAccreditationDto { Year = 2024 })
+                )
+            );
         var id = Guid.NewGuid();
         await factory.SeedAsync(
             new WorkItem
@@ -820,31 +845,147 @@ public class ReAccreditationEndpointTests
                 TypeId = ReAccreditationType.Id,
                 StateId = "submitted",
                 SubmittedBy = TenantClientId,
-                Payload = new BsonDocument
-                {
-                    ["operatorOrganisationId"] = "org-42",
-                    ["operatorRegistrationId"] = "reg-99",
-                    ["previousAccreditationYear"] = 2024,
-                },
+                Payload = payload,
             },
             cancellationToken
         );
+        using var client = factory.CreateClient();
+        var response = await client.GetAsync($"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
+        return (factory, response);
+    }
 
-        var response = await client.GetAsync(
-            $"/work-items/re-accreditation/{id}/prior-year",
-            cancellationToken
+    private static int CountLogs(ReAccreditationFactory factory, LogLevel level, string fragment) =>
+        factory.Logs!.Records.Count(r =>
+            r.Level == level && r.Message.Contains(fragment, StringComparison.Ordinal)
         );
 
-        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    [Fact]
+    public async Task PriorYear_derives_the_year_from_accreditationYear_and_warns_when_previousAccreditationYear_is_absent()
+    {
+        // Items stored before the operator backend sent previousAccreditationYear
+        // carry only accreditationYear, until they are backfilled.
+        var (factory, response) = await GetPriorYearFor(
+            new BsonDocument
+            {
+                ["operatorOrganisationId"] = "org-42",
+                ["operatorRegistrationId"] = "reg-99",
+                ["accreditationYear"] = 2025,
+            }
+        );
+        await using var _ = factory;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await factory
+            .ReExClient.Received(1)
+            .GetPriorYearAsync("org-42", "reg-99", 2024, Arg.Any<CancellationToken>());
+        Assert.Equal(1, CountLogs(factory, LogLevel.Warning, "has no previousAccreditationYear"));
+    }
+
+    [Fact]
+    public async Task PriorYear_uses_previousAccreditationYear_without_a_warning_when_present()
+    {
+        var (factory, response) = await GetPriorYearFor(
+            new BsonDocument
+            {
+                ["operatorOrganisationId"] = "org-42",
+                ["operatorRegistrationId"] = "reg-99",
+                ["accreditationYear"] = 2025,
+                ["previousAccreditationYear"] = 2023,
+            }
+        );
+        await using var _ = factory;
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        await factory
+            .ReExClient.Received(1)
+            .GetPriorYearAsync("org-42", "reg-99", 2023, Arg.Any<CancellationToken>());
+        Assert.Equal(0, CountLogs(factory, LogLevel.Warning, "has no previousAccreditationYear"));
+    }
+
+    [Fact]
+    public async Task PriorYear_is_404_prior_year_not_found_without_a_reex_call_when_the_item_has_ids_but_no_year()
+    {
+        // Created through management-fe's create form, which collects the ReEx
+        // identifiers (RA-448) but no accreditation year; the operator backend
+        // always sends accreditationYear. No year is guessed and ReEx is not called.
+        var (factory, response) = await GetPriorYearFor(
+            new BsonDocument
+            {
+                ["operatorOrganisationId"] = "org-42",
+                ["operatorRegistrationId"] = "reg-99",
+            }
+        );
+        await using var _ = factory;
+
+        await AssertProblemAsync(response, HttpStatusCode.NotFound, "prior-year-not-found");
+        Assert.Equal(1, CountLogs(factory, LogLevel.Information, "has no prior year to look up"));
+        Assert.DoesNotContain(factory.Logs!.Records, r => r.Level >= LogLevel.Error);
+        await factory
+            .ReExClient.DidNotReceive()
+            .GetPriorYearAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData(null, "reg-99")]
+    [InlineData("org-42", null)]
+    [InlineData(" ", "reg-99")]
+    public async Task PriorYear_is_404_prior_year_not_found_without_a_reex_call_when_a_reex_identifier_is_missing(
+        string? organisationId,
+        string? registrationId
+    )
+    {
+        var payload = new BsonDocument { ["accreditationYear"] = 2025 };
+        if (organisationId is not null)
+            payload["operatorOrganisationId"] = organisationId;
+        if (registrationId is not null)
+            payload["operatorRegistrationId"] = registrationId;
+
+        var (factory, response) = await GetPriorYearFor(payload);
+        await using var _ = factory;
+
+        await AssertProblemAsync(response, HttpStatusCode.NotFound, "prior-year-not-found");
+        await factory
+            .ReExClient.DidNotReceive()
+            .GetPriorYearAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task PriorYear_is_502_reex_unavailable_logged_once_at_information_when_reex_is_unavailable()
+    {
+        // RA-752: a ReEx outage is a 502, never the 404 that means "no prior
+        // year". The client has already logged the cause at Error, so the
+        // endpoint does not log it at Error again.
+        var (factory, response) = await GetPriorYearFor(
+            s_priorYearPayload,
+            PriorYearReadResult.Unavailable()
+        );
+        await using var _ = factory;
+
+        var problem = await AssertProblemAsync(response, HttpStatusCode.BadGateway, "reex-unavailable");
+        Assert.Equal(
+            ReAccreditationEndpoints.PriorYearUnavailableProblemTitle,
+            problem.GetProperty("title").GetString()
+        );
+        Assert.Equal(1, CountLogs(factory, LogLevel.Information, "ReEx could not answer"));
+        Assert.DoesNotContain(factory.Logs!.Records, r => r.Level >= LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task PriorYear_is_404_prior_year_not_found_when_reex_has_no_record()
+    {
+        var (factory, response) = await GetPriorYearFor(
+            s_priorYearPayload,
+            PriorYearReadResult.NotFound()
+        );
+        await using var _ = factory;
+
+        await AssertProblemAsync(response, HttpStatusCode.NotFound, "prior-year-not-found");
     }
 
     [Fact]
     public async Task PriorYear_returns_ok_with_prior_year_data_from_reex()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
         var stubData = new PriorYearAccreditationDto
         {
             Year = 2024,
@@ -859,32 +1000,11 @@ public class ReAccreditationEndpointTests
             ],
             BusinessPlan = new PriorYearBusinessPlanDto { NewInfrastructurePercent = 20 },
         };
-        factory
-            .ReExClient.GetPriorYearAsync("org-42", "reg-99", 2024, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<PriorYearAccreditationDto?>(stubData));
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            new WorkItem
-            {
-                Id = id,
-                TypeId = ReAccreditationType.Id,
-                StateId = "submitted",
-                SubmittedBy = TenantClientId,
-                Payload = new BsonDocument
-                {
-                    ["operatorOrganisationId"] = "org-42",
-                    ["operatorRegistrationId"] = "reg-99",
-                    ["previousAccreditationYear"] = 2024,
-                },
-            },
-            cancellationToken
+        var (factory, response) = await GetPriorYearFor(
+            s_priorYearPayload,
+            PriorYearReadResult.Found(stubData)
         );
-
-        var response = await client.GetAsync(
-            $"/work-items/re-accreditation/{id}/prior-year",
-            cancellationToken
-        );
+        await using var _ = factory;
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<PriorYearAccreditationDto>(
@@ -896,50 +1016,9 @@ public class ReAccreditationEndpointTests
         Assert.Single(body.Authorisers);
         Assert.Equal("Alice Smith", body.Authorisers[0].FullName);
         Assert.Equal("alice@example.com", body.Authorisers[0].Email);
-    }
-
-    [Fact]
-    public async Task PriorYear_passes_correct_identifiers_to_reex_client()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        string? capturedOrgId = null;
-        string? capturedRegId = null;
-        int? capturedYear = null;
-        factory
-            .ReExClient.GetPriorYearAsync(
-                Arg.Do<string?>(v => capturedOrgId = v),
-                Arg.Do<string?>(v => capturedRegId = v),
-                Arg.Do<int?>(v => capturedYear = v),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            new WorkItem
-            {
-                Id = id,
-                TypeId = ReAccreditationType.Id,
-                StateId = "submitted",
-                SubmittedBy = TenantClientId,
-                Payload = new BsonDocument
-                {
-                    ["operatorOrganisationId"] = "org-77",
-                    ["operatorRegistrationId"] = "reg-88",
-                    ["previousAccreditationYear"] = 2023,
-                },
-            },
-            cancellationToken
-        );
-
-        await client.GetAsync($"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
-
-        Assert.Equal("org-77", capturedOrgId);
-        Assert.Equal("reg-88", capturedRegId);
-        Assert.Equal(2023, capturedYear);
+        await factory
+            .ReExClient.Received(1)
+            .GetPriorYearAsync("org-42", "reg-99", 2024, Arg.Any<CancellationToken>());
     }
 
     // -------------------- Malformed-payload / branch-coverage gaps --------------------
@@ -1006,78 +1085,6 @@ public class ReAccreditationEndpointTests
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(cancellationToken);
         Assert.Equal("Invalid re-accreditation payload", problem!.Title);
-    }
-
-    [Fact]
-    public async Task PriorYear_derives_the_prior_year_from_AccreditationYear_when_PreviousAccreditationYear_is_absent()
-    {
-        // Older work items only carry AccreditationYear (Year N); the
-        // prior-year lookup must derive Year - 1 rather than passing null.
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        int? capturedYear = null;
-        factory
-            .ReExClient.GetPriorYearAsync(
-                Arg.Any<string?>(),
-                Arg.Any<string?>(),
-                Arg.Do<int?>(v => capturedYear = v),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            new WorkItem
-            {
-                Id = id,
-                TypeId = ReAccreditationType.Id,
-                StateId = "submitted",
-                SubmittedBy = TenantClientId,
-                Payload = new BsonDocument { ["accreditationYear"] = 2026 },
-            },
-            cancellationToken
-        );
-
-        await client.GetAsync($"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
-
-        Assert.Equal(2025, capturedYear);
-    }
-
-    [Fact]
-    public async Task PriorYear_passes_a_null_year_when_neither_year_field_is_present()
-    {
-        var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new ReAccreditationFactory(_fixture);
-        using var client = factory.CreateClient();
-
-        int? capturedYear = -1; // sentinel distinct from null so we can tell it was overwritten
-        factory
-            .ReExClient.GetPriorYearAsync(
-                Arg.Any<string?>(),
-                Arg.Any<string?>(),
-                Arg.Do<int?>(v => capturedYear = v),
-                Arg.Any<CancellationToken>()
-            )
-            .Returns(Task.FromResult<PriorYearAccreditationDto?>(null));
-
-        var id = Guid.NewGuid();
-        await factory.SeedAsync(
-            new WorkItem
-            {
-                Id = id,
-                TypeId = ReAccreditationType.Id,
-                StateId = "submitted",
-                SubmittedBy = TenantClientId,
-                Payload = new BsonDocument(),
-            },
-            cancellationToken
-        );
-
-        await client.GetAsync($"/work-items/re-accreditation/{id}/prior-year", cancellationToken);
-
-        Assert.Null(capturedYear);
     }
 
     [Theory]

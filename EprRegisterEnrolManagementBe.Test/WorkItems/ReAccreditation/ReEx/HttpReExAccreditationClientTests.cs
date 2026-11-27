@@ -1,5 +1,5 @@
 using System.Net;
-using System.Text;
+using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
@@ -27,14 +27,33 @@ public class HttpReExAccreditationClientTests
     private static HttpReExAccreditationClient CreateClient(
         string organisationJson,
         out IStructuredLogger<HttpReExAccreditationClient> logger
+    ) => CreateClient(FakeReExHttpHandler.Json(organisationJson), out logger);
+
+    private static HttpReExAccreditationClient CreateClient(
+        HttpMessageHandler handler,
+        out IStructuredLogger<HttpReExAccreditationClient> logger,
+        TimeSpan? timeout = null
     )
     {
-        var handler = new StubHttpMessageHandler(organisationJson);
-        var httpClient = new HttpClient(handler);
         var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
         logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
-        return new HttpReExAccreditationClient(httpClient, config, logger);
+        return new HttpReExAccreditationClient(
+            new HttpClient(handler),
+            config,
+            logger,
+            timeout ?? HttpReExAccreditationClient.RequestTimeout
+        );
     }
+
+    private static void AssertNoErrorLogged(IStructuredLogger<HttpReExAccreditationClient> logger) =>
+        logger
+            .DidNotReceive()
+            .Log(
+                LogLevel.Error,
+                Arg.Any<string>(),
+                Arg.Any<IReadOnlyDictionary<string, object?>>(),
+                Arg.Any<Exception?>()
+            );
 
     private static string OrganisationJson(string tonnageBand) =>
         $$"""
@@ -73,8 +92,8 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.NotNull(result);
-        Assert.Equal(expected, result!.TonnageBand);
+        Assert.Equal(ReExReadOutcome.Found, result.Outcome);
+        Assert.Equal(expected, result.Accreditation!.TonnageBand);
     }
 
     [Fact]
@@ -106,10 +125,10 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.NotNull(result);
-        Assert.Null(result!.TonnageBand);
-        Assert.Empty(result.Authorisers);
-        Assert.NotNull(result.BusinessPlan);
+        Assert.Equal(ReExReadOutcome.Found, result.Outcome);
+        Assert.Null(result.Accreditation!.TonnageBand);
+        Assert.Empty(result.Accreditation!.Authorisers);
+        Assert.NotNull(result.Accreditation!.BusinessPlan);
     }
 
     [Fact]
@@ -124,8 +143,8 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.NotNull(result);
-        Assert.Equal("some_future_band", result!.TonnageBand);
+        Assert.Equal(ReExReadOutcome.Found, result.Outcome);
+        Assert.Equal("some_future_band", result.Accreditation!.TonnageBand);
 
         logger
             .Received(1)
@@ -139,43 +158,6 @@ public class HttpReExAccreditationClientTests
             );
     }
 
-    private sealed class StubHttpMessageHandler(string responseJson) : HttpMessageHandler
-    {
-        // RA-526: lets a test assert ReEx was never called at all (e.g. a missing-identifier
-        // short-circuit), which the other tests here never needed to distinguish.
-        public int RequestCount { get; private set; }
-
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken
-        )
-        {
-            RequestCount++;
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(responseJson, Encoding.UTF8, "application/json"),
-            };
-            return Task.FromResult(response);
-        }
-    }
-
-    private sealed class StatusCodeHttpMessageHandler(HttpStatusCode statusCode)
-        : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken
-        ) => Task.FromResult(new HttpResponseMessage(statusCode));
-    }
-
-    private sealed class ThrowingHttpMessageHandler(Exception exception) : HttpMessageHandler
-    {
-        protected override Task<HttpResponseMessage> SendAsync(
-            HttpRequestMessage request,
-            CancellationToken cancellationToken
-        ) => throw exception;
-    }
-
     [Theory]
     [InlineData(null, "reg-1")]
     [InlineData("", "reg-1")]
@@ -183,46 +165,29 @@ public class HttpReExAccreditationClientTests
     [InlineData("org-1", null)]
     [InlineData("org-1", "")]
     [InlineData("org-1", "   ")]
-    public async Task GetPriorYearAsync_returns_null_for_missing_identifiers(
+    public async Task GetPriorYearAsync_throws_for_a_missing_identifier_without_calling_ReEx(
         string? organisationId,
         string? registrationId
     )
     {
-        var client = CreateClient(OrganisationJson("up_to_500"));
+        var handler = FakeReExHttpHandler.Json(OrganisationJson("up_to_500"));
+        var client = CreateClient(handler, out _);
 
-        var result = await client.GetPriorYearAsync(
-            organisationId,
-            registrationId,
-            2025,
-            TestContext.Current.CancellationToken
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            client.GetPriorYearAsync(
+                organisationId!,
+                registrationId!,
+                2025,
+                TestContext.Current.CancellationToken
+            )
         );
-
-        Assert.Null(result);
+        Assert.Equal(0, handler.RequestCount);
     }
 
     [Fact]
-    public async Task GetPriorYearAsync_returns_null_when_year_is_null()
+    public async Task GetPriorYearAsync_is_not_found_with_a_warning_when_reex_has_no_record_of_the_organisation()
     {
-        var client = CreateClient(OrganisationJson("up_to_500"));
-
-        var result = await client.GetPriorYearAsync(
-            "org-1",
-            "reg-1",
-            null,
-            TestContext.Current.CancellationToken
-        );
-
-        Assert.Null(result);
-    }
-
-    [Fact]
-    public async Task GetPriorYearAsync_returns_null_and_logs_a_warning_on_a_non_success_status_code()
-    {
-        var handler = new StatusCodeHttpMessageHandler(HttpStatusCode.NotFound);
-        var httpClient = new HttpClient(handler);
-        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
-        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
-        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+        var client = CreateClient(FakeReExHttpHandler.OrganisationNotFound(), out var logger);
 
         var result = await client.GetPriorYearAsync(
             "org-1",
@@ -231,12 +196,69 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(PriorYearReadResult.NotFound(), result);
         logger
             .Received(1)
             .Log(
                 LogLevel.Warning,
-                Arg.Any<string>(),
+                "ReEx has no record of the organisation",
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["reex.organisation_id"]! == "org-1"
+                    && (int)p["reex.status_code"]! == (int)HttpStatusCode.NotFound
+                ),
+                null
+            );
+        AssertNoErrorLogged(logger);
+    }
+
+    [Theory]
+    [InlineData("""{"statusCode":404,"error":"Not Found","message":"Organisation not found"}""")]
+    [InlineData("""{"statusCode":404,"error":"Not Found","message":"Organisation with id 6650f0c1a2b3c4d5e6f70809 not found"}""")]
+    public async Task GetPriorYearAsync_recognises_both_of_reex_organisation_not_found_messages(string body)
+    {
+        var client = CreateClient(FakeReExHttpHandler.Json(body, HttpStatusCode.NotFound), out _);
+
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(ReExReadOutcome.NotFound, result.Outcome);
+    }
+
+    /// <summary>
+    /// A 404 that is not ReEx's own "organisation not found" (Hapi's route
+    /// miss when ReExApi:BaseUrl has the wrong path, a proxy or gateway page,
+    /// no body) is ReEx being unreachable, not "no prior year".
+    /// </summary>
+    [Theory]
+    [InlineData("""{"statusCode":404,"error":"Not Found","message":"Not Found"}""")]
+    [InlineData("""{"message":"Not found"}""")]
+    [InlineData("""{"message":"Registration with id reg-1 not found"}""")]
+    [InlineData("<html><body>404 Not Found</body></html>")]
+    [InlineData("")]
+    [InlineData("[]")]
+    public async Task GetPriorYearAsync_is_unavailable_with_an_error_on_a_404_that_is_not_reex_organisation_not_found(
+        string body
+    )
+    {
+        var client = CreateClient(FakeReExHttpHandler.Json(body, HttpStatusCode.NotFound), out var logger);
+
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(PriorYearReadResult.Unavailable(), result);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                Arg.Is<string>(m => m.StartsWith("ReEx answered 404 without", StringComparison.Ordinal)),
                 Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
                     (string)p["reex.organisation_id"]! == "org-1"
                     && (int)p["reex.status_code"]! == (int)HttpStatusCode.NotFound
@@ -249,8 +271,8 @@ public class HttpReExAccreditationClientTests
     /// RA-475. A 401/403 from ReEx is this service's own misconfiguration, not
     /// "no prior-year record for this organisation", and it fails EVERY lookup until
     /// it is fixed. It used to log identically to a 404, which is how a total outage
-    /// of the prior-year panel on dev read as ordinary noise. The degraded return is
-    /// deliberately unchanged — only the severity and the message move.
+    /// of the prior-year panel on dev read as ordinary noise. RA-752: it is
+    /// Unavailable, never NotFound.
     /// </summary>
     [Theory]
     [InlineData(HttpStatusCode.Unauthorized)]
@@ -259,11 +281,7 @@ public class HttpReExAccreditationClientTests
         HttpStatusCode statusCode
     )
     {
-        var handler = new StatusCodeHttpMessageHandler(statusCode);
-        var httpClient = new HttpClient(handler);
-        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
-        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
-        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+        var client = CreateClient(FakeReExHttpHandler.Status(statusCode), out var logger);
 
         var result = await client.GetPriorYearAsync(
             "org-1",
@@ -272,7 +290,7 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(PriorYearReadResult.Unavailable(), result);
         logger
             .Received(1)
             .Log(
@@ -294,19 +312,11 @@ public class HttpReExAccreditationClientTests
             );
     }
 
-    [Theory]
-    [InlineData(typeof(HttpRequestException))]
-    [InlineData(typeof(TaskCanceledException))]
-    public async Task GetPriorYearAsync_returns_null_and_logs_an_error_when_the_request_throws(
-        Type exceptionType
-    )
+    [Fact]
+    public async Task GetPriorYearAsync_is_unavailable_with_an_error_when_the_request_fails()
     {
-        var exception = (Exception)Activator.CreateInstance(exceptionType, "boom")!;
-        var handler = new ThrowingHttpMessageHandler(exception);
-        var httpClient = new HttpClient(handler);
-        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
-        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
-        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+        var exception = new HttpRequestException("boom");
+        var client = CreateClient(FakeReExHttpHandler.Throwing(exception), out var logger);
 
         var result = await client.GetPriorYearAsync(
             "org-1",
@@ -315,12 +325,12 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(PriorYearReadResult.Unavailable(), result);
         logger
             .Received(1)
             .Log(
                 LogLevel.Error,
-                Arg.Any<string>(),
+                "ReEx organisation request failed",
                 Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
                     (string)p["reex.organisation_id"]! == "org-1"
                 ),
@@ -329,9 +339,11 @@ public class HttpReExAccreditationClientTests
     }
 
     [Fact]
-    public async Task GetPriorYearAsync_returns_null_when_the_response_body_deserialises_to_null()
+    public async Task GetPriorYearAsync_is_unavailable_with_an_error_when_reex_outlasts_the_client_timeout()
     {
-        var client = CreateClient("null");
+        // The real HttpClient timeout, as in production, shortened so the test
+        // does not wait RequestTimeout.
+        var client = CreateClient(FakeReExHttpHandler.Hanging(), out var logger, TimeSpan.FromMilliseconds(50));
 
         var result = await client.GetPriorYearAsync(
             "org-1",
@@ -340,11 +352,112 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(PriorYearReadResult.Unavailable(), result);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                "ReEx organisation request failed",
+                Arg.Any<IReadOnlyDictionary<string, object?>>(),
+                Arg.Any<TaskCanceledException>()
+            );
     }
 
     [Fact]
-    public async Task GetPriorYearAsync_returns_null_when_no_registration_matches()
+    public void ReEx_times_out_before_management_fe_gives_up_on_the_page()
+    {
+        // management-fe's BACKEND_API_TIMEOUT_MS is 5000: a hung ReEx must be
+        // timed out, logged and answered 502 here before the caller has gone.
+        var httpClient = new HttpClient();
+
+        _ = new HttpReExAccreditationClient(
+            httpClient,
+            Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" }),
+            Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>()
+        );
+
+        Assert.Equal(HttpReExAccreditationClient.RequestTimeout, httpClient.Timeout);
+        Assert.True(HttpReExAccreditationClient.RequestTimeout < TimeSpan.FromMilliseconds(5000));
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.BadGateway)]
+    [InlineData(HttpStatusCode.ServiceUnavailable)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    [InlineData(HttpStatusCode.BadRequest)]
+    public async Task GetPriorYearAsync_is_unavailable_with_an_error_on_any_other_failure_status(
+        HttpStatusCode statusCode
+    )
+    {
+        var client = CreateClient(FakeReExHttpHandler.Status(statusCode), out var logger);
+
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(PriorYearReadResult.Unavailable(), result);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                "ReEx organisation lookup failed",
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["reex.organisation_id"]! == "org-1"
+                    && (int)p["reex.status_code"]! == (int)statusCode
+                ),
+                null
+            );
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_lets_the_callers_own_cancellation_through()
+    {
+        // A cancelled request is the caller giving up, not ReEx failing.
+        var client = CreateClient(FakeReExHttpHandler.Throwing(new TaskCanceledException("cancelled")), out var logger);
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            client.GetPriorYearAsync("org-1", "reg-1", 2025, cts.Token)
+        );
+        AssertNoErrorLogged(logger);
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("not json")]
+    public async Task GetPriorYearAsync_is_unavailable_with_an_error_when_the_body_is_not_an_organisation(
+        string body
+    )
+    {
+        var client = CreateClient(body, out var logger);
+
+        var result = await client.GetPriorYearAsync(
+            "org-1",
+            "reg-1",
+            2025,
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(PriorYearReadResult.Unavailable(), result);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                "ReEx returned a body that is not an organisation",
+                Arg.Is<IReadOnlyDictionary<string, object?>>(p =>
+                    (string)p["reex.organisation_id"]! == "org-1"
+                ),
+                Arg.Any<Exception?>()
+            );
+    }
+
+    [Fact]
+    public async Task GetPriorYearAsync_is_not_found_when_no_registration_matches()
     {
         var client = CreateClient(OrganisationJson("up_to_500").Replace("reg-1", "reg-other"));
 
@@ -355,11 +468,11 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(PriorYearReadResult.NotFound(), result);
     }
 
     [Fact]
-    public async Task GetPriorYearAsync_returns_null_when_no_accreditation_matches_the_registration()
+    public async Task GetPriorYearAsync_is_not_found_when_no_accreditation_matches_the_registration()
     {
         const string json = """
             {
@@ -380,11 +493,11 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(PriorYearReadResult.NotFound(), result);
     }
 
     [Fact]
-    public async Task GetPriorYearAsync_returns_null_when_validFrom_does_not_parse()
+    public async Task GetPriorYearAsync_is_not_found_when_validFrom_does_not_parse()
     {
         const string json = """
             {
@@ -405,11 +518,11 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(PriorYearReadResult.NotFound(), result);
     }
 
     [Fact]
-    public async Task GetPriorYearAsync_returns_null_when_validFrom_year_does_not_match_the_requested_year()
+    public async Task GetPriorYearAsync_is_not_found_when_validFrom_year_does_not_match_the_requested_year()
     {
         var client = CreateClient(OrganisationJson("up_to_500"));
 
@@ -421,7 +534,7 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(PriorYearReadResult.NotFound(), result);
     }
 
     [Fact]
@@ -467,19 +580,19 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.NotNull(result);
-        Assert.Equal(15, result!.BusinessPlan.BusinessCollectionsPercent);
+        Assert.Equal(ReExReadOutcome.Found, result.Outcome);
+        Assert.Equal(15, result.Accreditation!.BusinessPlan.BusinessCollectionsPercent);
         // RA-456: "Activities or investment not covered by the other
         // categories" is the 7th category, mapped to OtherPercent the same
         // way the other six usage descriptions map to their own setters.
-        Assert.Equal(8, result.BusinessPlan.OtherPercent);
-        Assert.Equal(10, result.BusinessPlan.NewInfrastructurePercent);
-        Assert.Equal(12, result.BusinessPlan.PriceSupportPercent);
-        Assert.Equal(6, result.BusinessPlan.CommunicationsPercent);
-        Assert.Equal(9, result.BusinessPlan.NewMarketsPercent);
-        Assert.Equal(11, result.BusinessPlan.NewUsesPercent);
-        Assert.Equal(string.Empty, result.Authorisers[0].FullName);
-        Assert.Equal(string.Empty, result.Authorisers[0].Email);
+        Assert.Equal(8, result.Accreditation!.BusinessPlan.OtherPercent);
+        Assert.Equal(10, result.Accreditation!.BusinessPlan.NewInfrastructurePercent);
+        Assert.Equal(12, result.Accreditation!.BusinessPlan.PriceSupportPercent);
+        Assert.Equal(6, result.Accreditation!.BusinessPlan.CommunicationsPercent);
+        Assert.Equal(9, result.Accreditation!.BusinessPlan.NewMarketsPercent);
+        Assert.Equal(11, result.Accreditation!.BusinessPlan.NewUsesPercent);
+        Assert.Equal(string.Empty, result.Accreditation!.Authorisers[0].FullName);
+        Assert.Equal(string.Empty, result.Accreditation!.Authorisers[0].Email);
 
         logger
             .Received(1)
@@ -532,7 +645,7 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Equal(Enum.Parse<Nation>(expected), result);
+        Assert.Equal(NationReadResult.Found(Enum.Parse<Nation>(expected)), result);
     }
 
     [Fact]
@@ -546,7 +659,7 @@ public class HttpReExAccreditationClientTests
             TestContext.Current.CancellationToken
         );
 
-        Assert.Equal(Nation.England, result);
+        Assert.Equal(NationReadResult.Found(Nation.England), result);
         logger
             .Received(1)
             .Log(
@@ -561,58 +674,64 @@ public class HttpReExAccreditationClientTests
     }
 
     [Fact]
-    public async Task GetNationAsync_registration_not_found_returns_null()
+    public async Task GetNationAsync_is_not_found_when_the_registration_is_not_in_the_organisation()
     {
         var client = CreateClient(OrganisationJsonWithRegulator("ea"));
 
         var result = await client.GetNationAsync(
             "org-1",
-            "does-not-exist",
+            "reg-other",
             TestContext.Current.CancellationToken
         );
 
-        Assert.Null(result);
+        Assert.Equal(NationReadResult.NotFound(), result);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_is_not_found_when_reex_has_no_record_of_the_organisation()
+    {
+        var client = CreateClient(FakeReExHttpHandler.OrganisationNotFound(), out _);
+
+        var result = await client.GetNationAsync("org-1", "reg-1", TestContext.Current.CancellationToken);
+
+        Assert.Equal(NationReadResult.NotFound(), result);
+    }
+
+    [Fact]
+    public async Task GetNationAsync_is_unavailable_with_an_error_when_reex_fails()
+    {
+        // The RA-526 nation migration skips the item and retries it next run.
+        var client = CreateClient(FakeReExHttpHandler.Status(HttpStatusCode.InternalServerError), out var logger);
+
+        var result = await client.GetNationAsync("org-1", "reg-1", TestContext.Current.CancellationToken);
+
+        Assert.Equal(NationReadResult.Unavailable(), result);
+        logger
+            .Received(1)
+            .Log(
+                LogLevel.Error,
+                "ReEx organisation lookup failed",
+                Arg.Any<IReadOnlyDictionary<string, object?>>(),
+                null
+            );
     }
 
     [Theory]
     [InlineData(null, "reg-1")]
+    [InlineData(" ", "reg-1")]
     [InlineData("org-1", null)]
-    public async Task GetNationAsync_missing_identifier_returns_null_without_calling_ReEx(
+    [InlineData("org-1", "")]
+    public async Task GetNationAsync_throws_for_a_missing_identifier_without_calling_ReEx(
         string? organisationId,
         string? registrationId
     )
     {
-        var handler = new StubHttpMessageHandler(OrganisationJsonWithRegulator("ea"));
-        var httpClient = new HttpClient(handler);
-        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
-        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
-        var client = new HttpReExAccreditationClient(httpClient, config, logger);
+        var handler = FakeReExHttpHandler.Json(OrganisationJsonWithRegulator("ea"));
+        var client = CreateClient(handler, out _);
 
-        var result = await client.GetNationAsync(
-            organisationId,
-            registrationId,
-            TestContext.Current.CancellationToken
+        await Assert.ThrowsAnyAsync<ArgumentException>(() =>
+            client.GetNationAsync(organisationId!, registrationId!, TestContext.Current.CancellationToken)
         );
-
-        Assert.Null(result);
         Assert.Equal(0, handler.RequestCount);
-    }
-
-    [Fact]
-    public async Task GetNationAsync_returns_null_on_a_non_success_status_code()
-    {
-        var handler = new StatusCodeHttpMessageHandler(HttpStatusCode.NotFound);
-        var httpClient = new HttpClient(handler);
-        var config = Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" });
-        var logger = Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>();
-        var client = new HttpReExAccreditationClient(httpClient, config, logger);
-
-        var result = await client.GetNationAsync(
-            "org-1",
-            "reg-1",
-            TestContext.Current.CancellationToken
-        );
-
-        Assert.Null(result);
     }
 }

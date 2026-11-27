@@ -116,10 +116,12 @@ internal sealed class ReAccreditationNationCorrectionMigration(
         logger.LogInformation(
             "RA-526 nation correction complete. Corrected: {Corrected}. Already correct: "
                 + "{AlreadyCorrect}. Skipped (no identifiers): {SkippedNoIdentifiers}. Skipped "
-                + "(ReEx lookup failed): {SkippedLookupFailed}.",
+                + "(not in ReEx): {SkippedNotInReEx}. Skipped (ReEx lookup failed): "
+                + "{SkippedLookupFailed}.",
             tally.Corrected,
             tally.AlreadyCorrect,
             tally.SkippedNoIdentifiers,
+            tally.SkippedNotInReEx,
             tally.SkippedLookupFailed);
     }
 
@@ -129,6 +131,7 @@ internal sealed class ReAccreditationNationCorrectionMigration(
         public int Corrected;
         public int AlreadyCorrect;
         public int SkippedNoIdentifiers;
+        public int SkippedNotInReEx;
         public int SkippedLookupFailed;
     }
 
@@ -159,11 +162,19 @@ internal sealed class ReAccreditationNationCorrectionMigration(
                         + "operatorOrganisationId/operatorRegistrationId, cannot look up ReEx.",
                     full.Id);
                 return;
+            case CorrectionOutcome.NotInReEx:
+                tally.SkippedNotInReEx++;
+                logger.LogWarning(
+                    "RA-526 correction skipped work item {WorkItemId}: ReEx has no record of "
+                        + "its organisation or registration.",
+                    full.Id);
+                return;
             case CorrectionOutcome.LookupFailed:
+                // The client has already logged the ReEx failure at Error.
                 tally.SkippedLookupFailed++;
                 logger.LogWarning(
-                    "RA-526 correction skipped work item {WorkItemId}: ReEx lookup failed "
-                        + "or returned no result; will retry on the next run.",
+                    "RA-526 correction skipped work item {WorkItemId}: ReEx could not answer; "
+                        + "will retry on the next run.",
                     full.Id);
                 return;
             case CorrectionOutcome.AlreadyCorrect:
@@ -231,6 +242,7 @@ internal sealed class ReAccreditationNationCorrectionMigration(
     private enum CorrectionOutcome
     {
         NoIdentifiers,
+        NotInReEx,
         LookupFailed,
         AlreadyCorrect,
         Corrected,
@@ -249,22 +261,27 @@ internal sealed class ReAccreditationNationCorrectionMigration(
     {
         var organisationId = GetString(item.Payload, "operatorOrganisationId");
         var registrationId = GetString(item.Payload, "operatorRegistrationId");
-        if (organisationId is null || registrationId is null)
+        if (string.IsNullOrWhiteSpace(organisationId) || string.IsNullOrWhiteSpace(registrationId))
         {
             return new CorrectionPlan(CorrectionOutcome.NoIdentifiers);
         }
 
-        var correctNation = await reExClient.GetNationAsync(
+        var lookup = await reExClient.GetNationAsync(
             organisationId,
             registrationId,
             cancellationToken);
-        if (correctNation is null)
+        if (lookup.Outcome == ReExReadOutcome.NotFound)
+        {
+            return new CorrectionPlan(CorrectionOutcome.NotInReEx);
+        }
+
+        if (lookup.Nation is not Nation correctNation)
         {
             return new CorrectionPlan(CorrectionOutcome.LookupFailed);
         }
 
         var currentNation = GetString(item.Payload, "nation") ?? Nation.England.ToString();
-        var correctNationString = correctNation.Value.ToString();
+        var correctNationString = correctNation.ToString();
         if (string.Equals(currentNation, correctNationString, StringComparison.OrdinalIgnoreCase))
         {
             return new CorrectionPlan(CorrectionOutcome.AlreadyCorrect);

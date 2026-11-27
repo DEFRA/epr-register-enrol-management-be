@@ -1,6 +1,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Security.Claims;
 using System.Text.Json;
+using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Utils.Logging;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.Mvc;
@@ -52,13 +53,19 @@ public static class WorkItemEndpoints
             .WithMetadata(new RequestSizeLimitAttribute(MaxSubmitBodyBytes))
             .RequireAuthorization();
 
-        group.MapGet("/{id:guid}", GetById).WithName("GetWorkItemById").RequireAuthorization();
+        // RA-752: read-only callers (the Admin UI) may read one work item, for
+        // its Work item page (Document tab and Regulator view).
+        group
+            .MapGet("/{id:guid}", GetById)
+            .WithName("GetWorkItemById")
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed);
 
         // RA-751: read-only callers (the Admin UI) may list work items.
         group
             .MapGet(string.Empty, GetAll)
             .WithName("ListWorkItems")
-            .RequireAuthorization(EprRegisterEnrolManagementBe.Auth.CallerAccessPolicies.ReadOnlyCallerAllowed);
+            .RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed);
 
         group
             .MapPost("/{id:guid}/actions/{actionId}", ApplyAction)
@@ -458,7 +465,7 @@ public static class WorkItemEndpoints
             statusCode: StatusCodes.Status400BadRequest
         );
 
-    internal static async Task<Results<Ok<WorkItemResponse>, NotFound>> GetById(
+    internal static async Task<Results<Ok<WorkItemResponse>, ProblemHttpResult>> GetById(
         [FromRoute] Guid id,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
@@ -470,7 +477,7 @@ public static class WorkItemEndpoints
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
         if (workItem is null)
         {
-            return TypedResults.NotFound();
+            return WorkItemProblems.WorkItemNotFound(id);
         }
         return TypedResults.Ok(ToResponse(engine.Project(workItem), timeProvider));
     }
@@ -491,7 +498,7 @@ public static class WorkItemEndpoints
         {
             // RA-751: a client's query mistake, answered with 400. Warning,
             // not Error: it is the caller's bug to fix, not an incident here.
-            var caller = EprRegisterEnrolManagementBe.Auth.CallerIdentity.From(httpContext.User);
+            var caller = CallerIdentity.From(httpContext.User);
             log.Log(
                 LogLevel.Warning,
                 "Work item list query rejected",
@@ -527,7 +534,7 @@ public static class WorkItemEndpoints
 
         // RA-751 / ADR-0010: a read-only caller (the Admin UI) gets only the
         // fields its search shows, never the full payload or submitter.
-        if (EprRegisterEnrolManagementBe.Auth.CallerAccessPolicies.IsReadOnlyCaller(httpContext.User))
+        if (CallerAccessPolicies.IsReadOnlyCaller(httpContext.User))
         {
             return TypedResults.Ok(
                 new ReadOnlyWorkItemListResponse(

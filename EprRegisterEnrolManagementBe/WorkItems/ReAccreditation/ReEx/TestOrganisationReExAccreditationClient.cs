@@ -1,6 +1,4 @@
 using EprRegisterEnrolManagementBe.Config;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
-using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
 
 namespace EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 
@@ -18,21 +16,21 @@ internal sealed class TestOrganisationReExAccreditationClient(
     IReExAccreditationClient testOrganisations
 ) : IReExAccreditationClient
 {
-    public Task<PriorYearAccreditationDto?> GetPriorYearAsync(
-        string? organisationId,
-        string? registrationId,
-        int? year,
+    public Task<PriorYearReadResult> GetPriorYearAsync(
+        string organisationId,
+        string registrationId,
+        int year,
         CancellationToken cancellationToken = default
     ) =>
         Route(organisationId)
             .GetPriorYearAsync(organisationId, registrationId, year, cancellationToken);
 
-    public Task<Nation?> GetNationAsync(
-        string? organisationId,
-        string? registrationId,
+    public Task<NationReadResult> GetNationAsync(
+        string organisationId,
+        string registrationId,
         CancellationToken cancellationToken = default
     ) => Route(organisationId).GetNationAsync(organisationId, registrationId, cancellationToken);
 
-    private IReExAccreditationClient Route(string? organisationId) =>
+    private IReExAccreditationClient Route(string organisationId) =>
         TestOrganisations.IsTestOrganisation(organisationId) ? testOrganisations : real;
 }
