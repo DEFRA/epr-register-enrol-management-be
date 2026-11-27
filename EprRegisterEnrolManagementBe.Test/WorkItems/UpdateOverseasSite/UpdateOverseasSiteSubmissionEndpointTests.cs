@@ -288,8 +288,9 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
+        // As the operator backend sent it before RA-767: no size, so the record keeps none.
         var add = AddOverseasSiteSubmissions.Body("request-legacy", siteCount: 1);
-        Payload(add)["submissionSize"] = 3;
+        Payload(add)["submissionSize"] = null;
         var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
         await Submissions(factory)
             .UpdateOneAsync(
@@ -300,7 +301,7 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
 
         var response = await client.PostAsJsonAsync(
             "/work-items",
-            LaterGroup("request-legacy", reference, submissionSize: null, organisationId: organisationId),
+            LaterGroup("request-legacy", reference, submissionSize: 3, organisationId: organisationId),
             Ct
         );
 
@@ -336,6 +337,23 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
         Assert.Equal(4, stored["submissionSize"].AsInt32);
     }
 
+    // A request whose first group went before the caller sent sizes (the operator backend before RA-767) keeps no
+    // stored size, so a later group's size is taken as sent rather than refused for good.
+    [Fact]
+    public async Task A_later_group_of_a_request_whose_first_group_sent_no_size_takes_its_own_size()
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var add = AddOverseasSiteSubmissions.Body("request-unsized", siteCount: 1);
+        Payload(add)["submissionSize"] = null;
+        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
+
+        var body = await PostCreatedAsync(client, LaterGroup("request-unsized", reference, submissionSize: 2));
+
+        var update = await factory.Persistence.GetByIdAsync(WorkItemIds(body)[0], Ct);
+        Assert.Equal(2, update!.Payload["submissionSize"].AsInt32);
+    }
+
     [Theory]
     [InlineData("a different size", 1, 3)]
     [InlineData("a stored size smaller than its sites", 2, null)]
@@ -347,9 +365,9 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var reference = (await PostCreatedAsync(client, AddOverseasSiteSubmissions.Body("request-size", siteCount: 1)))
-            .GetProperty("submissionReference")
-            .GetString();
+        var add = AddOverseasSiteSubmissions.Body("request-size", siteCount: 1);
+        Payload(add)["submissionSize"] = 1;
+        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
 
         var response = await client.PostAsJsonAsync(
             "/work-items",

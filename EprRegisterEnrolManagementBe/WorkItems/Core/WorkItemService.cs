@@ -539,6 +539,9 @@ public sealed class WorkItemService : IWorkItemService
             .ToList();
 
         SubmissionStamp stamp;
+        // The size kept on the record for reconciling later groups: only one the caller sent, or one taken from a
+        // sent size when joining. A defaulted size (this POST's own site count) says nothing about the request.
+        var recordedSize = submission.Shared.SubmissionSize;
         if (submission.Shared.SubmissionReference is { } sharedReference)
         {
             var joined = await JoinSharedSubmissionAsync(
@@ -554,6 +557,7 @@ public sealed class WorkItemService : IWorkItemService
                 return new SubmissionRefused(refused);
             }
             stamp = new SubmissionStamp(sharedReference, joined.Size);
+            recordedSize ??= joined.FromStoredSize ? joined.Size : null;
         }
         else
         {
@@ -611,14 +615,14 @@ public sealed class WorkItemService : IWorkItemService
             items,
             submission.Now,
             operatorOrganisationId,
-            stamp.Size
+            recordedSize
         );
         await Submissions.InsertAsync(session, record, cancellationToken);
         return new SubmissionStored(record, created);
     }
 
     /// <summary>The size a later group joining a shared reference is stamped with, or why it may not join.</summary>
-    private readonly record struct SharedJoin(int Size, WorkItemSubmissionResult? Failure);
+    private readonly record struct SharedJoin(int Size, WorkItemSubmissionResult? Failure, bool FromStoredSize = false);
 
     /// <summary>
     /// RA-767: a later group of an operator request may share the reference
@@ -682,7 +686,6 @@ public sealed class WorkItemService : IWorkItemService
             {
                 return ReferenceNotFound(submission, sharedReference, baseRequestId);
             }
-            storedSize ??= legacyItems.Select(item => ReadSubmissionSize(item.Payload)).FirstOrDefault(size => size is not null);
         }
 
         return SharedSize(submission, baseRequestId, storedSize, siteCount);
@@ -710,7 +713,7 @@ public sealed class WorkItemService : IWorkItemService
                 $"The size stored for operator request '{baseRequestId}' is {size}, fewer than the {siteCount} "
                     + "sites in this submission."
             )
-            : new SharedJoin(size, null);
+            : new SharedJoin(size, null, sentSize is null && storedSize is not null);
     }
 
     private static SharedJoin SizeRefused(string message) =>
@@ -722,11 +725,6 @@ public sealed class WorkItemService : IWorkItemService
                 SubmissionPayload.InvalidSubmissionSizeErrorCode
             )
         );
-
-    private static int? ReadSubmissionSize(BsonDocument payload) =>
-        payload.TryGetValue(SubmissionPayload.SubmissionSizeField, out var size) && size.IsInt32
-            ? size.AsInt32
-            : null;
 
     private SharedJoin ReferenceNotFound(ValidatedSubmission submission, string sharedReference, string baseRequestId)
     {
