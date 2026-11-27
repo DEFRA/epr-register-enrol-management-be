@@ -80,13 +80,7 @@ internal static class StandardConfirmContactGuard
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
-        // Enumerated rather than read off the template: a closed application
-        // must be refused even when its frozen snapshot is too old to carry
-        // terminal metadata.
-        if (
-            s_steps.Any(s => Is(workItem.StateId, s.TerminalStateId))
-            || Is(workItem.StateId, StandardWorkflow.WithdrawnStateId)
-        )
+        if (StandardWorkflow.IsFinalState(workItem.StateId))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,

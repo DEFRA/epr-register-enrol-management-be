@@ -95,6 +95,7 @@ internal sealed class StandardDeterminationWrites(
         Guid workItemId,
         ClaimsPrincipal user,
         DateTimeOffset appliedAt,
+        DateOnly? pushedEffectiveDate,
         CancellationToken cancellationToken
     ) =>
         WriteAsync(
@@ -111,7 +112,7 @@ internal sealed class StandardDeterminationWrites(
                     workItem,
                     registry,
                     StandardConfirmContactGuard.Approval
-                ),
+                ) ?? CheckPushedDateStillStamped(workItem!, pushedEffectiveDate),
             workItem =>
             {
                 AppendAudit(
@@ -168,6 +169,20 @@ internal sealed class StandardDeterminationWrites(
             appliedAt,
             cancellationToken
         );
+
+    /// <summary>
+    /// The refusal when the item no longer holds the date the push carried: the operator journey
+    /// was told that one, so committing another would leave the two services disagreeing. Runs on
+    /// every write attempt, so a change that wins a version conflict is seen too.
+    /// </summary>
+    private static WorkItemActionResult? CheckPushedDateStillStamped(WorkItem workItem, DateOnly? pushed) =>
+        StandardEffectiveDate.ReadStamped(workItem) == pushed
+            ? null
+            : WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.ConcurrencyConflict,
+                $"The valid-from date of work item '{workItem.Id}' changed while applicant contact was being "
+                    + "confirmed. Reload the work item and retry."
+            );
 
     /// <summary>One outcome's step 1, with its AC6 effective date if the type takes one.</summary>
     private sealed record Determination(
@@ -247,11 +262,7 @@ internal sealed class StandardDeterminationWrites(
             return WorkItemActionResult.IdempotentReplay(workItem);
         }
 
-        if (
-            Is(workItem.StateId, StandardWorkflow.ApprovedStateId)
-            || Is(workItem.StateId, StandardWorkflow.RejectedStateId)
-            || Is(workItem.StateId, StandardWorkflow.WithdrawnStateId)
-        )
+        if (StandardWorkflow.IsFinalState(workItem.StateId))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.TerminalState,

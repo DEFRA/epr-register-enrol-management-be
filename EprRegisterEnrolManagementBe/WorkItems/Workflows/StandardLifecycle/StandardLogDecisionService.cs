@@ -213,14 +213,7 @@ internal sealed class StandardLogDecisionService(
             return new EntryCheck(WorkItemActionResult.IdempotentReplay(workItem), false);
         }
 
-        // Enumerated rather than read off the template: a decision must be
-        // refused on a closed application even when its frozen snapshot is too
-        // old to carry terminal metadata.
-        if (
-            Is(workItem.StateId, StandardWorkflow.ApprovedStateId)
-            || Is(workItem.StateId, StandardWorkflow.RejectedStateId)
-            || Is(workItem.StateId, StandardWorkflow.WithdrawnStateId)
-        )
+        if (StandardWorkflow.IsFinalState(workItem.StateId))
         {
             return new EntryCheck(
                 WorkItemActionResult.Failure(

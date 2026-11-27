@@ -49,9 +49,15 @@ internal interface IStandardConfirmContactService
 ///   has landed.</item>
 /// </list>
 ///
+/// The write also refuses (a concurrency conflict) if the valid-from date was
+/// corrected (RA-800) while the push carrying the old one was in flight.
+///
 /// If the push is delivered but the write then fails, a retry sends a new
 /// <c>OccurredAt</c>; the operator journey, already at that terminal status,
-/// answers 200 with no change, so the retry goes on to make the write.
+/// answers 200 with no change, so the retry goes on to make the write. A
+/// retry carrying a different valid-from date gets a 409 from it instead, so
+/// the two services cannot end up with different dates: correcting the date
+/// back to the one the operator journey holds lets the confirmation complete.
 /// </summary>
 internal sealed class StandardConfirmContactService(
     IWorkItemPersistence persistence,
@@ -102,6 +108,8 @@ internal sealed class StandardConfirmContactService(
         // The checks passed, so the item is in one of the two pending states.
         var step = StandardConfirmContactGuard.ForPendingState(workItem!.StateId)!;
         var appliedAt = _timeProvider.GetUtcNow();
+        // Read before the push, which carries it: the write commits only if the item still holds it.
+        var pushedEffectiveDate = StandardEffectiveDate.ReadStamped(workItem);
         var delivery = await decisionPush.PushAsync(
             workItem,
             WorkItemEngineRules.ResolveTemplate(workItem, registry),
@@ -122,7 +130,13 @@ internal sealed class StandardConfirmContactService(
 
         var result =
             step.Outcome == StandardDecisionOutcome.Approved
-                ? await strategy.Determinations.ApproveAsync(workItemId, user, appliedAt, cancellationToken)
+                ? await strategy.Determinations.ApproveAsync(
+                    workItemId,
+                    user,
+                    appliedAt,
+                    pushedEffectiveDate,
+                    cancellationToken
+                )
                 : await strategy.Determinations.RefuseAsync(workItemId, user, appliedAt, cancellationToken);
 
         if (result.IsSuccess && !result.IsIdempotentReplay)

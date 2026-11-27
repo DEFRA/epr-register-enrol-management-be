@@ -110,13 +110,23 @@ public enum WorkItemActionFailureCode
     TemplateUnavailable,
 
     /// <summary>
-    /// RA-495 AC6: the effective date sent with an add-ORS approval is
-    /// missing or earlier than the date the change request was submitted.
+    /// RA-495 AC6 / RA-795: the effective date sent with an add-ORS approval is
+    /// missing, or outside 1 January to 31 December of the work item's
+    /// accreditation year.
     /// A client error (400) whose <see cref="WorkItemActionResult.ErrorCode"/>
     /// names the rule, so the frontend binds it to the date field without
     /// parsing prose. Nothing was changed.
     /// </summary>
     InvalidEffectiveDate,
+
+    /// <summary>
+    /// RA-795: a valid-from date could not be checked against the accreditation
+    /// year because the work item's <c>payload.accreditationYear</c> is missing
+    /// or unreadable. Mandatory at submission, so a server-side data fault
+    /// (a generic 500 with no <c>errorCode</c>), not a client error. Nothing
+    /// was changed.
+    /// </summary>
+    AccreditationYearUnavailable,
 }
 
 /// <summary>

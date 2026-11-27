@@ -10,9 +10,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// On an approval it is the date the operator's accreditation shows the site
 /// as accredited from.
 ///
-/// An approval must name it, and it may not be earlier than the UK calendar
-/// date the request was submitted; otherwise a past or future date is allowed.
-/// A refusal is not asked for one: it records the submission date, so the
+/// An approval must name it, and (RA-795) it must fall between 1 January and
+/// 31 December, inclusive, of the work item's accreditation year
+/// (<see cref="AccreditationYear"/>): it may be before the submission date (the
+/// duly-made or query-resolved date) or in the future. A refusal is not asked for one: it records the submission date, so the
 /// application history and payload carry a date on either outcome (both
 /// confirmed with the product owner, 2026-11-19).
 /// </summary>
@@ -26,7 +27,8 @@ internal static class StandardEffectiveDate
 
     public const string CodeRequired = "effective-date-required";
     public const string CodeInvalid = "effective-date-invalid";
-    public const string CodeBeforeSubmission = "effective-date-before-submission";
+    public const string CodeBeforeYearStart = "effective-date-before-year-start";
+    public const string CodeAfterYearEnd = "effective-date-after-year-end";
 
     /// <summary>
     /// Parses the wire value. Absent is fine here (whether it is required
@@ -76,8 +78,8 @@ internal static class StandardEffectiveDate
     public static DateOnly ForRefusal(WorkItem workItem) => UkCalendar.DateOf(workItem.SubmittedAt);
 
     /// <summary>
-    /// An approval's rules against the work item: present, and on or after
-    /// its submission date. Null when the date may be used, otherwise the
+    /// An approval's rules against the work item: present, and inside its
+    /// accreditation year. Null when the date may be used, otherwise the
     /// failure to hand back.
     /// </summary>
     public static WorkItemActionResult? Check(WorkItem workItem, DateOnly? effectiveDate)
@@ -91,13 +93,45 @@ internal static class StandardEffectiveDate
             );
         }
 
-        var submittedOn = UkCalendar.DateOf(workItem.SubmittedAt);
-        return date < submittedOn
+        return CheckWithinAccreditationYear(workItem, date);
+    }
+
+    /// <summary>
+    /// The year-bound rule, on its own so any action that sets a valid-from date
+    /// (the determination, and a later correction) applies the same one: the date
+    /// must be 1 January to 31 December, inclusive, of the work item's
+    /// accreditation year. Null when it is, otherwise the failure to hand back.
+    /// An unreadable year is a server-side fault
+    /// (<see cref="WorkItemActionFailureCode.AccreditationYearUnavailable"/>),
+    /// never a silent accept: the year is mandatory at submission.
+    /// </summary>
+    public static WorkItemActionResult? CheckWithinAccreditationYear(WorkItem workItem, DateOnly date)
+    {
+        if (!AccreditationYear.TryRead(workItem.Payload, out var year))
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.AccreditationYearUnavailable,
+                $"Work item {workItem.Id} has no readable payload.{AccreditationYear.Field}, "
+                    + "so its valid-from date cannot be checked."
+            );
+        }
+
+        if (date < new DateOnly(year, 1, 1))
+        {
+            return WorkItemActionResult.Failure(
+                WorkItemActionFailureCode.InvalidEffectiveDate,
+                $"Effective date {date:yyyy-MM-dd} is before 1 January {year}, the start of work item "
+                    + $"{workItem.Id}'s accreditation year.",
+                CodeBeforeYearStart
+            );
+        }
+
+        return date > new DateOnly(year, 12, 31)
             ? WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidEffectiveDate,
-                $"Effective date {date:yyyy-MM-dd} is before work item {workItem.Id} was submitted "
-                    + $"({submittedOn:yyyy-MM-dd}).",
-                CodeBeforeSubmission
+                $"Effective date {date:yyyy-MM-dd} is after 31 December {year}, the end of work item "
+                    + $"{workItem.Id}'s accreditation year.",
+                CodeAfterYearEnd
             )
             : null;
     }
