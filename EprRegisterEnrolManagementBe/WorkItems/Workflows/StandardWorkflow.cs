@@ -593,4 +593,29 @@ public static class StandardWorkflow
         s_states,
         s_transitions
     );
+
+    /// <summary>
+    /// The Standard workflow under its own <paramref name="workflowId"/>, with
+    /// every <c>withdraw*</c> declaration made <c>CallerInvocable: false</c>.
+    /// For a type with no withdraw service (add-ORS, RA-495 review; the ORS
+    /// update, RA-682): the status push hook never pushes a move onto
+    /// <c>withdrawn</c>, so the operator journey would never hear of it.
+    /// States, targets and every other transition are the Standard
+    /// workflow's, so the shared lifecycle services and the push hook's
+    /// exclusions work unchanged. <see cref="Definition"/> itself is left
+    /// alone because re-accreditation withdraws through it.
+    /// </summary>
+    internal static WorkItemWorkflow WithdrawNotCallerInvocable(string workflowId) =>
+        Definition with
+        {
+            Id = workflowId,
+            Transitions = Definition
+                .Transitions.Select(t => IsWithdraw(t) ? t with { CallerInvocable = false } : t)
+                .ToList(),
+        };
+
+    // A withdraw is any move onto the Withdrawn state, not an action-id
+    // prefix: the push hook never pushes a move onto withdrawn.
+    private static bool IsWithdraw(WorkItemTransition transition) =>
+        transition.ToStateId == WithdrawnStateId;
 }

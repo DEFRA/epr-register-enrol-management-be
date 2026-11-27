@@ -308,7 +308,7 @@ type is configured. Every setting is code, not runtime data:
 | In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` | `"ORS"` (shared, RA-682) |
 | Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` | `true` |
 | Requires a payment reference | `RequiresPaymentReference` (RA-682) | `true` | `true` | `true` | `false` |
-| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `AddOverseasSiteType.WorkflowDefinition`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` | the same rules under `standard-update-overseas-site` (`AddOverseasSiteType.WithdrawNotCallerInvocable`) |
+| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `StandardWorkflow.WithdrawNotCallerInvocable("standard-add-overseas-site")`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` | the same rules under `standard-update-overseas-site` (`StandardWorkflow.WithdrawNotCallerInvocable`) |
 | Template version | `TemplateVersion` | — (required) | `v19` | `v2` | `v1` |
 
 - **Requires a payment reference** is `false` only for a type that is never
