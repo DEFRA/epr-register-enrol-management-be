@@ -320,7 +320,7 @@ public static class WorkItemEndpoints
 
         if (!result.IsSuccess)
         {
-            return LogSubmitFailure(request, result.FailureCode, result.Message, log);
+            return LogSubmitFailure(request, result.FailureCode, result.Message, log, result.ErrorCode);
         }
 
         var submission = result.Submission!;
@@ -371,7 +371,8 @@ public static class WorkItemEndpoints
         WorkItemSubmissionRequest request,
         WorkItemActionFailureCode? failureCode,
         string? message,
-        IStructuredLogger<WorkItemEndpointsLogger> log
+        IStructuredLogger<WorkItemEndpointsLogger> log,
+        string? errorCode = null
     )
     {
         log.Log(
@@ -383,7 +384,7 @@ public static class WorkItemEndpoints
                 (ErrorMessageField, message)
             )
         );
-        return SubmitFailure(failureCode, message);
+        return SubmitFailure(failureCode, message, errorCode);
     }
 
     private static void LogSubmitSuccess(
@@ -426,7 +427,8 @@ public static class WorkItemEndpoints
 
     private static ProblemHttpResult SubmitFailure(
         WorkItemActionFailureCode? failureCode,
-        string? message
+        string? message,
+        string? errorCode
     ) =>
         failureCode switch
         {
@@ -454,7 +456,10 @@ public static class WorkItemEndpoints
             _ => TypedResults.Problem(
                 title: InvalidRequestTitle,
                 detail: message,
-                statusCode: StatusCodes.Status400BadRequest
+                statusCode: StatusCodes.Status400BadRequest,
+                extensions: errorCode is null
+                    ? null
+                    : new Dictionary<string, object?> { [WorkItemProblems.ErrorCodeKey] = errorCode }
             ),
         };
 

@@ -52,6 +52,15 @@ public interface IWorkItemService
     /// required field (<see cref="SubmissionPayload.Validate"/>) fails with
     /// <see cref="WorkItemActionFailureCode.InvalidSubmissionPayload"/>.
     /// </para>
+    /// <para>
+    /// RA-767: an operator request sent as several groups (one POST per type)
+    /// is one submission. A later group may send the
+    /// <c>submissionReference</c> its first group was given, which is reused
+    /// only when it is stored for the base request and organisation
+    /// (otherwise <see cref="WorkItemActionFailureCode.SubmissionReferenceNotFound"/>),
+    /// and any group may send the request's total <c>submissionSize</c>
+    /// (<see cref="SubmissionPayload.TryReadSharedSubmission"/>).
+    /// </para>
     /// </summary>
     Task<WorkItemSubmissionResult> SubmitPerSiteAsync(
         WorkItemSubmissionRequest request,
@@ -293,7 +302,7 @@ public sealed class WorkItemService : IWorkItemService
             submissionYear,
             cancellationToken
         );
-        payload[SubmissionSizeField] = 1;
+        payload[SubmissionPayload.SubmissionSizeField] = 1;
 
         return await PersistNewWorkItemAsync(
             request,
@@ -351,8 +360,17 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
+        if (SubmissionPayload.TryReadSharedSubmission(payload, out var shared) is { } sharedError)
+        {
+            return WorkItemSubmissionResult.Failure(
+                WorkItemActionFailureCode.InvalidSubmissionPayload,
+                sharedError.Message,
+                sharedError.ErrorCode
+            );
+        }
+
         SubmissionPayload.TryReadOperatorRequestId(payload, out var operatorRequestId);
-        var validated = new ValidatedSubmission(request, referenceFormat, operatorRequestId, now);
+        var validated = new ValidatedSubmission(request, referenceFormat, operatorRequestId, shared, now);
 
         for (var attempt = 1; attempt <= MaxSubmissionAttempts; attempt++)
         {
@@ -381,10 +399,15 @@ public sealed class WorkItemService : IWorkItemService
         var operatorRequestId = validated.OperatorRequestId;
         try
         {
-            var (submission, created) = await Transactions.RunAsync(
+            var (stored, created, failure) = await Transactions.RunAsync(
                 (session, token) => CreateSubmissionAsync(session, validated, token),
                 cancellationToken
             );
+            if (failure is not null)
+            {
+                return failure;
+            }
+            var submission = stored!;
             if (created.Count == 0)
             {
                 return Replay(type, submission);
@@ -462,17 +485,33 @@ public sealed class WorkItemService : IWorkItemService
         WorkItemSubmissionRequest Request,
         IWorkItemReferenceFormat ReferenceFormat,
         string OperatorRequestId,
+        SubmissionPayload.SharedSubmission Shared,
         DateTime Now
     );
+
+    /// <summary>
+    /// What one run of <see cref="CreateSubmissionAsync"/> produced: the
+    /// stored submission and the work items it created (none for one a
+    /// concurrent request committed), or the <see cref="Failure"/> that
+    /// stopped it before anything was written.
+    /// </summary>
+    private sealed record SubmissionAttempt(
+        SubmissionRecord? Submission,
+        IReadOnlyList<WorkItem> Created,
+        WorkItemSubmissionResult? Failure
+    )
+    {
+        public static SubmissionAttempt Failed(WorkItemSubmissionResult failure) => new(null, [], failure);
+    }
 
     /// <summary>
     /// The body of a submission's transaction. The transaction runner may run
     /// it more than once, so it builds everything it writes afresh from
     /// <paramref name="submission"/>. Returns the stored submission and the
-    /// work items it created, or a submission committed by a concurrent
-    /// request and no work items.
+    /// work items it created, a submission committed by a concurrent
+    /// request and no work items, or a refused shared submission reference.
     /// </summary>
-    private async Task<(SubmissionRecord Submission, IReadOnlyList<WorkItem> Created)> CreateSubmissionAsync(
+    private async Task<SubmissionAttempt> CreateSubmissionAsync(
         IClientSessionHandle session,
         ValidatedSubmission submission,
         CancellationToken cancellationToken
@@ -480,17 +519,33 @@ public sealed class WorkItemService : IWorkItemService
     {
         if (await Submissions.FindAsync(session, submission.OperatorRequestId, cancellationToken) is { } winner)
         {
-            return (winner, []);
+            return new SubmissionAttempt(winner, [], null);
         }
 
         var request = submission.Request;
         var payload = request.Payload;
-        AccreditationYear.TryRead(payload, out var accreditationYear);
-        var submissionReference = await _submissionReferenceGenerator.GenerateAsync(
-            session,
-            accreditationYear,
-            cancellationToken
-        );
+        var operatorOrganisationId = SubmissionPayload.ReadOperatorOrganisationId(payload);
+        string submissionReference;
+        if (submission.Shared.SubmissionReference is { } sharedReference)
+        {
+            if (
+                await SharedReferenceFailureAsync(session, submission, sharedReference, operatorOrganisationId, cancellationToken)
+                is { } refused
+            )
+            {
+                return SubmissionAttempt.Failed(refused);
+            }
+            submissionReference = sharedReference;
+        }
+        else
+        {
+            AccreditationYear.TryRead(payload, out var accreditationYear);
+            submissionReference = await _submissionReferenceGenerator.GenerateAsync(
+                session,
+                accreditationYear,
+                cancellationToken
+            );
+        }
 
         // Each work item holds the shared request fields and exactly one site.
         var sites = payload[SubmissionPayload.SitesField]
@@ -508,7 +563,7 @@ public sealed class WorkItemService : IWorkItemService
             var itemPayload = shared.DeepClone().AsBsonDocument;
             itemPayload[SubmissionPayload.SiteField] = site.DeepClone();
             itemPayload[SubmissionPayload.SubmissionReferenceField] = submissionReference;
-            itemPayload[SubmissionSizeField] = sites.Count;
+            itemPayload[SubmissionPayload.SubmissionSizeField] = submission.Shared.SubmissionSize ?? sites.Count;
 
             var applicationReference = await submission.ReferenceFormat.GenerateAsync(
                 session,
@@ -540,10 +595,55 @@ public sealed class WorkItemService : IWorkItemService
             request.Type.TypeId,
             submissionReference,
             items,
-            submission.Now
+            submission.Now,
+            operatorOrganisationId
         );
         await Submissions.InsertAsync(session, record, cancellationToken);
-        return (record, created);
+        return new SubmissionAttempt(record, created, null);
+    }
+
+    /// <summary>
+    /// RA-767: a later group of an operator request may share the reference
+    /// its first group was given, but only the one stored for that request
+    /// (the <c>operatorRequestId</c> before its first <c>:</c>) and the same
+    /// organisation, so a caller cannot attach work items to someone else's
+    /// submission. Returns the refusal, or <c>null</c> when it may be shared.
+    /// </summary>
+    private async Task<WorkItemSubmissionResult?> SharedReferenceFailureAsync(
+        IClientSessionHandle session,
+        ValidatedSubmission submission,
+        string sharedReference,
+        string? operatorOrganisationId,
+        CancellationToken cancellationToken
+    )
+    {
+        var baseRequestId = SubmissionPayload.BaseRequestId(submission.OperatorRequestId)
+            ?? throw new InvalidOperationException("A shared submission reference was read without a base request id.");
+        var stored = await Submissions.FindAsync(session, baseRequestId, cancellationToken);
+        if (
+            stored is not null
+            && string.Equals(stored.SubmissionReference, sharedReference, StringComparison.Ordinal)
+            && operatorOrganisationId is not null
+            && string.Equals(stored.OperatorOrganisationId, operatorOrganisationId, StringComparison.Ordinal)
+        )
+        {
+            return null;
+        }
+
+        _logger.LogWarning(
+            "Submission {OperatorRequestId} ({TypeId}) sent submissionReference {SubmissionReference}, which is "
+                + "not on file for request {BaseRequestId} and its organisation; refusing it.",
+            submission.OperatorRequestId,
+            submission.Request.Type.TypeId,
+            sharedReference,
+            baseRequestId
+        );
+        return WorkItemSubmissionResult.Failure(
+            WorkItemActionFailureCode.SubmissionReferenceNotFound,
+            $"submissionReference '{sharedReference}' is not on file for operator request '{baseRequestId}' "
+                + "and this organisation.",
+            SubmissionPayload.SubmissionReferenceNotFoundErrorCode
+        );
     }
 
     private WorkItemSubmissionResult Replay(IWorkItemType type, SubmissionRecord submission)
@@ -579,8 +679,6 @@ public sealed class WorkItemService : IWorkItemService
         );
         return WorkItemSubmissionResult.IdempotentReplay(submission);
     }
-
-    private const string SubmissionSizeField = "submissionSize";
 
     private ISubmissionStore Submissions =>
         _submissionStore

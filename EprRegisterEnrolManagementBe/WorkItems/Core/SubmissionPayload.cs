@@ -25,6 +25,32 @@ internal static class SubmissionPayload
     public const string SubmissionReferenceField = "submissionReference";
 
     /// <summary>
+    /// RA-739: stamped on every work item a submission creates: the number of
+    /// applications in the operator's submission.
+    /// </summary>
+    public const string SubmissionSizeField = "submissionSize";
+
+    public const string OperatorOrganisationIdField = "operatorOrganisationId";
+
+    /// <summary>
+    /// RA-767: separates an operator request's id from the suffix naming a
+    /// later group of it, as in <c>{requestId}:update-overseas-site</c>.
+    /// </summary>
+    public const char RequestGroupSeparator = ':';
+
+    /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionReferenceField"/> that is not a non-blank string.</summary>
+    public const string InvalidSubmissionReferenceErrorCode = "invalid-submission-reference";
+
+    /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionReferenceField"/> on a request that is not a later group.</summary>
+    public const string SubmissionReferenceNotAllowedErrorCode = "submission-reference-not-allowed";
+
+    /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionReferenceField"/> that is not the base request's.</summary>
+    public const string SubmissionReferenceNotFoundErrorCode = "submission-reference-not-found";
+
+    /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionSizeField"/> that is not a whole number covering this POST's sites.</summary>
+    public const string InvalidSubmissionSizeErrorCode = "invalid-submission-size";
+
+    /// <summary>
     /// RA-739: on each work item a per-site submission creates, that work
     /// item's own entry from <see cref="SitesField"/>.
     /// </summary>
@@ -40,7 +66,7 @@ internal static class SubmissionPayload
     public static readonly IReadOnlyCollection<string> UnchargedRequiredFields =
     [
         OperatorRequestIdField,
-        "operatorOrganisationId",
+        OperatorOrganisationIdField,
         "organisationName",
         "material",
     ];
@@ -66,6 +92,94 @@ internal static class SubmissionPayload
             : string.Empty;
         return operatorRequestId.Length > 0;
     }
+
+    /// <summary>
+    /// RA-767: what a per-site submission that is one group of a larger
+    /// operator request says about that request: the
+    /// <see cref="SubmissionReferenceField"/> an earlier group was given, and
+    /// the <see cref="SubmissionSizeField"/> across every group. Either is
+    /// <c>null</c> when not sent (absent or JSON null).
+    /// </summary>
+    public sealed record SharedSubmission(string? SubmissionReference, int? SubmissionSize);
+
+    /// <summary>A rejected <see cref="SharedSubmission"/>: the message and the wire <c>errorCode</c>.</summary>
+    public sealed record SharedSubmissionError(string Message, string ErrorCode);
+
+    /// <summary>
+    /// RA-767: read the optional <see cref="SharedSubmission"/> fields from an
+    /// already <see cref="Validate">validated</see> payload, or say why they
+    /// cannot be used. A <see cref="SubmissionReferenceField"/> is accepted
+    /// only on a later group (an <see cref="OperatorRequestIdField"/> holding
+    /// <see cref="RequestGroupSeparator"/>), and a
+    /// <see cref="SubmissionSizeField"/> must be a whole number no smaller than
+    /// this POST's site count.
+    /// </summary>
+    public static SharedSubmissionError? TryReadSharedSubmission(
+        BsonDocument payload,
+        out SharedSubmission shared
+    )
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        shared = new SharedSubmission(null, null);
+
+        string? reference = null;
+        if (IsSent(payload, SubmissionReferenceField))
+        {
+            if (!IsPresentString(payload, SubmissionReferenceField))
+            {
+                return new SharedSubmissionError(
+                    $"payload.{SubmissionReferenceField} must be a non-blank string when sent.",
+                    InvalidSubmissionReferenceErrorCode
+                );
+            }
+
+            TryReadOperatorRequestId(payload, out var operatorRequestId);
+            if (BaseRequestId(operatorRequestId) is null)
+            {
+                return new SharedSubmissionError(
+                    $"payload.{SubmissionReferenceField} may only be sent for a later group of an operator "
+                        + $"request, whose {OperatorRequestIdField} is '{{requestId}}{RequestGroupSeparator}{{group}}'.",
+                    SubmissionReferenceNotAllowedErrorCode
+                );
+            }
+            reference = payload[SubmissionReferenceField].AsString;
+        }
+
+        int? size = null;
+        if (IsSent(payload, SubmissionSizeField))
+        {
+            var siteCount = payload[SitesField].AsBsonArray.Count;
+            if (!BsonWholeNumber.TryGet(payload[SubmissionSizeField], siteCount, int.MaxValue, out var value))
+            {
+                return new SharedSubmissionError(
+                    $"payload.{SubmissionSizeField} must be a whole number of at least {siteCount}, "
+                        + "the number of sites in this submission.",
+                    InvalidSubmissionSizeErrorCode
+                );
+            }
+            size = value;
+        }
+
+        shared = new SharedSubmission(reference, size);
+        return null;
+    }
+
+    /// <summary>
+    /// RA-767: the operator request a later group belongs to, the
+    /// <paramref name="operatorRequestId"/> up to the first
+    /// <see cref="RequestGroupSeparator"/>, or <c>null</c> when it has none.
+    /// </summary>
+    public static string? BaseRequestId(string operatorRequestId)
+    {
+        var separator = operatorRequestId.IndexOf(RequestGroupSeparator, StringComparison.Ordinal);
+        return separator < 0 ? null : operatorRequestId[..separator];
+    }
+
+    /// <summary>The payload's <see cref="OperatorOrganisationIdField"/>, or <c>null</c> when it is not a non-blank string.</summary>
+    public static string? ReadOperatorOrganisationId(BsonDocument payload) =>
+        IsPresentString(payload, OperatorOrganisationIdField)
+            ? payload[OperatorOrganisationIdField].AsString
+            : null;
 
     /// <summary>The work item payload's <see cref="SubmissionReferenceField"/>, when it is a non-blank string.</summary>
     public static bool TryReadSubmissionReference(BsonDocument? payload, out string submissionReference)
@@ -164,6 +278,9 @@ internal static class SubmissionPayload
             ? "n:" + number.ToString(CultureInfo.InvariantCulture)
             : null;
     }
+
+    private static bool IsSent(BsonDocument document, string field) =>
+        document.TryGetValue(field, out var value) && !value.IsBsonNull;
 
     private static bool IsPresentString(BsonDocument document, string field) =>
         document.TryGetValue(field, out var value)

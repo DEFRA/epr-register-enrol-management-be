@@ -119,13 +119,38 @@ stores the rest of the site as sent.
 - **Replay guard.** The `submissions` collection (`MongoSubmissionStore`)
   holds one document per POST: `_id` = `operatorRequestId`, `typeId`,
   `submissionReference`, `workItems: [{ siteId, workItemId,
-  applicationReference }]` and `submittedAt`. A sequential replay finds it
+  applicationReference }]`, `submittedAt` and `operatorOrganisationId`
+  (RA-767; absent on records stored before it). A sequential replay finds it
   before validation or allocation and gets the stored body back with
   `X-Idempotent-Replay: true`. A concurrent duplicate either sees the
   winner's record when its transaction retries after a write conflict, or
   collides on `_id`; either way it returns the winner's response. A replay
   with a different payload returns the stored submission and ignores the
   edits, as RA-492 documents below.
+- **One operator request sent as several groups (RA-767).** The operator
+  backend sends a change request holding both adds and updates as one POST
+  per type: the add group under the request's id, then the update group under
+  `{requestId}:update-overseas-site`. They are one submission, so every work
+  item shares one `submissionReference` and `submissionSize`. Two optional
+  payload fields carry that across the POSTs; without them each POST behaves
+  as above.
+  - `submissionSize` (whole number, at least this POST's site count): stamped
+    on every work item instead of this POST's own site count, so the card's
+    "(n requests)" counts the whole request. Anything else is `400` with
+    `errorCode` `invalid-submission-size`.
+  - `submissionReference` (non-blank string; otherwise `400`
+    `invalid-submission-reference`): reused instead of allocating one. Only a
+    later group may send it, an `operatorRequestId` holding `:`; on any other
+    it is `400` `submission-reference-not-allowed`. Inside the transaction the
+    `submissions` record whose `_id` is the base request id (the
+    `operatorRequestId` up to its first `:`) must hold that same
+    `submissionReference` and the same `operatorOrganisationId`; otherwise it
+    is `400` `submission-reference-not-found`
+    (`WorkItemActionFailureCode.SubmissionReferenceNotFound`). Nothing is
+    created or allocated on any refusal. The later group's own record stores
+    the shared reference, and its replay returns that record as any replay
+    does. Related work items (`payload.submissionReference`) then list every
+    group's work items together.
 - **Collisions inside the transaction.** A duplicate key aborts the whole
   transaction. An `applicationReference` collision (only once an IYC
   sequence has wrapped) fails with `503` (`ApplicationReferenceExhausted`),
