@@ -60,6 +60,20 @@ public class ClientIdAuthenticationOptions : AuthenticationSchemeOptions
         new Dictionary<string, string>(StringComparer.Ordinal);
 
     /// <summary>
+    /// RA-751: the clientIds of read-only callers (the Admin UI). A request
+    /// asserting one of these is authenticated exactly like any other caller
+    /// (same signature, timestamp and nonce rules) and then carries the
+    /// <see cref="CallerAccessPolicies.AccessClaimType"/> claim with value
+    /// <see cref="CallerAccessPolicies.ReadOnlyAccess"/>, which the
+    /// authorization policies in <see cref="CallerAccessPolicies"/> use to
+    /// keep the caller to GET/HEAD on the routes that opt in. Membership does
+    /// not depend on a secret being configured, so a read-only caller stays
+    /// read-only in Development header-trust mode too. See ADR-0010.
+    /// </summary>
+    public IReadOnlySet<string> ReadOnlyClientIds { get; set; } =
+        new HashSet<string>(StringComparer.Ordinal);
+
+    /// <summary>
     /// Maximum permitted absolute difference between the BFF-supplied
     /// timestamp header and the backend's clock. Enforced in both
     /// directions to bound replay windows even if a request is captured
@@ -98,7 +112,28 @@ public class ClientIdAuthenticationOptions : AuthenticationSchemeOptions
     /// into <c>WorkItem.AuditLog.CreatedByName</c> and
     /// <c>WorkItemNote.CreatedByName</c>.
     /// </summary>
-    public int MaxUserNameLength { get; set; } = 256;
+    /// <remarks>
+    /// The cap is on the header as sent, which may be percent-encoded: the
+    /// Admin UI (RA-751) sends <c>encodeURIComponent(name)</c>. An Entra
+    /// display name is at most 256 characters, and encoding turns one UTF-16
+    /// character into at most 9 ASCII ones (a BMP character above U+07FF is 3
+    /// UTF-8 bytes, each <c>%XX</c>; a surrogate pair is 4 bytes, 12 chars for
+    /// 2), so the longest valid name arrives as 256 × 9 = 2304 chars. A lower
+    /// cap would 401 a support user with a long non-ASCII name on every call.
+    /// One cap for every caller, not a larger one for the Admin UI only: this
+    /// check runs before the signature is verified, so the client id it could
+    /// key on is still unproven and any caller could claim the Admin UI's.
+    /// </remarks>
+    public int MaxUserNameLength { get; set; } = MaxEntraDisplayNameLength * MaxPercentEncodedCharsPerChar;
+
+    /// <summary>Entra ID's limit on a user's <c>displayName</c>.</summary>
+    internal const int MaxEntraDisplayNameLength = 256;
+
+    /// <summary>
+    /// The most ASCII characters <c>encodeURIComponent</c> emits per UTF-16
+    /// character: three <c>%XX</c> triplets for a 3-byte UTF-8 BMP character.
+    /// </summary>
+    internal const int MaxPercentEncodedCharsPerChar = 9;
 
     /// <summary>
     /// Maximum permitted length of the role header. Persisted into the

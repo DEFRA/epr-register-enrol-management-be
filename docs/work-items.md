@@ -49,7 +49,7 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 | --- | --- | --- |
 | `POST` | `/work-items` | Submit a new work item. Body: `{ "typeId": "<type>", "payload": { ... } }`. The `typeId` must be registered with the framework; the server stamps the item with the type's `InitialState`, the caller's CDP client id and a server-side timestamp. Returns `201 Created` with `Location: /work-items/{id}`, except a split submission (below), which has no `Location` because it creates one work item per site. |
 | `GET` | `/work-items/{id}` | Fetch a single work item by id, projected with the actions the engine will currently allow. |
-| `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
+| `GET` | `/work-items` | List persisted work items (with the same projection), newest first, with filter / search / pagination per RA-93. Query string parameters: `typeId` (repeatable), `stateId` (repeatable), `search` (free-text — matched on id and submitter), `q` (RA-751 Admin UI search — case-insensitive substring of the id, `payload.accreditationId`, `payload.applicationReference`, `payload.operatorOrganisationId` or `payload.organisationName`), `assigned` (`true`/`false`, RA-751), `archived` (`true` = `payload.archivedAt` set, `false` = not set, RA-751), `sort` (`organisation`, A→Z by default; `status`, workflow order by default; `due-date`, soonest first by default; `last-modified` (RA-751), most recently updated first by default, ties broken on id in the same direction, backed by the `{ lastModifiedAt: -1, _id: -1 }` index; an absent or blank token keeps the default newest-submitted order, and any other token is a `400` ValidationProblem keyed `sort`, RA-751), `dir` (`asc`/`ascending` or `desc`/`descending`, any case; reverses a sort's default direction; any other non-blank value is a `400` keyed `dir`), `page` (1-based, default 1), `pageSize` (default 20, capped at 100). Returns a paged envelope: `{ items, totalCount, page, pageSize }`. |
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state; `400` for unknown actions, transitions whose from-state does not match, and transitions declared `CallerInvocable: false`. The `CallerInvocable` check and the engine resolve the transition with the same `WorkItemEngineRules.ResolveTransition` lookup (ids match case-insensitively; the declaration for the item's current state wins, else the first), so the guard always checks the transition the engine would apply. |
 
 **Split submissions (RA-739).** For a type that declares
@@ -417,6 +417,20 @@ type is configured. Every setting is code, not runtime data:
     is logged with the work item, accreditation number and reason. That is
     right for every grant before mid-year grants exist and a date too early
     for one granted later. A failed lookup is a 503, never a guessed date.
+- **Related change requests (RA-770).** `GET /work-items/{id}/related-work-items?page=`
+  (`WorkItems/Workflows/StandardLifecycle/RelatedWorkItemsEndpoints.cs`) serves
+  an In-Year Change case's Related change requests tab: `{ totalCount, page,
+  pageSize, items }`, ten to a page, the work item asked about first on page 1
+  and the rest of its submission in reference order, each item shaped as the
+  Duly make page's related list (`RelatedWorkItemResponse`). It reads the whole
+  submission with `IWorkItemPersistence.FindBySubmissionReferenceAsync` (one
+  work item per site, so small) and pages in memory. Any `page` value answers a
+  page: not a whole number or below 1 is page 1, past the end is the last page.
+  A work item with no submission reference lists only itself. The tab's
+  "(n)" label comes from the work item's own `payload.submissionSize`, not a
+  separate count. The submission-reference read filters on `$type: string` as
+  well as the value, because its index is partial on that type and a plain
+  equality match would not use it.
 - **Standard-workflow lifecycle (RA-495).** Duly make, make determination and
   confirm applicant contact are shared services
   (`WorkItems/Workflows/StandardLifecycle`) behind type-less routes:
@@ -455,6 +469,29 @@ type is configured. Every setting is code, not runtime data:
   `payload.effectiveDate` (RA-495 AC6), which the operator journey grants the
   site from and requires on `approved`; re-accreditation stamps none, so its
   body has no `effectiveDate`.
+  An approval's `effectiveDate` must fall between 1 January and 31 December
+  (inclusive) of the work item's `payload.accreditationYear` (RA-795; it may be
+  before the submission date): `400` with `errorCode`
+  `effective-date-before-year-start` or `effective-date-after-year-end`
+  (`StandardEffectiveDate.CheckWithinAccreditationYear`, reusable by any
+  action that sets a valid-from date). An unreadable year is a generic `500`.
+  RA-800: `POST /work-items/{id}/change-valid-from` with `{ effectiveDate, reason }`
+  corrects that date while the case is `approved-pending-contact`
+  (`StandardChangeValidFromService`, opt-in per type via `TakesEffectiveDate`; a
+  type without it gets `400 wrong-work-item-type`). One `ReplaceAsync` rewrites
+  `payload.effectiveDate` and appends a `valid-from-changed` audit entry
+  (`previousEffectiveDate`, `effectiveDate`, `reason`, user, state); `StateId`,
+  `SlaClock` and the operator are untouched (confirm contact pushes the stored
+  date). The confirm-contact write commits only while the item still holds the
+  date its push carried (`409` otherwise), and the operator journey refuses
+  (`409`) a repeated `approved` naming a different date from the one it granted.
+  So after a push it applied but this service did not commit, confirmation
+  fails until the date is corrected back to that one. Same-date saves are
+  accepted; any other state is `409`, no identity
+  `401`, a concurrency conflict is retried (3 attempts) then `409`. 400 codes
+  (`field`): `effective-date-required` / `-invalid` / `-before-year-start` /
+  `-after-year-end` (`effectiveDate`), `effective-date-reason-required` /
+  `effective-date-reason-too-long` (`reason`, max 200 words).
   Query and withdraw stay re-accreditation-only. The `query-during-*`
   transitions are already `CallerInvocable: false`; since v2 (RA-495 review)
   add-ORS's `withdraw*` transitions are too, so
@@ -630,7 +667,9 @@ optionally reads two headers forwarded by the BFF and turns them into
 | `x-cdp-user-name` | `user:name` |
 
 These are used for audit attribution only (`WorkItem.AuditLog.CreatedBy` /
-`CreatedByName` and similar). Role membership is not part of the trust
+`CreatedByName` and similar). `x-cdp-user-name` is capped at
+`Auth:MaxUserNameLength` (default 2304) characters as sent, because the Admin
+UI percent-encodes it: a 256-character Entra display name can encode to 2304. Role membership is not part of the trust
 contract — see ADR-0005.
 
 ### Storage
@@ -647,22 +686,68 @@ The Mongo collection has an `assigneeAndSubmitted` index for the common
 
 ### List filters
 
-`GET /work-items` accepts two extra query parameters:
+`GET /work-items` accepts these assignment query parameters:
 
 | Param | Effect |
 | --- | --- |
 | `assigneeId=<userId>` | only items currently assigned to that user |
 | `unassigned=true` | only items with no current assignee |
+| `assigned=true` / `assigned=false` | RA-751: items with any assignee / with none |
 
-If both are supplied, `assigneeId` wins.
+If `assigneeId` and `unassigned=true` are both supplied, the result is the
+union: items assigned to that user OR unassigned. `assigned` must be exactly
+`true` or `false` and cannot be combined with either of the other two; the
+endpoint answers `400` (ValidationProblem, title `Invalid query`, errors keyed
+`assigned`) otherwise. `archived` is validated the same way.
+
+### Read-only callers (RA-751)
+
+The Admin UI (`epr-register-enrol-admin`) is a read-only caller: it may call
+`GET /work-items` and `GET /work-items/re-accreditation/states` and nothing
+else. From `GET /work-items` it gets a projected item, `{ id, typeId, stateId,
+lastModifiedAt, assignedToId, assignedToName, payload: { applicationReference,
+operatorOrganisationId, organisationName } }`: no submitter, no contact
+details, no other payload. Other callers get the full item. A projected payload
+field stored as a non-string value comes back `null` for that item, logged at
+Error with the work item id and field name, and the rest of the page still
+returns. Every other request it makes is refused with `403` and logged at Error.
+An endpoint opens itself to read-only callers with
+`RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed)`; a plain
+`RequireAuthorization()` keeps them out. See
+[ADR-0010](adr/0010-read-only-admin-ui-caller.md).
+
+`GET /work-items` also takes `q` for the Admin UI: at most 100 characters
+after trimming, sent once; otherwise `400` (errors keyed `q`). `sort` and `dir`
+must each be sent at most once. These client mistakes are logged at Warning.
+
+`GET /work-items/re-accreditation/states` returns
+`{ typeId, templateVersion, states: [ { id, displayName, isTerminal, operatorJourneyPush } ] }`
+in workflow order. `operatorJourneyPush` is `status` (a move onto the state is
+pushed to the operator backend's status endpoint as `toStateId`), `query`
+(sent by the query push), `none` (never pushed) or `partial` (some routes in
+push and some do not: `awaiting-decision`, where `submit-for-decision` is not
+pushed but `continue-review-during-decision` is). Each is derived per action
+from the transitions into the state: `query` from the actions
+`ReAccreditationQueryPushHook` pushes on, `status` from
+`StandardStatusPushHook.IsActionStatusPushed`. The operator
+backend maps each state id to the Legacy `ApplicationStatus` it should hold
+(`CaseManagementStatusMapping.StatusPush`, served at
+`GET /admin/case-management-status-mapping`). The Admin UI labels and filters
+add-overseas-site items with these states too, because add-overseas-site uses
+the Standard workflow's states; `AddOverseasSiteTypeTests` pins that they match.
 
 ### Endpoints
+
+Read-only callers (the Admin UI, ADR-0010) are refused with `403` on every
+endpoint below; "any authenticated user" means any caller that is not
+read-only.
 
 ```
 POST /work-items/{id}/assign
   Body: { "assigneeId": "<userId>", "assigneeName": "<display name>" }
-  Authorization: any authenticated user; backend enforces the
-                 self-assign-only rule for non-`assign` callers.
+  Authorization: any authenticated user except a read-only caller (403,
+                 ADR-0010); backend enforces the self-assign-only rule
+                 for non-`assign` callers.
 
 POST /work-items/{id}/unassign
   Body: (none)
@@ -702,8 +787,9 @@ without re-sorting.
 ```
 POST /work-items/{id}/notes
   Body: { "text": "<note body>" }
-  Authorization: any authenticated user (notes are an audit narrative;
-                 no role gate beyond authentication).
+  Authorization: any authenticated user except a read-only caller (403,
+                 ADR-0010); notes are an audit narrative, with no role
+                 gate beyond that.
 
   Validation:
    - `text` required, non-blank, ≤ WorkItemService.MaxNoteLength (4000)
@@ -777,6 +863,9 @@ timeline without re-sorting.
   same user, unassigning an already-unassigned item, re-recording a decision
   that has already been made) and validation / authorization rejections do
   **not** append an entry. This keeps the timeline meaningful.
+  One deliberate exception (RA-800): saving the same valid-from date appends
+  `valid-from-changed`, with equal previous and new dates, because the
+  regulator's reason is part of the audit trail.
 - **No module-specific entry shape.** If a module needs richer details,
   extend the framework's `Details` keys rather than introducing a parallel
   audit channel.
@@ -867,7 +956,8 @@ registration line" promise. All files live under
 | `ReAccreditationFreshQuery.cs` | RA-000: checks `payload.currentQuery` is complete and was stamped inside the time window of the `query-during-*` transition a post-action hook is handling: `raisedAt`, non-empty `sections` and a non-null `reason` are present, and `raisedAt` lies between the item's previous `action-applied` entry (or `SubmittedAt`) and this transition's own. `currentQuery` is never cleared, so a stale stamp is always older than the `resume-during-*` that took the item out of `queried`. A window is not proof the stamp came from the request being handled, and it has two known gaps: (a) overlapping queries on one item — the stamp is an unversioned payload write that does not check state and the transition is applied after it, so both requests' stamps can land in the window and the winning transition pushes and emails whichever was written last (this race predates RA-000); (b) clock skew — the lower bound is a `CreatedAt` another pod may have written, so if that pod's clock runs ahead a genuine query fails the check and the item ends `queried` with nothing pushed or emailed, recorded only by the Error log and `query-push-failed` / `notification-failed`. `ReAccreditationQueryPushHook` and the Queried email in `ReAccreditationNotificationHook` both use it: without a fresh query (or with an unreadable payload) they send nothing, log at Error and record `query-push-failed` / `notification-failed` with a `reason`. |
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
 | `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
-| `Endpoints/ReAccreditationEndpoints.cs` | Module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
+| `Endpoints/ReAccreditationStatesEndpoint.cs` | RA-751: `GET /work-items/re-accreditation/states` — the template's states with their display names, terminal flags and operator-journey push kind. Open to read-only callers. |
+| `Endpoints/ReAccreditationEndpoints.cs` | Maps `GET /work-items/re-accreditation/states` (above) and the module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
 | `IReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateValidator.cs` | RA-576: `POST /work-items/re-accreditation/{id}/change-payment-date` with body `{ paymentDate, reason }` corrects the payment date entered at duly making. One `ReplaceAsync` edits `payload.paymentDate` and appends an `action-applied` audit entry (`actionId=change-payment-date`, `previousPaymentDate`, `paymentDate`, `reason`). `StateId` and `SlaClock` are not changed and no hooks run, so status and "Due on" stay as they were. Allowed in any non-terminal state (repeat edits included); terminal items and items with no payment date get 409. 400 codes: the duly-making `payment-date-*` codes (`field: paymentDate`) plus `payment-date-reason-required` / `payment-date-reason-too-long` (`field: reason`, max 200 words). |
 | `IReAccreditationResumeService.cs` / `ReAccreditationResumeService.cs` / `ReAccreditationResumeValidator.cs` | `POST /work-items/re-accreditation/{id}/resume-from-query`, called by the operator backend when the applicant responds to a query: applies the matching `resume-during-*` transition and appends a `query-responded` audit entry. RA-766 (permanent): the body may carry `chargeAmountPence` (400 if negative). When it is sent and differs from the stored value, it is saved to the top-level `payload.chargeAmountPence`, so the duly-making page shows the charge as recalculated after the query, and the `query-responded` entry records `previousChargeAmountPence` and `chargeAmountPence`. |
 | `ReAccreditationModule.cs` | Glue: exposes the type, registers the decision service in DI, mounts the endpoints. |

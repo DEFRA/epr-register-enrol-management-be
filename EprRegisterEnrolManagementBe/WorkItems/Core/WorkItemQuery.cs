@@ -69,6 +69,27 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// (<see cref="ResolveTypeIds"/>); a category with no registered types matches
 /// nothing.
 /// </param>
+/// <param name="Q">
+/// RA-751: free-text needle for the Admin UI's work item search. Matched
+/// case-insensitively as a substring of the work item id,
+/// <c>payload.accreditationId</c>, <c>payload.applicationReference</c> (the
+/// application reference, e.g. <c>AP…</c>), <c>payload.operatorOrganisationId</c> and
+/// <c>payload.organisationName</c>. Separate from <paramref name="Search"/>,
+/// which management-fe's Applications page uses with its own narrower match.
+/// Whitespace-only values are ignored.
+/// </param>
+/// <param name="Assigned">
+/// RA-751: <c>true</c> restricts to items with any assignee, <c>false</c> to
+/// items with none; <c>null</c> (absent) does not filter. Never combined with
+/// <paramref name="AssigneeId"/> or <paramref name="UnassignedOnly"/>: the
+/// endpoint rejects that combination.
+/// </param>
+/// <param name="Archived">
+/// RA-751: <c>true</c> restricts to items whose <c>payload.archivedAt</c> is
+/// set (stamped by <c>ArchiveBackgroundService</c>), <c>false</c> to items
+/// without it; <c>null</c> (absent) does not filter. Unrelated to
+/// <paramref name="IncludeArchived"/>, which selects nothing (RA-313).
+/// </param>
 public sealed record WorkItemQuery(
     IReadOnlyCollection<string>? TypeIds = null,
     IReadOnlyCollection<string>? StateIds = null,
@@ -88,7 +109,10 @@ public sealed record WorkItemQuery(
     string? Organisation = null,
     string? Sort = null,
     bool? SortDescending = null,
-    IReadOnlyCollection<string>? Categories = null)
+    IReadOnlyCollection<string>? Categories = null,
+    string? Q = null,
+    bool? Assigned = null,
+    bool? Archived = null)
 {
     /// <summary>
     /// RA-739: the typeIds this query restricts to, or <c>null</c> for any
@@ -143,6 +167,10 @@ public sealed record WorkItemQuery(
     /// <summary>Trimmed search needle, or <c>null</c> if blank/whitespace.</summary>
     public string? NormalisedSearch =>
         string.IsNullOrWhiteSpace(Search) ? null : Search.Trim();
+
+    /// <summary>RA-751: trimmed <see cref="Q"/>, or <c>null</c> if blank/whitespace.</summary>
+    public string? NormalisedQ =>
+        string.IsNullOrWhiteSpace(Q) ? null : Q.Trim();
 
     /// <summary>Trimmed assignee id, or <c>null</c> if blank/whitespace.</summary>
     public string? NormalisedAssigneeId =>

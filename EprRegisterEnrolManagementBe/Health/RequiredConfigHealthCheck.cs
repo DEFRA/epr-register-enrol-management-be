@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
@@ -15,9 +16,28 @@ namespace EprRegisterEnrolManagementBe.Health;
 /// nothing else reports it. Mirrors <c>RequiredConfigHealthCheck</c> in the sibling
 /// epr-register-enrol-backend repo (RA-441).
 /// </summary>
-public sealed class RequiredConfigHealthCheck(IConfiguration configuration, IHostEnvironment environment)
-    : IHealthCheck
+public sealed class RequiredConfigHealthCheck(
+    IConfiguration configuration,
+    IHostEnvironment environment,
+    ILogger<RequiredConfigHealthCheck> logger
+) : IHealthCheck
 {
+    // Caller secrets required outside Development, as (config key, env var).
+    // Missing one makes readiness Unhealthy: without it the caseworker
+    // service cannot serve its own callers.
+    private static readonly (string ConfigKey, string EnvVar)[] s_callerSecrets =
+    [
+        ("AUTH_SHARED_SECRET:MANAGEMENT_FE", "AUTH_SHARED_SECRET__MANAGEMENT_FE"),
+        ("AUTH_SHARED_SECRET:BACKEND", "AUTH_SHARED_SECRET__BACKEND"),
+    ];
+
+    // RA-751 / ADR-0010: the read-only Admin UI's secret. Missing it makes
+    // readiness Degraded, never Unhealthy (Degraded still answers 200), so an
+    // environment without the support-tool secret is never cut off from its
+    // caseworker traffic. It is logged at Error so it is still noticed.
+    internal const string AdminUiSecretKey = "AUTH_SHARED_SECRET:ADMIN_UI";
+    internal const string AdminUiSecretEnvVar = "AUTH_SHARED_SECRET__ADMIN_UI";
+
     public Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
         CancellationToken cancellationToken = default)
@@ -29,18 +49,11 @@ public sealed class RequiredConfigHealthCheck(IConfiguration configuration, IHos
         // one is blank — the caller just never gets an entry in ClientSecrets.
         if (!environment.IsDevelopment())
         {
-            if (
-                string.IsNullOrWhiteSpace(
-                    configuration.GetValue<string>("AUTH_SHARED_SECRET:MANAGEMENT_FE")
-                )
-            )
-                missing.Add("AUTH_SHARED_SECRET__MANAGEMENT_FE");
-            if (
-                string.IsNullOrWhiteSpace(
-                    configuration.GetValue<string>("AUTH_SHARED_SECRET:BACKEND")
-                )
-            )
-                missing.Add("AUTH_SHARED_SECRET__BACKEND");
+            missing.AddRange(
+                s_callerSecrets
+                    .Where(secret => string.IsNullOrWhiteSpace(configuration.GetValue<string>(secret.ConfigKey)))
+                    .Select(secret => secret.EnvVar)
+            );
         }
 
         // A blank username is the expected, silent default in Development. Anywhere
@@ -68,10 +81,27 @@ public sealed class RequiredConfigHealthCheck(IConfiguration configuration, IHos
                 missing.Add("REEX_API_BASIC_AUTH_PASSWORD");
         }
 
-        return Task.FromResult(
-            missing.Count == 0
-                ? HealthCheckResult.Healthy()
-                : HealthCheckResult.Unhealthy($"Missing required config: {string.Join(", ", missing)}")
-        );
+        if (missing.Count > 0)
+        {
+            return Task.FromResult(
+                HealthCheckResult.Unhealthy($"Missing required config: {string.Join(", ", missing)}")
+            );
+        }
+
+        if (
+            !environment.IsDevelopment()
+            && string.IsNullOrWhiteSpace(configuration.GetValue<string>(AdminUiSecretKey))
+        )
+        {
+            logger.LogError(
+                "{EnvVar} is not set: the read-only Admin UI cannot authenticate to this service. Caseworker traffic is unaffected.",
+                AdminUiSecretEnvVar
+            );
+            return Task.FromResult(
+                HealthCheckResult.Degraded($"Missing optional config: {AdminUiSecretEnvVar}")
+            );
+        }
+
+        return Task.FromResult(HealthCheckResult.Healthy());
     }
 }

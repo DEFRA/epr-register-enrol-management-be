@@ -163,16 +163,16 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         await using var factory = new AddOverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "effective-date-history", ct);
-        var today = DateOnly.FromDateTime(DateTime.UtcNow).ToString("yyyy-MM-dd");
+        var entered = EffectiveDate.ToString("yyyy-MM-dd");
 
-        var response = await PostDecisionAsync(client, id, "approved", today, ct);
+        var response = await PostDecisionAsync(client, id, "approved", entered, ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var pending = await factory.Persistence.GetByIdAsync(id, ct);
-        Assert.Equal(today, pending!.Payload["effectiveDate"].AsString);
+        Assert.Equal(entered, pending!.Payload["effectiveDate"].AsString);
         Assert.Contains(
             pending.AuditLog,
-            a => a.Action == "determination-made" && a.Details["effectiveDate"] == today
+            a => a.Action == "determination-made" && a.Details["effectiveDate"] == entered
         );
     }
 
@@ -203,8 +203,11 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     [InlineData("", "effective-date-required")]
     [InlineData("2026-02-30", "effective-date-invalid")]
     [InlineData("10/12/2026", "effective-date-invalid")]
-    [InlineData("2000-01-01", "effective-date-before-submission")]
-    public async Task An_approval_needs_an_effective_date_on_or_after_the_submission_date(
+    [InlineData("2025-12-31", "effective-date-before-year-start")]
+    [InlineData("2000-01-01", "effective-date-before-year-start")]
+    [InlineData("2027-01-01", "effective-date-after-year-end")]
+    [InlineData("2099-01-01", "effective-date-after-year-end")]
+    public async Task An_approval_needs_an_effective_date_inside_the_accreditation_year(
         string? effectiveDate,
         string errorCode
     )
@@ -227,6 +230,72 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
         var persisted = await factory.Persistence.GetByIdAsync(id, ct);
         Assert.Equal("assessment-started", persisted!.StateId);
         Assert.False(persisted.Payload.Contains("effectiveDate"));
+        Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "determination-made");
+    }
+
+    // RA-795: the valid-from date may be anywhere from 1 January to 31 December
+    // of the accreditation year, both ends included, and so may be before the
+    // submission date (the duly-made or query-resolved date).
+    [Theory]
+    [InlineData("2026-01-01")]
+    [InlineData("2026-12-31")]
+    public async Task An_approval_accepts_the_first_and_last_day_of_the_accreditation_year(string effectiveDate)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await factory.DulyMadeAndStartedAsync(client, $"effective-date-boundary-{effectiveDate}", ct);
+
+        var response = await PostDecisionAsync(client, id, "approved", effectiveDate, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var pending = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(effectiveDate, pending!.Payload["effectiveDate"].AsString);
+        Assert.Contains(
+            pending.AuditLog,
+            a => a.Action == "determination-made" && a.Details["effectiveDate"] == effectiveDate
+        );
+    }
+
+    [Fact]
+    public async Task An_approval_may_be_valid_from_a_date_before_the_submission_date()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await factory.DulyMadeAndStartedAsync(client, "effective-date-before-submission-ok", ct);
+        var item = await factory.Persistence.GetByIdAsync(id, ct);
+        // A date well before this item's submission, inside its accreditation year.
+        var submittedOn = UkCalendar.DateOf(item!.SubmittedAt);
+        var earlier = new DateOnly(submittedOn.Year, 1, 1);
+        await factory.Persistence.SetPayloadFieldAsync(id, "accreditationYear", submittedOn.Year, ct);
+        var sent = earlier.ToString("yyyy-MM-dd");
+
+        var response = await PostDecisionAsync(client, id, "approved", sent, ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var pending = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal(sent, pending!.Payload["effectiveDate"].AsString);
+    }
+
+    [Theory]
+    [InlineData("not-a-year")]
+    [InlineData("2026")]
+    public async Task An_approval_is_a_server_error_when_the_accreditation_year_cannot_be_read(string unreadableYear)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await factory.DulyMadeAndStartedAsync(client, $"effective-date-no-year-{unreadableYear}", ct);
+        await factory.Persistence.SetPayloadFieldAsync(id, "accreditationYear", unreadableYear, ct);
+
+        var response = await PostDecisionAsync(client, id, "approved", "2026-06-15", ct);
+
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+        Assert.False(problem.TryGetProperty("errorCode", out _));
+        var persisted = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal("assessment-started", persisted!.StateId);
         Assert.DoesNotContain(persisted.AuditLog, a => a.Action == "determination-made");
     }
 }

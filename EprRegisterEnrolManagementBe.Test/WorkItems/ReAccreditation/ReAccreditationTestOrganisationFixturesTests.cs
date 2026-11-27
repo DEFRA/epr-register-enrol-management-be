@@ -74,6 +74,7 @@ public class ReAccreditationTestOrganisationFixturesTests
                 ReAccreditationTestOrganisationFixtures.LegacySnapshotId,
                 ReAccreditationTestOrganisationFixtures.PreYearStartId,
                 ReAccreditationTestOrganisationFixtures.AccreditationNumberCorrectedId,
+                ReAccreditationTestOrganisationFixtures.ArchivedId,
                 ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionId,
                 ReAccreditationTestOrganisationFixtures.OrganisationNameCorrectionEnglandId,
             ],
@@ -109,6 +110,21 @@ public class ReAccreditationTestOrganisationFixturesTests
             documents,
             d => RegistrationReferenceAssert.IsValidFor(d["payload"].AsBsonDocument)
         );
+    }
+
+    [Fact]
+    public void The_ra751_fixture_is_a_withdrawn_item_archived_three_days_ago()
+    {
+        var now = DateTimeOffset.Parse("2026-11-25T12:00:00Z");
+        var archived = BuildFixtures(new FakeTimeProvider(now))
+            .Single(d => d["_id"].AsString == ReAccreditationTestOrganisationFixtures.ArchivedId);
+        var payload = archived["payload"].AsBsonDocument;
+
+        Assert.Equal("withdrawn", archived["stateId"].AsString);
+        Assert.Equal(now.UtcDateTime.AddDays(-3), payload["archivedAt"].ToUniversalTime());
+        Assert.Equal("e2e-ra751-archived", payload["operatorOrganisationId"].AsString);
+        Assert.Equal("E2E RA-751 Archived Ltd", payload["organisationName"].AsString);
+        Assert.Equal("RA-900000751", payload["applicationReference"].AsString);
     }
 
     [Fact]
