@@ -12,10 +12,12 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// submission with the same id finds or collides with it.
 /// RA-767: <see cref="OperatorOrganisationId"/> is the submitting
 /// organisation, so a later group of the same operator request can be checked
-/// against it before it shares <see cref="SubmissionReference"/>, and
-/// <see cref="SubmissionSize"/> is the size stamped on its work items, which a
-/// later group sharing the reference must agree with. Both are <c>null</c> on
-/// a record stored before RA-767.
+/// against it before it shares <see cref="SubmissionReference"/>.
+/// <see cref="SubmissionSize"/> is a size the caller sent (or one a later group
+/// took from a stored sent size), which a later group sharing the reference
+/// must agree with. It is <c>null</c> when the group sent no size, even though
+/// its work items are then stamped with their own site count. Both are
+/// <c>null</c> on a record stored before RA-767.
 /// </summary>
 public sealed record SubmissionRecord(
     string OperatorRequestId,

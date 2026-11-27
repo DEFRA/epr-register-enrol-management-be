@@ -277,7 +277,8 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
     }
 
     // A record stored before RA-767 holds no organisation or size, so the work
-    // items carrying the reference vouch for the organisation and the size.
+    // items carrying the reference vouch for the organisation; the later group's
+    // sent size is taken as it is.
     [Theory]
     [InlineData("org-1", true)]
     [InlineData("org-2", false)]
