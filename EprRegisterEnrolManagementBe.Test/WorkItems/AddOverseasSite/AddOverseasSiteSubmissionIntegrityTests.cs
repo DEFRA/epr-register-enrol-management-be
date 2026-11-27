@@ -348,7 +348,7 @@ public sealed class AddOverseasSiteSubmissionIntegrityTests(MongoIntegrationFixt
             .EnumerateArray()
             .Select(w => w.GetProperty("applicationReference").GetString());
 
-    private AddOverseasSiteAppFactory NewFactory(Action<IServiceCollection>? configureServices = null) =>
+    private OverseasSiteAppFactory NewFactory(Action<IServiceCollection>? configureServices = null) =>
         new(fixture) { ConfigureTestServices = configureServices };
 
     private static Action<IServiceCollection> FailSessionInsert(int failOn) =>

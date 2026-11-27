@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
 
 namespace EprRegisterEnrolManagementBe.Test.TestSupport;
 
@@ -10,8 +11,6 @@ namespace EprRegisterEnrolManagementBe.Test.TestSupport;
 /// </summary>
 internal static class UpdateOverseasSiteSubmissions
 {
-    public const string TypeId = "update-overseas-site";
-
     public static JsonObject Body(
         string operatorRequestId,
         int siteCount = 2,
@@ -22,7 +21,7 @@ internal static class UpdateOverseasSiteSubmissions
         var payload = new JsonObject
         {
             ["operatorRequestId"] = operatorRequestId,
-            ["changeType"] = TypeId,
+            ["changeType"] = UpdateOverseasSiteType.Id,
             ["operatorOrganisationId"] = "org-1",
             ["organisationName"] = "Acme Recycling Ltd",
             ["operatorOrgNumber"] = 500500,
@@ -71,7 +70,7 @@ internal static class UpdateOverseasSiteSubmissions
 
         return new JsonObject
         {
-            ["typeId"] = TypeId,
+            ["typeId"] = UpdateOverseasSiteType.Id,
             ["source"] = "operator-fe",
             ["payload"] = payload,
         };

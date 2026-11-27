@@ -4,7 +4,7 @@ using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.Extensions.DependencyInjection;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -26,7 +26,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task A_valid_change_rewrites_only_the_stored_date_and_audits_it()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(factory, client, "change-valid-from-ok", ct);
         var before = await factory.Persistence.GetByIdAsync(id, ct);
@@ -64,7 +64,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task Confirming_contact_afterwards_pushes_the_corrected_date()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(factory, client, "change-valid-from-push", ct);
         Assert.Equal(HttpStatusCode.OK, (await PostChangeValidFromAsync(client, id, NewDate, Reason, ct)).StatusCode);
@@ -82,7 +82,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task The_same_date_is_accepted_and_audited_with_equal_previous_and_new_dates()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(factory, client, "change-valid-from-same", ct);
         var current = EffectiveDate.ToString("yyyy-MM-dd");
@@ -103,7 +103,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task The_first_and_last_day_of_the_accreditation_year_are_accepted(string date)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(factory, client, $"change-valid-from-bound-{date}", ct);
 
@@ -127,7 +127,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     )
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(
             factory,
@@ -150,7 +150,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task A_missing_reason_is_rejected_against_the_reason_field(string? reason)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(factory, client, $"change-valid-from-no-reason-{reason?.Length}", ct);
         var before = await factory.Persistence.GetByIdAsync(id, ct);
@@ -165,7 +165,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task A_reason_of_more_than_200_words_is_rejected_and_one_of_exactly_200_is_accepted()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(factory, client, "change-valid-from-long-reason", ct);
         var before = await factory.Persistence.GetByIdAsync(id, ct);
@@ -189,7 +189,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task A_case_that_is_not_approved_awaiting_contact_is_a_conflict(string state)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, $"change-valid-from-state-{state}", ct);
         await DriveToAsync(factory, client, id, state, ct);
@@ -212,7 +212,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task A_request_without_an_identified_user_is_unauthorised()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(factory, client, "change-valid-from-no-user", ct);
         var before = await factory.Persistence.GetByIdAsync(id, ct);
@@ -228,7 +228,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task An_unknown_work_item_is_not_found()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
 
         var response = await PostChangeValidFromAsync(client, Guid.NewGuid(), NewDate, Reason, ct);
@@ -240,7 +240,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task A_concurrent_update_is_retried_and_the_change_still_lands()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture)
+        await using var factory = new OverseasSiteAppFactory(fixture)
         {
             ConfigureTestServices = services => ConflictOnFirstReplace.Install(services),
         };
@@ -261,7 +261,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task Repeated_concurrent_updates_end_in_a_conflict_with_nothing_changed()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture)
+        await using var factory = new OverseasSiteAppFactory(fixture)
         {
             ConfigureTestServices = services => ConflictOnFirstReplace.Install(services, alwaysConflict: true),
         };
@@ -280,7 +280,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     public async Task An_unreadable_accreditation_year_is_a_server_error()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await ApprovedAwaitingContactAsync(factory, client, "change-valid-from-no-year", ct);
         await factory.Persistence.SetPayloadFieldAsync(id, "accreditationYear", "not-a-year", ct);
@@ -295,7 +295,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     // ---------------------------------------------------------------- helpers
 
     private static async Task<Guid> ApprovedAwaitingContactAsync(
-        AddOverseasSiteAppFactory factory,
+        OverseasSiteAppFactory factory,
         HttpClient client,
         string operatorRequestId,
         CancellationToken ct
@@ -307,7 +307,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     }
 
     private static async Task DriveToAsync(
-        AddOverseasSiteAppFactory factory,
+        OverseasSiteAppFactory factory,
         HttpClient client,
         Guid id,
         string state,
@@ -348,7 +348,7 @@ public sealed class AddOverseasSiteChangeValidFromEndpointTests(MongoIntegration
     }
 
     private static async Task AssertUnchangedAsync(
-        AddOverseasSiteAppFactory factory,
+        OverseasSiteAppFactory factory,
         WorkItem before,
         CancellationToken ct
     )

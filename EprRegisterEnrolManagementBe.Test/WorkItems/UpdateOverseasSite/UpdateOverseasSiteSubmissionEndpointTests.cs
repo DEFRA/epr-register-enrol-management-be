@@ -3,7 +3,8 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.UpdateOverseasSite;
 
@@ -16,8 +17,6 @@ namespace EprRegisterEnrolManagementBe.Test.WorkItems.UpdateOverseasSite;
 /// </summary>
 public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFixture fixture)
 {
-    private const string TypeId = "update-overseas-site";
-
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     private static async Task<JsonElement> PostCreatedAsync(HttpClient client, object body)
@@ -36,17 +35,20 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
     [Fact]
     public async Task Two_site_updates_without_a_payment_reference_become_two_submitted_work_items()
     {
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
 
-        var body = await PostCreatedAsync(client, UpdateOverseasSiteSubmissions.Body("request-1:update-overseas-site"));
+        var body = await PostCreatedAsync(
+            client,
+            UpdateOverseasSiteSubmissions.Body($"request-1:{UpdateOverseasSiteType.Id}")
+        );
 
         Assert.Equal(["IYC-ORS-2026-00001", "IYC-ORS-2026-00002"], ApplicationReferences(body));
         foreach (var (entry, index) in body.GetProperty("workItems").EnumerateArray().Select((w, i) => (w, i)))
         {
             var stored = await factory.Persistence.GetByIdAsync(entry.GetProperty("id").GetGuid(), Ct);
             Assert.NotNull(stored);
-            Assert.Equal(TypeId, stored!.TypeId);
+            Assert.Equal(UpdateOverseasSiteType.Id, stored!.TypeId);
             Assert.Equal("submitted", stored.StateId);
             // No operator payment reference was sent, so Core's RA-503 fallback stamps the work
             // item's own reference, as for any submission without one.
@@ -67,7 +69,7 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
     [Fact]
     public async Task An_add_ORS_submission_without_a_payment_reference_is_still_refused()
     {
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var add = AddOverseasSiteSubmissions.Body("request-no-payment");
         add["payload"]!.AsObject().Remove("paymentReference");
@@ -84,10 +86,10 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
     [Fact]
     public async Task An_add_group_and_an_update_group_from_one_request_both_create_their_work_items()
     {
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var add = AddOverseasSiteSubmissions.Body("request-mixed", siteCount: 2);
-        var update = UpdateOverseasSiteSubmissions.Body("request-mixed:update-overseas-site", siteCount: 1);
+        var update = UpdateOverseasSiteSubmissions.Body($"request-mixed:{UpdateOverseasSiteType.Id}", siteCount: 1);
 
         var addBody = await PostCreatedAsync(client, add);
         var updateBody = await PostCreatedAsync(client, update);
@@ -109,11 +111,11 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
     [Fact]
     public async Task An_approved_update_is_pushed_back_with_its_effective_date()
     {
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var body = await PostCreatedAsync(
             client,
-            UpdateOverseasSiteSubmissions.Body("request-approve:update-overseas-site", siteCount: 1)
+            UpdateOverseasSiteSubmissions.Body($"request-approve:{UpdateOverseasSiteType.Id}", siteCount: 1)
         );
         var id = body.GetProperty("workItems")[0].GetProperty("id").GetGuid();
         Assert.Equal(HttpStatusCode.OK, (await PostDulyMakeAsync(client, id, Ct)).StatusCode);

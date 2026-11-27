@@ -6,7 +6,7 @@ using EprRegisterEnrolManagementBe.Utils.Mongo;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Driver;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -22,7 +22,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     public async Task Lists_the_submission_with_the_one_asked_about_first_then_the_rest_in_reference_order()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-tab-1", siteCount: 3, ct);
         await factory.SubmitAsync(client, "related-tab-other-submission", siteCount: 2, ct);
@@ -58,7 +58,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     public async Task Pages_a_large_submission_ten_at_a_time_keeping_the_one_asked_about_first_on_page_one()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-tab-large", siteCount: 12, ct);
 
@@ -78,7 +78,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     public async Task A_request_whose_reference_falls_on_page_two_is_still_first_on_page_one()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-tab-boundary", siteCount: 12, ct);
 
@@ -103,7 +103,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     public async Task Any_page_value_answers_the_nearest_page(string asked, int expected)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-tab-range", siteCount: 11, ct);
 
@@ -117,7 +117,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     public async Task A_request_submitted_on_its_own_lists_only_itself()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-tab-single", siteCount: 1, ct);
 
@@ -131,7 +131,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     public async Task A_work_item_with_no_submission_reference_lists_only_itself()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-tab-no-reference", siteCount: 2, ct);
         // As a work item stored before RA-739 gave every submission a reference.
@@ -149,7 +149,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     public async Task The_related_read_uses_the_submission_reference_index()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-tab-index", siteCount: 2, ct);
         var before = await SubmissionReferenceIndexUsesAsync(factory, ct);
@@ -162,7 +162,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     }
 
     private static async Task<long> SubmissionReferenceIndexUsesAsync(
-        AddOverseasSiteAppFactory factory,
+        OverseasSiteAppFactory factory,
         CancellationToken ct
     )
     {
@@ -178,7 +178,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
     public async Task An_unknown_work_item_is_not_found()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
 
         var response = await client.GetAsync($"/work-items/{Guid.NewGuid()}/related-work-items", ct);
@@ -186,7 +186,7 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
-    private static IMongoCollection<BsonDocument> WorkItems(AddOverseasSiteAppFactory factory) =>
+    private static IMongoCollection<BsonDocument> WorkItems(OverseasSiteAppFactory factory) =>
         factory.Services.GetRequiredService<IMongoDbClientFactory>().GetCollection<BsonDocument>("workItems");
 
     private static async Task<JsonElement> GetRelatedAsync(
