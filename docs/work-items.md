@@ -546,8 +546,18 @@ second tab had added an answer or BES file, is applied to `payload.site` the
 same way (changed values, new BES files appended by `fileId`, `scanStatus:
 "Clean"`), re-stamped on `payload.latestQueryResponse` (original `from` values
 of the round kept) and audited as a `query-responded` entry named "Query
-response updated" (no `actionId`), with no transition and no re-assignment. The response must
-change something and is validated: ORS fields are limited to `siteName`,
+response updated" (no `actionId`), with no transition and no re-assignment. A replay may
+also carry the optional `removedBesFileIds` (string array; absent or empty is
+today's behaviour): the `fileId`s of BES files the backend sent in an earlier
+response of this round and has since had deleted by a second tab. Each is removed
+from `payload.site.besEvidence.files` and from the stamped
+`latestQueryResponse.besEvidenceFiles`, but only if the latest response of this
+query round stamped it (so a file that predates the query is never removed) and the
+site still holds it; an unknown id is ignored, so replaying the same removal is a
+no-op, and a removal counts as a difference (audited as "Query response updated",
+`removedFileReferences` `bes-evidence:{fileId}`). It has no effect on an item
+still `queried`. The response must
+change something (a changed value, a new BES file or a removed one) and is validated: ORS fields are limited to `siteName`,
 `addressLine1`, `addressLine2`, `townOrCity`, `stateOrRegion`,
 `postcode`, `contactName`, `contactEmail`, `contactPhone` and
 `rejectedLoadsArrangements`; interim site changes to the same without

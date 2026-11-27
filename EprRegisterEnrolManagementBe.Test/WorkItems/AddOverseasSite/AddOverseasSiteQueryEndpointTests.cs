@@ -57,7 +57,8 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     private static object ResumeBody(
         object? site = null,
         object? interimSites = null,
-        object? besEvidenceFiles = null
+        object? besEvidenceFiles = null,
+        string[]? removedBesFileIds = null
     ) =>
         new
         {
@@ -66,6 +67,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
             site = site ?? new { siteName = "New site name" },
             interimSites = interimSites ?? Array.Empty<object>(),
             besEvidenceFiles = besEvidenceFiles ?? Array.Empty<object>(),
+            removedBesFileIds,
         };
 
     private static Task<HttpResponseMessage> PostResumeAsync(
@@ -385,6 +387,39 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
         var entries = item.AuditLog.Where(a => a.Action == "query-responded").ToList();
         Assert.Equal(2, entries.Count);
         Assert.Contains(entries, e => e.ActionDisplayName == "Query response updated");
+    }
+
+    [Fact]
+    public async Task A_repeated_response_that_removes_a_sent_file_drops_it_and_replaying_the_removal_is_a_no_op()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (factory, client, id) = await QueriedAsync("resume-removal", ct);
+        await using var _ = factory;
+        using var __ = client;
+        object[] files =
+        [
+            new { fileId = "file-1", filename = "one.pdf", s3Key = "bes/file-1.pdf" },
+            new { fileId = "file-2", filename = "two.pdf", s3Key = "bes/file-2.pdf" },
+        ];
+        Assert.Equal(HttpStatusCode.OK, (await PostResumeAsync(client, id, ResumeBody(besEvidenceFiles: files), ct)).StatusCode);
+
+        var removal = ResumeBody(besEvidenceFiles: files.Skip(1).ToArray(), removedBesFileIds: ["file-1"]);
+        Assert.Equal(HttpStatusCode.OK, (await PostResumeAsync(client, id, removal, ct)).StatusCode);
+
+        var item = (await factory.Persistence.GetByIdAsync(id, ct))!;
+        Assert.Equal(
+            ["file-2"],
+            item.Payload["site"]["besEvidence"]["files"].AsBsonArray.Select(f => f["fileId"].AsString)
+        );
+        Assert.Equal(
+            ["file-2"],
+            item.Payload["latestQueryResponse"]["besEvidenceFiles"].AsBsonArray.Select(f => f["fileId"].AsString)
+        );
+        Assert.Equal(2, item.AuditLog.Count(a => a.Action == "query-responded"));
+
+        Assert.Equal(HttpStatusCode.OK, (await PostResumeAsync(client, id, removal, ct)).StatusCode);
+        var again = (await factory.Persistence.GetByIdAsync(id, ct))!;
+        Assert.Equal(2, again.AuditLog.Count(a => a.Action == "query-responded"));
     }
 
     [Fact]

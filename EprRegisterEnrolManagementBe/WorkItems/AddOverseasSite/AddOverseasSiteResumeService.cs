@@ -16,13 +16,18 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 /// <see cref="AddOverseasSiteResumeRules.InterimSiteFields"/> only. Every
 /// member is nullable so a structurally broken body reaches
 /// <see cref="AddOverseasSiteResumeValidator"/> and is a ProblemDetails 400.
+/// <see cref="RemovedBesFileIds"/> is optional (absent or empty: nothing removed): the
+/// <c>fileId</c>s of BES files the operator backend sent in an earlier response of this query
+/// round and has since had deleted, which a replay removes (see
+/// <see cref="AddOverseasSiteResumeService"/>).
 /// </summary>
 internal sealed record AddOverseasSiteResumeRequest(
     AddOverseasSiteResponder? ResponderContactDetails,
     DateTime? SubmittedAt,
     Dictionary<string, string?>? Site,
     IReadOnlyList<AddOverseasSiteInterimSiteChange>? InterimSites,
-    IReadOnlyList<AddOverseasSiteBesFile>? BesEvidenceFiles
+    IReadOnlyList<AddOverseasSiteBesFile>? BesEvidenceFiles,
+    IReadOnlyList<string>? RemovedBesFileIds = null
 );
 
 internal sealed record AddOverseasSiteResponder(string? FullName, string? Email, string? Role);
@@ -82,20 +87,21 @@ internal static class AddOverseasSiteResumeRules
 /// field keys are refused rather than ignored, so a hand-crafted call cannot
 /// overwrite the ORS's country, coordinates or recycling operations; values are
 /// length-capped. The response must change something: a changed ORS or interim
-/// site value, or a new BES file.
+/// site value, a new BES file, or a removed one.
 /// </summary>
 internal static class AddOverseasSiteResumeValidator
 {
     public const string MissingResponderMessage =
         "responderContactDetails.fullName, .email and .role are all required";
     public const string NothingChangedMessage =
-        "the response must change a site or interim site field, or add a BES evidence file";
+        "the response must change a site or interim site field, or add or remove a BES evidence file";
     public const string UnknownSiteFieldMessage = "site contains a field that cannot be changed in a query response";
     public const string UnknownInterimSiteFieldMessage =
         "interimSites[].changes contains a field that cannot be changed in a query response";
     public const string InterimSiteNotIdentifiedMessage = "each interim site change needs a siteNumber or siteId";
     public const string FieldTooLongMessage = "a changed value is too long";
     public const string BesFileIncompleteMessage = "each besEvidenceFiles entry needs a fileId, filename and s3Key";
+    public const string RemovedBesFileIdInvalidMessage = "each removedBesFileIds entry must be a non-blank fileId";
 
     public static string? Validate(AddOverseasSiteResumeRequest? request)
     {
@@ -148,8 +154,17 @@ internal static class AddOverseasSiteResumeValidator
             return BesFileIncompleteMessage;
         }
 
+        var removed = request.RemovedBesFileIds ?? [];
+        if (removed.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > AddOverseasSiteResumeRules.MaxValueLength))
+        {
+            return RemovedBesFileIdInvalidMessage;
+        }
+
         var changesAnything =
-            site.Count > 0 || interimSites.Any(i => (i.Changes ?? []).Count > 0) || besFiles.Count > 0;
+            site.Count > 0
+            || interimSites.Any(i => (i.Changes ?? []).Count > 0)
+            || besFiles.Count > 0
+            || removed.Count > 0;
         return changesAnything ? null : NothingChangedMessage;
     }
 }
@@ -394,14 +409,20 @@ internal sealed class AddOverseasSiteResumeService(
         var siteChanges = ApplyChanges(site, request.Site);
         var interimChanges = ApplyInterimSiteChanges(site, request.InterimSites, out var unmatchedInterimSites);
         var newFileCount = AppendBesFiles(site, request.BesEvidenceFiles);
-        if (siteChanges.Count == 0 && interimChanges.All(c => c.Changes.Count == 0) && newFileCount == 0)
+        var queryEntry = FindQueryEntry(workItem);
+        var priorResponse = queryEntry is null ? null : PriorResponseThisRound(workItem, queryEntry);
+        var removedFileIds = RemoveBesFiles(site, request.RemovedBesFileIds, StampedBesFileIds(priorResponse));
+        if (
+            siteChanges.Count == 0
+            && interimChanges.All(c => c.Changes.Count == 0)
+            && newFileCount == 0
+            && removedFileIds.Count == 0
+        )
         {
             return NoOpReplay(workItem);
         }
 
         // Keep the original "from" values of this query round (the earlier response already applied some).
-        var queryEntry = FindQueryEntry(workItem);
-        var priorResponse = queryEntry is null ? null : PriorResponseThisRound(workItem, queryEntry);
         if (priorResponse is not null)
         {
             siteChanges = MergeChanges(priorResponse.GetValue("siteChanges", null) as BsonDocument, siteChanges);
@@ -418,17 +439,18 @@ internal sealed class AddOverseasSiteResumeService(
         await AppendAuditAsync(
             workItemId,
             ReplayAuditActionDisplayName,
-            BuildAuditDetails(null, request, siteChanges, interimChanges, unmatchedInterimSites),
+            BuildAuditDetails(null, request, siteChanges, interimChanges, unmatchedInterimSites, removedFileIds),
             workItem.StateId,
             user
         );
         logger.LogInformation(
-            "Add-ORS work item {WorkItemId} in state '{StateId}': a differing resume replay was applied ({SiteFieldCount} site field(s), {InterimCount} interim site(s), {BesCount} new BES file(s)).",
+            "Add-ORS work item {WorkItemId} in state '{StateId}': a differing resume replay was applied ({SiteFieldCount} site field(s), {InterimCount} interim site(s), {BesCount} new and {RemovedCount} removed BES file(s)).",
             workItemId,
             workItem.StateId,
             siteChanges.Count,
             interimChanges.Count,
-            newFileCount
+            newFileCount,
+            removedFileIds.Count
         );
 
         var refreshed = await persistence.GetByIdAsync(workItemId, cancellationToken);
@@ -450,7 +472,8 @@ internal sealed class AddOverseasSiteResumeService(
         AddOverseasSiteResumeRequest request,
         Dictionary<string, FieldChange> siteChanges,
         List<InterimSiteChange> interimChanges,
-        List<string> unmatchedInterimSites
+        List<string> unmatchedInterimSites,
+        List<string>? removedFileIds = null
     ) =>
         new()
         {
@@ -469,6 +492,7 @@ internal sealed class AddOverseasSiteResumeService(
                 ";",
                 (request.BesEvidenceFiles ?? []).Select(f => $"bes-evidence:{f.FileId}:{f.Filename}")
             ),
+            ["removedFileReferences"] = string.Join(";", (removedFileIds ?? []).Select(id => $"bes-evidence:{id}")),
         };
 
     private async Task AppendAuditAsync(
@@ -615,6 +639,51 @@ internal sealed class AddOverseasSiteResumeService(
         return merged;
     }
 
+    /// <summary>The <c>fileId</c>s on the response stamped earlier this query round: the only files a replay may remove.</summary>
+    private static HashSet<string> StampedBesFileIds(BsonDocument? stampedResponse)
+    {
+        var files = stampedResponse?.GetValue("besEvidenceFiles", null) as BsonArray;
+        return (files ?? [])
+            .OfType<BsonDocument>()
+            .Select(f => f.GetValue("fileId", BsonNull.Value))
+            .Where(v => v.IsString)
+            .Select(v => v.AsString)
+            .ToHashSet(StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// Removes from <c>site.besEvidence.files</c> the requested <c>fileId</c>s that a response of this query round
+    /// stamped (<paramref name="removable"/>) and that the site still holds; returns the ids removed. A file that
+    /// predates the query, or an id not held, is ignored, so a replay of the same removal is a no-op.
+    /// </summary>
+    private static List<string> RemoveBesFiles(BsonDocument site, IReadOnlyList<string>? requested, HashSet<string> removable)
+    {
+        var ids = (requested ?? []).Where(removable.Contains).ToHashSet(StringComparer.Ordinal);
+        if (
+            ids.Count == 0
+            || !site.TryGetValue(BesEvidenceField, out var evidence)
+            || evidence is not BsonDocument evidenceDocument
+            || !evidenceDocument.TryGetValue("files", out var list)
+            || list is not BsonArray files
+        )
+        {
+            return [];
+        }
+
+        var removed = new List<string>();
+        for (var i = files.Count - 1; i >= 0; i--)
+        {
+            if (files[i] is BsonDocument file && file.GetValue("fileId", BsonNull.Value) is { IsString: true } id && ids.Contains(id.AsString))
+            {
+                removed.Add(id.AsString);
+                files.RemoveAt(i);
+            }
+        }
+
+        removed.Reverse();
+        return removed;
+    }
+
     /// <summary>Appends the response's new BES files to <c>site.besEvidence.files</c>, skipping any <c>fileId</c> already there; returns how many were added.</summary>
     private static int AppendBesFiles(BsonDocument site, IReadOnlyList<AddOverseasSiteBesFile>? files)
     {
@@ -751,7 +820,9 @@ internal sealed class AddOverseasSiteResumeService(
                 })
             ),
             ["besEvidenceFiles"] = new BsonArray(
-                (request.BesEvidenceFiles ?? []).Select(f => new BsonDocument
+                (request.BesEvidenceFiles ?? [])
+                .Where(f => request.RemovedBesFileIds?.Contains(f.FileId) != true)
+                .Select(f => new BsonDocument
                 {
                     ["fileId"] = f.FileId,
                     ["filename"] = f.Filename,

@@ -11,8 +11,9 @@ public sealed class AddOverseasSiteResumeValidatorTests
         AddOverseasSiteResponder? responder = null,
         Dictionary<string, string?>? site = null,
         IReadOnlyList<AddOverseasSiteInterimSiteChange>? interimSites = null,
-        IReadOnlyList<AddOverseasSiteBesFile>? besFiles = null
-    ) => new(responder ?? s_responder, DateTime.UtcNow, site, interimSites, besFiles);
+        IReadOnlyList<AddOverseasSiteBesFile>? besFiles = null,
+        IReadOnlyList<string>? removedBesFileIds = null
+    ) => new(responder ?? s_responder, DateTime.UtcNow, site, interimSites, besFiles, removedBesFileIds);
 
     private static AddOverseasSiteBesFile BesFile(string? fileId = "f-1", string? s3Key = "bes/f-1.pdf") =>
         new(fileId, "evidence.pdf", "application/pdf", s3Key, "bucket", "2026-01-01", "2027-01-01");
@@ -32,6 +33,29 @@ public sealed class AddOverseasSiteResumeValidatorTests
     [Fact]
     public void A_new_bes_file_alone_is_valid() =>
         Assert.Null(AddOverseasSiteResumeValidator.Validate(Request(besFiles: [BesFile()])));
+
+    [Fact]
+    public void A_removed_bes_file_alone_is_valid() =>
+        Assert.Null(AddOverseasSiteResumeValidator.Validate(Request(site: new(), removedBesFileIds: ["f-1"])));
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    [InlineData(null)]
+    public void A_removed_bes_file_id_must_not_be_blank(string? id) =>
+        Assert.Equal(
+            AddOverseasSiteResumeValidator.RemovedBesFileIdInvalidMessage,
+            AddOverseasSiteResumeValidator.Validate(Request(removedBesFileIds: [id!]))
+        );
+
+    [Fact]
+    public void A_removed_bes_file_id_is_length_capped() =>
+        Assert.Equal(
+            AddOverseasSiteResumeValidator.RemovedBesFileIdInvalidMessage,
+            AddOverseasSiteResumeValidator.Validate(
+                Request(removedBesFileIds: [new string('x', AddOverseasSiteResumeRules.MaxValueLength + 1)])
+            )
+        );
 
     [Fact]
     public void A_response_that_changes_nothing_is_refused() =>

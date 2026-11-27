@@ -152,14 +152,16 @@ public sealed class AddOverseasSiteQueryServicesTests
         Dictionary<string, string?>? site = null,
         IReadOnlyList<AddOverseasSiteInterimSiteChange>? interimSites = null,
         IReadOnlyList<AddOverseasSiteBesFile>? besFiles = null,
-        DateTime? submittedAt = null
+        DateTime? submittedAt = null,
+        IReadOnlyList<string>? removedBesFileIds = null
     ) =>
         new(
             new AddOverseasSiteResponder("Ada Operator", "ada@example.test", "Director"),
             submittedAt,
             site ?? new() { ["siteName"] = "New site" },
             interimSites,
-            besFiles
+            besFiles,
+            removedBesFileIds
         );
 
     private static async Task<WorkItemActionResult> ResumeAsync(Harness h, AddOverseasSiteResumeRequest? request = null) =>
@@ -349,6 +351,162 @@ public sealed class AddOverseasSiteQueryServicesTests
         await h.Persistence
             .Received(1)
             .SetPayloadFieldAsync(h.WorkItem!.Id, "latestQueryResponse", Arg.Any<BsonValue>(), Ct);
+    }
+
+    // A second tab deleted a BES file the operator backend had already sent: the replay carries its fileId in removedBesFileIds.
+
+    private static WorkItem ItemWithSentFiles()
+    {
+        var item = ResumedItem();
+        item.Payload["site"]["besEvidence"]["files"] = new BsonArray
+        {
+            new BsonDocument { ["fileId"] = "pre-1", ["filename"] = "pre-query.pdf" },
+            new BsonDocument { ["fileId"] = "f-1", ["filename"] = "first.pdf" },
+            new BsonDocument { ["fileId"] = "f-2", ["filename"] = "second.pdf" },
+        };
+        item.Payload["latestQueryResponse"]["besEvidenceFiles"] = new BsonArray
+        {
+            new BsonDocument { ["fileId"] = "f-1" },
+            new BsonDocument { ["fileId"] = "f-2" },
+            42,
+            new BsonDocument { ["filename"] = "no-id" },
+        };
+        return item;
+    }
+
+    private static AddOverseasSiteResumeRequest Removal(params string[] ids) =>
+        Response(
+            besFiles: [new("f-2", "second.pdf", null, "bes/f-2.pdf", null, null, null)],
+            removedBesFileIds: ids
+        );
+
+    [Fact]
+    public async Task A_replay_that_removes_a_sent_BES_file_drops_it_from_the_site_and_the_stamp_and_audits_it()
+    {
+        var h = new Harness(ItemWithSentFiles());
+        BsonDocument? site = null;
+        BsonDocument? latest = null;
+        h.Persistence
+            .SetPayloadFieldAsync(Arg.Any<Guid>(), "site", Arg.Do<BsonValue>(v => site = v.AsBsonDocument), Arg.Any<CancellationToken>())
+            .Returns(true);
+        h.Persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(),
+                "latestQueryResponse",
+                Arg.Do<BsonValue>(v => latest = v.AsBsonDocument),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+
+        var result = await ResumeAsync(h, Removal("f-1"));
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.IsIdempotentReplay);
+        await h.Engine.DidNotReceiveWithAnyArgs().ApplyActionAsync(default, default!, default!, TestContext.Current.CancellationToken);
+        Assert.Equal(["pre-1", "f-2"], site!["besEvidence"]["files"].AsBsonArray.Select(f => f["fileId"].AsString));
+        Assert.Equal(["f-2"], latest!["besEvidenceFiles"].AsBsonArray.Select(f => f["fileId"].AsString));
+        // The round's original "from" survives a removal-only replay.
+        Assert.Equal("Old site", latest["siteChanges"]["siteName"]["from"].AsString);
+        await h.Audit
+            .Received(1)
+            .AppendAsync(
+                h.WorkItem!.Id,
+                AddOverseasSiteResumeService.AuditAction,
+                AddOverseasSiteResumeService.ReplayAuditActionDisplayName,
+                Arg.Is<Dictionary<string, string?>>(d => d["removedFileReferences"] == "bes-evidence:f-1"),
+                s_user,
+                CancellationToken.None
+            );
+    }
+
+    [Fact]
+    public async Task A_replay_that_lists_a_removed_file_among_the_files_does_not_stamp_it()
+    {
+        var h = new Harness(ItemWithSentFiles());
+        BsonDocument? latest = null;
+        h.Persistence
+            .SetPayloadFieldAsync(
+                Arg.Any<Guid>(),
+                "latestQueryResponse",
+                Arg.Do<BsonValue>(v => latest = v.AsBsonDocument),
+                Arg.Any<CancellationToken>()
+            )
+            .Returns(true);
+        var request = Response(
+            besFiles:
+            [
+                new("f-1", "first.pdf", null, "bes/f-1.pdf", null, null, null),
+                new("f-2", "second.pdf", null, "bes/f-2.pdf", null, null, null),
+            ],
+            removedBesFileIds: ["f-1"]
+        );
+
+        await ResumeAsync(h, request);
+
+        Assert.Equal(["f-2"], latest!["besEvidenceFiles"].AsBsonArray.Select(f => f["fileId"].AsString));
+    }
+
+    [Fact]
+    public async Task Replaying_the_same_removal_again_is_a_no_op()
+    {
+        var item = ItemWithSentFiles();
+        item.Payload["site"]["besEvidence"]["files"].AsBsonArray.RemoveAt(1);
+        item.Payload["latestQueryResponse"]["besEvidenceFiles"] = new BsonArray { new BsonDocument { ["fileId"] = "f-2" } };
+        var h = new Harness(item);
+
+        var result = await ResumeAsync(h, Removal("f-1"));
+
+        Assert.True(result.IsIdempotentReplay);
+        await h.Persistence
+            .DidNotReceiveWithAnyArgs()
+            .SetPayloadFieldAsync(default, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task A_replay_never_removes_a_file_that_predates_the_query_or_an_unknown_one()
+    {
+        var h = new Harness(ItemWithSentFiles());
+
+        var result = await ResumeAsync(h, Removal("pre-1", "never-held", "f-1-typo"));
+
+        Assert.True(result.IsIdempotentReplay);
+        await h.Persistence
+            .DidNotReceiveWithAnyArgs()
+            .SetPayloadFieldAsync(default, default!, default!, TestContext.Current.CancellationToken);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_removal_is_ignored_when_there_is_no_response_this_round_or_no_file_list(bool noFileList)
+    {
+        var item = ItemWithSentFiles();
+        if (noFileList)
+        {
+            item.Payload["site"]["besEvidence"] = new BsonDocument();
+        }
+        else
+        {
+            item.Payload["latestQueryResponse"]["respondedAt"] = s_now.UtcDateTime.AddHours(-3);
+        }
+
+        var h = new Harness(item);
+
+        var result = await ResumeAsync(h, Response(removedBesFileIds: ["f-1"]));
+
+        Assert.True(result.IsIdempotentReplay);
+    }
+
+    [Fact]
+    public async Task A_removal_on_a_site_without_BES_evidence_is_ignored()
+    {
+        var item = ItemWithSentFiles();
+        item.Payload["site"].AsBsonDocument.Remove("besEvidence");
+        var h = new Harness(item);
+
+        var result = await ResumeAsync(h, Response(removedBesFileIds: ["f-1"]));
+
+        Assert.True(result.IsIdempotentReplay);
     }
 
     [Fact]
