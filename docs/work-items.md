@@ -197,11 +197,12 @@ and `WorkItemReferenceGenerator` picks one from the type's
     the same code and the same year (for `ORS`, adds and updates; see RA-682
     above).
   - After a wrap, the reference for the next number already exists with that
-    same type and year. The `applicationReference` unique index makes each
+    same code and year. The `applicationReference` unique index makes each
     retry take the next number, and every one collides.
-  - So once one type passes 99,999 changes in a year, every later
-    submission of that type fails with `503` (`ApplicationReferenceExhausted`,
-    labelled transient) until the year changes.
+  - So once one code passes 99,999 changes in a year, every later
+    submission with that code fails with `503` (`ApplicationReferenceExhausted`,
+    labelled transient) until the year changes. For `ORS`, adds and updates
+    count together.
   - RA-492 judged that many changes of one type in one year unrealistic.
 - **Sequence storage.** Counters live in the `referenceSequences` collection
   as `{ _id: "IYC-ORS-2026", seq: <long> }`, where `seq` is how many numbers
