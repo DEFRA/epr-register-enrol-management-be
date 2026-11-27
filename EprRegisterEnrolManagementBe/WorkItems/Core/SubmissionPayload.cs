@@ -30,7 +30,19 @@ internal static class SubmissionPayload
     /// </summary>
     public const string SubmissionSizeField = "submissionSize";
 
+    /// <summary>
+    /// The operator organisation the request is from. RA-767: stored on the
+    /// submission record, so a later group can share an earlier group's
+    /// <see cref="SubmissionReferenceField"/> only from the same organisation.
+    /// </summary>
     public const string OperatorOrganisationIdField = "operatorOrganisationId";
+
+    /// <summary>
+    /// RA-767: the largest <see cref="SubmissionSizeField"/> accepted, well
+    /// beyond any real operator request, so a typo cannot stamp a size that
+    /// would mislead the caseworker.
+    /// </summary>
+    public const int MaxSubmissionSize = 1000;
 
     /// <summary>
     /// RA-767: separates an operator request's id from the suffix naming a
@@ -47,7 +59,12 @@ internal static class SubmissionPayload
     /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionReferenceField"/> that is not the base request's.</summary>
     public const string SubmissionReferenceNotFoundErrorCode = "submission-reference-not-found";
 
-    /// <summary>RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionSizeField"/> that is not a whole number covering this POST's sites.</summary>
+    /// <summary>
+    /// RA-767: <c>errorCode</c> for a supplied <see cref="SubmissionSizeField"/>
+    /// that is not a whole number from this POST's site count to
+    /// <see cref="MaxSubmissionSize"/>, or, on a later group sharing a
+    /// reference, that differs from the size stored for the request.
+    /// </summary>
     public const string InvalidSubmissionSizeErrorCode = "invalid-submission-size";
 
     /// <summary>
@@ -106,23 +123,19 @@ internal static class SubmissionPayload
     public sealed record SharedSubmissionError(string Message, string ErrorCode);
 
     /// <summary>
-    /// RA-767: read the optional <see cref="SharedSubmission"/> fields from an
-    /// already <see cref="Validate">validated</see> payload, or say why they
-    /// cannot be used. A <see cref="SubmissionReferenceField"/> is accepted
-    /// only on a later group (an <see cref="OperatorRequestIdField"/> holding
+    /// RA-767: why the optional <see cref="SharedSubmission"/> fields of an
+    /// already <see cref="Validate">validated</see> payload cannot be used, or
+    /// <c>null</c> when they can (<see cref="ReadSharedSubmission"/>). A
+    /// <see cref="SubmissionReferenceField"/> is accepted only on a later group
+    /// (an <see cref="OperatorRequestIdField"/> holding
     /// <see cref="RequestGroupSeparator"/>), and a
-    /// <see cref="SubmissionSizeField"/> must be a whole number no smaller than
-    /// this POST's site count.
+    /// <see cref="SubmissionSizeField"/> must be a whole number from this
+    /// POST's site count to <see cref="MaxSubmissionSize"/>.
     /// </summary>
-    public static SharedSubmissionError? TryReadSharedSubmission(
-        BsonDocument payload,
-        out SharedSubmission shared
-    )
+    public static SharedSubmissionError? ValidateSharedSubmission(BsonDocument payload)
     {
         ArgumentNullException.ThrowIfNull(payload);
-        shared = new SharedSubmission(null, null);
 
-        string? reference = null;
         if (IsSent(payload, SubmissionReferenceField))
         {
             if (!IsPresentString(payload, SubmissionReferenceField))
@@ -142,26 +155,39 @@ internal static class SubmissionPayload
                     SubmissionReferenceNotAllowedErrorCode
                 );
             }
-            reference = payload[SubmissionReferenceField].AsString;
         }
 
-        int? size = null;
-        if (IsSent(payload, SubmissionSizeField))
+        var siteCount = payload[SitesField].AsBsonArray.Count;
+        if (
+            IsSent(payload, SubmissionSizeField)
+            && !BsonWholeNumber.TryGet(payload[SubmissionSizeField], siteCount, MaxSubmissionSize, out _)
+        )
         {
-            var siteCount = payload[SitesField].AsBsonArray.Count;
-            if (!BsonWholeNumber.TryGet(payload[SubmissionSizeField], siteCount, int.MaxValue, out var value))
-            {
-                return new SharedSubmissionError(
-                    $"payload.{SubmissionSizeField} must be a whole number of at least {siteCount}, "
-                        + "the number of sites in this submission.",
-                    InvalidSubmissionSizeErrorCode
-                );
-            }
-            size = value;
+            return new SharedSubmissionError(
+                $"payload.{SubmissionSizeField} must be a whole number from {siteCount}, "
+                    + $"the number of sites in this submission, to {MaxSubmissionSize}.",
+                InvalidSubmissionSizeErrorCode
+            );
         }
 
-        shared = new SharedSubmission(reference, size);
         return null;
+    }
+
+    /// <summary>
+    /// RA-767: the <see cref="SharedSubmission"/> fields of a payload that
+    /// passed <see cref="ValidateSharedSubmission"/>.
+    /// </summary>
+    public static SharedSubmission ReadSharedSubmission(BsonDocument payload)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        var reference = IsPresentString(payload, SubmissionReferenceField)
+            ? payload[SubmissionReferenceField].AsString
+            : null;
+        int? size = IsSent(payload, SubmissionSizeField)
+            && BsonWholeNumber.TryGet(payload[SubmissionSizeField], 1, MaxSubmissionSize, out var value)
+            ? value
+            : null;
+        return new SharedSubmission(reference, size);
     }
 
     /// <summary>

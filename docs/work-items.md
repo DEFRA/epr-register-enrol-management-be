@@ -119,8 +119,9 @@ stores the rest of the site as sent.
 - **Replay guard.** The `submissions` collection (`MongoSubmissionStore`)
   holds one document per POST: `_id` = `operatorRequestId`, `typeId`,
   `submissionReference`, `workItems: [{ siteId, workItemId,
-  applicationReference }]`, `submittedAt` and `operatorOrganisationId`
-  (RA-767; absent on records stored before it). A sequential replay finds it
+  applicationReference }]`, `submittedAt`, `operatorOrganisationId` and
+  `submissionSize` (both RA-767; absent on records stored before it), with a
+  non-unique index on `submissionReference`. A sequential replay finds it
   before validation or allocation and gets the stored body back with
   `X-Idempotent-Replay: true`. A concurrent duplicate either sees the
   winner's record when its transaction retries after a write conflict, or
@@ -134,21 +135,33 @@ stores the rest of the site as sent.
   item shares one `submissionReference` and `submissionSize`. Two optional
   payload fields carry that across the POSTs; without them each POST behaves
   as above.
-  - `submissionSize` (whole number, at least this POST's site count): stamped
-    on every work item instead of this POST's own site count, so the card's
-    "(n requests)" counts the whole request. Anything else is `400` with
-    `errorCode` `invalid-submission-size`.
+  - `submissionSize` (whole number from this POST's site count to 1000):
+    stamped on every work item, and stored on the `submissions` record,
+    instead of this POST's own site count, so the card's "(n requests)" counts
+    the whole request. Anything else is `400` with `errorCode`
+    `invalid-submission-size`.
   - `submissionReference` (non-blank string; otherwise `400`
     `invalid-submission-reference`): reused instead of allocating one. Only a
     later group may send it, an `operatorRequestId` holding `:`; on any other
-    it is `400` `submission-reference-not-allowed`. Inside the transaction the
-    `submissions` record whose `_id` is the base request id (the
-    `operatorRequestId` up to its first `:`) must hold that same
-    `submissionReference` and the same `operatorOrganisationId`; otherwise it
-    is `400` `submission-reference-not-found`
-    (`WorkItemActionFailureCode.SubmissionReferenceNotFound`). Nothing is
-    created or allocated on any refusal. The later group's own record stores
-    the shared reference, and its replay returns that record as any replay
+    it is `400` `submission-reference-not-allowed`. Inside the transaction at
+    least one `submissions` record of the same request (its `_id` is the base
+    request id, the `operatorRequestId` up to its first `:`, or starts with
+    `{base}:`) must hold that `submissionReference`, and none of them a
+    different `operatorOrganisationId`; otherwise it is `400`
+    `submission-reference-not-found`
+    (`WorkItemActionFailureCode.SubmissionReferenceNotFound`). A record stored
+    before RA-767 has no `operatorOrganisationId`, so instead every work item
+    carrying the reference must have this payload's
+    `payload.operatorOrganisationId` (and there must be at least one). Both
+    ids and the organisation are asserted by the caller, so this is a
+    consistency check against joining the wrong submission; the trust
+    boundary is the client-id policy on `POST /work-items`.
+    The group's `submissionSize`, when sent, must equal the stored one (the
+    record's, or on a pre-RA-767 record the work items'); when it is left out
+    the stored one is stamped. Either way it must cover this POST's sites.
+    Otherwise it is `400` `invalid-submission-size`. Nothing is created or
+    allocated on any refusal. The later group's own record stores the shared
+    reference and size, and its replay returns that record as any replay
     does. Related work items (`payload.submissionReference`) then list every
     group's work items together.
 - **Collisions inside the transaction.** A duplicate key aborts the whole
@@ -497,18 +510,24 @@ type is configured. Every setting is code, not runtime data:
   The ORS update (`UpdateOverseasSiteLifecycleStrategy`, RA-682) opts in like
   add-ORS (same push route, no minting, no emails) with two differences
   (RA-782). It takes no valid-from date (`TakesEffectiveDate` false): the
-  decision records none, its confirm-contact push has no `effectiveDate`
+  decision records none (an `effectiveDate` sent with it is ignored, as for
+  re-accreditation), its confirm-contact push has no `effectiveDate`
   (null is omitted on the wire) and `change-valid-from` gets
   `400 wrong-work-item-type`. It takes no payment date (`TakesPaymentDate`
   false, as it is never charged): `GET /work-items/{id}/duly-make` returns
   `takesPaymentDate: false` (true for every other type) so the page asks for
-  none; `POST /work-items/{id}/duly-make` needs no `paymentDate` and refuses one
-  that is sent with `400 errorCode: payment-date-not-taken`
-  (`field: paymentDate`); nothing is stamped on `payload.paymentDate`, and the
-  SLA clock starts at the moment it is duly made (UTC), over the same 12 weeks,
-  with `sla-clock-started` audited as `anchoredTo: duly-made` and no
-  `paymentDate` on the `action-applied` entry. A type that takes a payment date
-  and is sent none still gets `400 payment-date-required`.
+  none; `POST /work-items/{id}/duly-make` needs no `paymentDate` and refuses
+  any non-blank one that is sent, well-formed or not, with
+  `400 errorCode: payment-date-not-taken` (`field: paymentDate`); nothing is
+  stamped on `payload.paymentDate`, and the SLA clock starts at midnight UTC
+  of the day it is duly made (as a paid type's starts at midnight UTC of the
+  payment date), over the same 12 weeks, with `sla-clock-started` audited as
+  `anchoredTo: duly-made` and no `paymentDate` on the `action-applied` entry.
+  A type that takes a payment date and is sent none still gets
+  `400 payment-date-required`, and a malformed or out-of-range one the
+  validator's code as before. The payment date is checked once the work item
+  is loaded, so whatever date is sent, an unknown id is `404` and a type that
+  has not opted in is `400 wrong-work-item-type`.
   An approval's `effectiveDate` must fall between 1 January and 31 December
   (inclusive) of the work item's `payload.accreditationYear` (RA-795; it may be
   before the submission date): `400` with `errorCode`

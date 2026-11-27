@@ -39,21 +39,25 @@ public sealed class UpdateOverseasSiteLifecycleEndpointTests(MongoIntegrationFix
     [Theory]
     [InlineData(null)]
     [InlineData("")]
-    public async Task Duly_make_without_a_payment_date_starts_the_sla_clock_when_it_is_duly_made(string? paymentDate)
+    public async Task Duly_make_without_a_payment_date_starts_the_sla_clock_at_midnight_of_the_day_it_is_duly_made(
+        string? paymentDate
+    )
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await SubmitAsync(client, $"duly-make-{paymentDate is null}");
 
-        var before = DateTime.UtcNow;
+        var before = DateTime.UtcNow.Date;
         var response = await PostDulyMakeAsync(client, id, paymentDate, Ct);
-        var after = DateTime.UtcNow;
+        var after = DateTime.UtcNow.Date;
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var dulyMade = await factory.Persistence.GetByIdAsync(id, Ct);
         Assert.Equal("duly-made", dulyMade!.StateId);
         Assert.False(dulyMade.Payload.Contains("paymentDate"));
-        Assert.InRange(dulyMade.SlaClock!.StartedAt, before.AddSeconds(-1), after.AddSeconds(1));
+        // Midnight UTC of the duly-made day, as a paid type's is of its payment day.
+        Assert.Equal(TimeSpan.Zero, dulyMade.SlaClock!.StartedAt.TimeOfDay);
+        Assert.InRange(dulyMade.SlaClock.StartedAt, before, after);
         // The same 12 weeks as re-accreditation, from the duly make.
         Assert.Equal(TimeSpan.FromDays(84), dulyMade.SlaClock.TargetDuration);
         Assert.Equal(dulyMade.SlaClock.StartedAt.AddDays(84), dulyMade.SlaClock.DueAt);
@@ -86,6 +90,39 @@ public sealed class UpdateOverseasSiteLifecycleEndpointTests(MongoIntegrationFix
         Assert.Null(untouched.SlaClock);
         Assert.False(untouched.Payload.Contains("paymentDate"));
         Assert.DoesNotContain(untouched.AuditLog, a => a.Action != "work-item-submitted");
+    }
+
+    // Any date sent is refused as not taken, before it is parsed, so the code
+    // does not depend on what the caseworker typed.
+    [Theory]
+    [InlineData("not-a-date")]
+    [InlineData("2026/01/05")]
+    [InlineData("2099-01-01")]
+    [InlineData("2000-01-01")]
+    public async Task Duly_make_refuses_a_malformed_or_out_of_range_payment_date_as_not_taken(string paymentDate)
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var id = await SubmitAsync(client, $"malformed-{paymentDate.Replace('/', '-')}");
+
+        var response = await PostDulyMakeAsync(client, id, paymentDate, Ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Equal("payment-date-not-taken", problem.GetProperty("errorCode").GetString());
+        Assert.Equal("paymentDate", problem.GetProperty("field").GetString());
+        Assert.Equal("submitted", (await factory.Persistence.GetByIdAsync(id, Ct))!.StateId);
+    }
+
+    [Fact]
+    public async Task Duly_make_of_an_unknown_work_item_is_not_found_whatever_date_is_sent()
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+
+        var response = await PostDulyMakeAsync(client, Guid.NewGuid(), "not-a-date", Ct);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Theory]

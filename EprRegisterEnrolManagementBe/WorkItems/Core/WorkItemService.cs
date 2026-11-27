@@ -55,11 +55,12 @@ public interface IWorkItemService
     /// <para>
     /// RA-767: an operator request sent as several groups (one POST per type)
     /// is one submission. A later group may send the
-    /// <c>submissionReference</c> its first group was given, which is reused
-    /// only when it is stored for the base request and organisation
+    /// <c>submissionReference</c> an earlier group was given, which is reused
+    /// only when it is stored for a group of the same request and organisation
     /// (otherwise <see cref="WorkItemActionFailureCode.SubmissionReferenceNotFound"/>),
     /// and any group may send the request's total <c>submissionSize</c>
-    /// (<see cref="SubmissionPayload.TryReadSharedSubmission"/>).
+    /// (<see cref="SubmissionPayload.ValidateSharedSubmission"/>), which a
+    /// group sharing a reference must agree with.
     /// </para>
     /// </summary>
     Task<WorkItemSubmissionResult> SubmitPerSiteAsync(
@@ -360,7 +361,7 @@ public sealed class WorkItemService : IWorkItemService
             );
         }
 
-        if (SubmissionPayload.TryReadSharedSubmission(payload, out var shared) is { } sharedError)
+        if (SubmissionPayload.ValidateSharedSubmission(payload) is { } sharedError)
         {
             return WorkItemSubmissionResult.Failure(
                 WorkItemActionFailureCode.InvalidSubmissionPayload,
@@ -370,7 +371,13 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         SubmissionPayload.TryReadOperatorRequestId(payload, out var operatorRequestId);
-        var validated = new ValidatedSubmission(request, referenceFormat, operatorRequestId, shared, now);
+        var validated = new ValidatedSubmission(
+            request,
+            referenceFormat,
+            operatorRequestId,
+            SubmissionPayload.ReadSharedSubmission(payload),
+            now
+        );
 
         for (var attempt = 1; attempt <= MaxSubmissionAttempts; attempt++)
         {
@@ -399,15 +406,15 @@ public sealed class WorkItemService : IWorkItemService
         var operatorRequestId = validated.OperatorRequestId;
         try
         {
-            var (stored, created, failure) = await Transactions.RunAsync(
+            var outcome = await Transactions.RunAsync(
                 (session, token) => CreateSubmissionAsync(session, validated, token),
                 cancellationToken
             );
-            if (failure is not null)
+            if (outcome is SubmissionRefused refused)
             {
-                return failure;
+                return refused.Failure;
             }
-            var submission = stored!;
+            var (submission, created) = (SubmissionStored)outcome;
             if (created.Count == 0)
             {
                 return Replay(type, submission);
@@ -490,26 +497,28 @@ public sealed class WorkItemService : IWorkItemService
     );
 
     /// <summary>
-    /// What one run of <see cref="CreateSubmissionAsync"/> produced: the
-    /// stored submission and the work items it created (none for one a
-    /// concurrent request committed), or the <see cref="Failure"/> that
-    /// stopped it before anything was written.
+    /// What one run of <see cref="CreateSubmissionAsync"/> produced: either
+    /// <see cref="SubmissionStored"/> or <see cref="SubmissionRefused"/>.
     /// </summary>
-    private sealed record SubmissionAttempt(
-        SubmissionRecord? Submission,
-        IReadOnlyList<WorkItem> Created,
-        WorkItemSubmissionResult? Failure
-    )
-    {
-        public static SubmissionAttempt Failed(WorkItemSubmissionResult failure) => new(null, [], failure);
-    }
+    private abstract record SubmissionAttempt;
+
+    /// <summary>
+    /// The stored submission and the work items it created, none for a
+    /// submission a concurrent request committed.
+    /// </summary>
+    private sealed record SubmissionStored(SubmissionRecord Submission, IReadOnlyList<WorkItem> Created)
+        : SubmissionAttempt;
+
+    /// <summary>A refusal found before anything was written.</summary>
+    private sealed record SubmissionRefused(WorkItemSubmissionResult Failure) : SubmissionAttempt;
+
+    /// <summary>The <c>submissionReference</c> and <c>submissionSize</c> a submission's work items are stamped with.</summary>
+    private readonly record struct SubmissionStamp(string Reference, int Size);
 
     /// <summary>
     /// The body of a submission's transaction. The transaction runner may run
     /// it more than once, so it builds everything it writes afresh from
-    /// <paramref name="submission"/>. Returns the stored submission and the
-    /// work items it created, a submission committed by a concurrent
-    /// request and no work items, or a refused shared submission reference.
+    /// <paramref name="submission"/>.
     /// </summary>
     private async Task<SubmissionAttempt> CreateSubmissionAsync(
         IClientSessionHandle session,
@@ -519,40 +528,45 @@ public sealed class WorkItemService : IWorkItemService
     {
         if (await Submissions.FindAsync(session, submission.OperatorRequestId, cancellationToken) is { } winner)
         {
-            return new SubmissionAttempt(winner, [], null);
+            return new SubmissionStored(winner, []);
         }
 
         var request = submission.Request;
         var payload = request.Payload;
         var operatorOrganisationId = SubmissionPayload.ReadOperatorOrganisationId(payload);
-        string submissionReference;
+        var sites = payload[SubmissionPayload.SitesField]
+            .AsBsonArray.Select(site => site.AsBsonDocument)
+            .ToList();
+
+        SubmissionStamp stamp;
         if (submission.Shared.SubmissionReference is { } sharedReference)
         {
-            if (
-                await SharedReferenceFailureAsync(session, submission, sharedReference, operatorOrganisationId, cancellationToken)
-                is { } refused
-            )
+            var joined = await JoinSharedSubmissionAsync(
+                session,
+                submission,
+                sharedReference,
+                operatorOrganisationId,
+                sites.Count,
+                cancellationToken
+            );
+            if (joined.Failure is { } refused)
             {
-                return SubmissionAttempt.Failed(refused);
+                return new SubmissionRefused(refused);
             }
-            submissionReference = sharedReference;
+            stamp = new SubmissionStamp(sharedReference, joined.Size);
         }
         else
         {
             AccreditationYear.TryRead(payload, out var accreditationYear);
-            submissionReference = await _submissionReferenceGenerator.GenerateAsync(
-                session,
-                accreditationYear,
-                cancellationToken
+            stamp = new SubmissionStamp(
+                await _submissionReferenceGenerator.GenerateAsync(session, accreditationYear, cancellationToken),
+                submission.Shared.SubmissionSize ?? sites.Count
             );
         }
 
-        // Each work item holds the shared request fields and exactly one site.
-        var sites = payload[SubmissionPayload.SitesField]
-            .AsBsonArray.Select(site => site.AsBsonDocument)
-            .ToList();
-        var shared = payload.DeepClone().AsBsonDocument;
-        shared.Remove(SubmissionPayload.SitesField);
+        // Each work item holds the request's own fields and exactly one site.
+        var requestFields = payload.DeepClone().AsBsonDocument;
+        requestFields.Remove(SubmissionPayload.SitesField);
         var operatorPaymentReference = ReadOperatorPaymentReference(payload);
         var snapshot = WorkItemTemplateSnapshot.Capture(request.Type);
 
@@ -560,10 +574,10 @@ public sealed class WorkItemService : IWorkItemService
         var items = new List<SubmissionRecordItem>(sites.Count);
         foreach (var site in sites)
         {
-            var itemPayload = shared.DeepClone().AsBsonDocument;
+            var itemPayload = requestFields.DeepClone().AsBsonDocument;
             itemPayload[SubmissionPayload.SiteField] = site.DeepClone();
-            itemPayload[SubmissionPayload.SubmissionReferenceField] = submissionReference;
-            itemPayload[SubmissionPayload.SubmissionSizeField] = submission.Shared.SubmissionSize ?? sites.Count;
+            itemPayload[SubmissionPayload.SubmissionReferenceField] = stamp.Reference;
+            itemPayload[SubmissionPayload.SubmissionSizeField] = stamp.Size;
 
             var applicationReference = await submission.ReferenceFormat.GenerateAsync(
                 session,
@@ -593,43 +607,129 @@ public sealed class WorkItemService : IWorkItemService
         var record = new SubmissionRecord(
             submission.OperatorRequestId,
             request.Type.TypeId,
-            submissionReference,
+            stamp.Reference,
             items,
             submission.Now,
-            operatorOrganisationId
+            operatorOrganisationId,
+            stamp.Size
         );
         await Submissions.InsertAsync(session, record, cancellationToken);
-        return new SubmissionAttempt(record, created, null);
+        return new SubmissionStored(record, created);
     }
+
+    /// <summary>The size a later group joining a shared reference is stamped with, or why it may not join.</summary>
+    private readonly record struct SharedJoin(int Size, WorkItemSubmissionResult? Failure);
 
     /// <summary>
     /// RA-767: a later group of an operator request may share the reference
-    /// its first group was given, but only the one stored for that request
-    /// (the <c>operatorRequestId</c> before its first <c>:</c>) and the same
-    /// organisation, so a caller cannot attach work items to someone else's
-    /// submission. Returns the refusal, or <c>null</c> when it may be shared.
+    /// an earlier group of it was given. The reference must be stored for a
+    /// group of the same request (an <c>operatorRequestId</c> that is the base
+    /// id or starts with <c>{base}:</c>) from the same organisation. Both ids
+    /// and the organisation are the caller's own assertions, so this is a
+    /// consistency check that stops a mistaken reference joining the wrong
+    /// submission; the trust boundary is the client-id policy on the route.
+    /// A record stored before RA-767 holds no organisation, so the work items
+    /// carrying the reference are checked instead.
+    /// The group's <c>submissionSize</c>, when sent, must equal the stored
+    /// one; when not, the stored one is stamped.
     /// </summary>
-    private async Task<WorkItemSubmissionResult?> SharedReferenceFailureAsync(
+    private async Task<SharedJoin> JoinSharedSubmissionAsync(
         IClientSessionHandle session,
         ValidatedSubmission submission,
         string sharedReference,
         string? operatorOrganisationId,
+        int siteCount,
         CancellationToken cancellationToken
     )
     {
+        // ValidateSharedSubmission accepts a reference only on a later group.
         var baseRequestId = SubmissionPayload.BaseRequestId(submission.OperatorRequestId)
             ?? throw new InvalidOperationException("A shared submission reference was read without a base request id.");
-        var stored = await Submissions.FindAsync(session, baseRequestId, cancellationToken);
+        var groupPrefix = baseRequestId + SubmissionPayload.RequestGroupSeparator;
+        var groups = (await Submissions.FindBySubmissionReferenceAsync(session, sharedReference, cancellationToken))
+            .Where(group =>
+                group.OperatorRequestId == baseRequestId
+                || group.OperatorRequestId.StartsWith(groupPrefix, StringComparison.Ordinal)
+            )
+            .ToList();
+
         if (
-            stored is not null
-            && string.Equals(stored.SubmissionReference, sharedReference, StringComparison.Ordinal)
-            && operatorOrganisationId is not null
-            && string.Equals(stored.OperatorOrganisationId, operatorOrganisationId, StringComparison.Ordinal)
+            operatorOrganisationId is null
+            || groups.Count == 0
+            || groups.Any(group =>
+                group.OperatorOrganisationId is { } stored
+                && !string.Equals(stored, operatorOrganisationId, StringComparison.Ordinal)
+            )
         )
         {
-            return null;
+            return ReferenceNotFound(submission, sharedReference, baseRequestId);
         }
 
+        var storedSize = groups.Select(group => group.SubmissionSize).FirstOrDefault(size => size is not null);
+        if (groups.Exists(group => group.OperatorOrganisationId is null))
+        {
+            var legacyItems = await _persistence.FindBySubmissionReferenceAsync(sharedReference, cancellationToken);
+            if (
+                legacyItems.Count == 0
+                || legacyItems.Any(item =>
+                    !string.Equals(
+                        SubmissionPayload.ReadOperatorOrganisationId(item.Payload),
+                        operatorOrganisationId,
+                        StringComparison.Ordinal
+                    )
+                )
+            )
+            {
+                return ReferenceNotFound(submission, sharedReference, baseRequestId);
+            }
+            storedSize ??= legacyItems.Select(item => ReadSubmissionSize(item.Payload)).FirstOrDefault(size => size is not null);
+        }
+
+        return SharedSize(submission, baseRequestId, storedSize, siteCount);
+    }
+
+    private static SharedJoin SharedSize(
+        ValidatedSubmission submission,
+        string baseRequestId,
+        int? storedSize,
+        int siteCount
+    )
+    {
+        var sentSize = submission.Shared.SubmissionSize;
+        if (sentSize is { } sent && storedSize is { } stored && sent != stored)
+        {
+            return SizeRefused(
+                $"payload.{SubmissionPayload.SubmissionSizeField} {sent} differs from {stored}, the size stored "
+                    + $"for operator request '{baseRequestId}'."
+            );
+        }
+
+        var size = sentSize ?? storedSize ?? siteCount;
+        return size < siteCount
+            ? SizeRefused(
+                $"The size stored for operator request '{baseRequestId}' is {size}, fewer than the {siteCount} "
+                    + "sites in this submission."
+            )
+            : new SharedJoin(size, null);
+    }
+
+    private static SharedJoin SizeRefused(string message) =>
+        new(
+            0,
+            WorkItemSubmissionResult.Failure(
+                WorkItemActionFailureCode.InvalidSubmissionPayload,
+                message,
+                SubmissionPayload.InvalidSubmissionSizeErrorCode
+            )
+        );
+
+    private static int? ReadSubmissionSize(BsonDocument payload) =>
+        payload.TryGetValue(SubmissionPayload.SubmissionSizeField, out var size) && size.IsInt32
+            ? size.AsInt32
+            : null;
+
+    private SharedJoin ReferenceNotFound(ValidatedSubmission submission, string sharedReference, string baseRequestId)
+    {
         _logger.LogWarning(
             "Submission {OperatorRequestId} ({TypeId}) sent submissionReference {SubmissionReference}, which is "
                 + "not on file for request {BaseRequestId} and its organisation; refusing it.",
@@ -638,11 +738,14 @@ public sealed class WorkItemService : IWorkItemService
             sharedReference,
             baseRequestId
         );
-        return WorkItemSubmissionResult.Failure(
-            WorkItemActionFailureCode.SubmissionReferenceNotFound,
-            $"submissionReference '{sharedReference}' is not on file for operator request '{baseRequestId}' "
-                + "and this organisation.",
-            SubmissionPayload.SubmissionReferenceNotFoundErrorCode
+        return new SharedJoin(
+            0,
+            WorkItemSubmissionResult.Failure(
+                WorkItemActionFailureCode.SubmissionReferenceNotFound,
+                $"submissionReference '{sharedReference}' is not on file for operator request '{baseRequestId}' "
+                    + "and this organisation.",
+                SubmissionPayload.SubmissionReferenceNotFoundErrorCode
+            )
         );
     }
 

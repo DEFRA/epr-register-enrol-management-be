@@ -381,6 +381,7 @@ public static class WorkItemEndpoints
             SubmissionLogFields(
                 request,
                 ("error.code", failureCode.ToString()),
+                ("error.error_code", errorCode),
                 (ErrorMessageField, message)
             )
         );

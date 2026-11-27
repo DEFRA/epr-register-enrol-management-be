@@ -3,7 +3,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.Utils.Mongo;
 using EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
+using Microsoft.Extensions.DependencyInjection;
+using MongoDB.Bson;
+using MongoDB.Driver;
 using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.UpdateOverseasSite;
@@ -150,7 +154,9 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
     {
         await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
-        var addBody = await PostCreatedAsync(client, AddOverseasSiteSubmissions.Body("request-replay", siteCount: 1));
+        var add = AddOverseasSiteSubmissions.Body("request-replay", siteCount: 1);
+        Payload(add)["submissionSize"] = 2;
+        var addBody = await PostCreatedAsync(client, add);
         var update = LaterGroup("request-replay", addBody.GetProperty("submissionReference").GetString(), submissionSize: 2);
         var first = await client.PostAsJsonAsync("/work-items", update, Ct);
         var firstBody = await first.Content.ReadAsStringAsync(Ct);
@@ -255,16 +261,135 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
         Assert.Equal(2, added!.Payload["submissionSize"].AsInt32);
     }
 
+    // RA-767 review: the issuing group need not be stored under the bare base id.
+    [Fact]
+    public async Task A_later_group_shares_a_reference_issued_to_an_earlier_group_with_a_group_suffix()
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var add = AddOverseasSiteSubmissions.Body("request-suffixed:first", siteCount: 1);
+        Payload(add)["submissionSize"] = 2;
+        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
+
+        var updateBody = await PostCreatedAsync(client, LaterGroup("request-suffixed", reference, submissionSize: 2));
+
+        Assert.Equal(reference, updateBody.GetProperty("submissionReference").GetString());
+    }
+
+    // A record stored before RA-767 holds no organisation or size, so the work
+    // items carrying the reference vouch for the organisation and the size.
+    [Theory]
+    [InlineData("org-1", true)]
+    [InlineData("org-2", false)]
+    public async Task A_later_group_of_a_request_stored_before_RA_767_is_checked_against_its_work_items(
+        string organisationId,
+        bool accepted
+    )
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var add = AddOverseasSiteSubmissions.Body("request-legacy", siteCount: 1);
+        Payload(add)["submissionSize"] = 3;
+        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
+        await Submissions(factory)
+            .UpdateOneAsync(
+                Builders<BsonDocument>.Filter.Eq("_id", "request-legacy"),
+                Builders<BsonDocument>.Update.Unset("operatorOrganisationId").Unset("submissionSize"),
+                cancellationToken: Ct
+            );
+
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            LaterGroup("request-legacy", reference, submissionSize: null, organisationId: organisationId),
+            Ct
+        );
+
+        if (!accepted)
+        {
+            await AssertRefusedAsync(response, "submission-reference-not-found");
+            Assert.Equal(1, await factory.CountAsync("workItems", Ct));
+            return;
+        }
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>(Ct);
+        Assert.Equal(reference, body.GetProperty("submissionReference").GetString());
+        var update = await factory.Persistence.GetByIdAsync(WorkItemIds(body)[0], Ct);
+        Assert.Equal(3, update!.Payload["submissionSize"].AsInt32);
+    }
+
+    [Fact]
+    public async Task A_later_group_that_omits_the_size_is_stamped_with_the_stored_one()
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var add = AddOverseasSiteSubmissions.Body("request-no-size", siteCount: 1);
+        Payload(add)["submissionSize"] = 4;
+        var reference = (await PostCreatedAsync(client, add)).GetProperty("submissionReference").GetString();
+
+        var body = await PostCreatedAsync(client, LaterGroup("request-no-size", reference, submissionSize: null));
+
+        var update = await factory.Persistence.GetByIdAsync(WorkItemIds(body)[0], Ct);
+        Assert.Equal(4, update!.Payload["submissionSize"].AsInt32);
+        var stored = await Submissions(factory)
+            .Find(Builders<BsonDocument>.Filter.Eq("_id", $"request-no-size:{UpdateOverseasSiteType.Id}"))
+            .SingleAsync(Ct);
+        Assert.Equal(4, stored["submissionSize"].AsInt32);
+    }
+
+    [Theory]
+    [InlineData("a different size", 1, 3)]
+    [InlineData("a stored size smaller than its sites", 2, null)]
+    public async Task A_later_group_whose_size_does_not_fit_the_stored_one_is_refused(
+        string _,
+        int siteCount,
+        int? submissionSize
+    )
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var reference = (await PostCreatedAsync(client, AddOverseasSiteSubmissions.Body("request-size", siteCount: 1)))
+            .GetProperty("submissionReference")
+            .GetString();
+
+        var response = await client.PostAsJsonAsync(
+            "/work-items",
+            LaterGroup("request-size", reference, submissionSize, siteCount: siteCount),
+            Ct
+        );
+
+        await AssertRefusedAsync(response, "invalid-submission-size");
+        Assert.Equal(1, await factory.CountAsync("workItems", Ct));
+        Assert.Equal(1, await factory.CountAsync("submissions", Ct));
+    }
+
+    [Fact]
+    public async Task A_size_over_the_upper_bound_is_refused()
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var add = AddOverseasSiteSubmissions.Body("request-huge", siteCount: 1);
+        Payload(add)["submissionSize"] = 1001;
+
+        var response = await client.PostAsJsonAsync("/work-items", add, Ct);
+
+        await AssertRefusedAsync(response, "invalid-submission-size");
+        Assert.Equal(0, await factory.CountAsync("workItems", Ct));
+    }
+
+    private static IMongoCollection<BsonDocument> Submissions(OverseasSiteAppFactory factory) =>
+        factory.Services.GetRequiredService<IMongoDbClientFactory>().GetCollection<BsonDocument>("submissions");
+
     private static JsonObject Payload(JsonObject body) => body["payload"]!.AsObject();
 
     private static JsonObject LaterGroup(
         string requestId,
         string? submissionReference,
-        int submissionSize = 2,
-        string organisationId = "org-1"
+        int? submissionSize = 2,
+        string organisationId = "org-1",
+        int siteCount = 1
     )
     {
-        var body = UpdateOverseasSiteSubmissions.Body($"{requestId}:{UpdateOverseasSiteType.Id}", siteCount: 1);
+        var body = UpdateOverseasSiteSubmissions.Body($"{requestId}:{UpdateOverseasSiteType.Id}", siteCount: siteCount);
         Payload(body)["submissionReference"] = submissionReference;
         Payload(body)["submissionSize"] = submissionSize;
         Payload(body)["operatorOrganisationId"] = organisationId;

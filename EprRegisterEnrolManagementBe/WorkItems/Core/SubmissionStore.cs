@@ -12,8 +12,10 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Core;
 /// submission with the same id finds or collides with it.
 /// RA-767: <see cref="OperatorOrganisationId"/> is the submitting
 /// organisation, so a later group of the same operator request can be checked
-/// against it before it shares <see cref="SubmissionReference"/>. <c>null</c>
-/// on a record stored before RA-767.
+/// against it before it shares <see cref="SubmissionReference"/>, and
+/// <see cref="SubmissionSize"/> is the size stamped on its work items, which a
+/// later group sharing the reference must agree with. Both are <c>null</c> on
+/// a record stored before RA-767.
 /// </summary>
 public sealed record SubmissionRecord(
     string OperatorRequestId,
@@ -21,7 +23,8 @@ public sealed record SubmissionRecord(
     string SubmissionReference,
     IReadOnlyList<SubmissionRecordItem> WorkItems,
     DateTime SubmittedAt,
-    string? OperatorOrganisationId
+    string? OperatorOrganisationId,
+    int? SubmissionSize
 );
 
 /// <summary>RA-739: the work item created for one site of a <see cref="SubmissionRecord"/>.</summary>
@@ -48,6 +51,17 @@ public interface ISubmissionStore
     );
 
     /// <summary>
+    /// RA-767: every stored submission whose <see cref="SubmissionRecord.SubmissionReference"/>
+    /// is <paramref name="submissionReference"/>, read inside <paramref name="session"/>:
+    /// the groups of one operator request that share it.
+    /// </summary>
+    Task<IReadOnlyList<SubmissionRecord>> FindBySubmissionReferenceAsync(
+        IClientSessionHandle session,
+        string submissionReference,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
     /// Insert <paramref name="record"/> in <paramref name="session"/>. A record
     /// with the same <see cref="SubmissionRecord.OperatorRequestId"/> already
     /// on file raises a duplicate-key error.
@@ -63,8 +77,10 @@ public interface ISubmissionStore
 /// MongoDB-backed <see cref="ISubmissionStore"/>. One document per submission,
 /// shaped <c>{ _id: operatorRequestId, typeId, submissionReference,
 /// workItems: [{ siteId, workItemId, applicationReference }], submittedAt,
-/// operatorOrganisationId }</c>.
-/// Only the implicit unique <c>_id</c> index is needed. The collection is
+/// operatorOrganisationId, submissionSize }</c>.
+/// Besides the implicit unique <c>_id</c> index, a non-unique one on
+/// <c>submissionReference</c> backs <see cref="FindBySubmissionReferenceAsync"/>
+/// (RA-767: the groups of one request share a reference). The collection is
 /// created when the store is constructed (see <see cref="MongoService{T}"/>),
 /// so the first submission's transaction never has to create it.
 /// </summary>
@@ -106,6 +122,18 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
         return document is null ? null : FromDocument(document);
     }
 
+    public async Task<IReadOnlyList<SubmissionRecord>> FindBySubmissionReferenceAsync(
+        IClientSessionHandle session,
+        string submissionReference,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var documents = await Collection
+            .Find(session, Builders<BsonDocument>.Filter.Eq(SubmissionReferenceKey, submissionReference))
+            .ToListAsync(cancellationToken);
+        return documents.Select(FromDocument).ToList();
+    }
+
     public Task InsertAsync(
         IClientSessionHandle session,
         SubmissionRecord record,
@@ -119,7 +147,9 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
 
     protected override List<CreateIndexModel<BsonDocument>> DefineIndexes(
         IndexKeysDefinitionBuilder<BsonDocument> builder
-    ) => [];
+    ) => [new CreateIndexModel<BsonDocument>(builder.Ascending(SubmissionReferenceKey))];
+
+    private const string SubmissionReferenceKey = "submissionReference";
 
     private static FilterDefinition<BsonDocument> ById(string operatorRequestId) =>
         Builders<BsonDocument>.Filter.Eq("_id", operatorRequestId);
@@ -129,7 +159,7 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
         {
             ["_id"] = record.OperatorRequestId,
             ["typeId"] = record.TypeId,
-            ["submissionReference"] = record.SubmissionReference,
+            [SubmissionReferenceKey] = record.SubmissionReference,
             ["workItems"] = new BsonArray(
                 record.WorkItems.Select(item => new BsonDocument
                 {
@@ -142,13 +172,14 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
             ["operatorOrganisationId"] = record.OperatorOrganisationId is { } organisationId
                 ? organisationId
                 : BsonNull.Value,
+            ["submissionSize"] = record.SubmissionSize is { } size ? size : BsonNull.Value,
         };
 
     private static SubmissionRecord FromDocument(BsonDocument document) =>
         new(
             document["_id"].AsString,
             document["typeId"].AsString,
-            document["submissionReference"].AsString,
+            document[SubmissionReferenceKey].AsString,
             document["workItems"]
                 .AsBsonArray.Select(value => value.AsBsonDocument)
                 .Select(item => new SubmissionRecordItem(
@@ -160,6 +191,7 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
             document["submittedAt"].ToUniversalTime(),
             document.TryGetValue("operatorOrganisationId", out var organisationId) && organisationId.IsString
                 ? organisationId.AsString
-                : null
+                : null,
+            document.TryGetValue("submissionSize", out var size) && size.IsInt32 ? size.AsInt32 : null
         );
 }

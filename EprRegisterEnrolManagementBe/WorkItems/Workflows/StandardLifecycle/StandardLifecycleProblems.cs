@@ -20,9 +20,10 @@ internal static class StandardLifecycleProblems
     /// (the frontend's answer is "this application has changed, reload it",
     /// never a field error); a generic 500 with no <c>errorCode</c> for a
     /// work item whose template cannot be resolved (a server-side
-    /// configuration problem); 400 otherwise. The only 400 a service itself
-    /// produces is a type mismatch, which gets an <c>errorCode</c> so the
-    /// frontend never parses prose.
+    /// configuration problem); 400 otherwise. The 400s a service itself
+    /// produces carry an <c>errorCode</c> so the frontend never parses prose:
+    /// a type mismatch (<c>wrong-work-item-type</c>), or a payment date
+    /// refused at duly making, which also names its <c>field</c>.
     /// </summary>
     public static ProblemHttpResult ServiceFailure(WorkItemActionResult result, string title) =>
         Problem(result, title, ServiceStatus(result.FailureCode));

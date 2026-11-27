@@ -449,12 +449,12 @@ internal static class ReAccreditationEndpoints
     /// payment date, stamping that date on the payload, notifying the operator
     /// and pushing the new status — runs atomically with the state transition.
     ///
-    /// Payment-date validation happens in the endpoint rather than in the
-    /// service, because only the endpoint can shape the response the case
-    /// management frontend needs: a 400 ProblemDetails carrying a stable
-    /// machine-readable <c>errorCode</c> and <c>field</c>, which it binds to a
-    /// GOV.UK error summary against the date input. Everything else is a
-    /// page-level failure on that side, so the two must stay clearly
+    /// The service validates the payment date once it has loaded the work
+    /// item (whether a date is taken is the type's rule), and its refusal maps
+    /// to a 400 ProblemDetails carrying a stable machine-readable
+    /// <c>errorCode</c> and <c>field</c>, which the case management frontend
+    /// binds to a GOV.UK error summary against the date input. Everything else
+    /// is a page-level failure on that side, so the two must stay clearly
     /// distinguishable — see <see cref="StandardDulyMakingValidator"/> for
     /// the code vocabulary, which is part of the wire contract with
     /// management-fe and mgmt-tests.
@@ -469,7 +469,6 @@ internal static class ReAccreditationEndpoints
         [FromBody] DulyMakeRequest? request,
         [FromKeyedServices(ReAccreditationType.Id)] IStandardDulyMakingService dulyMakingService,
         [FromServices] IWorkItemService engine,
-        [FromServices] TimeProvider timeProvider,
         CancellationToken cancellationToken
     ) =>
         StandardLifecycleEndpoints.DulyMake(
@@ -478,7 +477,6 @@ internal static class ReAccreditationEndpoints
             new StandardDulyMakeRequest(request?.PaymentDate),
             dulyMakingService,
             engine,
-            timeProvider,
             cancellationToken
         );
 

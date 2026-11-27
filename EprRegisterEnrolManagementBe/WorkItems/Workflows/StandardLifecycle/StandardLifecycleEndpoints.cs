@@ -186,11 +186,13 @@ internal static class StandardLifecycleEndpoints
 
     /// <summary>
     /// Duly make a work item with the payment date the caseworker entered.
-    /// A date that is sent is checked here so a 400 can carry the stable
-    /// <c>errorCode</c> and <c>field</c> management-fe binds to its error
-    /// summary (<see cref="StandardDulyMakingValidator"/>). Whether one must be
-    /// sent depends on the type (<see cref="IStandardDulyMakingRules.TakesPaymentDate"/>),
-    /// so the service decides that, with the same codes and field.
+    /// Whether a date is taken depends on the type
+    /// (<see cref="IStandardDulyMakingRules.TakesPaymentDate"/>), so the service
+    /// validates it once the work item is loaded. Its refusal is a 400 carrying
+    /// the stable <c>errorCode</c> (<see cref="StandardDulyMakingValidator"/>)
+    /// and <c>field</c> management-fe binds to its error summary. An unknown
+    /// work item is a 404, and a type that has not opted in is
+    /// <c>wrong-work-item-type</c>, before any date is looked at.
     /// </summary>
     public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> DulyMake(
         [FromRoute] Guid id,
@@ -198,37 +200,12 @@ internal static class StandardLifecycleEndpoints
         [FromBody] StandardDulyMakeRequest? request,
         [FromServices] IStandardDulyMakingService dulyMakingService,
         [FromServices] IWorkItemService engine,
-        [FromServices] TimeProvider timeProvider,
         CancellationToken cancellationToken
     )
     {
-        DateOnly? paymentDate = null;
-        if (!string.IsNullOrWhiteSpace(request?.PaymentDate))
-        {
-            var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
-            var validation = StandardDulyMakingValidator.Validate(request.PaymentDate, today);
-            if (validation.IsValid)
-            {
-                paymentDate = validation.PaymentDate;
-            }
-            else
-            {
-                return TypedResults.Problem(
-                    title: DulyMakeProblemTitle,
-                    detail: validation.Detail,
-                    statusCode: StatusCodes.Status400BadRequest,
-                    extensions: new Dictionary<string, object?>
-                    {
-                        [StandardLifecycleProblems.ErrorCodeKey] = validation.ErrorCode,
-                        [StandardLifecycleProblems.FieldKey] = StandardDulyMakingValidator.Field,
-                    }
-                );
-            }
-        }
-
         var result = await dulyMakingService.CompleteDulyMakingAsync(
             id,
-            paymentDate,
+            request?.PaymentDate,
             httpContext.User,
             cancellationToken
         );
