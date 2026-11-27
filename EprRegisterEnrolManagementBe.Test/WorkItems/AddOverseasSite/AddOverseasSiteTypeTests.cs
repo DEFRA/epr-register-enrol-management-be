@@ -16,7 +16,7 @@ public sealed class AddOverseasSiteTypeTests
         IWorkItemType type = new AddOverseasSiteType();
 
         Assert.Equal("add-overseas-site", type.TypeId);
-        Assert.Equal("New ORS accreditation", type.DisplayName);
+        Assert.Equal("Accreditation: add registered ORS", type.DisplayName);
         Assert.Equal(WorkItemCategories.InYearChange, type.Category);
         Assert.Equal("ORS", type.InYearChangeCode);
         Assert.True(type.SplitsSubmissionPerSite);

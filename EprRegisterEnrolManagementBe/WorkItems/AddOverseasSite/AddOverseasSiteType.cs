@@ -39,7 +39,10 @@ internal sealed class AddOverseasSiteType : IWorkItemType
     );
 
     public string TypeId => Id;
-    public string DisplayName => "New ORS accreditation";
+    // RA-681: the case management request type label, kept in step with
+    // management-fe. Not frozen into the template snapshot, so existing items
+    // need no migration.
+    public string DisplayName => "Accreditation: add registered ORS";
 
     // v1 (RA-739): the Standard workflow as it stood (re-accreditation's v19
     // rules), with the withdraw* transitions caller-invocable.

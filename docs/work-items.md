@@ -303,7 +303,7 @@ type is configured. Every setting is code, not runtime data:
 
 | Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) | ORS update (`update-overseas-site`) |
 | --- | --- | --- | --- | --- | --- |
-| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` | `"ORS update"` |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"Accreditation: add registered ORS"` | `"ORS update"` |
 | Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` | `in-year-change` |
 | In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` | `"ORS"` (shared, RA-682) |
 | Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` | `true` |
