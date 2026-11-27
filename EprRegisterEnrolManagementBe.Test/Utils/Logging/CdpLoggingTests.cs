@@ -76,9 +76,14 @@ public class CdpLoggingTests
             )
             .BuildServiceProvider();
 
+        // Console.Out is process-wide, so tests running in parallel write to
+        // the captured writer too. A bare StringWriter is not thread-safe and
+        // its buffer can be corrupted mid-write, so every write and the final
+        // read go through one synchronised wrapper.
         var originalOut = Console.Out;
         var capturedOutput = new StringWriter();
-        Console.SetOut(capturedOutput);
+        var synchronisedOutput = TextWriter.Synchronized(capturedOutput);
+        Console.SetOut(synchronisedOutput);
         try
         {
             var ctx = NewHostBuilderContext(withConsoleSink: true);
@@ -93,7 +98,11 @@ public class CdpLoggingTests
             Console.SetOut(originalOut);
         }
 
-        var output = capturedOutput.ToString();
+        string output;
+        lock (synchronisedOutput)
+        {
+            output = capturedOutput.ToString();
+        }
         Assert.Contains(PiiRedactionEnricher.RedactedValue, output);
         Assert.DoesNotContain("person@example.com", output);
     }
