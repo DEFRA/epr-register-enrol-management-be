@@ -30,6 +30,20 @@ public interface IOperatorBackendPushAdapter
         CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// RA-698: push a query raised against an in-year change request item
+    /// (add-ORS) to <c>POST api/v1/accreditation-changes/case-management/{workItemId}/query</c>
+    /// with <c>{ note, raisedAt }</c>. Same auth, signing, retry and
+    /// never-throws behaviour as <see cref="PushQueryRaisedAsync"/>; the item is
+    /// one ORS, so there are no section keys.
+    /// </summary>
+    Task<OperatorBackendPushResult> PushChangeRequestQueryRaisedAsync(
+        Guid workItemId,
+        Guid correlationId,
+        string queryNote,
+        DateTime raisedAt,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// RA-368: push a work item's state transition to the operator backend so
     /// its own record of application progress (<c>ApplicationStatus</c>)
     /// reflects the Case Management service's lifecycle beyond just queries.

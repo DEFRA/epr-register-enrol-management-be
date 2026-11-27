@@ -275,8 +275,9 @@ and `WorkItemReferenceGenerator` picks one from the type's
    `WorkItems/Workflows/`).
 
 3. **Implement `IWorkItemModule`** to register the module's services and
-   endpoints. Mount endpoints under `/work-items/<type-id>/...` to keep
-   modules isolated from each other.
+   endpoints. Namespace type-specific routes under `/work-items/<type-id>/...`
+   to keep modules isolated from each other; routes keyed by work item id alone
+   are allowed only under the exception in [Conventions](#conventions).
 
 4. **Register the module** in `Program.cs`:
 
@@ -309,7 +310,7 @@ type is configured. Every setting is code, not runtime data:
 | Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` | `true` |
 | Required submission fields | `RequiredSubmissionFields` (RA-682) | `SubmissionPayload.ChargedRequiredFields` (includes `paymentReference`) | the default | the default | `SubmissionPayload.UnchargedRequiredFields` (no `paymentReference`) |
 | Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `StandardWorkflow.WithdrawNotCallerInvocable("standard-add-overseas-site")`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` | the same rules under `standard-update-overseas-site` (`StandardWorkflow.WithdrawNotCallerInvocable`) |
-| Template version | `TemplateVersion` | — (required) | `v19` | `v2` | `v1` |
+| Template version | `TemplateVersion` | — (required) | `v19` | `v3` | `v1` |
 
 - **Required submission fields** leave out `paymentReference` only for a type
   that is never charged. Its submission may leave `paymentReference` out, and then each work
@@ -358,7 +359,7 @@ type is configured. Every setting is code, not runtime data:
   workflow changes every type that references it, so each of those types
   needs a new `TemplateVersion` and a snapshot migration. A type that needs
   different rules from a shared workflow derives its own instead of changing
-  the shared one: add-ORS v2 (RA-495 review) is `StandardWorkflow.Definition`
+  the shared one: add-ORS v2 (RA-495 review, v3 for RA-698) is `StandardWorkflow.Definition`
   with its `withdraw*` transitions made `CallerInvocable: false`, because
   withdraw is re-accreditation-only and re-accreditation still withdraws
   through the shared workflow.
@@ -492,9 +493,9 @@ type is configured. Every setting is code, not runtime data:
   (`field`): `effective-date-required` / `-invalid` / `-before-year-start` /
   `-after-year-end` (`effectiveDate`), `effective-date-reason-required` /
   `effective-date-reason-too-long` (`reason`, max 200 words).
-  Query and withdraw stay re-accreditation-only. The `query-during-*`
-  transitions are already `CallerInvocable: false`; since v2 (RA-495 review)
-  add-ORS's `withdraw*` transitions are too, so
+  Withdraw stays re-accreditation-only (query is add-ORS too since RA-698, see
+  [Add-ORS query and response](#add-ors-query-and-response-ra-698)). Since v2
+  (RA-495 review) add-ORS's `withdraw*` transitions are `CallerInvocable: false`, so
   `POST /work-items/{id}/actions/withdraw*` returns `400` for an add-ORS item
   and `availableActions` no longer lists them. Before that the generic route
   could withdraw one, and the status push hook (which never pushes a move onto
@@ -506,6 +507,79 @@ type is configured. Every setting is code, not runtime data:
   skips an item with no caller-invocable `withdraw*` declaration. Management-fe
   registers its add-ORS detail template for both versions.
 
+### Add-ORS query and response (RA-698)
+
+A regulator can query an add-ORS item, and the operator answers it. The item is
+one ORS, so the query is implicitly a combined ORS and BES query: there are no
+section keys. The shared state machine already declares the transitions
+(`query-during-*`, `resume-during-*`, `continue-review-during-*`, all
+`CallerInvocable: false`); add-ORS **v3** wires them to bespoke endpoints in
+`WorkItems/AddOverseasSite/` and bumps `TemplateVersion` to `v3`.
+`AddOverseasSiteQuerySnapshotMigration` (registered after the v2 migration)
+brings v1/v2 snapshots onto v3: it makes those declarations (and `withdraw*`)
+non-invocable, adds any a snapshot lacks, and sets the version; it writes only
+`TemplateSnapshot` and `TemplateVersion`. The transition is resolved
+server-side (never named by the caller) as for re-accreditation, by
+`StandardQueryActions`.
+
+| Route | Caller | What it does |
+|---|---|---|
+| `POST /work-items/{id}/query` | regulator (management-fe) | Body `{ reason }` only (required, at most 200 words; `sections` is refused with `400`). Self-assigns the querier, stamps `payload.currentQuery`, applies `query-during-*` from `submitted`/`duly-made`/`assessment-in-progress`/`assessment-started`/`awaiting-decision` to `queried`, and records an `application-queried` audit entry (`actionId`, `reason`). `409` when already `queried` or decided; `400` for another type. |
+| `POST /work-items/add-overseas-site/{id}/resume-from-query` | operator backend | Body `{ responderContactDetails:{fullName,email,role}, submittedAt, site:{changed ORS values}, interimSites:[{siteId,siteNumber,changes}], besEvidenceFiles:[{fileId,filename,contentType,s3Key,s3Bucket,besEvidenceValidFromDate,besEvidenceExpiryDate}] }`. See below. |
+| `POST /work-items/{id}/continue-review` | regulator | Moves an `updated` item back to where it was queried from (resolved from its `resume-during-*` audit entry). Idempotent (`X-Idempotent-Replay`); `409` from any other state. |
+
+**Query push (MBE-3).** `AddOverseasSiteQueryPushHook` pushes the note to the
+operator backend through `IOperatorBackendPushAdapter.PushChangeRequestQueryRaisedAsync`:
+`POST api/v1/accreditation-changes/case-management/{workItemId}/query` with
+`{ note, raisedAt }`, the same client id, signing, retries and correlation id
+as the status push. The outcome is audited as `query-push-sent`,
+`query-push-skipped` (push disabled) or `query-push-failed`; a failed push
+never undoes the query. A query is excluded from the status push, so it is sent
+once, with its note.
+
+**Resume from query (MBE-4).** The item must be `queried` (an item already
+resumed is a replay: any other state is `409`). A replay whose values and BES
+files are all already on the site is an idempotent no-op (the operator backend's
+retry, which carries a fresh `submittedAt`); one that differs, because the
+operator resubmitted after the backend refused to mark the item Updated when a
+second tab had added an answer or BES file, is applied to `payload.site` the
+same way (changed values, new BES files appended by `fileId`, `scanStatus:
+"Clean"`), re-stamped on `payload.latestQueryResponse` (original `from` values
+of the round kept) and audited as a `query-responded` entry named "Query
+response updated" (no `actionId`), with no transition and no re-assignment. A replay may
+also carry the optional `removedBesFileIds` (string array; absent or empty is
+today's behaviour): the `fileId`s of BES files the backend sent in an earlier
+response of this round and has since had deleted by a second tab. Each is removed
+from `payload.site.besEvidence.files` and from the stamped
+`latestQueryResponse.besEvidenceFiles`, but only if the latest response of this
+query round stamped it (so a file that predates the query is never removed) and the
+site still holds it; an unknown id is ignored, so replaying the same removal is a
+no-op, and a removal counts as a difference (audited as "Query response updated",
+`removedFileReferences` `bes-evidence:{fileId}`). It has no effect on an item
+still `queried`. The response must
+change something (a changed value, a new BES file or a removed one) and is validated: ORS fields are limited to `siteName`,
+`addressLine1`, `addressLine2`, `townOrCity`, `stateOrRegion`,
+`postcode`, `contactName`, `contactEmail`, `contactPhone` and
+`rejectedLoadsArrangements`; interim site changes to the same without
+`rejectedLoadsArrangements`. Any other key (country, coordinates, operation
+codes, `orsId`) is a `400`, so a locked field cannot be overwritten. Values
+are applied to `payload.site` and to the `payload.site.interimSites` entry
+matched on `siteNumber` (else `siteId`), the response is stamped on
+`payload.latestQueryResponse` (including the new BES files, which are also
+appended to `payload.site.besEvidence.files`, de-duplicated by `fileId` and
+stamped `scanStatus: "Clean"` because the operator backend forwards only
+scanned files), and the item
+moves by the `resume-during-*` for the query it answers (to `updated`;
+`resume-during-duly-made` lands in `assessment-in-progress`, also shown as
+"Updated"), after which the querier is re-assigned. A `query-responded` audit
+entry records the responder, `siteChanges` and `interimSiteChanges` as JSON
+(old and new values per field), `fileReferences`
+(`bes-evidence:{fileId}:{filename}`) and `unmatchedInterimSites` (interim
+changes that matched no interim site: audited, not applied). The status push
+for this move is suppressed (`IStandardLifecycleStrategy.PushesQueryResponseStatus`
+is `false` for add-ORS), because the operator journey sent the response and
+already holds that status; the later `continue-review` move is pushed as usual.
+
 ## Conventions
 
 - A module **must not** depend on another module. If two modules need shared
@@ -514,8 +588,11 @@ type is configured. Every setting is code, not runtime data:
 - Module DI registrations should use **module-scoped interfaces**
   (`IMyTypePersistence`, not `IPersistence`) to avoid colliding with other
   modules.
-- A module's HTTP routes should namespace themselves under
+- A module's type-specific HTTP routes should namespace themselves under
   `/work-items/<type-id>` so they do not clash with another module's routes.
+  Routes keyed by work item id alone (the framework lifecycle routes, and
+  add-ORS's `/work-items/{id}/query` and `/continue-review`) are allowed where
+  the type is resolved from the item and the service refuses other types.
 - Treat `IWorkItemType` as data: no I/O, no DI dependencies. Behaviour
   belongs in service objects registered via `RegisterServices`.
 - Form submissions (state transitions, type-specific payload edits)

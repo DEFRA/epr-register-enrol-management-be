@@ -40,6 +40,12 @@ internal sealed class AddOverseasSiteLifecycleStrategy(StandardDeterminationWrit
     /// <summary>RA-495 AC6: an approval names its effective date, and the site is accredited from it.</summary>
     public bool TakesEffectiveDate => true;
 
+    /// <summary>
+    /// RA-698: the operator journey sends the query response itself, so the
+    /// move onto Updated is not pushed back to it.
+    /// </summary>
+    public bool PushesQueryResponseStatus => false;
+
     public int? ReadChargePence(WorkItem workItem) =>
         SubmissionPayload.ReadSite(workItem.Payload) is { } site
         && site.TryGetValue(SiteChargePenceField, out var charge)

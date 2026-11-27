@@ -98,7 +98,8 @@ internal static class StandardLifecycleServiceCollectionExtensions
                 services.GetRequiredService<IWorkItemRegistry>(),
                 services.GetRequiredService<IBackgroundTaskQueue>(),
                 services.GetRequiredService<HeaderPropagationValues>(),
-                Logger<StandardStatusPushHook>(services)
+                Logger<StandardStatusPushHook>(services),
+                strategy.PushesQueryResponseStatus
             );
         });
 

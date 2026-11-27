@@ -12,11 +12,18 @@ namespace EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 /// site, all sharing one <c>SUB-{yyyy}-{sequence}</c> submission reference.
 /// It follows the shared <see cref="StandardWorkflow"/>, and its lifecycle
 /// actions run through the shared Standard-lifecycle routes (RA-495, see
-/// <see cref="AddOverseasSiteLifecycleStrategy"/>). Query and withdraw stay
-/// re-accreditation-only: the query transitions are already
-/// <c>CallerInvocable: false</c> in the Standard workflow, and this type's own
-/// <see cref="Workflow"/> makes every <c>withdraw*</c> declaration
-/// <c>CallerInvocable: false</c> too (v2).
+/// <see cref="AddOverseasSiteLifecycleStrategy"/>). Withdraw stays
+/// re-accreditation-only: this type's own <see cref="Workflow"/> makes every
+/// <c>withdraw*</c> declaration <c>CallerInvocable: false</c> (v2).
+///
+/// RA-698 (v3): a regulator can query an add-ORS item and the operator can
+/// answer it. The query-during-*, resume-during-* and continue-review-during-*
+/// transitions are the Standard workflow's and stay
+/// <c>CallerInvocable: false</c>: they are reachable only through this
+/// module's bespoke services (<see cref="AddOverseasSiteQueryService"/>,
+/// <see cref="AddOverseasSiteResumeService"/>,
+/// <see cref="AddOverseasSiteContinueReviewService"/>), which resolve the
+/// right one server-side, stamp and audit the query, and apply the response.
 /// </summary>
 internal sealed class AddOverseasSiteType : IWorkItemType
 {
@@ -48,7 +55,12 @@ internal sealed class AddOverseasSiteType : IWorkItemType
     // snapshotted under v1 keep them caller-invocable until
     // AddOverseasSiteWithdrawNotCallerInvocableSnapshotMigration patches
     // their frozen snapshot.
-    public string TemplateVersion => "v2";
+    // v3 (RA-698): the query, resume and continue-review transitions are
+    // wired to bespoke endpoints. The declarations themselves are unchanged
+    // (all CallerInvocable: false), so the bump marks the rules and
+    // AddOverseasSiteQuerySnapshotMigration brings v1/v2 snapshots onto them,
+    // adding any of those declarations a snapshot lacks.
+    public string TemplateVersion => "v3";
 
     public string? Category => WorkItemCategories.InYearChange;
     public string? InYearChangeCode => "ORS";

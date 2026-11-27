@@ -48,6 +48,14 @@ internal interface IStandardLifecycleStrategy : IStandardDulyMakingRules
     /// contact.
     /// </summary>
     bool TakesEffectiveDate => false;
+
+    /// <summary>
+    /// RA-698: whether the post-commit status push also reports a query
+    /// response (<c>resume-during-*</c>). False for a type whose operator
+    /// journey is itself the sender of the response (add-ORS), so the move is
+    /// not echoed back to it. Re-accreditation keeps reporting it.
+    /// </summary>
+    bool PushesQueryResponseStatus => true;
 }
 
 /// <summary>

@@ -20,7 +20,7 @@ public sealed class AddOverseasSiteTypeTests
         Assert.Equal(WorkItemCategories.InYearChange, type.Category);
         Assert.Equal("ORS", type.InYearChangeCode);
         Assert.True(type.SplitsSubmissionPerSite);
-        Assert.Equal("v2", type.TemplateVersion);
+        Assert.Equal("v3", type.TemplateVersion);
         Assert.Equal("submitted", type.InitialState.Id);
     }
 
@@ -69,6 +69,24 @@ public sealed class AddOverseasSiteTypeTests
 
         Assert.Equal(7, withdraws.Count);
         Assert.All(withdraws, t => Assert.True(t.CallerInvocable));
+    }
+
+    // RA-698 (v3): the query, resume and continue-review transitions are the
+    // Standard workflow's, reachable only through the module's bespoke services.
+    [Fact]
+    public void Declares_the_query_resume_and_continue_review_transitions_as_bespoke_only()
+    {
+        var bespoke = new AddOverseasSiteType()
+            .Transitions.Where(t =>
+                t.ActionId.StartsWith("query-during-", StringComparison.Ordinal)
+                || t.ActionId.StartsWith("resume-during-", StringComparison.Ordinal)
+                || t.ActionId.StartsWith("continue-review-during-", StringComparison.Ordinal)
+            )
+            .ToList();
+
+        // 5 query (assessment-started shares query-during-assessment), 4 resume, 4 continue-review.
+        Assert.Equal(13, bespoke.Count);
+        Assert.All(bespoke, t => Assert.False(t.CallerInvocable));
     }
 
     [Fact]

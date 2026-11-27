@@ -60,7 +60,7 @@ public sealed class AddOverseasSiteWithdrawEndpointTests(MongoIntegrationFixture
 
         var body = await client.GetFromJsonAsync<WorkItemResponse>($"/work-items/{id}", ct);
 
-        Assert.Equal("v2", body!.TemplateVersion);
+        Assert.Equal("v3", body!.TemplateVersion);
         Assert.DoesNotContain(body.AvailableActions, a => a.ActionId.StartsWith("withdraw", StringComparison.Ordinal));
     }
 
