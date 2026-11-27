@@ -158,7 +158,8 @@ internal sealed class StandardDulyMakingService(
             return dateFailure;
         }
 
-        for (var attempt = 1; ; attempt++)
+        WorkItemConcurrencyException? lastConflict = null;
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
             var outcome = await AttemptAsync(loaded, paymentDate.Date, user, cancellationToken);
             if (outcome.Failure is { } attemptFailure)
@@ -179,9 +180,10 @@ internal sealed class StandardDulyMakingService(
                 return WorkItemActionResult.Success(persisted);
             }
 
+            lastConflict = outcome.Conflict;
             if (attempt == MaxAttempts)
             {
-                return Abandoned(workItemId, outcome.Conflict);
+                break;
             }
 
             loaded = await LoadAsync(workItemId, cancellationToken);
@@ -190,6 +192,8 @@ internal sealed class StandardDulyMakingService(
                 return reloadFailure;
             }
         }
+
+        return Abandoned(workItemId, lastConflict);
     }
 
     /// <summary>
