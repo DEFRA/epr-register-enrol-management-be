@@ -341,7 +341,7 @@ public sealed class WorkItemService : IWorkItemService
 
         var referenceFormat = _referenceGenerator.ForType(type);
         var payloadError =
-            SubmissionPayload.Validate(payload, type.RequiresPaymentReference)
+            SubmissionPayload.Validate(payload, type.RequiredSubmissionFields)
             ?? referenceFormat.ValidatePayload(payload);
         if (payloadError is not null)
         {
@@ -799,13 +799,11 @@ public sealed class WorkItemService : IWorkItemService
     /// <c>null</c> when it carries none.
     /// </summary>
     private static string? ReadOperatorPaymentReference(BsonDocument payload) =>
-        payload.TryGetValue(PaymentReferenceField, out var value)
+        payload.TryGetValue(SubmissionPayload.PaymentReferenceField, out var value)
         && value.IsString
         && !string.IsNullOrWhiteSpace(value.AsString)
             ? value.AsString
             : null;
-
-    private const string PaymentReferenceField = "paymentReference";
 
     /// <summary>
     /// A new work item of <paramref name="request"/>'s type in its initial
@@ -829,7 +827,7 @@ public sealed class WorkItemService : IWorkItemService
         // to applicationReference only when the payload never carried one - a submitter that
         // predates this (RA-447/CM3, RA-316) or a source that doesn't send it, so this is
         // never left blank rather than because the two are meant to be interchangeable.
-        payload[PaymentReferenceField] = operatorPaymentReference ?? applicationReference;
+        payload[SubmissionPayload.PaymentReferenceField] = operatorPaymentReference ?? applicationReference;
 
         var workItem = new WorkItem
         {

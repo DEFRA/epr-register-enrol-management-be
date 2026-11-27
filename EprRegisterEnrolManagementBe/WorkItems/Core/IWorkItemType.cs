@@ -68,12 +68,14 @@ public interface IWorkItemType : IWorkItemTemplate
     string? InYearChangeCode => null;
 
     /// <summary>
-    /// RA-682: whether a submission of this type must carry a
-    /// <c>paymentReference</c> (see <see cref="SubmissionPayload.Validate"/>).
-    /// Defaults to <c>true</c>, so existing types need no change. A type that is
-    /// never charged (the ORS update) sets it to <c>false</c>.
+    /// RA-682: the payload fields a submission of this type must carry (see
+    /// <see cref="SubmissionPayload.Validate"/>). Defaults to
+    /// <see cref="SubmissionPayload.ChargedRequiredFields"/>, which include
+    /// <c>paymentReference</c>, so existing types need no change. A type that
+    /// is never charged (the ORS update) returns
+    /// <see cref="SubmissionPayload.UnchargedRequiredFields"/>.
     /// </summary>
-    bool RequiresPaymentReference => true;
+    IReadOnlyCollection<string> RequiredSubmissionFields => SubmissionPayload.ChargedRequiredFields;
 
     /// <summary>
     /// Stable identifier for the current shape of this type's templates and

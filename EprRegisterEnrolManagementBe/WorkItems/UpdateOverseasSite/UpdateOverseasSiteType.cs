@@ -38,7 +38,7 @@ internal sealed class UpdateOverseasSiteType : IWorkItemType
     public bool SplitsSubmissionPerSite => true;
 
     /// <summary>RA-682 AC05: no charge, so nothing is paid and there is no payment reference.</summary>
-    public bool RequiresPaymentReference => false;
+    public IReadOnlyCollection<string> RequiredSubmissionFields => SubmissionPayload.UnchargedRequiredFields;
 
     public WorkItemWorkflow Workflow => s_workflow;
     public WorkItemState InitialState => Workflow.InitialState;

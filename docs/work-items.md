@@ -101,7 +101,7 @@ stores the rest of the site as sent.
 
 - **Validation (400, nothing created).** `SubmissionPayload.Validate` requires
   `operatorRequestId`, `operatorOrganisationId`, `organisationName`,
-  `material` and, for a type whose `RequiresPaymentReference` is `true` (every
+  `material` and, for a type whose `RequiredSubmissionFields` include it (every
   type but the ORS update, which is never charged), `paymentReference`
   (non-blank strings), a 4-digit
   `accreditationYear`, and at least one site, each with a `siteId` (string or
@@ -307,12 +307,12 @@ type is configured. Every setting is code, not runtime data:
 | Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` | `in-year-change` |
 | In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` | `"ORS"` (shared, RA-682) |
 | Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` | `true` |
-| Requires a payment reference | `RequiresPaymentReference` (RA-682) | `true` | `true` | `true` | `false` |
+| Required submission fields | `RequiredSubmissionFields` (RA-682) | `SubmissionPayload.ChargedRequiredFields` (includes `paymentReference`) | the default | the default | `SubmissionPayload.UnchargedRequiredFields` (no `paymentReference`) |
 | Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `StandardWorkflow.WithdrawNotCallerInvocable("standard-add-overseas-site")`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` | the same rules under `standard-update-overseas-site` (`StandardWorkflow.WithdrawNotCallerInvocable`) |
 | Template version | `TemplateVersion` | — (required) | `v19` | `v2` | `v1` |
 
-- **Requires a payment reference** is `false` only for a type that is never
-  charged. Its submission may leave `paymentReference` out, and then each work
+- **Required submission fields** leave out `paymentReference` only for a type
+  that is never charged. Its submission may leave `paymentReference` out, and then each work
   item gets the RA-503 fallback: `paymentReference` is set to the item's own
   `applicationReference`. So an ORS update work item shows its IYC reference
   as its payment reference, which a detail page (RA-767) shouldn't present as

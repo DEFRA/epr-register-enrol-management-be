@@ -22,7 +22,7 @@ public sealed class UpdateOverseasSiteTypeTests
         Assert.Equal(WorkItemCategories.InYearChange, type.Category);
         Assert.Equal("ORS", type.InYearChangeCode);
         Assert.True(type.SplitsSubmissionPerSite);
-        Assert.False(type.RequiresPaymentReference);
+        Assert.DoesNotContain(SubmissionPayload.PaymentReferenceField, type.RequiredSubmissionFields);
         Assert.Equal("v1", type.TemplateVersion);
         Assert.Equal("submitted", type.InitialState.Id);
     }
@@ -31,8 +31,8 @@ public sealed class UpdateOverseasSiteTypeTests
     [Fact]
     public void Add_ORS_still_requires_a_payment_reference()
     {
-        Assert.True(((IWorkItemType)new AddOverseasSiteType()).RequiresPaymentReference);
-        Assert.True(((IWorkItemType)new ReAccreditationType()).RequiresPaymentReference);
+        Assert.Contains(SubmissionPayload.PaymentReferenceField, ((IWorkItemType)new AddOverseasSiteType()).RequiredSubmissionFields);
+        Assert.Contains(SubmissionPayload.PaymentReferenceField, ((IWorkItemType)new ReAccreditationType()).RequiredSubmissionFields);
     }
 
     // RA-682: the same workflow as add-ORS, under its own id.

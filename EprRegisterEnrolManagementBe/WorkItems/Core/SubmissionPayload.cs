@@ -30,17 +30,31 @@ internal static class SubmissionPayload
     /// </summary>
     public const string SiteField = "site";
 
-    private static readonly string[] s_requiredFields =
+    /// <summary>RA-682: required by every type that charges (see <see cref="ChargedRequiredFields"/>).</summary>
+    public const string PaymentReferenceField = "paymentReference";
+
+    /// <summary>
+    /// RA-682: the fields a submission must carry when its type is never
+    /// charged (the ORS update), so it has no <see cref="PaymentReferenceField"/>.
+    /// </summary>
+    public static readonly IReadOnlyCollection<string> UnchargedRequiredFields =
     [
         OperatorRequestIdField,
         "operatorOrganisationId",
         "organisationName",
         "material",
-        PaymentReferenceField,
     ];
 
-    /// <summary>RA-682: required unless the type says otherwise (<see cref="IWorkItemType.RequiresPaymentReference"/>).</summary>
-    private const string PaymentReferenceField = "paymentReference";
+    /// <summary>
+    /// The fields a submission must carry when its type charges: the
+    /// <see cref="UnchargedRequiredFields"/> and <see cref="PaymentReferenceField"/>.
+    /// The default for <see cref="IWorkItemType.RequiredSubmissionFields"/>.
+    /// </summary>
+    public static readonly IReadOnlyCollection<string> ChargedRequiredFields =
+    [
+        .. UnchargedRequiredFields,
+        PaymentReferenceField,
+    ];
 
     private static readonly string[] s_requiredSiteFields = ["orsId", "siteName"];
 
@@ -71,19 +85,16 @@ internal static class SubmissionPayload
 
     /// <summary>
     /// Why <paramref name="payload"/> cannot be submitted, or <c>null</c> when it can.
-    /// RA-682: <paramref name="requirePaymentReference"/> is the type's
-    /// <see cref="IWorkItemType.RequiresPaymentReference"/>; when false,
-    /// <c>paymentReference</c> may be absent.
+    /// RA-682: <paramref name="requiredFields"/> are the type's
+    /// <see cref="IWorkItemType.RequiredSubmissionFields"/>, each of which must
+    /// be a non-blank string.
     /// </summary>
-    public static string? Validate(BsonDocument payload, bool requirePaymentReference = true)
+    public static string? Validate(BsonDocument payload, IEnumerable<string> requiredFields)
     {
         ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(requiredFields);
 
-        if (
-            s_requiredFields.FirstOrDefault(field =>
-                (requirePaymentReference || field != PaymentReferenceField) && !IsPresentString(payload, field)
-            ) is { } missing
-        )
+        if (requiredFields.FirstOrDefault(field => !IsPresentString(payload, field)) is { } missing)
         {
             return $"payload.{missing} is required.";
         }
