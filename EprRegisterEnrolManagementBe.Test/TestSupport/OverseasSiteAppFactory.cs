@@ -19,15 +19,15 @@ namespace EprRegisterEnrolManagementBe.Test.TestSupport;
 
 /// <summary>
 /// RA-495: the app with the production modules registered, against ephemeral
-/// MongoDB, for the add-ORS lifecycle endpoint tests. Work items come from a
-/// submission posted to <c>POST /work-items</c> as the operator backend posts
-/// it. The operator-backend push adapter, the accreditation number adapter and
+/// MongoDB, for the add-ORS and ORS update (RA-682) endpoint tests. Work items
+/// come from a submission posted to <c>POST /work-items</c> as the operator
+/// backend posts it. The operator-backend push adapter, the accreditation number adapter and
 /// the Notify client are fakes: a test reads the pushes the adapter received
 /// (every push succeeds unless told otherwise) and can assert the others are
 /// never used. <see cref="ConfigureTestServices"/> adds a test's own
 /// registrations (fault injection) after all of that.
 /// </summary>
-internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
+internal sealed class OverseasSiteAppFactory : WebApplicationFactory<Program>
 {
     public const int SiteChargePence = 32800;
 
@@ -150,7 +150,7 @@ internal sealed class AddOverseasSiteAppFactory : WebApplicationFactory<Program>
     public static Task<HttpResponseMessage> PostConfirmContactAsync(HttpClient client, Guid id, CancellationToken ct) =>
         client.PostAsync($"/work-items/{id}/confirm-contact", content: null, ct);
 
-    public AddOverseasSiteAppFactory(MongoIntegrationFixture fixture, params OperatorBackendPushResult[] decisionResults)
+    public OverseasSiteAppFactory(MongoIntegrationFixture fixture, params OperatorBackendPushResult[] decisionResults)
     {
         _fixture = fixture;
         var results = decisionResults.Length == 0 ? [OperatorBackendPushResult.Success()] : decisionResults;

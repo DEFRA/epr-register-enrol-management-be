@@ -15,6 +15,7 @@ using EprRegisterEnrolManagementBe.WorkItems.InYearChanges;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Http;
+using EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
 using EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
@@ -238,6 +239,7 @@ static void ConfigureWorkItems(WebApplicationBuilder builder)
     services.AddSingleton<ISlaService, SlaService>();
     services.AddWorkItemModule<ReAccreditationModule>(builder.Configuration);
     services.AddWorkItemModule<AddOverseasSiteModule>(builder.Configuration);
+    services.AddWorkItemModule<UpdateOverseasSiteModule>(builder.Configuration);
     services.AddHostedService<SlaBreachBackgroundService>();
     services.AddHostedService<ArchiveBackgroundService>();
 

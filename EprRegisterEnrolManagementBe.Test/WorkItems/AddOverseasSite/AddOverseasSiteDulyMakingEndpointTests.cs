@@ -2,7 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -20,7 +20,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_making_one_site_moves_only_that_work_item_to_duly_made_on_the_payment_date_clock()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-1", siteCount: 2, ct);
 
@@ -56,7 +56,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     )
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-invalid", siteCount: 1, ct);
 
@@ -75,7 +75,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task A_work_item_already_duly_made_cannot_be_duly_made_again()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-twice", siteCount: 1, ct);
         var first = await PostDulyMakeAsync(client, ids[0], PaymentDate.ToString("yyyy-MM-dd"), ct);
@@ -93,7 +93,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_make_details_carry_the_sites_own_charge()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "duly-make-charge", siteCount: 1, ct);
 
@@ -106,7 +106,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_make_details_list_every_work_item_from_the_same_submission_with_their_current_status()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-1", siteCount: 3, ct);
         await factory.SubmitAsync(client, "related-other-submission", siteCount: 2, ct);
@@ -141,7 +141,7 @@ public sealed class AddOverseasSiteDulyMakingEndpointTests(MongoIntegrationFixtu
     public async Task Duly_make_details_list_only_the_work_item_itself_for_a_single_site_submission()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "related-single", siteCount: 1, ct);
 

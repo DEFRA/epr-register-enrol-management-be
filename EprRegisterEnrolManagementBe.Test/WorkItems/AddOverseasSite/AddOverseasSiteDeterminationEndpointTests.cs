@@ -4,7 +4,7 @@ using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using NSubstitute;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -25,7 +25,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task Approving_then_confirming_contact_grants_the_site_without_minting_a_number_or_sending_an_email()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "determine-approve", ct);
 
@@ -54,7 +54,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task Refusing_then_confirming_contact_closes_the_case_as_refused()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "determine-refuse", ct);
 
@@ -80,7 +80,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task The_determination_is_final(string outcome)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, $"determine-final-{outcome}", ct);
         Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, outcome, ct)).StatusCode);
@@ -101,7 +101,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task No_determination_is_taken_before_the_work_item_is_duly_made()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var ids = await factory.SubmitAsync(client, "determine-not-started", siteCount: 1, ct);
 
@@ -117,7 +117,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task Contact_is_not_confirmed_before_a_determination()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "confirm-too-early", ct);
 
@@ -135,7 +135,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task A_closed_case_cannot_be_reassigned_or_unassigned(string outcome)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, $"closed-assign-{outcome}", ct);
         Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, outcome, ct)).StatusCode);
@@ -160,7 +160,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task Approving_records_the_entered_effective_date_in_the_application_history()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "effective-date-history", ct);
         var entered = EffectiveDate.ToString("yyyy-MM-dd");
@@ -182,7 +182,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task Refusing_records_the_submission_date_as_the_effective_date(string? sentDate)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, $"effective-date-refusal-{sentDate ?? "absent"}", ct);
 
@@ -213,7 +213,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     )
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(
             client,
@@ -242,7 +242,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task An_approval_accepts_the_first_and_last_day_of_the_accreditation_year(string effectiveDate)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, $"effective-date-boundary-{effectiveDate}", ct);
 
@@ -261,7 +261,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task An_approval_may_be_valid_from_a_date_before_the_submission_date()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "effective-date-before-submission-ok", ct);
         var item = await factory.Persistence.GetByIdAsync(id, ct);
@@ -284,7 +284,7 @@ public sealed class AddOverseasSiteDeterminationEndpointTests(MongoIntegrationFi
     public async Task An_approval_is_a_server_error_when_the_accreditation_year_cannot_be_read(string unreadableYear)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, $"effective-date-no-year-{unreadableYear}", ct);
         await factory.Persistence.SetPayloadFieldAsync(id, "accreditationYear", unreadableYear, ct);
