@@ -25,7 +25,7 @@ internal sealed class UpdateOverseasSiteType : IWorkItemType
     );
 
     public string TypeId => Id;
-    public string DisplayName => "ORS update";
+    public string DisplayName => "Update ORS Accreditation";
 
     public string? Category => WorkItemCategories.InYearChange;
 

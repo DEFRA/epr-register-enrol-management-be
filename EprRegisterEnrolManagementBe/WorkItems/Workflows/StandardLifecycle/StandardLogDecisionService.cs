@@ -31,7 +31,7 @@ internal interface IStandardLogDecisionService
         CancellationToken cancellationToken = default
     );
 
-    /// <summary>A determination with no effective date, as every type but add-ORS records.</summary>
+    /// <summary>A determination with no effective date, as a type that takes none records.</summary>
     Task<WorkItemActionResult> LogDecisionAsync(
         Guid workItemId,
         StandardDecisionOutcome outcome,

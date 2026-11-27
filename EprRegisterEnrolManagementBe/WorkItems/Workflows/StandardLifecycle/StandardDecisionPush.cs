@@ -21,10 +21,11 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// <see cref="StandardStatusPushHook"/> writes, so management-fe's audit log
 /// renders them identically.
 ///
-/// The push carries the effective date the determination stamped (RA-495 AC6,
-/// <see cref="StandardEffectiveDate"/>), so the operator journey grants an
-/// add-ORS site from the date the caseworker entered. A type that stamps none
-/// sends none.
+/// The push carries the effective date the caller names (RA-495 AC6,
+/// <see cref="StandardEffectiveDate"/>): the one the determination stamped, so
+/// the operator journey grants an add-ORS site from the date the caseworker
+/// entered, or the type's automatic one (RA-782: an ORS update's approval
+/// date). A type with neither sends none.
 ///
 /// A type with no push target (the operator journey cannot apply it) is never pushed: the
 /// delivery is <see cref="Delivery.NotPushed"/> and nothing is recorded.
@@ -35,8 +36,11 @@ internal class StandardDecisionPush(
     ILogger logger
 )
 {
-    /// <summary>What a push is recorded as: the action's display name and when it happened.</summary>
-    public readonly record struct PushDetails(string ActionDisplayName, DateTime OccurredAt);
+    /// <summary>
+    /// What a push is recorded as: the action's display name and when it
+    /// happened, and the effective date it carries (null for none).
+    /// </summary>
+    public readonly record struct PushDetails(string ActionDisplayName, DateTime OccurredAt, DateOnly? EffectiveDate);
 
     /// <summary>
     /// Pushes the outcome to the operator journey through
@@ -73,7 +77,7 @@ internal class StandardDecisionPush(
             actionId,
             details.ActionDisplayName,
             details.OccurredAt,
-            StandardEffectiveDate.ReadStamped(workItem)
+            details.EffectiveDate
         );
         var pushResult = await target.PushDecisionAsync(pushAdapter, change, cancellationToken);
         var delivery = new Delivery(change, pushResult);

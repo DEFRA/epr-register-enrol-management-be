@@ -19,11 +19,18 @@ public sealed record SubmissionRecord(
     DateTime SubmittedAt
 );
 
-/// <summary>RA-739: the work item created for one site of a <see cref="SubmissionRecord"/>.</summary>
+/// <summary>
+/// RA-739: the work item created for one site of a <see cref="SubmissionRecord"/>.
+/// RA-767: <see cref="TypeId"/> is the work item's own type, which may differ
+/// from the record's when the request mixes site types (an add and an
+/// update); <c>null</c> on a record stored before it, whose work items are all
+/// of the record's type.
+/// </summary>
 public sealed record SubmissionRecordItem(
     BsonValue SiteId,
     Guid WorkItemId,
-    string ApplicationReference
+    string ApplicationReference,
+    string? TypeId = null
 );
 
 /// <summary>RA-739: the <c>submissions</c> collection.</summary>
@@ -57,7 +64,8 @@ public interface ISubmissionStore
 /// <summary>
 /// MongoDB-backed <see cref="ISubmissionStore"/>. One document per submission,
 /// shaped <c>{ _id: operatorRequestId, typeId, submissionReference,
-/// workItems: [{ siteId, workItemId, applicationReference }], submittedAt }</c>.
+/// workItems: [{ siteId, workItemId, applicationReference, typeId }],
+/// submittedAt }</c>.
 /// Only the implicit unique <c>_id</c> index is needed. The collection is
 /// created when the store is constructed (see <see cref="MongoService{T}"/>),
 /// so the first submission's transaction never has to create it.
@@ -65,6 +73,10 @@ public interface ISubmissionStore
 [ExcludeFromCodeCoverage]
 public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissionStore
 {
+    // Stored field names: one place, so a record written and a record read can't drift apart.
+    private const string TypeIdKey = "typeId";
+    private const string SubmissionReferenceKey = "submissionReference";
+
     /// <summary>Collection holding one document per submission.</summary>
     public const string CollectionName = "submissions";
 
@@ -122,14 +134,15 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
         new()
         {
             ["_id"] = record.OperatorRequestId,
-            ["typeId"] = record.TypeId,
-            ["submissionReference"] = record.SubmissionReference,
+            [TypeIdKey] = record.TypeId,
+            [SubmissionReferenceKey] = record.SubmissionReference,
             ["workItems"] = new BsonArray(
                 record.WorkItems.Select(item => new BsonDocument
                 {
                     ["siteId"] = item.SiteId,
                     ["workItemId"] = item.WorkItemId.ToString(),
                     ["applicationReference"] = item.ApplicationReference,
+                    [TypeIdKey] = item.TypeId is { } typeId ? typeId : BsonNull.Value,
                 })
             ),
             ["submittedAt"] = record.SubmittedAt,
@@ -138,14 +151,15 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
     private static SubmissionRecord FromDocument(BsonDocument document) =>
         new(
             document["_id"].AsString,
-            document["typeId"].AsString,
-            document["submissionReference"].AsString,
+            document[TypeIdKey].AsString,
+            document[SubmissionReferenceKey].AsString,
             document["workItems"]
                 .AsBsonArray.Select(value => value.AsBsonDocument)
                 .Select(item => new SubmissionRecordItem(
                     item["siteId"],
                     Guid.Parse(item["workItemId"].AsString),
-                    item["applicationReference"].AsString
+                    item["applicationReference"].AsString,
+                    item.TryGetValue(TypeIdKey, out var typeId) && typeId.IsString ? typeId.AsString : null
                 ))
                 .ToList(),
             document["submittedAt"].ToUniversalTime()

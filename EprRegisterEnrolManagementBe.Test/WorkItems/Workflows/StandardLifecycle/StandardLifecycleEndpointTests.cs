@@ -111,6 +111,7 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
         Assert.Equal(TestChargePence, body.GetProperty("chargePence").GetInt32());
+        Assert.True(body.GetProperty("takesPaymentDate").GetBoolean());
     }
 
     [Theory]
@@ -136,6 +137,35 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         Assert.Equal("submitted", (await factory.Persistence.GetByIdAsync(id, ct))!.StateId);
     }
 
+    // A type that takes a payment date (re-accreditation, add-ORS) still needs one
+    // when the date is left out, the check the service makes once it knows the type.
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Re_accreditation_on_the_shared_route_still_requires_a_payment_date(string? paymentDate)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new LifecycleFactory(fixture, PushAdapterReturning(OperatorBackendPushResult.Success()));
+        using var client = factory.CreateClient();
+        var id = await factory.SeedAsync(
+            new ReAccreditationType(),
+            "submitted",
+            ct,
+            new BsonDocument { ["applicationReference"] = "RA-123456789", ["chargeAmountPence"] = 327600 }
+        );
+
+        var response = await PostDulyMakeAsync(client, id, paymentDate, ct);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+        Assert.Equal("payment-date-required", problem.GetProperty("errorCode").GetString());
+        Assert.Equal("paymentDate", problem.GetProperty("field").GetString());
+        var untouched = await factory.Persistence.GetByIdAsync(id, ct);
+        Assert.Equal("submitted", untouched!.StateId);
+        Assert.Empty(untouched.AuditLog);
+    }
+
     [Fact]
     public async Task Re_accreditation_is_reachable_on_the_shared_routes()
     {
@@ -153,6 +183,7 @@ public sealed class StandardLifecycleEndpointTests(MongoIntegrationFixture fixtu
         var response = await PostDulyMakeAsync(client, id, s_paymentDate.ToString("yyyy-MM-dd"), ct);
 
         Assert.Equal(327600, details.GetProperty("chargePence").GetInt32());
+        Assert.True(details.GetProperty("takesPaymentDate").GetBoolean());
         // RA-495: re-accreditation is not submitted per site, so nothing is related.
         Assert.Empty(details.GetProperty("relatedWorkItems").EnumerateArray());
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

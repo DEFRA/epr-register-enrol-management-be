@@ -41,7 +41,14 @@ internal static class StandardDulyMakingValidator
     public const string CodeInFuture = "payment-date-in-future";
     public const string CodeTooOld = "payment-date-too-old";
 
-    /// <summary>The field all four codes above refer to.</summary>
+    /// <summary>
+    /// A payment date sent for a type that takes none
+    /// (<see cref="IStandardDulyMakingRules.TakesPaymentDate"/>): refused rather
+    /// than ignored, so a caller cannot stamp a payment on a free change.
+    /// </summary>
+    public const string CodeNotTaken = "payment-date-not-taken";
+
+    /// <summary>The field all the codes above refer to.</summary>
     public const string Field = "paymentDate";
 
     /// <summary>

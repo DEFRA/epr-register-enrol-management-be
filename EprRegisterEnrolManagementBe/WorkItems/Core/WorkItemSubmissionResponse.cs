@@ -16,7 +16,7 @@ public sealed record WorkItemSubmissionResponse(
     public static WorkItemSubmissionResponse From(SubmissionRecord submission) =>
         new(
             submission.SubmissionReference,
-            submission.WorkItems.Select(WorkItemSubmissionItemResponse.From).ToList()
+            submission.WorkItems.Select(item => WorkItemSubmissionItemResponse.From(item, submission.TypeId)).ToList()
         );
 }
 
@@ -26,14 +26,26 @@ public sealed record WorkItemSubmissionResponse(
 /// backend, or a string. It is an <see cref="object"/> so System.Text.Json
 /// writes it with that JSON type; <see cref="SubmissionRecordItem.SiteId"/>
 /// holds the same value as a <see cref="BsonValue"/> so it is stored with it.
+/// RA-767: <see cref="TypeId"/> is the work item's own type, since one request
+/// can mix site types.
 /// </summary>
 public sealed record WorkItemSubmissionItemResponse(
     object? SiteId,
     Guid Id,
-    string ApplicationReference
+    string ApplicationReference,
+    string TypeId
 )
 {
-    /// <summary>The response for one stored <paramref name="item"/>.</summary>
-    public static WorkItemSubmissionItemResponse From(SubmissionRecordItem item) =>
-        new(BsonTypeMapper.MapToDotNetValue(item.SiteId), item.WorkItemId, item.ApplicationReference);
+    /// <summary>
+    /// The response for one stored <paramref name="item"/>. An item stored
+    /// before RA-767 has no type of its own, so it takes
+    /// <paramref name="submissionTypeId"/>.
+    /// </summary>
+    public static WorkItemSubmissionItemResponse From(SubmissionRecordItem item, string submissionTypeId) =>
+        new(
+            BsonTypeMapper.MapToDotNetValue(item.SiteId),
+            item.WorkItemId,
+            item.ApplicationReference,
+            item.TypeId ?? submissionTypeId
+        );
 }

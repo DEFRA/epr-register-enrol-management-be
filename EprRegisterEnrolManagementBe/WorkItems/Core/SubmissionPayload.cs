@@ -30,6 +30,36 @@ internal static class SubmissionPayload
     /// </summary>
     public const string SiteField = "site";
 
+    /// <summary>
+    /// RA-739: stamped on every work item a submission creates: the number of
+    /// applications in the operator's submission.
+    /// </summary>
+    public const string SubmissionSizeField = "submissionSize";
+
+    public const string OperatorOrganisationIdField = "operatorOrganisationId";
+
+    /// <summary>
+    /// RA-767: on a site, the split-per-site type its work item is created as,
+    /// so one request can hold adds and updates. Optional: a site without one
+    /// takes the request's <c>typeId</c>.
+    /// </summary>
+    public const string SiteTypeIdField = "typeId";
+
+    /// <summary>
+    /// RA-767: <c>errorCode</c> for a site <see cref="SiteTypeIdField"/> that
+    /// is not a registered type that splits a submission per site.
+    /// </summary>
+    public const string UnknownSiteTypeErrorCode = "unknown-site-type";
+
+    /// <summary>
+    /// RA-767: <c>errorCode</c> for a site <see cref="SiteTypeIdField"/> whose
+    /// type is not in the request type's category.
+    /// </summary>
+    public const string SiteTypeMismatchErrorCode = "site-type-mismatch";
+
+    /// <summary>A site type that cannot be used: the message and the wire <c>errorCode</c>.</summary>
+    public sealed record SiteTypeError(string Message, string ErrorCode);
+
     /// <summary>RA-682: required by every type that charges (see <see cref="ChargedRequiredFields"/>).</summary>
     public const string PaymentReferenceField = "paymentReference";
 
@@ -40,7 +70,7 @@ internal static class SubmissionPayload
     public static readonly IReadOnlyCollection<string> UnchargedRequiredFields =
     [
         OperatorRequestIdField,
-        "operatorOrganisationId",
+        OperatorOrganisationIdField,
         "organisationName",
         "material",
     ];
@@ -65,6 +95,91 @@ internal static class SubmissionPayload
             ? payload[OperatorRequestIdField].AsString
             : string.Empty;
         return operatorRequestId.Length > 0;
+    }
+
+    /// <summary>
+    /// RA-767: the type each of the payload's sites is created as, in site
+    /// order: its <see cref="SiteTypeIdField"/>, or
+    /// <paramref name="requestType"/> when it has none. A site type must be
+    /// registered (<paramref name="findType"/>), split a submission per site,
+    /// and be <paramref name="requestType"/> or share its non-null
+    /// <see cref="IWorkItemType.Category"/>; otherwise <paramref name="error"/>
+    /// says why. A payload with no usable <see cref="SitesField"/>, or a site
+    /// that is not an object, is left to <see cref="Validate"/>.
+    /// </summary>
+    public static IReadOnlyList<IWorkItemType> ResolveSiteTypes(
+        BsonDocument payload,
+        IWorkItemType requestType,
+        Func<string, IWorkItemType?> findType,
+        out SiteTypeError? error
+    )
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        ArgumentNullException.ThrowIfNull(requestType);
+        ArgumentNullException.ThrowIfNull(findType);
+
+        error = null;
+        if (!payload.TryGetValue(SitesField, out var sitesValue) || !sitesValue.IsBsonArray)
+        {
+            return [];
+        }
+
+        var types = new List<IWorkItemType>(sitesValue.AsBsonArray.Count);
+        foreach (var (siteValue, index) in sitesValue.AsBsonArray.Select((site, i) => (site, i)))
+        {
+            if (!siteValue.IsBsonDocument || !siteValue.AsBsonDocument.TryGetValue(SiteTypeIdField, out var typeIdValue))
+            {
+                types.Add(requestType);
+                continue;
+            }
+
+            error = CheckSiteType(typeIdValue, index, requestType, findType, out var siteType);
+            if (error is not null)
+            {
+                return [];
+            }
+            types.Add(siteType!);
+        }
+
+        return types;
+    }
+
+    private static SiteTypeError? CheckSiteType(
+        BsonValue typeIdValue,
+        int index,
+        IWorkItemType requestType,
+        Func<string, IWorkItemType?> findType,
+        out IWorkItemType? siteType
+    )
+    {
+        var path = $"payload.{SitesField}[{index}].{SiteTypeIdField}";
+        siteType =
+            typeIdValue.IsString && !string.IsNullOrWhiteSpace(typeIdValue.AsString)
+                ? findType(typeIdValue.AsString)
+                : null;
+        if (siteType is not { SplitsSubmissionPerSite: true })
+        {
+            siteType = null;
+            return new SiteTypeError(
+                $"{path} must be a registered work item type that splits a submission per site.",
+                UnknownSiteTypeErrorCode
+            );
+        }
+
+        var sameGroup =
+            string.Equals(siteType.TypeId, requestType.TypeId, StringComparison.Ordinal)
+            || (requestType.Category is not null && siteType.Category == requestType.Category);
+        if (sameGroup)
+        {
+            return null;
+        }
+
+        var mismatched = siteType.TypeId;
+        siteType = null;
+        return new SiteTypeError(
+            $"{path} '{mismatched}' is not in the same category as the request's type '{requestType.TypeId}'.",
+            SiteTypeMismatchErrorCode
+        );
     }
 
     /// <summary>The work item payload's <see cref="SubmissionReferenceField"/>, when it is a non-blank string.</summary>

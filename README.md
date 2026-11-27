@@ -159,7 +159,7 @@ docker compose down -v
 | POST   | `/work-items/{id}/assign`                    | Assign a work item to a user           |
 | POST   | `/work-items/{id}/unassign`                  | Unassign a work item                   |
 | POST   | `/work-items/{id}/notes`                     | Add a note to a work item              |
-| GET    | `/work-items/{id}/duly-make`                 | Duly-make details: charge and related work items (Standard-lifecycle types) |
+| GET    | `/work-items/{id}/duly-make`                 | Duly-make details: charge, whether a payment date is taken (`takesPaymentDate`) and related work items (Standard-lifecycle types) |
 | POST   | `/work-items/{id}/duly-make`                 | Duly make a work item (Standard-lifecycle types) |
 | POST   | `/work-items/{id}/decision`                  | Make the determination; an add-ORS approval also takes `effectiveDate` (`yyyy-MM-dd`) |
 | POST   | `/work-items/{id}/confirm-contact`           | Confirm applicant contact, applying the final outcome |

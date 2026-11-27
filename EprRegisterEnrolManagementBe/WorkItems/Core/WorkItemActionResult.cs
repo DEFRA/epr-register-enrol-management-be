@@ -120,6 +120,15 @@ public enum WorkItemActionFailureCode
     InvalidEffectiveDate,
 
     /// <summary>
+    /// A duly make whose payment date does not suit the type: missing for a
+    /// type that takes one, or sent for a type that takes none
+    /// (<c>IStandardDulyMakingRules.TakesPaymentDate</c>). A client error (400)
+    /// whose <see cref="WorkItemActionResult.ErrorCode"/> the frontend binds to
+    /// the payment date field. Nothing was changed.
+    /// </summary>
+    InvalidPaymentDate,
+
+    /// <summary>
     /// RA-795: a valid-from date could not be checked against the accreditation
     /// year because the work item's <c>payload.accreditationYear</c> is missing
     /// or unreadable. Mandatory at submission, so a server-side data fault

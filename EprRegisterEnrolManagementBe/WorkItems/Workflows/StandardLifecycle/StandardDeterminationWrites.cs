@@ -225,7 +225,7 @@ internal sealed class StandardDeterminationWrites(
 
                 AppendAudit(
                     workItem,
-                    "determination-made",
+                    StandardEffectiveDate.DeterminationMadeAction,
                     determination.AuditDisplayName,
                     user,
                     now.UtcDateTime,

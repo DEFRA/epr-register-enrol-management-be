@@ -64,7 +64,7 @@ re-accreditation) plus a single `site`, its own
 `referenceSequences` keyed `SUB-{yyyy}`, starting at `0001` and growing past
 `9999`), `submissionSize` and `paymentReference`. The response is `201` with
 `{ "submissionReference": "SUB-2026-0001", "workItems": [{ "siteId", "id",
-"applicationReference" }] }`. `siteId` is echoed as sent: the operator backend
+"applicationReference", "typeId" }] }`. `siteId` is echoed as sent: the operator backend
 sends a number. The unique index on `payload.operatorRequestId`
 is now on (`payload.operatorRequestId`, `payload.site.siteId`); startup drops
 the RA-492 single-field index. Re-accreditation's request and response are
@@ -101,8 +101,8 @@ stores the rest of the site as sent.
 
 - **Validation (400, nothing created).** `SubmissionPayload.Validate` requires
   `operatorRequestId`, `operatorOrganisationId`, `organisationName`,
-  `material` and, for a type whose `RequiredSubmissionFields` include it (every
-  type but the ORS update, which is never charged), `paymentReference`
+  `material` and, when any site's type has it in its `RequiredSubmissionFields`
+  (every type but the ORS update, which is never charged), `paymentReference`
   (non-blank strings), a 4-digit
   `accreditationYear`, and at least one site, each with a `siteId` (string or
   whole number), `orsId` and `siteName`. `siteId`s must be unique within the
@@ -117,15 +117,35 @@ stores the rest of the site as sent.
   (`MongoService`), never inside the transaction, since creating a collection
   in a transaction is not supported on every Mongo deployment.
 - **Replay guard.** The `submissions` collection (`MongoSubmissionStore`)
-  holds one document per POST: `_id` = `operatorRequestId`, `typeId`,
-  `submissionReference`, `workItems: [{ siteId, workItemId,
-  applicationReference }]` and `submittedAt`. A sequential replay finds it
-  before validation or allocation and gets the stored body back with
-  `X-Idempotent-Replay: true`. A concurrent duplicate either sees the
-  winner's record when its transaction retries after a write conflict, or
-  collides on `_id`; either way it returns the winner's response. A replay
-  with a different payload returns the stored submission and ignores the
-  edits, as RA-492 documents below.
+  holds one document per POST: `_id` = `operatorRequestId`, `typeId` (the
+  request's), `submissionReference`, `workItems: [{ siteId, workItemId,
+  applicationReference, typeId }]` (each work item's own type, RA-767; absent
+  on records stored before it) and `submittedAt`. A sequential replay finds it
+  before validation or allocation and gets the stored body back, every site's
+  work item included, with `X-Idempotent-Replay: true`. A concurrent duplicate
+  either sees the winner's record when its transaction retries after a write
+  conflict, or collides on `_id`; either way it returns the winner's response.
+  A replay with a different payload returns the stored submission and ignores
+  the edits, as RA-492 documents below. An `operatorRequestId` on file under
+  a different request `typeId` is `409` (`SubmissionRequestIdReused`).
+- **One operator request, one POST (RA-767 AC2).** An operator change request
+  holding both adds and updates is one POST, so it is all or nothing. The
+  request's `typeId` is a split-per-site type (`add-overseas-site` or
+  `update-overseas-site`), and each site may carry its own `typeId`: a
+  registered split-per-site type that is the request's type or in its
+  category (`in-year-change`). A site without one takes the request's
+  `typeId`. A site `typeId` that is not a registered split-per-site type is
+  `400` with `errorCode` `unknown-site-type`; one in another category is
+  `400` `site-type-mismatch`. Each work item is created as its site's type:
+  its own `IYC-{code}` reference series, workflow, template snapshot and
+  lifecycle strategy. The site's `typeId` is not kept on the work item's
+  `site` (the work item's `typeId` holds it). Every work item shares the one
+  `submissionReference`, and `submissionSize` is the number of sites in the
+  POST. The required fields are every site type's, so `paymentReference` is
+  required when any site is an add and not for an update-only request. An
+  update's work item never takes the operator's `paymentReference` (it falls
+  back to its own `applicationReference`, as for any submission without one).
+  Each `workItems[]` entry of the response also carries its `typeId`.
 - **Collisions inside the transaction.** A duplicate key aborts the whole
   transaction. An `applicationReference` collision (only once an IYC
   sequence has wrapped) fails with `503` (`ApplicationReferenceExhausted`),
@@ -303,7 +323,7 @@ type is configured. Every setting is code, not runtime data:
 
 | Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) | ORS update (`update-overseas-site`) |
 | --- | --- | --- | --- | --- | --- |
-| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` | `"ORS update"` |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` | `"Update ORS Accreditation"` |
 | Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` | `in-year-change` |
 | In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` | `"ORS"` (shared, RA-682) |
 | Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` | `true` |
@@ -312,8 +332,9 @@ type is configured. Every setting is code, not runtime data:
 | Template version | `TemplateVersion` | — (required) | `v19` | `v2` | `v1` |
 
 - **Required submission fields** leave out `paymentReference` only for a type
-  that is never charged. Its submission may leave `paymentReference` out, and then each work
-  item gets the RA-503 fallback: `paymentReference` is set to the item's own
+  that is never charged. Its submission may leave `paymentReference` out, and its work
+  items never take one that is sent (it pays an add in the same request), so each
+  gets the RA-503 fallback: `paymentReference` is set to the item's own
   `applicationReference`. So an ORS update work item shows its IYC reference
   as its payment reference, which a detail page (RA-767) shouldn't present as
   a payment.
@@ -469,6 +490,30 @@ type is configured. Every setting is code, not runtime data:
   `payload.effectiveDate` (RA-495 AC6), which the operator journey grants the
   site from and requires on `approved`; re-accreditation stamps none, so its
   body has no `effectiveDate`.
+  The ORS update (`UpdateOverseasSiteLifecycleStrategy`, RA-682) opts in like
+  add-ORS (same push route and status push hook, no minting, no GOV.UK Notify
+  email, as add-ORS has none) with two differences (RA-782). The caseworker
+  enters no valid-from date (`TakesEffectiveDate` false): the decision records
+  none (an `effectiveDate` sent with it is ignored, as for re-accreditation)
+  and `change-valid-from` gets `400 wrong-work-item-type`. An approval still
+  takes effect from the approval date (AC6): its confirm-contact push carries
+  `effectiveDate`, the UK calendar date of the Approved `determination-made`
+  audit entry (`IStandardLifecycleStrategy.AutomaticEffectiveDate`). A
+  refusal's push has no `effectiveDate` (null is omitted on the wire). It takes no payment date (`TakesPaymentDate`
+  false, as it is never charged): `GET /work-items/{id}/duly-make` returns
+  `takesPaymentDate: false` (true for every other type) so the page asks for
+  none; `POST /work-items/{id}/duly-make` needs no `paymentDate` and refuses
+  any non-blank one that is sent, well-formed or not, with
+  `400 errorCode: payment-date-not-taken` (`field: paymentDate`); nothing is
+  stamped on `payload.paymentDate`, and the SLA clock starts at midnight UTC
+  of the day it is duly made (as a paid type's starts at midnight UTC of the
+  payment date), over the same 12 weeks, with `sla-clock-started` audited as
+  `anchoredTo: duly-made` and no `paymentDate` on the `action-applied` entry.
+  A type that takes a payment date and is sent none still gets
+  `400 payment-date-required`, and a malformed or out-of-range one the
+  validator's code as before. The payment date is checked once the work item
+  is loaded, so whatever date is sent, an unknown id is `404` and a type that
+  has not opted in is `400 wrong-work-item-type`.
   An approval's `effectiveDate` must fall between 1 January and 31 December
   (inclusive) of the work item's `payload.accreditationYear` (RA-795; it may be
   before the submission date): `400` with `errorCode`

@@ -128,7 +128,8 @@ internal static class StandardLifecycleEndpoints
     /// <summary>
     /// What the caseworker needs on the Duly make page that the type supplies:
     /// the charge to match the payment against
-    /// (<see cref="IStandardDulyMakingRules.ReadChargePence"/>).
+    /// (<see cref="IStandardDulyMakingRules.ReadChargePence"/>) and whether a
+    /// payment date is asked for (<see cref="IStandardDulyMakingRules.TakesPaymentDate"/>).
     /// </summary>
     public static async Task<Results<Ok<DulyMakeDetailsResponse>, NotFound, ProblemHttpResult>> GetDulyMakeDetails(
         [FromRoute] Guid id,
@@ -152,7 +153,9 @@ internal static class StandardLifecycleEndpoints
         }
 
         var related = await RelatedWorkItemsAsync(workItem, persistence, strategies, cancellationToken);
-        return TypedResults.Ok(new DulyMakeDetailsResponse(id, strategy.ReadChargePence(workItem), related));
+        return TypedResults.Ok(
+            new DulyMakeDetailsResponse(id, strategy.ReadChargePence(workItem), strategy.TakesPaymentDate, related)
+        );
     }
 
     /// <summary>
@@ -183,9 +186,13 @@ internal static class StandardLifecycleEndpoints
 
     /// <summary>
     /// Duly make a work item with the payment date the caseworker entered.
-    /// Payment-date validation happens here so a 400 can carry the stable
-    /// <c>errorCode</c> and <c>field</c> management-fe binds to its error
-    /// summary (<see cref="StandardDulyMakingValidator"/>).
+    /// Whether a date is taken depends on the type
+    /// (<see cref="IStandardDulyMakingRules.TakesPaymentDate"/>), so the service
+    /// validates it once the work item is loaded. Its refusal is a 400 carrying
+    /// the stable <c>errorCode</c> (<see cref="StandardDulyMakingValidator"/>)
+    /// and <c>field</c> management-fe binds to its error summary. An unknown
+    /// work item is a 404, and a type that has not opted in is
+    /// <c>wrong-work-item-type</c>, before any date is looked at.
     /// </summary>
     public static async Task<Results<Ok<WorkItemResponse>, NotFound, ProblemHttpResult>> DulyMake(
         [FromRoute] Guid id,
@@ -193,30 +200,12 @@ internal static class StandardLifecycleEndpoints
         [FromBody] StandardDulyMakeRequest? request,
         [FromServices] IStandardDulyMakingService dulyMakingService,
         [FromServices] IWorkItemService engine,
-        [FromServices] TimeProvider timeProvider,
         CancellationToken cancellationToken
     )
     {
-        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
-        var validation = StandardDulyMakingValidator.Validate(request?.PaymentDate, today);
-
-        if (!validation.IsValid)
-        {
-            return TypedResults.Problem(
-                title: DulyMakeProblemTitle,
-                detail: validation.Detail,
-                statusCode: StatusCodes.Status400BadRequest,
-                extensions: new Dictionary<string, object?>
-                {
-                    [StandardLifecycleProblems.ErrorCodeKey] = validation.ErrorCode,
-                    [StandardLifecycleProblems.FieldKey] = StandardDulyMakingValidator.Field,
-                }
-            );
-        }
-
         var result = await dulyMakingService.CompleteDulyMakingAsync(
             id,
-            validation.PaymentDate!.Value,
+            request?.PaymentDate,
             httpContext.User,
             cancellationToken
         );
@@ -382,7 +371,10 @@ internal static class StandardLifecycleEndpoints
 /// </summary>
 internal sealed record StandardChangeValidFromRequest(string? EffectiveDate, string? Reason);
 
-/// <summary>RA-495: <c>POST /work-items/{id}/duly-make</c> body.</summary>
+/// <summary>
+/// RA-495: <c>POST /work-items/{id}/duly-make</c> body. <c>PaymentDate</c>
+/// (<c>yyyy-MM-dd</c>) is required for a type that takes one and refused for one that does not.
+/// </summary>
 internal sealed record StandardDulyMakeRequest(string? PaymentDate);
 
 /// <summary>
@@ -394,10 +386,13 @@ internal sealed record StandardDecisionRequest(string? Outcome, string? Effectiv
 /// <summary>
 /// RA-495: <c>GET /work-items/{id}/duly-make</c>: the charge, in pence, the
 /// caseworker matches the payment against (null when the work item carries
-/// none), and every work item from the same submission, itself included.
+/// none), whether the duly make takes a payment date (false for a type that is
+/// never charged, so the page asks for none), and every work item from the
+/// same submission, itself included.
 /// </summary>
 internal sealed record DulyMakeDetailsResponse(
     Guid WorkItemId,
     int? ChargePence,
+    bool TakesPaymentDate,
     IReadOnlyList<RelatedWorkItemResponse> RelatedWorkItems
 );

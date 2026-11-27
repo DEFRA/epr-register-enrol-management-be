@@ -45,9 +45,18 @@ internal interface IStandardLifecycleStrategy : IStandardDulyMakingRules
     /// from (<see cref="StandardEffectiveDate"/>): entered on approval, the
     /// submission date on refusal.
     /// Re-accreditation's does not; its accreditation starts at confirm
-    /// contact.
+    /// contact. Nor does an ORS update's, which takes effect from the approval
+    /// date instead (<see cref="AutomaticEffectiveDate"/>).
     /// </summary>
     bool TakesEffectiveDate => false;
+
+    /// <summary>
+    /// RA-782 AC6: the effective date the confirm-contact push carries for an
+    /// outcome when the determination stamped none, so a type whose approval
+    /// takes effect without an entered date can still tell the operator
+    /// journey from when. Null (the default) pushes no date.
+    /// </summary>
+    DateOnly? AutomaticEffectiveDate(WorkItem workItem, StandardDecisionOutcome outcome) => null;
 }
 
 /// <summary>
@@ -71,6 +80,14 @@ internal interface IStandardDulyMakingRules
     /// the payload carries none.
     /// </summary>
     int? ReadChargePence(WorkItem workItem);
+
+    /// <summary>
+    /// Whether duly making records the date the operator paid, which the SLA
+    /// clock is anchored to. False for a type that is never charged: a date
+    /// sent anyway is refused (<see cref="StandardDulyMakingValidator.CodeNotTaken"/>)
+    /// and the clock starts when the work item is duly made.
+    /// </summary>
+    bool TakesPaymentDate => true;
 
     /// <summary>
     /// Records the payment date entered at duly making on the payload.

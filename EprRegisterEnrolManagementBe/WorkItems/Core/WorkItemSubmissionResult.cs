@@ -14,13 +14,15 @@ public sealed record WorkItemSubmissionResult
         SubmissionRecord? submission,
         WorkItemActionFailureCode? failureCode,
         string? message,
-        bool isIdempotentReplay
+        bool isIdempotentReplay,
+        string? errorCode = null
     )
     {
         Submission = submission;
         FailureCode = failureCode;
         Message = message;
         IsIdempotentReplay = isIdempotentReplay;
+        ErrorCode = errorCode;
     }
 
     /// <summary>The submission and its work items, in site order, or <c>null</c> on failure.</summary>
@@ -31,6 +33,12 @@ public sealed record WorkItemSubmissionResult
 
     /// <summary>A human-readable description of the failure, or <c>null</c> on success.</summary>
     public string? Message { get; }
+
+    /// <summary>
+    /// The wire <c>errorCode</c> the caller can branch on (RA-767: a site
+    /// <c>typeId</c> that cannot be used), or <c>null</c>.
+    /// </summary>
+    public string? ErrorCode { get; }
 
     /// <summary>
     /// True when the <c>operatorRequestId</c> was already on file and
@@ -56,7 +64,14 @@ public sealed record WorkItemSubmissionResult
     public static WorkItemSubmissionResult Failure(WorkItemActionFailureCode code, string message) =>
         new(submission: null, code, message, isIdempotentReplay: false);
 
-    /// <summary>Carry a failed <see cref="WorkItemActionResult"/>'s code and message over.</summary>
+    /// <summary>A failure carrying a wire <see cref="ErrorCode"/>.</summary>
+    public static WorkItemSubmissionResult Failure(
+        WorkItemActionFailureCode code,
+        string message,
+        string errorCode
+    ) => new(submission: null, code, message, isIdempotentReplay: false, errorCode);
+
+    /// <summary>Carry a failed <see cref="WorkItemActionResult"/>'s code, message and wire <c>errorCode</c> over.</summary>
     public static WorkItemSubmissionResult Failure(WorkItemActionResult failure)
     {
         ArgumentNullException.ThrowIfNull(failure);
@@ -64,6 +79,6 @@ public sealed record WorkItemSubmissionResult
         {
             throw new ArgumentException("A failure result is required.", nameof(failure));
         }
-        return Failure(code, failure.Message ?? string.Empty);
+        return new(submission: null, code, failure.Message ?? string.Empty, isIdempotentReplay: false, failure.ErrorCode);
     }
 }

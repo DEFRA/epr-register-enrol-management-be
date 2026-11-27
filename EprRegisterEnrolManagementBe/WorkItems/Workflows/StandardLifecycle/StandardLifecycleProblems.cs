@@ -20,9 +20,10 @@ internal static class StandardLifecycleProblems
     /// (the frontend's answer is "this application has changed, reload it",
     /// never a field error); a generic 500 with no <c>errorCode</c> for a
     /// work item whose template cannot be resolved (a server-side
-    /// configuration problem); 400 otherwise. The only 400 a service itself
-    /// produces is a type mismatch, which gets an <c>errorCode</c> so the
-    /// frontend never parses prose.
+    /// configuration problem); 400 otherwise. The 400s a service itself
+    /// produces carry an <c>errorCode</c> so the frontend never parses prose:
+    /// a type mismatch (<c>wrong-work-item-type</c>), or a payment date
+    /// refused at duly making, which also names its <c>field</c>.
     /// </summary>
     public static ProblemHttpResult ServiceFailure(WorkItemActionResult result, string title) =>
         Problem(result, title, ServiceStatus(result.FailureCode));
@@ -80,13 +81,21 @@ internal static class StandardLifecycleProblems
     // RA-495 AC6: a failure the frontend binds to a form field carries its
     // errorCode and the field it belongs to.
     private static Dictionary<string, object?>? FieldErrorExtensions(WorkItemActionResult result) =>
-        result.FailureCode == WorkItemActionFailureCode.InvalidEffectiveDate && result.ErrorCode is { } errorCode
-            ? new Dictionary<string, object?>
-            {
-                [ErrorCodeKey] = errorCode,
-                [FieldKey] = StandardEffectiveDate.Field,
-            }
-            : null;
+        (result.FailureCode, result.ErrorCode) switch
+        {
+            (WorkItemActionFailureCode.InvalidEffectiveDate, { } errorCode) => FieldError(
+                errorCode,
+                StandardEffectiveDate.Field
+            ),
+            (WorkItemActionFailureCode.InvalidPaymentDate, { } errorCode) => FieldError(
+                errorCode,
+                StandardDulyMakingValidator.Field
+            ),
+            _ => null,
+        };
+
+    private static Dictionary<string, object?> FieldError(string errorCode, string field) =>
+        new() { [ErrorCodeKey] = errorCode, [FieldKey] = field };
 
     // UnknownAction is the services' "type has not opted in" failure
     // (StandardLifecycleStrategies.NotOptedIn). RA-495 review: a work item whose

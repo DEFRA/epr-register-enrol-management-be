@@ -7,14 +7,36 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// <summary>
 /// RA-495: completes duly making for a Standard-workflow work item: the
 /// <c>submitted → duly-made</c> transition with the payment date the caseworker
-/// entered. <paramref name="paymentDate"/> is already validated
-/// (<see cref="StandardDulyMakingValidator"/>, at the endpoint).
+/// entered. Whether a payment date is taken is the type's rule
+/// (<see cref="IStandardDulyMakingRules.TakesPaymentDate"/>), so it is checked
+/// once the work item's type is known.
 /// </summary>
 internal interface IStandardDulyMakingService
 {
+    /// <summary>
+    /// Duly make with <paramref name="paymentDate"/> already parsed and
+    /// validated (<see cref="StandardDulyMakingValidator"/>), or <c>null</c>
+    /// for none.
+    /// </summary>
     Task<WorkItemActionResult> CompleteDulyMakingAsync(
         Guid workItemId,
-        DateOnly paymentDate,
+        DateOnly? paymentDate,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default
+    );
+
+    /// <summary>
+    /// Duly make with <paramref name="enteredPaymentDate"/> as the caller sent
+    /// it (blank meaning none). For a type that takes a payment date it is
+    /// validated (<see cref="StandardDulyMakingValidator"/>); for one that takes
+    /// none, any date sent, well-formed or not, is refused with
+    /// <see cref="StandardDulyMakingValidator.CodeNotTaken"/>. Either refusal is
+    /// <see cref="WorkItemActionFailureCode.InvalidPaymentDate"/> carrying the
+    /// validator's code.
+    /// </summary>
+    Task<WorkItemActionResult> CompleteDulyMakingAsync(
+        Guid workItemId,
+        string? enteredPaymentDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default
     );
@@ -44,7 +66,9 @@ internal interface IStandardDulyMakingService
 ///   <see cref="WorkItem.StateId"/> to <c>duly-made</c>.</item>
 ///   <item>Starts the SLA clock with
 ///   <see cref="WorkItemSlaClock.StartedAt"/> anchored to midnight UTC of the
-///   entered payment date.</item>
+///   entered payment date. A type that takes no payment date (never charged)
+///   stamps none and anchors the clock to midnight UTC of the day it is duly
+///   made.</item>
 ///   <item>Appends the audit entries: the <c>action-applied</c> entry for
 ///   <c>duly-make</c> (plus one for the waypoint discharge when it happened)
 ///   and <c>sla-clock-started</c>.</item>
@@ -76,14 +100,42 @@ internal sealed class StandardDulyMakingService(
     private const string ActionId = "duly-make";
     private const string ActionDisplayName = "Duly make";
     private const string ContinueReviewActionId = "continue-review-during-duly-making";
+    private const string AnchoredToPaymentDate = "payment-date";
+    private const string AnchoredToDulyMade = "duly-made";
 
     private readonly IWorkItemPostActionHook[] _postActionHooks = postActionHooks.ToArray();
 
-    public async Task<WorkItemActionResult> CompleteDulyMakingAsync(
+    public Task<WorkItemActionResult> CompleteDulyMakingAsync(
         Guid workItemId,
-        DateOnly paymentDate,
+        DateOnly? paymentDate,
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default
+    ) =>
+        CompleteAsync(
+            workItemId,
+            (workItem, strategy) => CheckPaymentDateTaken(workItem, strategy, paymentDate),
+            user,
+            cancellationToken
+        );
+
+    public Task<WorkItemActionResult> CompleteDulyMakingAsync(
+        Guid workItemId,
+        string? enteredPaymentDate,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default
+    ) =>
+        CompleteAsync(
+            workItemId,
+            (workItem, strategy) => ReadEnteredPaymentDate(workItem, strategy, enteredPaymentDate),
+            user,
+            cancellationToken
+        );
+
+    private async Task<WorkItemActionResult> CompleteAsync(
+        Guid workItemId,
+        Func<WorkItem, IStandardDulyMakingRules, PaymentDateCheck> checkPaymentDate,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
     )
     {
         ArgumentNullException.ThrowIfNull(user);
@@ -93,90 +145,136 @@ internal sealed class StandardDulyMakingService(
             return identityFailure;
         }
 
-        WorkItem? dulyMade = null;
-        var dischargedWaypoint = false;
+        var loaded = await LoadAsync(workItemId, cancellationToken);
+        if (loaded.Failure is { } loadFailure)
+        {
+            return loadFailure;
+        }
 
+        // The type cannot change between attempts, so neither can this.
+        var paymentDate = checkPaymentDate(loaded.WorkItem!, loaded.Strategy!);
+        if (paymentDate.Failure is { } dateFailure)
+        {
+            return dateFailure;
+        }
+
+        WorkItemConcurrencyException? lastConflict = null;
         for (var attempt = 1; attempt <= MaxAttempts; attempt++)
         {
-            var loaded = await LoadAsync(workItemId, cancellationToken);
-            if (loaded.Failure is { } loadFailure)
+            var outcome = await AttemptAsync(loaded, paymentDate.Date, user, cancellationToken);
+            if (outcome.Failure is { } attemptFailure)
             {
-                return loadFailure;
+                return attemptFailure;
             }
 
-            var workItem = loaded.WorkItem!;
-            var starting = CheckStartingPoint(workItem, loaded.Template!);
-            if (starting.Failure is { } startFailure)
+            if (outcome.DulyMade is { } persisted)
             {
-                return startFailure;
+                LogDulyMade(persisted, user, paymentDate.Date, outcome.DischargedWaypoint);
+
+                // The state change bypassed WorkItemService.ApplyActionAsync, so the
+                // generic engine's hook fan-out never ran. Invoke it here: this is what
+                // sends the DulyMade operator email (AC07) and pushes the new status to
+                // the operator backend (AC09). It happens strictly after the save, so a
+                // hook that writes its own audit entry cannot collide with our write.
+                await InvokeActionAppliedHooksAsync(persisted, ActionId, FromStateId, user);
+                return WorkItemActionResult.Success(persisted);
             }
 
-            if (
-                ApplyDulyMake(
-                    workItem,
-                    loaded.Strategy!,
-                    paymentDate,
-                    user,
-                    starting.NeedsWaypointDischarge
-                ) is
-                { } applyFailure
-            )
+            lastConflict = outcome.Conflict;
+            if (attempt == MaxAttempts)
             {
-                return applyFailure;
-            }
-
-            try
-            {
-                await persistence.ReplaceAsync(workItem, cancellationToken);
-                dulyMade = workItem;
-                dischargedWaypoint = starting.NeedsWaypointDischarge;
                 break;
             }
-            catch (WorkItemConcurrencyException ex)
+
+            loaded = await LoadAsync(workItemId, cancellationToken);
+            if (loaded.Failure is { } reloadFailure)
             {
-                if (attempt == MaxAttempts)
-                {
-                    logger.LogError(
-                        ex,
-                        "Duly making of work item {WorkItemId} abandoned after {Attempts} attempts "
-                            + "due to repeated concurrency conflicts.",
-                        workItemId,
-                        MaxAttempts
-                    );
-                    return WorkItemActionResult.Failure(
-                        WorkItemActionFailureCode.ConcurrencyConflict,
-                        $"Work item '{workItemId}' was modified concurrently. "
-                            + "Reload the work item and retry."
-                    );
-                }
+                return reloadFailure;
             }
         }
 
-        // The loop has either returned or assigned `dulyMade`; the compiler
-        // cannot see the latter, so narrow with an assertion.
-        var persisted = dulyMade!;
+        return Abandoned(workItemId, lastConflict);
+    }
 
+    /// <summary>
+    /// The payment date a duly make records (<c>null</c> for none), or the
+    /// refusal of the one the caller gave.
+    /// </summary>
+    private readonly record struct PaymentDateCheck(DateOnly? Date, WorkItemActionResult? Failure);
+
+    /// <summary>
+    /// One attempt's result: the refusal to hand back, the saved work item, or
+    /// neither when the save lost a concurrency race (<see cref="Conflict"/>).
+    /// </summary>
+    private readonly record struct Attempt(
+        WorkItemActionResult? Failure,
+        WorkItem? DulyMade,
+        bool DischargedWaypoint,
+        WorkItemConcurrencyException? Conflict
+    );
+
+    private async Task<Attempt> AttemptAsync(
+        Loaded loaded,
+        DateOnly? paymentDate,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken
+    )
+    {
+        var workItem = loaded.WorkItem!;
+        var starting = CheckStartingPoint(workItem, loaded.Template!);
+        if (starting.Failure is { } startFailure)
+        {
+            return new Attempt(startFailure, null, false, null);
+        }
+
+        if (
+            ApplyDulyMake(workItem, loaded.Strategy!, paymentDate, user, starting.NeedsWaypointDischarge) is
+            { } applyFailure
+        )
+        {
+            return new Attempt(applyFailure, null, false, null);
+        }
+
+        try
+        {
+            await persistence.ReplaceAsync(workItem, cancellationToken);
+        }
+        catch (WorkItemConcurrencyException ex)
+        {
+            return new Attempt(null, null, false, ex);
+        }
+
+        return new Attempt(null, workItem, starting.NeedsWaypointDischarge, null);
+    }
+
+    private WorkItemActionResult Abandoned(Guid workItemId, WorkItemConcurrencyException? conflict)
+    {
+        logger.LogError(
+            conflict,
+            "Duly making of work item {WorkItemId} abandoned after {Attempts} attempts "
+                + "due to repeated concurrency conflicts.",
+            workItemId,
+            MaxAttempts
+        );
+        return WorkItemActionResult.Failure(
+            WorkItemActionFailureCode.ConcurrencyConflict,
+            $"Work item '{workItemId}' was modified concurrently. Reload the work item and retry."
+        );
+    }
+
+    private void LogDulyMade(WorkItem persisted, ClaimsPrincipal user, DateOnly? paymentDate, bool dischargedWaypoint) =>
         logger.LogInformation(
             "Work item {WorkItemId} ({TypeId}) duly made by {UserId} with payment date "
-                + "{PaymentDate}; SLA clock anchored to that date{WaypointDischarge}.",
+                + "{PaymentDate}; SLA clock anchored to {AnchoredTo}{WaypointDischarge}.",
             persisted.Id,
             persisted.TypeId,
             user.FindFirstValue("user:id"),
-            paymentDate.ToString("yyyy-MM-dd"),
+            paymentDate?.ToString("yyyy-MM-dd") ?? "(none)",
+            paymentDate is null ? AnchoredToDulyMade : AnchoredToPaymentDate,
             dischargedWaypoint
                 ? ", having first left the 'updated' waypoint via continue-review-during-duly-making"
                 : string.Empty
         );
-
-        // The state change bypassed WorkItemService.ApplyActionAsync, so the
-        // generic engine's hook fan-out never ran. Invoke it here: this is what
-        // sends the DulyMade operator email (AC07) and pushes the new status to
-        // the operator backend (AC09). It happens strictly after the save, so a
-        // hook that writes its own audit entry cannot collide with our write.
-        await InvokeActionAppliedHooksAsync(persisted, ActionId, FromStateId, user);
-
-        return WorkItemActionResult.Success(persisted);
-    }
 
     /// <summary>
     /// One attempt's freshly loaded inputs: the work item, its opted-in
@@ -231,6 +329,58 @@ internal sealed class StandardDulyMakingService(
 
         return new Loaded(null, workItem, strategy, template);
     }
+
+    /// <summary>
+    /// A payment date must be given for a type that takes one and must not be
+    /// for one that takes none: accepting it would stamp a payment on a change
+    /// that is never charged.
+    /// </summary>
+    private static PaymentDateCheck CheckPaymentDateTaken(
+        WorkItem workItem,
+        IStandardDulyMakingRules strategy,
+        DateOnly? paymentDate
+    ) =>
+        (strategy.TakesPaymentDate, paymentDate.HasValue) switch
+        {
+            (true, false) => Refused(StandardDulyMakingValidator.CodeRequired, "A payment date is required."),
+            (false, true) => NotTaken(workItem),
+            _ => new PaymentDateCheck(paymentDate, null),
+        };
+
+    /// <summary>
+    /// As <see cref="CheckPaymentDateTaken"/>, for the date as the caller sent
+    /// it. The type is resolved first so that a type taking no payment date
+    /// refuses any date sent with the same code, whether or not it parses.
+    /// </summary>
+    private PaymentDateCheck ReadEnteredPaymentDate(
+        WorkItem workItem,
+        IStandardDulyMakingRules strategy,
+        string? enteredPaymentDate
+    )
+    {
+        if (!strategy.TakesPaymentDate)
+        {
+            return string.IsNullOrWhiteSpace(enteredPaymentDate)
+                ? new PaymentDateCheck(null, null)
+                : NotTaken(workItem);
+        }
+
+        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        var validation = StandardDulyMakingValidator.Validate(enteredPaymentDate, today);
+        return validation.IsValid
+            ? new PaymentDateCheck(validation.PaymentDate, null)
+            : Refused(validation.ErrorCode!, validation.Detail!);
+    }
+
+    private static PaymentDateCheck NotTaken(WorkItem workItem) =>
+        Refused(
+            StandardDulyMakingValidator.CodeNotTaken,
+            $"Work item {workItem.Id} is of type '{workItem.TypeId}', which is not charged, "
+                + "so its duly make takes no payment date."
+        );
+
+    private static PaymentDateCheck Refused(string errorCode, string detail) =>
+        new(null, WorkItemActionResult.Failure(WorkItemActionFailureCode.InvalidPaymentDate, detail, errorCode));
 
     /// <summary>
     /// Whether duly making may start from where the item is, and whether the
@@ -341,7 +491,7 @@ internal sealed class StandardDulyMakingService(
     private WorkItemActionResult? ApplyDulyMake(
         WorkItem workItem,
         IStandardDulyMakingRules strategy,
-        DateOnly paymentDate,
+        DateOnly? paymentDate,
         ClaimsPrincipal user,
         bool needsWaypointDischarge
     )
@@ -353,7 +503,7 @@ internal sealed class StandardDulyMakingService(
             DischargeUpdatedWaypoint(workItem, user, now);
         }
 
-        if (!strategy.TryStampPaymentDate(workItem, paymentDate, logger))
+        if (paymentDate is { } date && !strategy.TryStampPaymentDate(workItem, date, logger))
         {
             return WorkItemActionResult.Failure(
                 WorkItemActionFailureCode.InvalidTransition,
@@ -370,27 +520,31 @@ internal sealed class StandardDulyMakingService(
         // now. Midnight UTC of that date is the earliest instant consistent
         // with it, which keeps the regulator's 12 weeks from being
         // shortened by whatever part of the day the payment landed in.
-        var slaStartedAt = paymentDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+        // With nothing paid the clock runs from the day of the duly make
+        // itself, anchored to its midnight UTC like a paid type's, so every
+        // type's 12 weeks are counted in whole days.
+        var slaStartedAt = (paymentDate ?? DateOnly.FromDateTime(now)).ToDateTime(
+            TimeOnly.MinValue,
+            DateTimeKind.Utc
+        );
         var slaClock = new WorkItemSlaClock { StartedAt = slaStartedAt };
         workItem.SlaClock = slaClock;
 
-        AppendAudit(
-            workItem,
-            "action-applied",
-            "Action applied",
-            user,
-            now,
-            new Dictionary<string, string?>
-            {
-                ["actionId"] = ActionId,
-                ["actionDisplayName"] = ActionDisplayName,
-                ["fromStateId"] = previousState,
-                ["toStateId"] = workItem.StateId,
-                // AC08: the entered date is part of the auditable record of
-                // what the regulator did, not just an input to the clock.
-                ["paymentDate"] = paymentDate.ToString("yyyy-MM-dd"),
-            }
-        );
+        var appliedDetails = new Dictionary<string, string?>
+        {
+            ["actionId"] = ActionId,
+            ["actionDisplayName"] = ActionDisplayName,
+            ["fromStateId"] = previousState,
+            ["toStateId"] = workItem.StateId,
+        };
+        if (paymentDate is { } entered)
+        {
+            // AC08: the entered date is part of the auditable record of
+            // what the regulator did, not just an input to the clock.
+            appliedDetails["paymentDate"] = entered.ToString("yyyy-MM-dd");
+        }
+
+        AppendAudit(workItem, "action-applied", "Action applied", user, now, appliedDetails);
         AppendAudit(
             workItem,
             "sla-clock-started",
@@ -401,10 +555,11 @@ internal sealed class StandardDulyMakingService(
             {
                 ["startedAt"] = slaStartedAt.ToString("O"),
                 ["targetDays"] = slaClock.TargetDuration.TotalDays.ToString(CultureInfo.InvariantCulture),
-                // Stated explicitly so the audit trail shows the clock was
-                // back-dated on purpose rather than looking like a bug to
-                // whoever reads it months later.
-                ["anchoredTo"] = "payment-date",
+                // Stated explicitly so the audit trail shows what the clock
+                // was anchored to, and that it starts at that day's midnight
+                // on purpose rather than looking like a bug to whoever reads
+                // it months later.
+                ["anchoredTo"] = paymentDate is null ? AnchoredToDulyMade : AnchoredToPaymentDate,
             }
         );
 

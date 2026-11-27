@@ -52,6 +52,15 @@ public interface IWorkItemService
     /// required field (<see cref="SubmissionPayload.Validate"/>) fails with
     /// <see cref="WorkItemActionFailureCode.InvalidSubmissionPayload"/>.
     /// </para>
+    /// <para>
+    /// RA-767: one operator request is one POST, so it is all or nothing even
+    /// when it mixes adds and updates. A site may name its own split-per-site
+    /// type in its <c>typeId</c> (<see cref="SubmissionPayload.ResolveSiteTypes"/>),
+    /// and its work item is created as that type: its own reference series,
+    /// workflow and template snapshot. Every work item shares the one
+    /// <c>submissionReference</c>, with <c>submissionSize</c> the number of
+    /// sites, and the payload must carry every site type's required fields.
+    /// </para>
     /// </summary>
     Task<WorkItemSubmissionResult> SubmitPerSiteAsync(
         WorkItemSubmissionRequest request,
@@ -293,7 +302,7 @@ public sealed class WorkItemService : IWorkItemService
             submissionYear,
             cancellationToken
         );
-        payload[SubmissionSizeField] = 1;
+        payload[SubmissionPayload.SubmissionSizeField] = 1;
 
         return await PersistNewWorkItemAsync(
             request,
@@ -339,11 +348,17 @@ public sealed class WorkItemService : IWorkItemService
         var now = _timeProvider.GetUtcNow().UtcDateTime;
         MirrorSource(payload, submissionMetadata);
 
-        var referenceFormat = _referenceGenerator.ForType(type);
-        var payloadError =
-            SubmissionPayload.Validate(payload, type.RequiredSubmissionFields)
-            ?? referenceFormat.ValidatePayload(payload);
-        if (payloadError is not null)
+        var siteTypes = SubmissionPayload.ResolveSiteTypes(payload, type, _registry.Find, out var siteTypeError);
+        if (siteTypeError is not null)
+        {
+            return WorkItemSubmissionResult.Failure(
+                WorkItemActionFailureCode.InvalidSubmissionPayload,
+                siteTypeError.Message,
+                siteTypeError.ErrorCode
+            );
+        }
+
+        if (ValidatePerSitePayload(type, payload, siteTypes) is { } payloadError)
         {
             return WorkItemSubmissionResult.Failure(
                 WorkItemActionFailureCode.InvalidSubmissionPayload,
@@ -352,7 +367,7 @@ public sealed class WorkItemService : IWorkItemService
         }
 
         SubmissionPayload.TryReadOperatorRequestId(payload, out var operatorRequestId);
-        var validated = new ValidatedSubmission(request, referenceFormat, operatorRequestId, now);
+        var validated = new ValidatedSubmission(request, siteTypes, operatorRequestId, now);
 
         for (var attempt = 1; attempt <= MaxSubmissionAttempts; attempt++)
         {
@@ -364,6 +379,31 @@ public sealed class WorkItemService : IWorkItemService
 
         // The last attempt rethrows instead of asking for another.
         throw new UnreachableException();
+    }
+
+    /// <summary>
+    /// Why a per-site payload cannot be submitted, or <c>null</c> when it can.
+    /// RA-767: the required fields are every site type's, so a request holding
+    /// an add needs the add's <c>paymentReference</c> while an update-only one
+    /// does not, and the payload must suit every site type's reference format.
+    /// </summary>
+    private string? ValidatePerSitePayload(
+        IWorkItemType requestType,
+        BsonDocument payload,
+        IReadOnlyList<IWorkItemType> siteTypes
+    )
+    {
+        // No sites resolve no types; Validate then reports the missing sites.
+        List<IWorkItemType> types =
+            siteTypes.Count == 0 ? [requestType] : siteTypes.DistinctBy(t => t.TypeId).ToList();
+        var requiredFields = types
+            .SelectMany(t => t.RequiredSubmissionFields)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+        return SubmissionPayload.Validate(payload, requiredFields)
+            ?? types
+                .Select(t => _referenceGenerator.ForType(t).ValidatePayload(payload))
+                .FirstOrDefault(error => error is not null);
     }
 
     /// <summary>
@@ -457,10 +497,14 @@ public sealed class WorkItemService : IWorkItemService
     /// </summary>
     internal const int MaxSubmissionAttempts = 3;
 
-    /// <summary>One validated submission, as <see cref="CreateSubmissionAsync"/> needs it.</summary>
+    /// <summary>
+    /// One validated submission, as <see cref="CreateSubmissionAsync"/> needs
+    /// it. <see cref="SiteTypes"/> holds the type each site is created as, in
+    /// site order.
+    /// </summary>
     private sealed record ValidatedSubmission(
         WorkItemSubmissionRequest Request,
-        IWorkItemReferenceFormat ReferenceFormat,
+        IReadOnlyList<IWorkItemType> SiteTypes,
         string OperatorRequestId,
         DateTime Now
     );
@@ -492,35 +536,38 @@ public sealed class WorkItemService : IWorkItemService
             cancellationToken
         );
 
-        // Each work item holds the shared request fields and exactly one site.
+        // Each work item holds the request's own fields and exactly one site.
         var sites = payload[SubmissionPayload.SitesField]
             .AsBsonArray.Select(site => site.AsBsonDocument)
             .ToList();
-        var shared = payload.DeepClone().AsBsonDocument;
-        shared.Remove(SubmissionPayload.SitesField);
+        var requestFields = payload.DeepClone().AsBsonDocument;
+        requestFields.Remove(SubmissionPayload.SitesField);
         var operatorPaymentReference = ReadOperatorPaymentReference(payload);
-        var snapshot = WorkItemTemplateSnapshot.Capture(request.Type);
 
         var created = new List<WorkItem>(sites.Count);
         var items = new List<SubmissionRecordItem>(sites.Count);
-        foreach (var site in sites)
+        foreach (var (site, siteType) in sites.Zip(submission.SiteTypes))
         {
-            var itemPayload = shared.DeepClone().AsBsonDocument;
-            itemPayload[SubmissionPayload.SiteField] = site.DeepClone();
+            var itemSite = site.DeepClone().AsBsonDocument;
+            // The work item's own TypeId says which type it is.
+            itemSite.Remove(SubmissionPayload.SiteTypeIdField);
+            var itemPayload = requestFields.DeepClone().AsBsonDocument;
+            itemPayload[SubmissionPayload.SiteField] = itemSite;
             itemPayload[SubmissionPayload.SubmissionReferenceField] = submissionReference;
-            itemPayload[SubmissionSizeField] = sites.Count;
+            itemPayload[SubmissionPayload.SubmissionSizeField] = sites.Count;
 
-            var applicationReference = await submission.ReferenceFormat.GenerateAsync(
-                session,
-                itemPayload,
-                cancellationToken
-            );
+            var applicationReference = await _referenceGenerator
+                .ForType(siteType)
+                .GenerateAsync(session, itemPayload, cancellationToken);
             var workItem = NewSubmittedWorkItem(
-                request,
-                snapshot,
+                request with { Type = siteType },
+                WorkItemTemplateSnapshot.Capture(siteType),
                 itemPayload,
                 applicationReference,
-                operatorPaymentReference,
+                // An uncharged site (an update) is not what the operator paid for.
+                siteType.RequiredSubmissionFields.Contains(SubmissionPayload.PaymentReferenceField)
+                    ? operatorPaymentReference
+                    : null,
                 submission.Now
             );
             await _persistence.CreateAsync(session, workItem, cancellationToken);
@@ -530,7 +577,8 @@ public sealed class WorkItemService : IWorkItemService
                 new SubmissionRecordItem(
                     site[SubmissionPayload.SiteIdField],
                     workItem.Id,
-                    applicationReference
+                    applicationReference,
+                    siteType.TypeId
                 )
             );
         }
@@ -579,8 +627,6 @@ public sealed class WorkItemService : IWorkItemService
         );
         return WorkItemSubmissionResult.IdempotentReplay(submission);
     }
-
-    private const string SubmissionSizeField = "submissionSize";
 
     private ISubmissionStore Submissions =>
         _submissionStore
