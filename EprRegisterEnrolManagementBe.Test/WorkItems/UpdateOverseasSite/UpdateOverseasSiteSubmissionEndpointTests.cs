@@ -106,6 +106,31 @@ public sealed class UpdateOverseasSiteSubmissionEndpointTests(MongoIntegrationFi
         Assert.Equal(3, await factory.CountAsync("workItems", Ct));
     }
 
+    // RA-681: management-fe labels an ORS request "Accreditation:" or "Registration:" from
+    // its site's selected flag, so each work item keeps the flag the operator sent.
+    [Fact]
+    public async Task Each_work_item_keeps_its_sites_selected_flag()
+    {
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var add = AddOverseasSiteSubmissions.Body("request-selected", siteCount: 1);
+        add["payload"]!["sites"]![0]!["selected"] = true;
+        var update = UpdateOverseasSiteSubmissions.Body($"request-selected:{UpdateOverseasSiteType.Id}", siteCount: 1);
+        update["payload"]!["sites"]![0]!["selected"] = false;
+
+        var addBody = await PostCreatedAsync(client, add);
+        var updateBody = await PostCreatedAsync(client, update);
+
+        async Task<bool> StoredSelected(JsonElement body)
+        {
+            var id = body.GetProperty("workItems")[0].GetProperty("id").GetGuid();
+            var stored = await factory.Persistence.GetByIdAsync(id, Ct);
+            return stored!.Payload["site"]["selected"].AsBoolean;
+        }
+        Assert.True(await StoredSelected(addBody));
+        Assert.False(await StoredSelected(updateBody));
+    }
+
     // RA-682 AC07: an approved update goes back to the operator backend with its
     // effective date, on the same change-request route as add-ORS.
     [Fact]
