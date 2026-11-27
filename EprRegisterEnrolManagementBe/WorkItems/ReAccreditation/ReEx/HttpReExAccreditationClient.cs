@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Models;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
@@ -55,6 +56,36 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
             dto.OtherPercent = v,
     };
 
+    // Structured-log field naming the ReEx organisation a lookup was for.
+    private const string OrganisationIdLogField = "reex.organisation_id";
+    private const string StatusCodeLogField = "reex.status_code";
+
+    /// <summary>
+    /// How long one ReEx request may take before it counts as unavailable. Both
+    /// front ends load prior-year on every work item page; management-fe gives
+    /// up after 5000ms (<c>BACKEND_API_TIMEOUT_MS</c>) and shows nothing, so a
+    /// ReEx that hangs must time out here first, be logged at Error and answer
+    /// 502, rather than leave no trace once the caller has gone. 4s leaves
+    /// room inside management-fe's 5s for the work item read before the call.
+    /// Keep it under management-fe's timeout if either changes.
+    /// </summary>
+    internal static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(4);
+
+    // ReEx (DEFRA/epr-backend, 4b9fc27) answers an unknown organisation with a
+    // Boom 404 whose message names the organisation:
+    // src/registration-accreditation-admin/routes/get-by-id.js throws
+    // "Organisation not found" and src/repositories/organisations/mongodb.js
+    // "Organisation with id <id> not found". A 404 without that message (Hapi's
+    // own route miss, "Not Found"; a proxy or gateway page; a wrong
+    // ReExApi:BaseUrl path) is not ReEx saying "no such organisation".
+    private static readonly Regex s_organisationNotFoundMessage =
+        new(
+            "^Organisation\\b.*\\bnot found$",
+            RegexOptions.IgnoreCase
+                | RegexOptions.CultureInvariant,
+            TimeSpan.FromMilliseconds(100)
+        );
+
     private readonly HttpClient _httpClient;
     private readonly IStructuredLogger<HttpReExAccreditationClient> _log;
 
@@ -63,43 +94,50 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
         IOptions<ReExAccreditationConfig> config,
         IStructuredLogger<HttpReExAccreditationClient> log
     )
+        : this(httpClient, config, log, RequestTimeout) { }
+
+    // Tests only: a shorter timeout, so a test can drive the real HttpClient
+    // timeout without waiting RequestTimeout. Internal, so DI never picks it.
+    internal HttpReExAccreditationClient(
+        HttpClient httpClient,
+        IOptions<ReExAccreditationConfig> config,
+        IStructuredLogger<HttpReExAccreditationClient> log,
+        TimeSpan timeout
+    )
     {
         _log = log;
         var baseUrl = config.Value.BaseUrl;
         if (!string.IsNullOrWhiteSpace(baseUrl))
             httpClient.BaseAddress = new Uri(baseUrl.TrimEnd('/') + '/');
+        httpClient.Timeout = timeout;
         _httpClient = httpClient;
     }
 
-    public async Task<PriorYearAccreditationDto?> GetPriorYearAsync(
-        string? organisationId,
-        string? registrationId,
-        int? year,
+    public async Task<PriorYearReadResult> GetPriorYearAsync(
+        string organisationId,
+        string registrationId,
+        int year,
         CancellationToken cancellationToken = default
     )
     {
-        if (
-            string.IsNullOrWhiteSpace(organisationId)
-            || string.IsNullOrWhiteSpace(registrationId)
-            || year is null
-        )
-        {
-            return null;
-        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(organisationId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(registrationId);
 
-        var org = await FetchOrganisationAsync(organisationId, cancellationToken);
+        var (outcome, org) = await FetchOrganisationAsync(organisationId, cancellationToken);
         if (org is null)
-            return null;
+            return outcome == ReExReadOutcome.NotFound
+                ? PriorYearReadResult.NotFound()
+                : PriorYearReadResult.Unavailable();
 
         var registration = org.Registrations.FirstOrDefault(r => r.Id == registrationId);
         if (registration is null)
-            return null;
+            return PriorYearReadResult.NotFound();
 
         var accreditation = org.Accreditations.FirstOrDefault(a =>
             a.Id is not null && a.Id == registration.AccreditationId
         );
         if (accreditation is null)
-            return null;
+            return PriorYearReadResult.NotFound();
 
         if (
             !DateOnly.TryParse(
@@ -107,10 +145,10 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                 CultureInfo.InvariantCulture,
                 out var validFrom
             )
-            || validFrom.Year != year.Value
+            || validFrom.Year != year
         )
         {
-            return null;
+            return PriorYearReadResult.NotFound();
         }
 
         var prn = accreditation.PrnIssuance;
@@ -128,33 +166,35 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
 
         var businessPlan = MapBusinessPlan(prn?.IncomeBusinessPlan ?? []);
 
-        return new PriorYearAccreditationDto
-        {
-            Year = year.Value,
-            TonnageBand = tonnageBand,
-            Authorisers = authorisers,
-            BusinessPlan = businessPlan,
-        };
+        return PriorYearReadResult.Found(
+            new PriorYearAccreditationDto
+            {
+                Year = year,
+                TonnageBand = tonnageBand,
+                Authorisers = authorisers,
+                BusinessPlan = businessPlan,
+            }
+        );
     }
 
-    public async Task<Nation?> GetNationAsync(
-        string? organisationId,
-        string? registrationId,
+    public async Task<NationReadResult> GetNationAsync(
+        string organisationId,
+        string registrationId,
         CancellationToken cancellationToken = default
     )
     {
-        if (string.IsNullOrWhiteSpace(organisationId) || string.IsNullOrWhiteSpace(registrationId))
-        {
-            return null;
-        }
+        ArgumentException.ThrowIfNullOrWhiteSpace(organisationId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(registrationId);
 
-        var org = await FetchOrganisationAsync(organisationId, cancellationToken);
+        var (outcome, org) = await FetchOrganisationAsync(organisationId, cancellationToken);
         if (org is null)
-            return null;
+            return outcome == ReExReadOutcome.NotFound
+                ? NationReadResult.NotFound()
+                : NationReadResult.Unavailable();
 
         var registration = org.Registrations.FirstOrDefault(r => r.Id == registrationId);
         if (registration is null)
-            return null;
+            return NationReadResult.NotFound();
 
         if (!RegulatorNationMapper.TryMap(registration.SubmittedToRegulator, out var nation))
         {
@@ -163,80 +203,163 @@ internal sealed class HttpReExAccreditationClient : IReExAccreditationClient
                 "Unrecognised regulator code for ReEx registration",
                 new Dictionary<string, object?>
                 {
-                    ["reex.organisation_id"] = organisationId,
+                    [OrganisationIdLogField] = organisationId,
                     ["reex.registration_id"] = registrationId,
                     ["reex.regulator_code"] = registration.SubmittedToRegulator,
                 }
             );
         }
 
-        return nation;
+        return NationReadResult.Found(nation);
     }
 
-    // Extracted from GetPriorYearAsync (S3776: cognitive complexity) - also keeps the
-    // RA-475 auth-vs-data-gap distinction self-contained rather than nested inside the
-    // caller's own branching.
-    private async Task<ReExOrganisationDto?> FetchOrganisationAsync(
+    // The organisation, or why there is none: NotFound only for ReEx's own
+    // "organisation not found" 404; anything else is logged at Error and is
+    // Unavailable.
+    private async Task<(ReExReadOutcome Outcome, ReExOrganisationDto? Organisation)> FetchOrganisationAsync(
         string organisationId,
         CancellationToken cancellationToken
     )
     {
+        HttpResponseMessage response;
         try
         {
-            using var response = await _httpClient.GetAsync(
+            response = await _httpClient.GetAsync(
                 $"v1/organisations/{Uri.EscapeDataString(organisationId)}",
                 cancellationToken
             );
+        }
+        catch (Exception ex)
+            when ((ex is HttpRequestException or TaskCanceledException)
+                && !cancellationToken.IsCancellationRequested)
+        {
+            // A TaskCanceledException without the caller's token cancelled is the
+            // HttpClient timeout (RequestTimeout), not the caller giving up.
+            _log.Log(
+                LogLevel.Error,
+                "ReEx organisation request failed",
+                new Dictionary<string, object?> { [OrganisationIdLogField] = organisationId },
+                exception: ex
+            );
+            return (ReExReadOutcome.Unavailable, null);
+        }
+
+        using (response)
+        {
+            if (response.StatusCode == HttpStatusCode.NotFound)
+                return await ReadNotFoundAsync(response, organisationId, cancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
                 // RA-475: a 401/403 is never a data condition — it means this
                 // service's ReEx Basic-auth credentials (REEX_API_BASIC_AUTH_USERNAME /
                 // REEX_API_BASIC_AUTH_PASSWORD) or ReExApi:BaseUrl are wrong for the
-                // environment, and EVERY prior-year lookup will fail for as long as
-                // they are. Logged at Error, and named as a credentials problem, so it
-                // is distinguishable from the ordinary "ReEx has no record for this
-                // organisation" 404 it otherwise degrades into identically — which is
-                // how a total outage of this lookup on dev read as routine noise.
-                //
-                // The RETURN is deliberately unchanged: the caller still gets null and
-                // the caseworker still gets an Application details page, just without
-                // the prior-year section. Failing the page over an optional panel would
-                // be a worse outcome than the missing data.
+                // environment, and EVERY ReEx lookup will fail for as long as
+                // they are. Named as a credentials problem so it is distinguishable
+                // from any other ReEx failure.
                 var isAuthFailure =
                     response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden;
 
                 _log.Log(
-                    isAuthFailure ? LogLevel.Error : LogLevel.Warning,
+                    LogLevel.Error,
                     isAuthFailure
-                        ? "ReEx rejected this service's credentials; prior-year lookup is failing for "
-                            + "every application until REEX_API_BASIC_AUTH_* / ReExApi:BaseUrl are corrected"
-                        : "ReEx prior-year lookup failed",
+                        ? "ReEx rejected this service's credentials; every ReEx lookup is failing "
+                            + "until REEX_API_BASIC_AUTH_* / ReExApi:BaseUrl are corrected"
+                        : "ReEx organisation lookup failed",
                     new Dictionary<string, object?>
                     {
-                        ["reex.organisation_id"] = organisationId,
-                        ["reex.status_code"] = (int)response.StatusCode,
+                        [OrganisationIdLogField] = organisationId,
+                        [StatusCodeLogField] = (int)response.StatusCode,
                     }
                 );
-                return null;
+                return (ReExReadOutcome.Unavailable, null);
             }
 
-            return await response.Content.ReadFromJsonAsync<ReExOrganisationDto>(
-                s_jsonOptions,
-                cancellationToken
-            );
-        }
-        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-        {
-            _log.Log(
-                LogLevel.Error,
-                "ReEx prior-year request failed",
-                new Dictionary<string, object?> { ["reex.organisation_id"] = organisationId },
-                exception: ex
-            );
-            return null;
+            ReExOrganisationDto? organisation;
+            try
+            {
+                organisation = await response.Content.ReadFromJsonAsync<ReExOrganisationDto>(
+                    s_jsonOptions,
+                    cancellationToken
+                );
+            }
+            catch (JsonException ex)
+            {
+                LogUnreadableBody(organisationId, ex);
+                return (ReExReadOutcome.Unavailable, null);
+            }
+
+            if (organisation is null)
+            {
+                LogUnreadableBody(organisationId, null);
+                return (ReExReadOutcome.Unavailable, null);
+            }
+
+            return (ReExReadOutcome.Found, organisation);
         }
     }
+
+    // A 404 is ReEx saying "no such organisation" only when its body is ReEx's
+    // own not-found error (see s_organisationNotFoundMessage). Any other 404 is
+    // treated as ReEx being unreachable at the configured path, so an outage
+    // never reads as "no prior year".
+    private async Task<(ReExReadOutcome Outcome, ReExOrganisationDto? Organisation)> ReadNotFoundAsync(
+        HttpResponseMessage response,
+        string organisationId,
+        CancellationToken cancellationToken
+    )
+    {
+        var body = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (IsOrganisationNotFoundBody(body))
+        {
+            _log.Log(
+                LogLevel.Warning,
+                "ReEx has no record of the organisation",
+                new Dictionary<string, object?>
+                {
+                    [OrganisationIdLogField] = organisationId,
+                    [StatusCodeLogField] = (int)response.StatusCode,
+                }
+            );
+            return (ReExReadOutcome.NotFound, null);
+        }
+
+        _log.Log(
+            LogLevel.Error,
+            "ReEx answered 404 without its organisation-not-found error; check ReExApi:BaseUrl "
+                + "and the CDP proxy route",
+            new Dictionary<string, object?>
+            {
+                [OrganisationIdLogField] = organisationId,
+                [StatusCodeLogField] = (int)response.StatusCode,
+            }
+        );
+        return (ReExReadOutcome.Unavailable, null);
+    }
+
+    private static bool IsOrganisationNotFoundBody(string body)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(body);
+            return document.RootElement.ValueKind == JsonValueKind.Object
+                && document.RootElement.TryGetProperty("message", out var message)
+                && message.ValueKind == JsonValueKind.String
+                && s_organisationNotFoundMessage.IsMatch(message.GetString()!.Trim());
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private void LogUnreadableBody(string organisationId, Exception? exception) =>
+        _log.Log(
+            LogLevel.Error,
+            "ReEx returned a body that is not an organisation",
+            new Dictionary<string, object?> { [OrganisationIdLogField] = organisationId },
+            exception: exception
+        );
 
     private string? MapTonnageBand(string? rawTonnageBand)
     {

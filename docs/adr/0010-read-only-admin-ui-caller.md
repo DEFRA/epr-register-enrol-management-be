@@ -1,7 +1,7 @@
 # ADR-0010: The Admin UI is a read-only caller
 
 **Date:** 2026-11-25
-**Status:** Accepted
+**Status:** Accepted, amended by RA-752 (see amendment below)
 **Issue:** RA-751 (epic RA-639, Production Support "Admin UI")
 
 ## Context
@@ -135,3 +135,66 @@ signed-in user.
 - `RequiredConfigHealthCheckTests`: a missing Admin UI secret is Degraded
   with an Error log outside Development and ignored in Development; a missing
   caseworker caller secret stays Unhealthy.
+
+## Amendment: RA-752 (2026-11-26)
+
+RA-752 (the Admin UI's Work item page) opts two more GETs in to
+`ReadOnlyCallerAllowed`: `GET /work-items/{id}` (Document tab and Regulator
+view) and `GET /work-items/re-accreditation/{id}/prior-year` (the Regulator
+view's prior-year section, which management-fe's work item page also shows).
+Decision 3's list is now those two plus the RA-751 pair.
+
+`GET /work-items/re-accreditation/{id}/recommendation` stays closed: neither
+the Admin UI nor management-fe's work item page calls it, and deny by default
+means a route opens only for a reader that needs it.
+
+`GET /work-items/{id}` is **not** projected the way decision 5 projects the
+list: the Admin UI gets the same full `WorkItemResponse` as management-fe,
+including the payload, notes, audit log and the names they hold. RA-752 AC08
+has the Document tab show the work item as JSON "including the payload, notes
+and audit log, with the status pushes to the Operator journey", which a
+projection would remove, and AC10 places the masking of names and email
+addresses in the Admin UI when it shows them. So for this route, decision 5's
+guarantee does not hold: personal data reaches the Admin UI and it is the
+Admin UI's masking that keeps it off screen. Where the masking happens comes
+from the ticket: AC10, and RA-752's Admin UI technical note, which extends the
+Admin UI's `mask-personal-data.js` to the names work items hold. Server-side
+masking for read-only callers was considered and not chosen by the tech lead,
+in the team Slack thread of 2026-11-26, relayed by Tom Halley. A team-wide
+rule for personal data in the Admin UI is still to be confirmed.
+
+Both opened routes now say why they answer `404`, with the `errorCode`
+ProblemDetails extension the repo already uses: `work-item-not-found` (no work
+item with that id) on both, and `prior-year-not-found` (the item has no prior
+year, or ReEx holds none) on prior-year. A caller treats a `404` as "not
+found" only with the code it expects; any other `404` (a route or proxy miss)
+is "unavailable". `GET /work-items/re-accreditation/{id}/prior-year` answers
+`502` with `reex-unavailable` when ReEx could not answer: a request failure, a
+timeout, a 401/403 or other non-404 status, an unreadable body, or a `404`
+without ReEx's own "organisation not found" error. The ReEx client returns
+that as an outcome (Found / NotFound / Unavailable, like
+`IAccreditationSummaryAdapter`) after logging the cause at Error, and times a
+request out after 4s, inside management-fe's 5s, so a hung ReEx is logged and
+answered rather than abandoned by the caller. Before RA-752 the client turned
+every failure into "no record", so a caller that reads `404` as "no prior
+year" (the Admin UI) could never show that the data was unavailable.
+
+`502`, not the `503` RA-769's accreditation-summary route answers when its
+operator backend read fails: this service is acting as a gateway to ReEx, and
+ReEx answered badly or not at all, which is what `502 Bad Gateway` says (RFC
+9110 section 15.6.3); `503` says this service itself is unavailable. A
+timeout is folded into `502` rather than `504` so callers handle one status.
+Callers tell the cases apart by `errorCode`, not by status, so the two routes
+differing does not change how either is read.
+
+Nothing else in this ADR changes. Verification:
+`ClientIdAuthenticationAdminUiCallerTests` now also asserts that the routing
+table opens exactly the listed GET-only endpoints to read-only callers, that
+every endpoint other than `/health`, `/health/ready` and the OpenAPI document
+requires authorization, that the Admin UI reads a work item (byte-identical to
+management-fe's) and its prior-year data, gets `404 work-item-not-found` for
+a missing work item, `404` for a non-GUID id, `404 prior-year-not-found` for
+prior-year data ReEx has no record of, `502 reex-unavailable` for each ReEx
+failure (the timeout through the real `HttpClient` timeout), `405` for a
+method an opened route does not map, and is still refused on writes.
+`HttpReExAccreditationClientTests` cover each ReEx outcome.

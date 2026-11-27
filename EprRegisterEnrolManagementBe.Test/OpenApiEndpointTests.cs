@@ -84,6 +84,36 @@ public class OpenApiEndpointTests
             "to match.");
     }
 
+    [Theory]
+    // RA-752: the statuses each route can answer, so a reader of the document
+    // can tell "not found" (404) from "ReEx unavailable" (502).
+    [InlineData("GetWorkItemById", new[] { "200", "404" })]
+    [InlineData("GetReAccreditationPriorYear", new[] { "200", "400", "404", "502" })]
+    public async Task Response_statuses_are_documented_for_the_read_routes(
+        string operationId,
+        string[] expected
+    )
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new OpenApiFactory();
+        using var client = factory.CreateClient();
+
+        var body = await client.GetStringAsync("/openapi/v1.json", ct);
+        using var document = JsonDocument.Parse(body);
+
+        var operation = document
+            .RootElement.GetProperty("paths")
+            .EnumerateObject()
+            .SelectMany(p => p.Value.EnumerateObject())
+            .Single(o =>
+                o.Value.TryGetProperty("operationId", out var id) && id.GetString() == operationId
+            );
+        Assert.Equal(
+            expected,
+            operation.Value.GetProperty("responses").EnumerateObject().Select(r => r.Name).Order()
+        );
+    }
+
     private sealed class OpenApiFactory : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
