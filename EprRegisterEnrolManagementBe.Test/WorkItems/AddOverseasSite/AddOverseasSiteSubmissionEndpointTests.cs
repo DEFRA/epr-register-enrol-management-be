@@ -28,7 +28,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
     public async Task Posting_three_sites_creates_three_submitted_work_items_sharing_one_submission_reference()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
@@ -87,7 +87,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
     public async Task Each_work_item_keeps_its_sites_charge_interim_sites_and_bes_files_as_sent()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var submission = new
         {
@@ -196,7 +196,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
     public async Task The_submission_reference_is_sequential_per_accreditation_year()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
 
         var first = await PostAsync(client, Submission("request-a", siteCount: 1));
@@ -226,7 +226,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
     public async Task A_single_site_submission_has_a_submission_size_of_one()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
@@ -245,7 +245,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
     public async Task Each_work_item_is_listed_with_its_payload_and_the_new_ORS_display_name()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         await client.PostAsJsonAsync("/work-items", Submission("request-list"), cancellationToken);
 
@@ -273,7 +273,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
     public async Task Re_accreditation_submissions_get_a_submission_reference_of_one_request_and_keep_their_response()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
 
         var response = await client.PostAsJsonAsync(
@@ -313,7 +313,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
     public async Task The_collections_a_submission_writes_to_exist_before_the_first_submission()
     {
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         _ = factory.Services.GetRequiredService<IWorkItemService>();
 
         var database = new MongoClient(fixture.ConnectionString).GetDatabase(factory.DatabaseName);
@@ -333,7 +333,7 @@ public sealed class AddOverseasSiteSubmissionEndpointTests(MongoIntegrationFixtu
         // A deployed database still carries it, and it must go, or every
         // site after the first in a submission collides.
         var cancellationToken = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         var workItems = new MongoClient(fixture.ConnectionString)
             .GetDatabase(factory.DatabaseName)
             .GetCollection<BsonDocument>("workItems");

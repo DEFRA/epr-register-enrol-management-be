@@ -5,7 +5,7 @@ using EprRegisterEnrolManagementBe.WorkItems.AddOverseasSite;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
 using Microsoft.AspNetCore.Mvc;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -25,7 +25,7 @@ public sealed class AddOverseasSiteWithdrawEndpointTests(MongoIntegrationFixture
     public async Task Withdraw_is_rejected_on_the_generic_action_route_for_a_submitted_item()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = (await factory.SubmitAsync(client, "withdraw-submitted", siteCount: 1, ct))[0];
 
@@ -36,7 +36,7 @@ public sealed class AddOverseasSiteWithdrawEndpointTests(MongoIntegrationFixture
     public async Task Withdraw_is_rejected_on_the_generic_action_route_for_a_started_item()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "withdraw-started", ct);
 
@@ -54,7 +54,7 @@ public sealed class AddOverseasSiteWithdrawEndpointTests(MongoIntegrationFixture
     public async Task Withdraw_is_not_offered_in_available_actions()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = (await factory.SubmitAsync(client, "withdraw-actions", siteCount: 1, ct))[0];
 
@@ -73,7 +73,7 @@ public sealed class AddOverseasSiteWithdrawEndpointTests(MongoIntegrationFixture
     public async Task Withdraw_is_rejected_on_the_generic_action_route_for_an_item_migrated_from_v1()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = (await factory.SubmitAsync(client, "withdraw-v1", siteCount: 1, ct))[0];
         var v1 = await factory.Persistence.GetByIdAsync(id, ct);
@@ -98,7 +98,7 @@ public sealed class AddOverseasSiteWithdrawEndpointTests(MongoIntegrationFixture
     public async Task A_re_accreditation_item_is_still_withdrawn_on_the_generic_action_route()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var type = new ReAccreditationType();
         var id = Guid.NewGuid();
@@ -122,7 +122,7 @@ public sealed class AddOverseasSiteWithdrawEndpointTests(MongoIntegrationFixture
     }
 
     private static async Task AssertGenericActionRejectedAsync(
-        AddOverseasSiteAppFactory factory,
+        OverseasSiteAppFactory factory,
         HttpClient client,
         Guid id,
         string stateId,

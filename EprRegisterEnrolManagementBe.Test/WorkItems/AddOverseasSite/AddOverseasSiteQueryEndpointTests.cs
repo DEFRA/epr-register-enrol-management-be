@@ -7,7 +7,7 @@ using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using Microsoft.AspNetCore.Mvc;
 using NSubstitute;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -23,7 +23,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
 
     /// <summary>A one-site submission whose site carries address, contact and one interim site.</summary>
     private static async Task<Guid> SubmitWithInterimSiteAsync(
-        AddOverseasSiteAppFactory factory,
+        OverseasSiteAppFactory factory,
         HttpClient client,
         string operatorRequestId,
         CancellationToken ct
@@ -75,13 +75,13 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
         CancellationToken ct
     ) => client.PostAsJsonAsync($"/work-items/add-overseas-site/{id}/resume-from-query", body, ct);
 
-    private async Task<(AddOverseasSiteAppFactory Factory, HttpClient Client, Guid Id)> QueriedAsync(
+    private async Task<(OverseasSiteAppFactory Factory, HttpClient Client, Guid Id)> QueriedAsync(
         string operatorRequestId,
         CancellationToken ct,
-        AddOverseasSiteAppFactory? factory = null
+        OverseasSiteAppFactory? factory = null
     )
     {
-        factory ??= new AddOverseasSiteAppFactory(fixture);
+        factory ??= new OverseasSiteAppFactory(fixture);
         var client = factory.CreateClient();
         var id = await SubmitWithInterimSiteAsync(factory, client, operatorRequestId, ct);
         Assert.Equal(HttpStatusCode.OK, (await PostQueryAsync(client, id, new { reason = Reason }, ct)).StatusCode);
@@ -115,7 +115,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     public async Task A_started_item_is_queried_through_the_assessment_transition()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "query-started", ct);
 
@@ -136,7 +136,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     public async Task An_invalid_query_body_is_a_400_and_changes_nothing(string json)
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = (await factory.SubmitAsync(client, "query-invalid", siteCount: 1, ct))[0];
 
@@ -155,7 +155,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     public async Task Querying_an_unknown_item_is_a_404()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
 
         var response = await PostQueryAsync(client, Guid.NewGuid(), new { reason = Reason }, ct);
@@ -180,7 +180,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     public async Task A_decided_item_cannot_be_queried()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "query-decided", ct);
         Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, "rejected", ct)).StatusCode);
@@ -194,7 +194,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     public async Task The_generic_action_route_cannot_apply_a_query_resume_or_continue_review_transition()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = (await factory.SubmitAsync(client, "query-generic", siteCount: 1, ct))[0];
 
@@ -209,7 +209,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     public async Task A_disabled_query_push_is_recorded_as_skipped_and_the_query_still_succeeds()
     {
         var ct = TestContext.Current.CancellationToken;
-        var factory = new AddOverseasSiteAppFactory(fixture);
+        var factory = new OverseasSiteAppFactory(fixture);
         factory
             .PushAdapter.PushChangeRequestQueryRaisedAsync(
                 Arg.Any<Guid>(),
@@ -233,7 +233,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     public async Task A_failed_query_push_is_recorded_and_the_query_still_succeeds()
     {
         var ct = TestContext.Current.CancellationToken;
-        var factory = new AddOverseasSiteAppFactory(fixture);
+        var factory = new OverseasSiteAppFactory(fixture);
         factory
             .PushAdapter.PushChangeRequestQueryRaisedAsync(
                 Arg.Any<Guid>(),
@@ -368,7 +368,7 @@ public sealed class AddOverseasSiteQueryEndpointTests(MongoIntegrationFixture fi
     public async Task A_response_to_an_item_that_was_not_queried_is_a_409()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = (await factory.SubmitAsync(client, "resume-not-queried", siteCount: 1, ct))[0];
 

@@ -14,7 +14,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using MongoDB.Bson;
 using NSubstitute;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.InYearChanges;
 
@@ -76,14 +76,14 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static AddOverseasSiteAppFactory NewFactory(
+    private static OverseasSiteAppFactory NewFactory(
         MongoIntegrationFixture fixture,
         IAccreditationSummaryAdapter adapter,
         bool testOrganisations = false,
         CapturingLoggerProvider? logs = null
     )
     {
-        return new AddOverseasSiteAppFactory(fixture)
+        return new OverseasSiteAppFactory(fixture)
         {
             Settings = new Dictionary<string, string>
             {
@@ -120,7 +120,7 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
 
     // An add-ORS submission as the operator backend posts it, with the fields the summary resolves from.
     private static async Task<Guid> SubmitAsync(
-        AddOverseasSiteAppFactory factory,
+        OverseasSiteAppFactory factory,
         HttpClient client,
         string operatorRequestId,
         string organisationId = "org-1",
@@ -219,7 +219,7 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
 
     // The re-accreditation work item that issued an accreditation: its number and start date on the payload.
     private static async Task StoreReAccreditationAsync(
-        AddOverseasSiteAppFactory factory,
+        OverseasSiteAppFactory factory,
         string stateId,
         string accreditationNumber,
         DateOnly? startDate
@@ -338,7 +338,7 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
     public async Task A_failed_work_item_lookup_is_a_service_unavailable_never_a_guessed_date()
     {
         var adapter = AdapterReturning(AccreditationSummaryReadResult.Success(Live));
-        await using var factory = new AddOverseasSiteAppFactory(fixture)
+        await using var factory = new OverseasSiteAppFactory(fixture)
         {
             ConfigureTestServices = services =>
             {
@@ -420,7 +420,7 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
     {
         // The real adapter, with OperatorBackendApi:Enabled false (the default): a case with an application id is a
         // 503 (see below), so a 404 here shows the missing application id is answered before any read is attempted.
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await SubmitAsync(factory, client, "summary-registration-only", applicationId: null);
 
@@ -478,7 +478,7 @@ public sealed class AccreditationSummaryEndpointTests(MongoIntegrationFixture fi
     public async Task A_disabled_operator_backend_is_a_service_unavailable()
     {
         // The real adapter, with OperatorBackendApi:Enabled false (the default): a transient failure.
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await SubmitAsync(factory, client, "summary-disabled");
 

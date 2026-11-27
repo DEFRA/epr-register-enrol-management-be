@@ -41,13 +41,9 @@ internal sealed class AddOverseasSiteType : IWorkItemType
     /// <see cref="StandardWorkflow"/> itself is left alone because
     /// re-accreditation withdraws through it.
     /// </summary>
-    internal static readonly WorkItemWorkflow WorkflowDefinition = StandardWorkflow.Definition with
-    {
-        Id = "standard-add-overseas-site",
-        Transitions = StandardWorkflow
-            .Definition.Transitions.Select(t => IsWithdraw(t) ? t with { CallerInvocable = false } : t)
-            .ToList(),
-    };
+    internal static readonly WorkItemWorkflow WorkflowDefinition = StandardWorkflow.WithdrawNotCallerInvocable(
+        "standard-add-overseas-site"
+    );
 
     public string TypeId => Id;
     public string DisplayName => "New ORS accreditation";
@@ -73,10 +69,4 @@ internal sealed class AddOverseasSiteType : IWorkItemType
     public WorkItemState InitialState => Workflow.InitialState;
     public IReadOnlyCollection<WorkItemState> States => Workflow.States;
     public IReadOnlyCollection<WorkItemTransition> Transitions => Workflow.Transitions;
-
-    // A withdraw is any move onto the Withdrawn state, not an action-id
-    // prefix: the push hook never pushes a move onto withdrawn, which is why
-    // add-ORS must not take one.
-    private static bool IsWithdraw(WorkItemTransition transition) =>
-        transition.ToStateId == StandardWorkflow.WithdrawnStateId;
 }

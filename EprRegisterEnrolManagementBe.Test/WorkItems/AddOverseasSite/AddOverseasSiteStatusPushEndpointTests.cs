@@ -4,7 +4,7 @@ using EprRegisterEnrolManagementBe.Integrations.OperatorBackend;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
 using NSubstitute;
-using static EprRegisterEnrolManagementBe.Test.TestSupport.AddOverseasSiteAppFactory;
+using static EprRegisterEnrolManagementBe.Test.TestSupport.OverseasSiteAppFactory;
 
 namespace EprRegisterEnrolManagementBe.Test.WorkItems.AddOverseasSite;
 
@@ -29,7 +29,7 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
     public async Task Duly_making_is_pushed_to_the_change_request_status_route_after_it_commits()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = (await factory.SubmitAsync(client, "push-duly-make", siteCount: 1, ct))[0];
 
@@ -51,7 +51,7 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
     )
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, $"push-{outcome}", ct);
 
@@ -90,7 +90,7 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
     public async Task Confirm_contact_commits_nothing_when_the_valid_from_date_changes_during_the_push()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(fixture);
+        await using var factory = new OverseasSiteAppFactory(fixture);
         using var client = factory.CreateClient();
         var id = await factory.DulyMadeAndStartedAsync(client, "push-date-changed-in-flight", ct);
         Assert.Equal(HttpStatusCode.OK, (await PostDecisionAsync(client, id, "approved", ct)).StatusCode);
@@ -125,7 +125,7 @@ public sealed class AddOverseasSiteStatusPushEndpointTests(MongoIntegrationFixtu
     public async Task Confirm_contact_commits_nothing_when_the_push_fails_and_a_retry_completes_it()
     {
         var ct = TestContext.Current.CancellationToken;
-        await using var factory = new AddOverseasSiteAppFactory(
+        await using var factory = new OverseasSiteAppFactory(
             fixture,
             OperatorBackendPushResult.Failure("Operator backend returned 500."),
             OperatorBackendPushResult.Success()

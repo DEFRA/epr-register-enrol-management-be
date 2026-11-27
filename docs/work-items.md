@@ -53,7 +53,8 @@ are mounted by `MapWorkItemFrameworkEndpoints()`:
 | `POST` | `/work-items/{id}/actions/{actionId}` | Invoke a named action declared by the type's transitions. `409` if the work item is in a terminal state; `400` for unknown actions, transitions whose from-state does not match, and transitions declared `CallerInvocable: false`. The `CallerInvocable` check and the engine resolve the transition with the same `WorkItemEngineRules.ResolveTransition` lookup (ids match case-insensitively; the declaration for the item's current state wins, else the first), so the guard always checks the transition the engine would apply. |
 
 **Split submissions (RA-739).** For a type that declares
-`SplitsSubmissionPerSite` (add-ORS, `add-overseas-site`), `POST /work-items`
+`SplitsSubmissionPerSite` (add-ORS, `add-overseas-site`, and the ORS update,
+`update-overseas-site`), `POST /work-items`
 splits the payload's `sites[]` into one work item per site. Each work item's
 payload is the shared request fields (organisation, `material`, `nation`,
 `accreditationYear` and so on, which the list's filters read as for
@@ -100,7 +101,9 @@ stores the rest of the site as sent.
 
 - **Validation (400, nothing created).** `SubmissionPayload.Validate` requires
   `operatorRequestId`, `operatorOrganisationId`, `organisationName`,
-  `material` and `paymentReference` (non-blank strings), a 4-digit
+  `material` and, for a type whose `RequiredSubmissionFields` include it (every
+  type but the ORS update, which is never charged), `paymentReference`
+  (non-blank strings), a 4-digit
   `accreditationYear`, and at least one site, each with a `siteId` (string or
   whole number), `orsId` and `siteName`. `siteId`s must be unique within the
   submission (`7` and `"7"` are different sites, as in a Mongo index). Every
@@ -163,7 +166,14 @@ and `WorkItemReferenceGenerator` picks one from the type's
   overrides it in its own module folder, so Core never lists module type ids.
   The `add-overseas-site` type (RA-739, `WorkItems/AddOverseasSite/`) sets
   `InYearChangeCode => "ORS"`, and each work item a submission is split into
-  gets its own IYC reference (see [Ingestion API](#ingestion-api)).
+  gets its own IYC reference (see [Ingestion API](#ingestion-api)). The
+  `update-overseas-site` type (RA-682, `WorkItems/UpdateOverseasSite/`) sets
+  the same `"ORS"` code.
+- **Decided on RA-682 (26 Nov 2026): the ORS update shares the `ORS` code.**
+  Adds and updates are both ORS changes and take numbers from one
+  `IYC-ORS-{yyyy}` counter. The reference identifies the ORS change; whether it
+  is an add or an update is the work item's type (`add-overseas-site` or
+  `update-overseas-site`), which Case Management shows alongside it.
 - **What regulators agreed (Jira comment, 10 Nov 2026):** the shape
   `IYC-<type code>-<year>-<5-digit sequence>`, with one sequence per change
   type per year.
@@ -184,13 +194,15 @@ and `WorkItemReferenceGenerator` picks one from the type's
   created before the change simply skips one number.
 - **The wrap acts as a cap (accepted, not fixed).**
   - A counter is keyed `IYC-{code}-{yyyy}`, so every number in one counter has
-    the same change type and the same year.
+    the same code and the same year (for `ORS`, adds and updates; see RA-682
+    above).
   - After a wrap, the reference for the next number already exists with that
-    same type and year. The `applicationReference` unique index makes each
+    same code and year. The `applicationReference` unique index makes each
     retry take the next number, and every one collides.
-  - So once one type passes 99,999 changes in a year, every later
-    submission of that type fails with `503` (`ApplicationReferenceExhausted`,
-    labelled transient) until the year changes.
+  - So once one code passes 99,999 changes in a year, every later
+    submission with that code fails with `503` (`ApplicationReferenceExhausted`,
+    labelled transient) until the year changes. For `ORS`, adds and updates
+    count together.
   - RA-492 judged that many changes of one type in one year unrealistic.
 - **Sequence storage.** Counters live in the `referenceSequences` collection
   as `{ _id: "IYC-ORS-2026", seq: <long> }`, where `seq` is how many numbers
@@ -289,18 +301,26 @@ That is still a module-only change.
 The work item type definition (`IWorkItemType`) is the single place a case
 type is configured. Every setting is code, not runtime data:
 
-| Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) |
-| --- | --- | --- | --- | --- |
-| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` |
-| Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` |
-| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` |
-| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` |
-| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `AddOverseasSiteType.WorkflowDefinition`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` |
-| Template version | `TemplateVersion` | — (required) | `v19` | `v3` |
+| Setting | Member | Default | Re-accreditation | Add-ORS (`add-overseas-site`) | ORS update (`update-overseas-site`) |
+| --- | --- | --- | --- | --- | --- |
+| Display label | `DisplayName` | — (required) | `"Re-accreditation"` | `"New ORS accreditation"` | `"ORS update"` |
+| Category | `Category` | `null` (the type is its own group) | `null` | `in-year-change` | `in-year-change` |
+| In-year change code | `InYearChangeCode` (RA-492) | `null` (AP reference) | `null` | `"ORS"` | `"ORS"` (shared, RA-682) |
+| Splits a submission per site | `SplitsSubmissionPerSite` | `false` | `false` | `true` | `true` |
+| Required submission fields | `RequiredSubmissionFields` (RA-682) | `SubmissionPayload.ChargedRequiredFields` (includes `paymentReference`) | the default | the default | `SubmissionPayload.UnchargedRequiredFields` (no `paymentReference`) |
+| Workflow | `Workflow` | a bespoke workflow built from the type's own `InitialState`, `States` and `Transitions` | `StandardWorkflow.Definition` | `StandardWorkflow.WithdrawNotCallerInvocable("standard-add-overseas-site")`: the Standard workflow with every `withdraw*` declaration `CallerInvocable: false` | the same rules under `standard-update-overseas-site` (`StandardWorkflow.WithdrawNotCallerInvocable`) |
+| Template version | `TemplateVersion` | — (required) | `v19` | `v3` | `v1` |
+
+- **Required submission fields** leave out `paymentReference` only for a type
+  that is never charged. Its submission may leave `paymentReference` out, and then each work
+  item gets the RA-503 fallback: `paymentReference` is set to the item's own
+  `applicationReference`. So an ORS update work item shows its IYC reference
+  as its payment reference, which a detail page (RA-767) shouldn't present as
+  a payment.
 
 - **Category** groups related types so the list can filter on the group
   without naming each type: `GET /work-items?category=in-year-change`
-  (repeatable, and unioned with any `typeId`). In-year change types (add-ORS now; update ORS and
+  (repeatable, and unioned with any `typeId`). In-year change types (add-ORS and the ORS update now;
   tonnage band upgrade later) declare `WorkItemCategories.InYearChange`
   (`in-year-change`). Each change type still has its own `TypeId`, so a
   type's workflow can change on its own.
@@ -738,17 +758,64 @@ union: items assigned to that user OR unassigned. `assigned` must be exactly
 endpoint answers `400` (ValidationProblem, title `Invalid query`, errors keyed
 `assigned`) otherwise. `archived` is validated the same way.
 
-### Read-only callers (RA-751)
+### Read-only callers (RA-751, RA-752)
 
-The Admin UI (`epr-register-enrol-admin`) is a read-only caller: it may call
-`GET /work-items` and `GET /work-items/re-accreditation/states` and nothing
-else. From `GET /work-items` it gets a projected item, `{ id, typeId, stateId,
+The Admin UI (`epr-register-enrol-admin`) is a read-only caller. It may call
+these and nothing else:
+
+| Route | Opened by | Admin UI use | What it gets |
+| --- | --- | --- | --- |
+| `GET /work-items` | RA-751 | Case management search | Projected items (below) |
+| `GET /work-items/re-accreditation/states` | RA-751 | State names and push kinds for search | Same as every caller |
+| `GET /work-items/{id}` | RA-752 | Work item page: Document tab and Regulator view | The full `WorkItemResponse`, same as every caller |
+| `GET /work-items/re-accreditation/{id}/prior-year` | RA-752 | Work item page: Regulator view's prior-year section | Same as every caller |
+
+From `GET /work-items` it gets a projected item, `{ id, typeId, stateId,
 lastModifiedAt, assignedToId, assignedToName, payload: { applicationReference,
 operatorOrganisationId, organisationName } }`: no submitter, no contact
 details, no other payload. Other callers get the full item. A projected payload
 field stored as a non-string value comes back `null` for that item, logged at
 Error with the work item id and field name, and the rest of the page still
-returns. Every other request it makes is refused with `403` and logged at Error.
+returns.
+
+`GET /work-items/{id}` is not projected: RA-752 AC08 has the Document tab show
+the work item as JSON with its payload, notes and audit log (`status-push-*`
+entries included), and AC10 has the Admin UI mask names and email addresses
+when it shows them. The response carries no `templateSnapshot`, `version` or
+raw `slaClock`.
+
+Both RA-752 routes answer every caller the same way, with ProblemDetails
+carrying an `errorCode` so a caller never has to read a bare `404` as "no
+such thing" when it may be a route or proxy miss:
+
+| Route | Case | Status | `errorCode` |
+| --- | --- | --- | --- |
+| `GET /work-items/{id}` | No work item with that id | `404` | `work-item-not-found` |
+| `.../prior-year` | No work item with that id | `404` | `work-item-not-found` |
+| `.../prior-year` | No prior year: no ReEx identifiers, identifiers but no year, or ReEx holds no matching accreditation | `404` | `prior-year-not-found` |
+| `.../prior-year` | ReEx could not answer | `502` | `reex-unavailable` |
+| `.../prior-year` | Not a re-accreditation item, or an unparseable payload | `400` | none |
+
+The operator backend sends `accreditationYear` on every submission, so an item
+with no year was created through management-fe's create form, which collects
+the ReEx identifiers (RA-448) but no year: it has no prior year, logged at
+Information, and ReEx is not called. An item with only `accreditationYear`
+(stored before `previousAccreditationYear` existed) is looked up for
+`accreditationYear - 1` with a Warning each time, until stored items are
+backfilled with `previousAccreditationYear`.
+
+"ReEx could not answer" is a request failure, a timeout (the ReEx client gives
+up after 4s, inside management-fe's 5s), a 401/403 or other non-404 status, an
+unreadable body, or a `404` without ReEx's own "organisation not found" error
+(for example a wrong `ReExApi:BaseUrl` path). The ReEx client logs the cause
+at Error; the endpoint adds one Information line with the work item id.
+
+Every other route it calls is refused with `403` and logged at Error,
+including `GET /work-items/re-accreditation/{id}/recommendation`, which
+neither the Admin UI nor management-fe's work item page reads. A method the
+route doesn't map (`PUT`/`DELETE` on `/work-items/{id}`, `POST` on
+`.../prior-year`, or `HEAD`) is `405` from routing, with no refusal log. An id
+that is not a GUID matches no route, so it is `404`, not `403`.
 An endpoint opens itself to read-only callers with
 `RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed)`; a plain
 `RequireAuthorization()` keeps them out. See
@@ -995,7 +1062,7 @@ registration line" promise. All files live under
 | `Models/ReAccreditationPayload.cs` | Module's interpretation of the free-form `WorkItem.Payload` (organisation name, registration number, materials handled, previous accreditation year, compliance issues reported). |
 | `IReAccreditationDecisionService.cs` / `ReAccreditationDecisionService.cs` | Module-scoped service object showing where type-specific business logic lives. Pure recommendation function (`approve` / `reject` / `more-info-needed`) over the payload. |
 | `Endpoints/ReAccreditationStatesEndpoint.cs` | RA-751: `GET /work-items/re-accreditation/states` — the template's states with their display names, terminal flags and operator-journey push kind. Open to read-only callers. |
-| `Endpoints/ReAccreditationEndpoints.cs` | Maps `GET /work-items/re-accreditation/states` (above) and the module-namespaced endpoint at `GET /work-items/re-accreditation/{id}/recommendation` — fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
+| `Endpoints/ReAccreditationEndpoints.cs` | Maps `GET /work-items/re-accreditation/states` (above); `GET /work-items/re-accreditation/{id}/prior-year`, live prior-year data from ReEx (status codes above; open to read-only callers since RA-752); and `GET /work-items/re-accreditation/{id}/recommendation`, which fetches the work item, deserialises the payload via `WorkItemPayloadConverter`, calls the decision service and returns `{ recommendation, rationale }`. |
 | `IReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateService.cs` / `ReAccreditationChangePaymentDateValidator.cs` | RA-576: `POST /work-items/re-accreditation/{id}/change-payment-date` with body `{ paymentDate, reason }` corrects the payment date entered at duly making. One `ReplaceAsync` edits `payload.paymentDate` and appends an `action-applied` audit entry (`actionId=change-payment-date`, `previousPaymentDate`, `paymentDate`, `reason`). `StateId` and `SlaClock` are not changed and no hooks run, so status and "Due on" stay as they were. Allowed in any non-terminal state (repeat edits included); terminal items and items with no payment date get 409. 400 codes: the duly-making `payment-date-*` codes (`field: paymentDate`) plus `payment-date-reason-required` / `payment-date-reason-too-long` (`field: reason`, max 200 words). |
 | `IReAccreditationResumeService.cs` / `ReAccreditationResumeService.cs` / `ReAccreditationResumeValidator.cs` | `POST /work-items/re-accreditation/{id}/resume-from-query`, called by the operator backend when the applicant responds to a query: applies the matching `resume-during-*` transition and appends a `query-responded` audit entry. RA-766 (permanent): the body may carry `chargeAmountPence` (400 if negative). When it is sent and differs from the stored value, it is saved to the top-level `payload.chargeAmountPence`, so the duly-making page shows the charge as recalculated after the query, and the `query-responded` entry records `previousChargeAmountPence` and `chargeAmountPence`. |
 | `ReAccreditationModule.cs` | Glue: exposes the type, registers the decision service in DI, mounts the endpoints. |

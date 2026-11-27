@@ -128,6 +128,18 @@ internal static class ReAccreditationEndpoints
     /// </summary>
     public const string RecyclingOperationsProblemTitle = "Could not update recycling operations";
 
+    /// <summary>
+    /// RA-752: ProblemDetails title for <c>GET .../prior-year</c>'s 502 when
+    /// ReEx cannot answer (<see cref="ReExUnavailableErrorCode"/>).
+    /// </summary>
+    public const string PriorYearUnavailableProblemTitle = "Prior-year data unavailable";
+
+    /// <summary>RA-752: <c>GET .../prior-year</c>'s 404 when the work item has no prior year.</summary>
+    public const string PriorYearNotFoundErrorCode = "prior-year-not-found";
+
+    /// <summary>RA-752: <c>GET .../prior-year</c>'s 502 when ReEx cannot answer.</summary>
+    public const string ReExUnavailableErrorCode = "reex-unavailable";
+
     [ExcludeFromCodeCoverage]
     public static IEndpointRouteBuilder MapReAccreditationEndpoints(this IEndpointRouteBuilder app)
     {
@@ -248,10 +260,15 @@ internal static class ReAccreditationEndpoints
 
         // Live prior-year accreditation data from ReEx, scoped to this
         // work item type because no other module needs ReEx access.
+        // RA-752: read-only callers (the Admin UI) may call it; its Regulator
+        // view shows the prior-year data as management-fe's work item page does.
         group
             .MapGet("/{id:guid}/prior-year", GetPriorYear)
             .WithName("GetReAccreditationPriorYear")
-            .RequireAuthorization();
+            .ProducesProblem(StatusCodes.Status400BadRequest)
+            .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status502BadGateway)
+            .RequireAuthorization(CallerAccessPolicies.ReadOnlyCallerAllowed);
 
         // RA-294/RA-297: operator-backend notification whenever a new ORS or
         // interim site is added to an accreditation application. There is no
@@ -545,25 +562,35 @@ internal static class ReAccreditationEndpoints
 
     /// <summary>
     /// Return live prior-year accreditation data from ReEx for the given
-    /// re-accreditation work item. Uses the ReEx organisation and registration
-    /// identifiers stored in the work item payload (populated by the operator
-    /// backend at submission time). Returns 404 when the identifiers are absent
-    /// (work item created via the case management form) or when ReEx returns no
-    /// matching accreditation for the prior year.
+    /// re-accreditation work item, looked up with the ReEx organisation and
+    /// registration identifiers and the accreditation year stored in its
+    /// payload. RA-752 problem codes (<c>errorCode</c>):
+    /// <list type="bullet">
+    /// <item>404 <c>work-item-not-found</c>: no work item with that id.</item>
+    /// <item>404 <c>prior-year-not-found</c>: the item has no prior year to
+    /// look up, or ReEx holds none. The operator backend sends
+    /// <c>accreditationYear</c> on every submission (it has since before it
+    /// sent ReEx identifiers), so an item with no identifiers, or identifiers
+    /// but no year, was created through management-fe's create form, which
+    /// collects the identifiers (RA-448) but no year.</item>
+    /// <item>502 <c>reex-unavailable</c>: ReEx could not answer, so a caller
+    /// never reads an outage as "no prior year".</item>
+    /// </list>
     /// </summary>
     private static async Task<
-        Results<Ok<PriorYearAccreditationDto>, NotFound, ProblemHttpResult>
+        Results<Ok<PriorYearAccreditationDto>, ProblemHttpResult>
     > GetPriorYear(
         [FromRoute] Guid id,
         HttpContext httpContext,
         [FromServices] IWorkItemPersistence persistence,
         [FromServices] IReExAccreditationClient reExClient,
+        [FromServices] ILoggerFactory loggerFactory,
         CancellationToken cancellationToken
     )
     {
         var workItem = await persistence.GetByIdAsync(id, cancellationToken);
         if (workItem is null)
-            return TypedResults.NotFound();
+            return WorkItemProblems.WorkItemNotFound(id);
 
         if (
             !string.Equals(
@@ -593,23 +620,107 @@ internal static class ReAccreditationEndpoints
             );
         }
 
-        // PreviousAccreditationYear is set by new operator submissions (Year − 1).
-        // Older work items only carry AccreditationYear; derive the prior year from that.
-        var priorYearValue =
-            payload?.PreviousAccreditationYear
-            ?? (payload?.AccreditationYear is int ay ? ay - 1 : (int?)null);
+        var logger = loggerFactory.CreateLogger("ReAccreditationEndpoints.GetPriorYear");
 
-        var priorYear = await reExClient.GetPriorYearAsync(
-            payload?.OperatorOrganisationId,
-            payload?.OperatorRegistrationId,
+        // No ReEx identifiers, or identifiers but no year: a form-created item
+        // (see the summary), which has no prior year. ReEx is not called.
+        if (
+            payload is null
+            || string.IsNullOrWhiteSpace(payload.OperatorOrganisationId)
+            || string.IsNullOrWhiteSpace(payload.OperatorRegistrationId)
+            || ResolvePriorYear(payload, id, logger) is not int priorYearValue
+        )
+        {
+            if (logger.IsEnabled(LogLevel.Information))
+            {
+                logger.LogInformation(
+                    "Work item {WorkItemId} has no prior year to look up: it lacks ReEx "
+                        + "identifiers or an accreditation year.",
+                    id
+                );
+            }
+            return PriorYearNotFound(id);
+        }
+
+        var lookup = await reExClient.GetPriorYearAsync(
+            payload.OperatorOrganisationId,
+            payload.OperatorRegistrationId,
             priorYearValue,
             cancellationToken
         );
 
-        if (priorYear is null)
-            return TypedResults.NotFound();
+        switch (lookup.Outcome)
+        {
+            case ReExReadOutcome.Found when lookup.Accreditation is not null:
+                return TypedResults.Ok(lookup.Accreditation);
+            case ReExReadOutcome.NotFound:
+                return PriorYearNotFound(id);
+            default:
+                // The client has already logged the cause at Error.
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    logger.LogInformation(
+                        "Prior-year data for work item {WorkItemId} is unavailable: ReEx could "
+                            + "not answer.",
+                        id
+                    );
+                }
+                return TypedResults.Problem(
+                    title: PriorYearUnavailableProblemTitle,
+                    detail: "ReEx, the source of prior-year accreditation data, could not answer. Try again later.",
+                    statusCode: StatusCodes.Status502BadGateway,
+                    extensions: new Dictionary<string, object?>
+                    {
+                        [ErrorCodeKey] = ReExUnavailableErrorCode,
+                    }
+                );
+        }
+    }
 
-        return TypedResults.Ok(priorYear);
+    private static ProblemHttpResult PriorYearNotFound(Guid id) =>
+        TypedResults.Problem(
+            title: "Prior-year accreditation not found",
+            detail: $"Work item {id} has no prior-year accreditation.",
+            statusCode: StatusCodes.Status404NotFound,
+            extensions: new Dictionary<string, object?>
+            {
+                [ErrorCodeKey] = PriorYearNotFoundErrorCode,
+            }
+        );
+
+    /// <summary>
+    /// The prior accreditation year to look up, or <c>null</c> when the work
+    /// item stores no year (a form-created item; see <see cref="GetPriorYear"/>).
+    /// PreviousAccreditationYear is set by new operator submissions (Year − 1).
+    /// Older work items only carry AccreditationYear, so the prior year is
+    /// derived from that: a read-side default for old stored data, logged at
+    /// Warning every time it fires, until stored items are backfilled with
+    /// previousAccreditationYear and this fallback is removed.
+    /// </summary>
+    private static int? ResolvePriorYear(ReAccreditationPayload payload, Guid id, ILogger logger)
+    {
+        if (payload.PreviousAccreditationYear is int previousYear)
+        {
+            return previousYear;
+        }
+
+        if (payload.AccreditationYear is not int accreditationYear)
+        {
+            return null;
+        }
+
+        var derived = accreditationYear - 1;
+        if (logger.IsEnabled(LogLevel.Warning))
+        {
+            logger.LogWarning(
+                "Work item {WorkItemId} has no previousAccreditationYear; prior year derived "
+                    + "as accreditationYear - 1 = {PriorYear}, until stored items are "
+                    + "backfilled with previousAccreditationYear.",
+                id,
+                derived
+            );
+        }
+        return derived;
     }
 
     /// <summary>

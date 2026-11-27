@@ -1,15 +1,24 @@
+using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
-using MongoDB.Bson;
 using EprRegisterEnrolManagementBe.Auth;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
+using EprRegisterEnrolManagementBe.Utils.Logging;
 using EprRegisterEnrolManagementBe.WorkItems.Core;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.Endpoints;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx;
+using EprRegisterEnrolManagementBe.WorkItems.ReAccreditation.ReEx.Dtos;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using MongoDB.Bson;
 using NSubstitute;
 
 namespace EprRegisterEnrolManagementBe.Test.Auth;
@@ -19,8 +28,13 @@ namespace EprRegisterEnrolManagementBe.Test.Auth;
 /// read-only caller. It authenticates with its own secret,
 /// <c>AUTH_SHARED_SECRET__ADMIN_UI</c>, and may only GET (or HEAD) the
 /// endpoints that opt in to <see cref="CallerAccessPolicies.ReadOnlyCallerAllowed"/>:
-/// <c>GET /work-items</c> and <c>GET /work-items/re-accreditation/states</c>.
-/// Every other request it makes is refused with 403 and logged at Error.
+/// <c>GET /work-items</c> and <c>GET /work-items/re-accreditation/states</c>
+/// (RA-751), and <c>GET /work-items/{id}</c> and
+/// <c>GET /work-items/re-accreditation/{id}/prior-year</c> (RA-752, the Admin
+/// UI's Work item page). Every other route it calls is refused with 403 and
+/// logged at Error. A method an opened route doesn't map (PUT/DELETE on
+/// /work-items/{id}, POST on .../prior-year, or HEAD) is 405 from routing,
+/// with no refusal log; an id that is not a GUID matches no route, so 404.
 /// Production host throughout unless stated, so the handler fails closed.
 /// </summary>
 public class ClientIdAuthenticationAdminUiCallerTests
@@ -32,7 +46,8 @@ public class ClientIdAuthenticationAdminUiCallerTests
 
     private static (BareFactory Factory, WebApplicationFactory<Program> App, CapturingLoggerProvider Logs) NewApp(
         string environment = "Production",
-        string? adminSecret = AdminSecret
+        string? adminSecret = AdminSecret,
+        IReExAccreditationClient? reExClient = null
     )
     {
         var overrides = new Dictionary<string, string?>
@@ -51,6 +66,11 @@ public class ClientIdAuthenticationAdminUiCallerTests
         var app = factory.WithWebHostBuilder(builder =>
             builder.ConfigureServices(services =>
             {
+                if (reExClient is not null)
+                {
+                    services.RemoveAll<IReExAccreditationClient>();
+                    services.AddSingleton(reExClient);
+                }
                 services.RemoveAll<ILoggerFactory>();
                 services.AddSingleton<ILoggerFactory>(_ =>
                     LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Trace).AddProvider(logs))
@@ -169,8 +189,8 @@ public class ClientIdAuthenticationAdminUiCallerTests
             { "POST", $"/work-items/{s_workItemId}/actions/duly-make" },
             { "POST", $"/work-items/re-accreditation/{s_workItemId}/decision-rationale" },
             { "PATCH", $"/work-items/re-accreditation/{s_workItemId}/overseas-sites/site-1/recycling-operations" },
-            // A read the Admin UI has not been given (RA-752 is not built).
-            { "GET", $"/work-items/{s_workItemId}" },
+            // RA-752: neither management-fe's work item page nor the Admin UI
+            // calls the recommendation read, so it stays closed.
             { "GET", $"/work-items/re-accreditation/{s_workItemId}/recommendation" },
             // RA-770's Related change requests read: plain RequireAuthorization(),
             // so the default (not read-only) policy keeps the Admin UI out.
@@ -210,6 +230,377 @@ public class ClientIdAuthenticationAdminUiCallerTests
         await factory
             .MockPersistence.DidNotReceive()
             .GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Pins the endpoints that opt in to the read-only policy, read from the
+    /// routing table: opening another one fails here until this list is
+    /// updated. Update ADR-0010 and docs/work-items.md with it. An endpoint
+    /// with no authorization at all is caught by
+    /// <see cref="Every_endpoint_outside_the_anonymous_allow_list_requires_authorization"/>.
+    /// </summary>
+    [Fact]
+    public async Task Only_the_listed_read_endpoints_are_open_to_read_only_callers_and_all_are_get_only()
+    {
+        var (factory, app, _) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        using var scope = app.Services.CreateScope();
+        var endpoints = scope
+            .ServiceProvider.GetRequiredService<IEnumerable<EndpointDataSource>>()
+            .SelectMany(s => s.Endpoints)
+            .Where(e =>
+                e.Metadata.GetOrderedMetadata<IAuthorizeData>()
+                    .Any(a => a.Policy == CallerAccessPolicies.ReadOnlyCallerAllowed)
+            )
+            .ToList();
+
+        Assert.Equal(
+            ["GetReAccreditationPriorYear", "GetReAccreditationStates", "GetWorkItemById", "ListWorkItems"],
+            endpoints.Select(e => e.Metadata.GetMetadata<EndpointNameMetadata>()?.EndpointName).Order()
+        );
+        Assert.All(
+            endpoints,
+            e => Assert.Equal(["GET"], e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? [])
+        );
+    }
+
+    /// <summary>
+    /// There is no fallback policy, so an endpoint mapped without
+    /// RequireAuthorization() would be open to every caller, the Admin UI
+    /// included. Only the health probes and the OpenAPI document may be.
+    /// </summary>
+    [Fact]
+    public async Task Every_endpoint_outside_the_anonymous_allow_list_requires_authorization()
+    {
+        var (factory, app, _) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        using var scope = app.Services.CreateScope();
+        var open = scope
+            .ServiceProvider.GetRequiredService<IEnumerable<EndpointDataSource>>()
+            .SelectMany(s => s.Endpoints)
+            .OfType<RouteEndpoint>()
+            .Where(e =>
+                e.Metadata.GetOrderedMetadata<IAuthorizeData>().Count == 0
+                || e.Metadata.GetMetadata<IAllowAnonymous>() is not null
+            )
+            .Select(e => e.RoutePattern.RawText)
+            .Order()
+            .ToList();
+
+        Assert.Equal(s_anonymousEndpoints, open);
+    }
+
+    private static readonly string[] s_anonymousEndpoints =
+    [
+        "/health",
+        "/health/ready",
+        "/openapi/{documentName}.json",
+    ];
+
+    private static WorkItem StoredWorkItem() =>
+        new()
+        {
+            Id = s_workItemId,
+            TypeId = ReAccreditationType.Id,
+            StateId = "submitted",
+            SubmittedAt = DateTime.Parse("2026-04-01T09:00:00Z").ToUniversalTime(),
+            LastModifiedAt = DateTime.Parse("2026-04-02T09:00:00Z").ToUniversalTime(),
+            SubmittedBy = "operator-backend",
+            Payload = new BsonDocument
+            {
+                ["applicationReference"] = "APP-752",
+                ["operatorOrganisationId"] = "org-752",
+                ["operatorRegistrationId"] = "reg-752",
+                ["previousAccreditationYear"] = 2025,
+            },
+            Notes =
+            {
+                new WorkItemNote
+                {
+                    Id = Guid.Parse("00000752-0000-4000-8000-000000000002"),
+                    Text = "Checked the evidence",
+                    CreatedAt = DateTime.Parse("2026-04-02T08:00:00Z").ToUniversalTime(),
+                    CreatedBy = "caseworker-1",
+                    CreatedByName = "Case Worker",
+                },
+            },
+            AuditLog =
+            {
+                new WorkItemAuditEntry
+                {
+                    Id = Guid.Parse("00000752-0000-4000-8000-000000000003"),
+                    Action = "status-push-sent",
+                    ActionDisplayName = "Status sent to the Registration & Accreditation service",
+                    CreatedAt = DateTime.Parse("2026-04-02T09:00:00Z").ToUniversalTime(),
+                    Details = new Dictionary<string, string?> { ["toStateId"] = "submitted" },
+                    StateId = "submitted",
+                },
+            },
+        };
+
+    [Fact]
+    public async Task Admin_ui_can_read_a_work_item_with_its_payload_notes_and_audit_log()
+    {
+        // RA-752 AC08: the Document tab shows the payload, notes and audit log,
+        // including the status pushes to the operator journey.
+        var (factory, app, logs) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        factory.MockPersistence.GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>()).Returns(StoredWorkItem());
+        using var client = AdminClient(factory, app, "nonce-admin-get-by-id");
+
+        var response = await client.GetAsync($"/work-items/{s_workItemId}", TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        var root = body.RootElement;
+        Assert.Equal(s_workItemId, root.GetProperty("id").GetGuid());
+        Assert.Equal("APP-752", root.GetProperty("payload").GetProperty("applicationReference").GetString());
+        Assert.Equal("Checked the evidence", Assert.Single(root.GetProperty("notes").EnumerateArray()).GetProperty("text").GetString());
+        var push = Assert.Single(root.GetProperty("auditLog").EnumerateArray());
+        Assert.Equal("status-push-sent", push.GetProperty("action").GetString());
+        Assert.Equal("submitted", push.GetProperty("details").GetProperty("toStateId").GetString());
+        var access = Assert.Single(
+            logs.Records,
+            r => r.Level == LogLevel.Information && r.Message.StartsWith("Read-only caller", StringComparison.Ordinal)
+        );
+        Assert.Equal($"/work-items/{s_workItemId}", access.Properties["Path"]);
+    }
+
+    [Fact]
+    public async Task Admin_ui_reads_the_same_work_item_as_management_fe()
+    {
+        // Unlike the list (ADR-0010 decision 5), the single-item read is not
+        // projected for a read-only caller: RA-752 AC08's Document tab shows
+        // the payload, notes and audit log, and the Admin UI masks names and
+        // emails itself (AC10). So the Admin UI sees exactly what a
+        // caseworker's frontend sees, availableActions included.
+        var (factory, app, _) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        factory.MockPersistence.GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>()).Returns(_ => StoredWorkItem());
+        using var admin = AdminClient(factory, app, "nonce-admin-same-view");
+        using var frontend = SignedClient(factory, app, "frontend", ManagementFeSecret, "nonce-fe-same-view");
+
+        var adminBody = await admin.GetStringAsync($"/work-items/{s_workItemId}", TestContext.Current.CancellationToken);
+        var frontendBody = await frontend.GetStringAsync(
+            $"/work-items/{s_workItemId}",
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(frontendBody, adminBody);
+    }
+
+    [Fact]
+    public async Task Admin_ui_gets_404_work_item_not_found_not_403_for_a_work_item_that_does_not_exist()
+    {
+        var (factory, app, logs) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        using var client = AdminClient(factory, app, "nonce-admin-missing");
+
+        var response = await client.GetAsync($"/work-items/{s_workItemId}", TestContext.Current.CancellationToken);
+
+        await AssertProblemAsync(response, HttpStatusCode.NotFound, WorkItemProblems.WorkItemNotFoundErrorCode);
+        Assert.DoesNotContain(logs.Records, r => r.Level == LogLevel.Error);
+        await factory.MockPersistence.Received(1).GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    [InlineData("/work-items/not-a-guid")]
+    [InlineData("/work-items/12345")]
+    [InlineData("/work-items/re-accreditation/not-a-guid/prior-year")]
+    public async Task Admin_ui_gets_404_for_an_id_that_cannot_be_a_work_item(string path)
+    {
+        // The {id:guid} route constraint does not match, so no endpoint runs
+        // and nothing is authorized or read: 404, never 403.
+        var (factory, app, logs) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        using var client = AdminClient(factory, app, $"nonce-admin-malformed-{path.GetHashCode()}");
+
+        var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        // No access or refusal log: authorization never ran.
+        Assert.DoesNotContain(logs.Records, r => r.Message.StartsWith("Read-only caller", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Admin_ui_can_read_the_prior_year_data()
+    {
+        var reEx = Substitute.For<IReExAccreditationClient>();
+        reEx.GetPriorYearAsync("org-752", "reg-752", 2025, Arg.Any<CancellationToken>())
+            .Returns(PriorYearReadResult.Found(new PriorYearAccreditationDto { Year = 2025, TonnageBand = "UpTo5000" }));
+        var (factory, app, _) = NewApp(reExClient: reEx);
+        await using var _f = factory;
+        await using var _a = app;
+        factory.MockPersistence.GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>()).Returns(StoredWorkItem());
+        using var client = AdminClient(factory, app, "nonce-admin-prior-year");
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{s_workItemId}/prior-year",
+            TestContext.Current.CancellationToken
+        );
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        Assert.Equal(2025, body.RootElement.GetProperty("year").GetInt32());
+    }
+
+    private static async Task AssertProblemAsync(HttpResponseMessage response, HttpStatusCode status, string errorCode)
+    {
+        Assert.Equal(status, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        using var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        Assert.Equal(errorCode, body.RootElement.GetProperty("errorCode").GetString());
+    }
+
+    /// <summary>
+    /// A real <see cref="HttpReExAccreditationClient"/> over a fake ReEx, so
+    /// the whole path from ReEx's answer to this service's status is covered.
+    /// </summary>
+    private static HttpReExAccreditationClient ReExAnswering(
+        HttpMessageHandler reEx,
+        TimeSpan? timeout = null
+    ) =>
+        new(
+            new HttpClient(reEx),
+            Options.Create(new ReExAccreditationConfig { BaseUrl = "https://reex.test/" }),
+            Substitute.For<IStructuredLogger<HttpReExAccreditationClient>>(),
+            timeout ?? HttpReExAccreditationClient.RequestTimeout
+        );
+
+    public static TheoryData<string> ReExFailures =>
+        new() { "500", "503", "401", "403", "unrecognised-404", "timeout", "unreachable" };
+
+    private static HttpReExAccreditationClient FailingReEx(string failure) =>
+        failure switch
+        {
+            // The real HttpClient timeout, shortened from RequestTimeout.
+            "timeout" => ReExAnswering(FakeReExHttpHandler.Hanging(), TimeSpan.FromMilliseconds(50)),
+            "unreachable" => ReExAnswering(FakeReExHttpHandler.Throwing(new HttpRequestException("ReEx unreachable"))),
+            // Hapi's own route miss, as a wrong ReExApi:BaseUrl path would get.
+            "unrecognised-404" => ReExAnswering(
+                FakeReExHttpHandler.Json(
+                    """{"statusCode":404,"error":"Not Found","message":"Not Found"}""",
+                    HttpStatusCode.NotFound
+                )
+            ),
+            _ => ReExAnswering(
+                FakeReExHttpHandler.Status((HttpStatusCode)int.Parse(failure, CultureInfo.InvariantCulture))
+            ),
+        };
+
+    [Theory]
+    [MemberData(nameof(ReExFailures))]
+    public async Task Admin_ui_gets_502_reex_unavailable_not_404_for_prior_year_data_when_reex_fails(string failure)
+    {
+        // RA-752: the Admin UI reads 404 prior-year-not-found as "no prior
+        // year" and 502 as "unavailable", so a ReEx outage must never look
+        // like a 404. The client logs the cause at Error; the endpoint adds
+        // one Information line with the work item id.
+        var (factory, app, logs) = NewApp(reExClient: FailingReEx(failure));
+        await using var _f = factory;
+        await using var _a = app;
+        factory.MockPersistence.GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>()).Returns(StoredWorkItem());
+        using var client = AdminClient(factory, app, $"nonce-admin-prior-year-{failure}");
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{s_workItemId}/prior-year",
+            TestContext.Current.CancellationToken
+        );
+
+        await AssertProblemAsync(response, HttpStatusCode.BadGateway, ReAccreditationEndpoints.ReExUnavailableErrorCode);
+        var line = Assert.Single(
+            logs.Records,
+            r => r.Message.StartsWith("Prior-year data for work item", StringComparison.Ordinal)
+        );
+        Assert.Equal(LogLevel.Information, line.Level);
+        Assert.Equal(s_workItemId, line.Properties["WorkItemId"]);
+    }
+
+    [Fact]
+    public async Task Admin_ui_gets_404_prior_year_not_found_when_reex_has_no_record()
+    {
+        var reEx = ReExAnswering(FakeReExHttpHandler.OrganisationNotFound());
+        var (factory, app, logs) = NewApp(reExClient: reEx);
+        await using var _f = factory;
+        await using var _a = app;
+        factory.MockPersistence.GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>()).Returns(StoredWorkItem());
+        using var client = AdminClient(factory, app, "nonce-admin-prior-year-no-record");
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{s_workItemId}/prior-year",
+            TestContext.Current.CancellationToken
+        );
+
+        await AssertProblemAsync(response, HttpStatusCode.NotFound, ReAccreditationEndpoints.PriorYearNotFoundErrorCode);
+        Assert.DoesNotContain(logs.Records, r => r.Level == LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task Admin_ui_gets_404_work_item_not_found_not_403_for_prior_year_data_of_a_missing_work_item()
+    {
+        var reEx = Substitute.For<IReExAccreditationClient>();
+        var (factory, app, logs) = NewApp(reExClient: reEx);
+        await using var _f = factory;
+        await using var _a = app;
+        using var client = AdminClient(factory, app, "nonce-admin-prior-year-missing");
+
+        var response = await client.GetAsync(
+            $"/work-items/re-accreditation/{s_workItemId}/prior-year",
+            TestContext.Current.CancellationToken
+        );
+
+        await AssertProblemAsync(response, HttpStatusCode.NotFound, WorkItemProblems.WorkItemNotFoundErrorCode);
+        Assert.DoesNotContain(logs.Records, r => r.Level == LogLevel.Error);
+        await reEx
+            .DidNotReceiveWithAnyArgs()
+            .GetPriorYearAsync(default!, default!, default, Arg.Any<CancellationToken>());
+    }
+
+    [Theory]
+    // Another method on an opened read route: the path has only a GET
+    // endpoint, so routing answers 405 and no handler or policy runs. The
+    // write routes on the same item are 403 (RefusedRequests).
+    [InlineData("PUT", "/work-items/{0}")]
+    [InlineData("DELETE", "/work-items/{0}")]
+    [InlineData("HEAD", "/work-items/{0}")]
+    [InlineData("POST", "/work-items/re-accreditation/{0}/prior-year")]
+    public async Task Admin_ui_gets_405_with_no_refusal_log_for_a_method_an_opened_route_does_not_map(
+        string method,
+        string template
+    )
+    {
+        var (factory, app, logs) = NewApp();
+        await using var _f = factory;
+        await using var _a = app;
+        factory.MockPersistence.GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>()).Returns(StoredWorkItem());
+        using var client = AdminClient(factory, app, $"nonce-admin-write-{method}-{template.GetHashCode()}");
+        using var request = new HttpRequestMessage(new HttpMethod(method), string.Format(template, s_workItemId));
+        if (method != "HEAD")
+        {
+            request.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+        }
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+        Assert.DoesNotContain(logs.Records, r => r.Message.StartsWith("Read-only caller", StringComparison.Ordinal));
+        // No handler ran: the work item was neither read nor written.
+        await factory.MockPersistence.DidNotReceive().GetByIdAsync(s_workItemId, Arg.Any<CancellationToken>());
+        await factory
+            .MockPersistence.DidNotReceive()
+            .ReplaceAsync(Arg.Is<WorkItem>(w => w.Id == s_workItemId), Arg.Any<CancellationToken>());
     }
 
     [Fact]
