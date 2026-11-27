@@ -275,8 +275,9 @@ and `WorkItemReferenceGenerator` picks one from the type's
    `WorkItems/Workflows/`).
 
 3. **Implement `IWorkItemModule`** to register the module's services and
-   endpoints. Mount endpoints under `/work-items/<type-id>/...` to keep
-   modules isolated from each other.
+   endpoints. Namespace type-specific routes under `/work-items/<type-id>/...`
+   to keep modules isolated from each other; routes keyed by work item id alone
+   are allowed only under the exception in [Conventions](#conventions).
 
 4. **Register the module** in `Program.cs`:
 
