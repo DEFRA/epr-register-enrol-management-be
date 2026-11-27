@@ -122,6 +122,36 @@ internal static class AddOverseasSiteResumeValidator
         }
 
         var interimSites = request.InterimSites ?? [];
+        var interimError = ValidateInterimSites(interimSites);
+        if (interimError is not null)
+        {
+            return interimError;
+        }
+
+        var values = site.Values.Concat(interimSites.SelectMany(i => (i.Changes ?? []).Values));
+        if (values.Any(v => v is { Length: > AddOverseasSiteResumeRules.MaxValueLength }))
+        {
+            return FieldTooLongMessage;
+        }
+
+        var besFiles = request.BesEvidenceFiles ?? [];
+        var removed = request.RemovedBesFileIds ?? [];
+        var besError = ValidateBesFiles(besFiles, removed);
+        if (besError is not null)
+        {
+            return besError;
+        }
+
+        var changesAnything =
+            site.Count > 0
+            || interimSites.Any(i => (i.Changes ?? []).Count > 0)
+            || besFiles.Count > 0
+            || removed.Count > 0;
+        return changesAnything ? null : NothingChangedMessage;
+    }
+
+    private static string? ValidateInterimSites(IReadOnlyList<AddOverseasSiteInterimSiteChange> interimSites)
+    {
         foreach (var interim in interimSites)
         {
             if (interim is null || (interim.SiteId is null && string.IsNullOrWhiteSpace(interim.SiteNumber)))
@@ -135,13 +165,11 @@ internal static class AddOverseasSiteResumeValidator
             }
         }
 
-        var values = site.Values.Concat(interimSites.SelectMany(i => (i.Changes ?? []).Values));
-        if (values.Any(v => v is { Length: > AddOverseasSiteResumeRules.MaxValueLength }))
-        {
-            return FieldTooLongMessage;
-        }
+        return null;
+    }
 
-        var besFiles = request.BesEvidenceFiles ?? [];
+    private static string? ValidateBesFiles(IReadOnlyList<AddOverseasSiteBesFile> besFiles, IReadOnlyList<string> removed)
+    {
         if (
             besFiles.Any(f =>
                 f is null
@@ -154,18 +182,9 @@ internal static class AddOverseasSiteResumeValidator
             return BesFileIncompleteMessage;
         }
 
-        var removed = request.RemovedBesFileIds ?? [];
-        if (removed.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > AddOverseasSiteResumeRules.MaxValueLength))
-        {
-            return RemovedBesFileIdInvalidMessage;
-        }
-
-        var changesAnything =
-            site.Count > 0
-            || interimSites.Any(i => (i.Changes ?? []).Count > 0)
-            || besFiles.Count > 0
-            || removed.Count > 0;
-        return changesAnything ? null : NothingChangedMessage;
+        return removed.Any(id => string.IsNullOrWhiteSpace(id) || id.Length > AddOverseasSiteResumeRules.MaxValueLength)
+            ? RemovedBesFileIdInvalidMessage
+            : null;
     }
 }
 
@@ -228,6 +247,10 @@ internal sealed class AddOverseasSiteResumeService(
     public const string LatestResponsePayloadField = "latestQueryResponse";
 
     private const string InterimSitesField = "interimSites";
+
+    private const string FileIdField = "fileId";
+
+    private const string InterimSiteChangesField = "interimSiteChanges";
 
     private const string RejectedLoadsWireField = "rejectedLoadsArrangements";
 
@@ -316,7 +339,7 @@ internal sealed class AddOverseasSiteResumeService(
         if (priorResponse is not null)
         {
             siteChanges = MergeChanges(priorResponse.GetValue("siteChanges", null) as BsonDocument, siteChanges);
-            interimChanges = MergeInterimChanges(priorResponse.GetValue("interimSiteChanges", null) as BsonArray, interimChanges);
+            interimChanges = MergeInterimChanges(priorResponse.GetValue(InterimSiteChangesField, null) as BsonArray, interimChanges);
         }
 
         AppendBesFiles(site, request.BesEvidenceFiles);
@@ -426,7 +449,7 @@ internal sealed class AddOverseasSiteResumeService(
         if (priorResponse is not null)
         {
             siteChanges = MergeChanges(priorResponse.GetValue("siteChanges", null) as BsonDocument, siteChanges);
-            interimChanges = MergeInterimChanges(priorResponse.GetValue("interimSiteChanges", null) as BsonArray, interimChanges);
+            interimChanges = MergeInterimChanges(priorResponse.GetValue(InterimSiteChangesField, null) as BsonArray, interimChanges);
         }
 
         LogUnmatchedInterimSites(workItemId, unmatchedInterimSites);
@@ -483,7 +506,7 @@ internal sealed class AddOverseasSiteResumeService(
             ["responderRole"] = request.ResponderContactDetails?.Role,
             ["submittedAt"] = (request.SubmittedAt ?? _timeProvider.GetUtcNow().UtcDateTime).ToString("O", CultureInfo.InvariantCulture),
             ["siteChanges"] = JsonSerializer.Serialize(ToWire(siteChanges), s_json),
-            ["interimSiteChanges"] = JsonSerializer.Serialize(
+            [InterimSiteChangesField] = JsonSerializer.Serialize(
                 interimChanges.Select(c => new { c.SiteId, c.SiteNumber, changes = ToWire(c.Changes) }),
                 s_json
             ),
@@ -645,7 +668,7 @@ internal sealed class AddOverseasSiteResumeService(
         var files = stampedResponse?.GetValue("besEvidenceFiles", null) as BsonArray;
         return (files ?? [])
             .OfType<BsonDocument>()
-            .Select(f => f.GetValue("fileId", BsonNull.Value))
+            .Select(f => f.GetValue(FileIdField, BsonNull.Value))
             .Where(v => v.IsString)
             .Select(v => v.AsString)
             .ToHashSet(StringComparer.Ordinal);
@@ -673,7 +696,7 @@ internal sealed class AddOverseasSiteResumeService(
         var removed = new List<string>();
         for (var i = files.Count - 1; i >= 0; i--)
         {
-            if (files[i] is BsonDocument file && file.GetValue("fileId", BsonNull.Value) is { IsString: true } id && ids.Contains(id.AsString))
+            if (files[i] is BsonDocument file && file.GetValue(FileIdField, BsonNull.Value) is { IsString: true } id && ids.Contains(id.AsString))
             {
                 removed.Add(id.AsString);
                 files.RemoveAt(i);
@@ -706,7 +729,7 @@ internal sealed class AddOverseasSiteResumeService(
 
         var known = existing
             .OfType<BsonDocument>()
-            .Select(f => f.GetValue("fileId", BsonNull.Value))
+            .Select(f => f.GetValue(FileIdField, BsonNull.Value))
             .Where(v => v.IsString)
             .Select(v => v.AsString)
             .ToHashSet(StringComparer.Ordinal);
@@ -717,7 +740,7 @@ internal sealed class AddOverseasSiteResumeService(
             existing.Add(
                 new BsonDocument
                 {
-                    ["fileId"] = file.FileId,
+                    [FileIdField] = file.FileId,
                     ["filename"] = file.Filename,
                     ["contentType"] = Text(file.ContentType),
                     ["s3Key"] = file.S3Key,
@@ -811,7 +834,7 @@ internal sealed class AddOverseasSiteResumeService(
                 ["role"] = request.ResponderContactDetails?.Role,
             },
             ["siteChanges"] = ChangesToBson(siteChanges),
-            ["interimSiteChanges"] = new BsonArray(
+            [InterimSiteChangesField] = new BsonArray(
                 interimChanges.Select(c => new BsonDocument
                 {
                     ["siteId"] = c.SiteId is { } siteId ? new BsonInt32(siteId) : BsonNull.Value,
@@ -824,7 +847,7 @@ internal sealed class AddOverseasSiteResumeService(
                 .Where(f => request.RemovedBesFileIds?.Contains(f.FileId) != true)
                 .Select(f => new BsonDocument
                 {
-                    ["fileId"] = f.FileId,
+                    [FileIdField] = f.FileId,
                     ["filename"] = f.Filename,
                     ["contentType"] = Text(f.ContentType),
                     ["s3Key"] = f.S3Key,
