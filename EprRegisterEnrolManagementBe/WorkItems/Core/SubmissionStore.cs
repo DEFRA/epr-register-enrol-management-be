@@ -73,6 +73,10 @@ public interface ISubmissionStore
 [ExcludeFromCodeCoverage]
 public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissionStore
 {
+    // Stored field names: one place, so a record written and a record read can't drift apart.
+    private const string TypeIdKey = "typeId";
+    private const string SubmissionReferenceKey = "submissionReference";
+
     /// <summary>Collection holding one document per submission.</summary>
     public const string CollectionName = "submissions";
 
@@ -130,15 +134,15 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
         new()
         {
             ["_id"] = record.OperatorRequestId,
-            ["typeId"] = record.TypeId,
-            ["submissionReference"] = record.SubmissionReference,
+            [TypeIdKey] = record.TypeId,
+            [SubmissionReferenceKey] = record.SubmissionReference,
             ["workItems"] = new BsonArray(
                 record.WorkItems.Select(item => new BsonDocument
                 {
                     ["siteId"] = item.SiteId,
                     ["workItemId"] = item.WorkItemId.ToString(),
                     ["applicationReference"] = item.ApplicationReference,
-                    ["typeId"] = item.TypeId is { } typeId ? typeId : BsonNull.Value,
+                    [TypeIdKey] = item.TypeId is { } typeId ? typeId : BsonNull.Value,
                 })
             ),
             ["submittedAt"] = record.SubmittedAt,
@@ -147,15 +151,15 @@ public sealed class MongoSubmissionStore : MongoService<BsonDocument>, ISubmissi
     private static SubmissionRecord FromDocument(BsonDocument document) =>
         new(
             document["_id"].AsString,
-            document["typeId"].AsString,
-            document["submissionReference"].AsString,
+            document[TypeIdKey].AsString,
+            document[SubmissionReferenceKey].AsString,
             document["workItems"]
                 .AsBsonArray.Select(value => value.AsBsonDocument)
                 .Select(item => new SubmissionRecordItem(
                     item["siteId"],
                     Guid.Parse(item["workItemId"].AsString),
                     item["applicationReference"].AsString,
-                    item.TryGetValue("typeId", out var typeId) && typeId.IsString ? typeId.AsString : null
+                    item.TryGetValue(TypeIdKey, out var typeId) && typeId.IsString ? typeId.AsString : null
                 ))
                 .ToList(),
             document["submittedAt"].ToUniversalTime()
