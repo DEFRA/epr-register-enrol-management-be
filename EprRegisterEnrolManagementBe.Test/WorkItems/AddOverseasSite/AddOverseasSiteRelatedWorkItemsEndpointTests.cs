@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using EprRegisterEnrolManagementBe.Test.TestSupport;
 using EprRegisterEnrolManagementBe.Utils.Mongo;
+using EprRegisterEnrolManagementBe.WorkItems.UpdateOverseasSite;
 using Microsoft.Extensions.DependencyInjection;
 using MongoDB.Bson;
 using MongoDB.Driver;
@@ -172,6 +173,32 @@ public sealed class AddOverseasSiteRelatedWorkItemsEndpointTests(MongoIntegratio
             .Match(new BsonDocument("name", "payload.submissionReference_1"))
             .SingleAsync(ct);
         return stats["accesses"]["ops"].ToInt64();
+    }
+
+    // RA-681: management-fe labels an ORS update row "Accreditation:" or "Registration:"
+    // from its site's selected flag, so each related item carries it.
+    [Fact]
+    public async Task Each_item_carries_its_sites_selected_flag_or_null_when_absent()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var factory = new OverseasSiteAppFactory(fixture);
+        using var client = factory.CreateClient();
+        var update = UpdateOverseasSiteSubmissions.Body($"related-tab-selected:{UpdateOverseasSiteType.Id}", siteCount: 3);
+        update["payload"]!["sites"]![0]!["selected"] = true;
+        update["payload"]!["sites"]![1]!["selected"] = false;
+        var response = await client.PostAsJsonAsync("/work-items", update, ct);
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var created = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
+        var id = created.GetProperty("workItems")[0].GetProperty("id").GetGuid();
+
+        var body = await GetRelatedAsync(client, id, page: null, ct);
+
+        Assert.Equal(
+            [("ORS-001", JsonValueKind.True), ("ORS-002", JsonValueKind.False), ("ORS-003", JsonValueKind.Null)],
+            body.GetProperty("items")
+                .EnumerateArray()
+                .Select(i => (i.GetProperty("orsId").GetString(), i.GetProperty("selected").ValueKind))
+        );
     }
 
     [Fact]

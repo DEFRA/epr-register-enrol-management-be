@@ -8,7 +8,9 @@ namespace EprRegisterEnrolManagementBe.WorkItems.Workflows.StandardLifecycle;
 /// related change requests and (RA-770) the Related change requests tab show
 /// it. The site fields are null for a work item with no <c>payload.site</c>;
 /// the charge is null when its type has not opted in to the Standard lifecycle
-/// or the work item carries none.
+/// or the work item carries none. RA-681: <c>Selected</c> is the site's
+/// <c>selected</c> flag, which management-fe uses to label an ORS update
+/// "Accreditation:" or "Registration:"; null when the site has none.
 /// </summary>
 internal sealed record RelatedWorkItemResponse(
     Guid Id,
@@ -17,6 +19,7 @@ internal sealed record RelatedWorkItemResponse(
     string? ApplicationReference,
     string? SiteName,
     string? OrsId,
+    bool? Selected,
     int? ChargePence
 )
 {
@@ -31,10 +34,14 @@ internal sealed record RelatedWorkItemResponse(
             StringOrNull(payload, "applicationReference"),
             StringOrNull(site, "siteName"),
             StringOrNull(site, "orsId"),
+            BoolOrNull(site, "selected"),
             strategy?.ReadChargePence(workItem)
         );
     }
 
     private static string? StringOrNull(BsonDocument? document, string field) =>
         document is not null && document.TryGetValue(field, out var value) && value.IsString ? value.AsString : null;
+
+    private static bool? BoolOrNull(BsonDocument? document, string field) =>
+        document is not null && document.TryGetValue(field, out var value) && value.IsBoolean ? value.AsBoolean : null;
 }
